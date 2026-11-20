@@ -138,9 +138,15 @@ impl PalwCertDutyV1 {
     }
 
     fn refresh(&mut self, owed: Vec<PalwCertificationDutyV1>, now_daa: u64) {
-        let open: std::collections::BTreeSet<Hash64> = owed.iter().map(|d| d.claim_id).collect();
-        self.verdicts.retain(|claim, _| open.contains(claim));
-        self.queued.retain(|claim, _| open.contains(claim));
+        let previous: BTreeMap<_, _> = self.owed.iter().map(|d| (d.claim_id, d)).collect();
+        let unchanged: std::collections::BTreeSet<_> =
+            owed.iter().filter(|d| previous.get(&d.claim_id) == Some(d)).map(|d| d.claim_id).collect();
+        self.verdicts.retain(|claim, _| unchanged.contains(claim));
+        self.queued.retain(|claim, _| unchanged.contains(claim));
+        self.replays.retain_live(|claim| unchanged.contains(claim));
+        if self.fp_active.is_some_and(|claim| !unchanged.contains(&claim)) {
+            self.fp_active = None;
+        }
         self.owed = owed;
         self.read_at = Some(now_daa);
     }
@@ -192,6 +198,7 @@ impl PalwPanelService {
         if duty.read_at != Some(current_daa) {
             let owed = session.clone().spawn_blocking(move |c| c.palw_certification_duties_v1(bond_key, current_daa)).await;
             duty.refresh(owed, current_daa);
+            court_outbox.retain_pending(|(claim, round, responder, _)| !mine(*round, *responder) || duty.queued.contains_key(claim));
         }
         if duty.owed.is_empty() && duty.replaying.is_none() {
             court_outbox.retain_pending(|(_, round, responder, _)| !mine(*round, *responder));
@@ -257,12 +264,20 @@ impl PalwPanelService {
                     let seat_duty = d.seat_duty.as_ref().expect("checked");
                     let seat_r_duty = PalwSeatRDutyV1 { deadline: d.deadline_daa, role: PalwSeatRRoleV1::FullSeat, heavy };
                     let pooled = fp_materials.get(&claim).map(|v| v.as_slice()).unwrap_or(&[]);
-                    let (step, _) =
+                    // Gate C consumes its own verdict. A selected Panel seat
+                    // submits the separately bound full-replay approval.
+                    let (step, _, checked) =
                         self.fp_seat_replay_pass_v1(session, seat_duty, seat_r_duty, current_daa, pooled, &mut duty.replays).await;
                     let verdict = match step {
                         PalwSeatReplayStepV1::Waiting => None,
                         PalwSeatReplayStepV1::Licensed => {
-                            Some(PalwCertDutyVerdictV1::Reproduced { execution_root: seat_duty.execution_root })
+                            if seat_duty.protected_replay.is_none()
+                                || checked.is_some_and(|replay| Some(replay.binding()) == seat_duty.protected_replay)
+                            {
+                                Some(PalwCertDutyVerdictV1::Reproduced { execution_root: seat_duty.execution_root })
+                            } else {
+                                None
+                            }
                         }
                         PalwSeatReplayStepV1::Refuted => {
                             error!(
@@ -302,6 +317,13 @@ impl PalwPanelService {
                 continue;
             };
             if duty.queued.get(&d.claim_id).is_some_and(|at| current_daa < at.saturating_add(PALW_CERT_DUTY_RESEND_DAA_V1)) {
+                continue;
+            }
+            if let Some(binding) = d.seat_duty.as_ref().and_then(|seat| seat.protected_replay)
+                && !session
+                    .palw_protected_original_readback_v1(d.claim_id)
+                    .is_ok_and(|read| read.is_some_and(|row| row.replay_binding_v1() == binding))
+            {
                 continue;
             }
             let (verdict, transcript) = match verdict {
@@ -418,6 +440,24 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn refreshing_a_replaced_certification_discards_its_old_replay_verdict() {
+        let original = duty(1_000);
+        let claim = original.claim_id;
+        let mut book = PalwCertDutyV1::new();
+        book.refresh(vec![original.clone()], 100);
+        book.verdicts.insert(claim, PalwCertDutyVerdictV1::Unavailable);
+        book.fp_active = Some(claim);
+        book.queued.insert(claim, 100);
+        book.refresh(vec![original.clone()], 101);
+        assert!(book.verdicts.contains_key(&claim));
+        let replacement = PalwCertificationDutyV1 { drawn_daa: 101, ..original };
+        book.refresh(vec![replacement], 102);
+        assert!(!book.verdicts.contains_key(&claim));
+        assert!(!book.queued.contains_key(&claim));
+        assert_eq!(book.fp_active, None);
+    }
+
+    #[test]
     fn an_unjudged_row_waits_until_the_margin_then_attests_unavailable() {
         let d = duty(1_000);
         assert_eq!(palw_cert_duty_attest_now_v1(&d, None, 100), None);
@@ -465,6 +505,7 @@ pub(super) mod tests {
         ));
         kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
             model_panel_one: false,
+            protected_replay: None,
             accepted_block: j.accepted_block,
             claim_id: Hash64::from_bytes([7; 64]),
             class_id: j.class_id,

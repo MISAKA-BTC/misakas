@@ -3071,6 +3071,10 @@ pub struct Params {
     pub palw_positive_court_v2: Option<PositiveCourtFenceV2>,
     /// RFC-0051 funded tokenizer-registration transport. No shipped preset enables it.
     pub palw_tokenizer_registration_v1: Option<TokenizerRegistrationFenceV1>,
+    /// Unadopted isolated-network Manifest ingress; absent on all public presets.
+    pub palw_manifest_ingress_v3: Option<ManifestIngressFenceV3>,
+    /// Complete unadopted planning terms for an explicitly isolated T12 chain.
+    pub palw_protected_planning_v3: Option<ProtectedPlanningFenceV3>,
     /// RFC-0045 result-free canonical assignments. No public activation is assigned.
     pub palw_positive_assignment_v2: Option<PositiveAssignmentFenceV2>,
     /// RFC-0046 limited funding-relay metadata intake. Dormant on every preset.
@@ -4355,6 +4359,10 @@ pub fn palw_v2_bond_withdrawal_delay_at_v1(
 mod activation;
 mod full_activation_v1;
 mod identity;
+mod manifest_ingress_v3;
+pub use manifest_ingress_v3::ManifestIngressFenceV3;
+mod protected_planning_v3;
+pub use protected_planning_v3::ProtectedPlanningFenceV3;
 mod tokenizer_registration_v1;
 pub use tokenizer_registration_v1::TokenizerRegistrationFenceV1;
 
@@ -6363,6 +6371,8 @@ impl Params {
             palw_native_mining_v39: self.palw_native_mining_v39.clone(),
             palw_positive_court_v2: self.palw_positive_court_v2.clone(),
             palw_tokenizer_registration_v1: self.palw_tokenizer_registration_v1,
+            palw_manifest_ingress_v3: self.palw_manifest_ingress_v3,
+            palw_protected_planning_v3: self.palw_protected_planning_v3,
             palw_positive_assignment_v2: self.palw_positive_assignment_v2.clone(),
             palw_positive_funding_relay_v2: self.palw_positive_funding_relay_v2.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
@@ -7552,6 +7562,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_tokenizer_registration_v1: None,
+    palw_manifest_ingress_v3: None,
+    palw_protected_planning_v3: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -7937,6 +7949,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_tokenizer_registration_v1: None,
+    palw_manifest_ingress_v3: None,
+    palw_protected_planning_v3: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -8304,6 +8318,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_tokenizer_registration_v1: None,
+    palw_manifest_ingress_v3: None,
+    palw_protected_planning_v3: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -13918,6 +13934,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
     palw_tokenizer_registration_v1: None,
+    palw_manifest_ingress_v3: None,
+    palw_protected_planning_v3: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,

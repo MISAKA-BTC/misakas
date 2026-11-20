@@ -176,6 +176,10 @@ impl ChainFacts {
     /// A source that read nothing (the `--anchor`-only form) objects to nothing here: it also
     /// submits nothing, so there is no unknown being read as a yes.
     pub fn commit_refusal(&self) -> Option<String> {
+        self.commit_refusal_for_protected(false)
+    }
+
+    pub fn commit_refusal_for_protected(&self, protected: bool) -> Option<String> {
         if !self.live {
             return None;
         }
@@ -189,7 +193,7 @@ impl ChainFacts {
                     .to_string(),
             );
         }
-        if !self.fp_certified {
+        if !self.fp_certified && !protected {
             return Some(
                 "this class is not seated on the free-prompt lane (ADR-0075 ClassLaneCertified; `fp_certified` is false \
                          in /health) — a commitment would be refused as FreePromptLaneUncertified"

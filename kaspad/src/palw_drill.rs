@@ -47,6 +47,9 @@
 //!   unfenced is never reported as having crossed it. The second post-launch flag day (lane F2,
 //!   `--palw-drill-fence2-at`: every fence of `PALW_T12_POST_LAUNCH_FENCES_V2`, applied after the
 //!   first) is recorded beside it (`fence2_at=`) and held to the same rule.
+pub(crate) mod manifest_ingress_v3;
+pub(crate) mod protected_planning_v3;
+
 use crate::args::Args;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::config::Config;
@@ -130,6 +133,9 @@ pub struct PalwDrillExtraFencesV1 {
     pub fence4_at: Option<u64>,
     /// RFC-0002 Part II Proposal A's seating fence (`palw_class_seating`), `--palw-drill-class-seating-at`: over the generative fence.
     pub class_seating_at: Option<u64>,
+    /// Full explicit declaration, shared by configuration, validation, export and datadir identity.
+    pub manifest_ingress: Option<kaspa_consensus_core::config::params::ManifestIngressFenceV3>,
+    pub protected_planning: Option<kaspa_consensus_core::config::params::ProtectedPlanningFenceV3>,
 }
 
 impl PalwDrillExtraFencesV1 {
@@ -171,6 +177,8 @@ impl PalwDrillExtraFencesV1 {
             full_activation_at: args.palw_drill_full_activation_at,
             fence4_at: args.palw_drill_fence4_at,
             class_seating_at: args.palw_drill_class_seating_at,
+            manifest_ingress: args.palw_drill_manifest_ingress,
+            protected_planning: args.palw_drill_protected_planning,
         }
     }
 
@@ -202,6 +210,8 @@ impl PalwDrillExtraFencesV1 {
             || self.full_activation_at.is_some()
             || self.fence4_at.is_some()
             || self.class_seating_at.is_some()
+            || self.manifest_ingress.is_some()
+            || self.protected_planning.is_some()
     }
 
     /// Does any capacity step flag stand?
@@ -226,6 +236,8 @@ impl PalwDrillExtraFencesV1 {
     /// The first flag that stands, named (for the unsalted refusal).
     fn first_named(&self) -> Option<(&'static str, u64, &'static str)> {
         [
+            ("--palw-drill-manifest-ingress", self.manifest_ingress.map(|p| p.activation.daa_score()), "the unadopted native Manifest ingress contract"),
+            ("--palw-drill-protected-planning", self.protected_planning.map(|p| p.activation.daa_score()), "the unadopted protected-planning declaration"),
             ("--palw-drill-fence4-at", self.fence4_at, "testnet-12's fourth post-launch flag day (palw_gdn_key_heads, P0a)"),
             ("--palw-drill-class-seating-at", self.class_seating_at, "RFC-0002 Part II's class-seating fence (palw_class_seating)"),
             ("--palw-drill-tir2-at", self.tir2_at, "testnet-12's DAA-3,600 flag day (palw_tir_fence2)"),
@@ -495,6 +507,12 @@ impl PalwDrillExtraFencesV1 {
         if let Some(at) = self.class_seating_at {
             moves.extend(d::palw_drill_class_seating_at_v1(params, at).map_err(|e| format!("--palw-drill-class-seating-at: {e}"))?);
         }
+        if let Some(policy) = self.manifest_ingress {
+            manifest_ingress_v3::install_v3(params, policy)?;
+        }
+        if let Some(policy) = self.protected_planning {
+            protected_planning_v3::install_v3(params, policy)?;
+        }
         Ok(moves)
     }
 
@@ -567,6 +585,8 @@ impl PalwDrillExtraFencesV1 {
             ("useful_work_at=", "--palw-drill-useful-work-at", palw_drill_marker_fence_text_v1(self.useful_work_at)),
             ("int13_at=", "--palw-drill-int13-at", palw_drill_marker_fence_text_v1(self.int13_at)),
             ("full_activation_at=", "--palw-drill-full-activation-at", palw_drill_marker_fence_text_v1(self.full_activation_at)),
+            ("manifest_ingress_v3=", "--palw-drill-manifest-ingress", manifest_ingress_v3::marker_v3(self.manifest_ingress)),
+            ("protected_planning_v3=", "--palw-drill-protected-planning", protected_planning_v3::marker_v3(self.protected_planning)),
         ]
     }
 
@@ -847,8 +867,24 @@ pub(crate) fn palw_drill_real_submit_delay_v1(config: &Config, seconds: Option<u
 /// every node without the flag.
 pub fn palw_drill_fence_lines_v1(config: &Config) -> Vec<String> {
     let moves = &config.palw_drill_fence_moves;
+    let draft = config.params.palw_manifest_ingress_v3.map(|policy| {
+        format!(
+            "PALW PRIVATE DRAFT Manifest ingress {} — unadopted; params fingerprint {}, schedule id {}",
+            manifest_ingress_v3::marker_v3(Some(policy)),
+            config.params.consensus_params_id(),
+            config.params.consensus_schedule_id()
+        )
+    });
+    let planning = config.params.palw_protected_planning_v3.map(|policy| {
+        format!(
+            "PALW PRIVATE DRAFT protected planning {} — unadopted; params fingerprint {}, schedule id {}",
+            protected_planning_v3::marker_v3(Some(policy)),
+            config.params.consensus_params_id(),
+            config.params.consensus_schedule_id()
+        )
+    });
     if moves.is_empty() {
-        return Vec::new();
+        return draft.into_iter().chain(planning).collect();
     }
     let mut lines = vec![format!(
         "PALW DRILL FLAG DAY (--palw-drill-fence-at / --palw-drill-fence2-at / --palw-drill-fence3-at / --palw-drill-model-court-at / --palw-drill-tir-at / --palw-drill-tir2-at): {} post-launch fence(s) of testnet-12's release set \
@@ -858,6 +894,8 @@ pub fn palw_drill_fence_lines_v1(config: &Config) -> Vec<String> {
         config.params.consensus_schedule_id()
     )];
     lines.extend(moves.iter().map(|m| format!("PALW DRILL FLAG DAY: {m}")));
+    lines.extend(draft);
+    lines.extend(planning);
     lines
 }
 
@@ -1233,6 +1271,8 @@ pub fn palw_drill_write_keyring_v4(
         "salt_id": salt.id(),
         "genesis_hash": params.genesis.hash.to_string(),
         "consensus_params_id": params.consensus_params_id().to_string(),
+        "manifest_ingress_v3": extra.manifest_ingress,
+        "protected_planning_v3": extra.protected_planning,
         "fence_at": fence_at,
         "fence2_at": fence2_at,
         "fence3_at": fence3_at,

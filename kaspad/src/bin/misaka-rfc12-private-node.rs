@@ -14,21 +14,32 @@ use kaspad_lib::{
         AdditionalCampaignWorkersV1, PrivateKernelMaterialReplacementSpecV4, PrivateKernelPaidCheckSpecV4,
         PrivateKernelPaidMaterialGenerationSpecV5, PrivateKernelPaidReplaceSpecV4, PrivateKernelPaidWorkSpecV4,
         PrivateNativeCustodySpecV3, PrivatePaidMaterialGenerationExportSpecV5, PrivatePaidObservationClaimsV5,
-        PrivateRecoveryAckFeeSpecV4, PrivateSourceBootstrapCheckerSpecV1, PrivateSourceBootstrapProducerSpecV1,
-        create_private_integration_core_with_campaign_workers_v1, create_private_integration_core_with_native_custody_v3,
-        create_private_integration_core_with_native_custody_v4, create_private_integration_core_with_runtime,
-        create_private_integration_core_with_source_workers_v1, export_private_complete_bootstrap_v1,
-        export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4, export_private_paid_program_work_v3,
-        export_private_source_paid_bootstrap_v1, generate_private_paid_request_v4, prepare_private_integration_probe,
-        private_complete_check_params_v1, private_g14_drill_params_v1, private_late_retirement_params_v1,
-        private_native_settlement_params_v1, private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
+        PrivateProtectedClaimProfileV3, PrivateRecoveryAckFeeSpecV4, PrivateSourceBootstrapCheckerSpecV1,
+        PrivateSourceBootstrapProducerSpecV1, create_private_integration_core_with_campaign_workers_v1,
+        create_private_integration_core_with_native_custody_v3, create_private_integration_core_with_native_custody_v4,
+        create_private_integration_core_with_runtime, create_private_integration_core_with_source_workers_v1,
+        export_private_complete_bootstrap_v1, export_private_paid_bootstrap_v3, export_private_paid_bootstrap_v4,
+        export_private_paid_program_work_v3, export_private_protected_bootstrap_v3, export_private_source_paid_bootstrap_v1,
+        generate_private_paid_request_v4, prepare_private_integration_probe, private_complete_check_params_v1,
+        private_g14_drill_params_v1, private_late_retirement_params_v1, private_native_settlement_params_v1,
+        private_paid_claim_params_v3, private_paid_claim_params_v4, private_probe_manifest,
         private_source_bootstrap_paid_params_with_consumer_v6, private_source_bootstrap_params_v1,
         private_source_verifier_economics_params_v2,
     },
 };
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 const USAGE: &str = "misaka-rfc12-private-node (requires --features private-integration-config)
---private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|g14-v1|source-v1|source-paid-v1 --private-probe-salt=HEX --testnet --netsuffix=12
+--private-probe-profile=native-v1|population-v1|complete-v1|paid-v3|paid-v4|g14-v1|protected-v3|source-v1|source-paid-v1 --private-probe-salt=HEX --testnet --netsuffix=12
+protected-v3 requires --private-probe-protected-policy=ABSOLUTE_JSON: version 3, complete planning and manifest declarations,
+  and tokenizer_policy_path naming an absolute Borsh TokenizerRegistrationPolicyV1. Parsed once; no capacity/price defaults.
+  Their common finite activation must follow all shipped prerequisites. Native validators and real PoW remain mandatory.
+  A salt starting with the ASCII bytes MISAKA/P200/V1/ selects a fresh isolated lifecycle genesis.
+  This variant requires private-integration-clock and activates protected registration at DAA 200.
+Optional isolated historical time (--features private-integration-clock, protected-v3 node mode only):
+  --private-probe-clock-file=ABSOLUTE_JSON and KASPA_TEST_CLOCK_ISOLATED=1.
+  File: {\"version\":1,\"genesis\":\"EXACT_HASH\",\"timestampMs\":INTEGER}. All isolated peers share it.
+  Atomic file updates may advance at most one heartbeat interval, never past real wall time.
+  Only process observation time changes; DAA, activation, PoW and consensus deadlines are unchanged.
 Optional --private-probe-source-verifier-economics-policy=ABSOLUTE_BORSH supplies explicit dormant\nprivate prepayment/liability terms; it supplies no acceptance or policy approval.\nsource-v1/source-paid-v1 require --private-probe-source-policy=ABSOLUTE_BORSH (explicit nonzero activation and full policy;
   no values are selected or approved) and optionally --private-probe-source-check=ABSOLUTE_JSON
   (one actual drawn slot, registered model material, independent carrier key/input and finite resource/fee caps).
@@ -46,7 +57,9 @@ Any profile: --private-probe-retirement-daa=N (N >= 2) arms palw_dns_retirement_
   run accumulates DNS-validator history before the fence (RFC-0012 §4.4); Rule E and its commitment stay at DAA 1. The
   height is part of the profile's identity: every node, export and print of one run must name the same N.
 Read-only mode: --print-private-probe-profile
-Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3, paid-v4 or source-paid-v1)
+Offline export: --private-probe-export-bootstrap=FRESH_DIRECTORY (complete-v1, paid-v3, paid-v4, source-paid-v1 or protected-v3)
+  protected-v3 exports only salted keys, their existing genesis outpoints and the exact parsed policy;
+  it does not create a model, registration, claim, approval or chain state.
 Generate authenticated live paid-v4 request:
   --private-probe-request-rpc=ws://127.0.0.1:PORT --private-probe-request-block=PINNED_HASH
   --private-probe-request-spec=JSON --private-probe-request-inputs=BORSH --private-probe-generate-paid-request=NEW_FILE
@@ -137,6 +150,8 @@ fn split(args: Vec<String>) -> Result<PrivateFlags, String> {
                         | "--private-probe-g14-at"
                         | "--private-probe-g14-set"
                         | "--private-probe-panel-seats"
+                        | "--private-probe-protected-policy"
+                        | "--private-probe-clock-file"
                         | "--private-probe-request-rpc"
                         | "--private-probe-request-block"
                         | "--private-probe-request-spec"
@@ -214,6 +229,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         return Err("--private-probe-g14-at / --private-probe-panel-seats belong to the g14-v1 profile".into());
     }
     let bootstrap = flags.values.remove("--private-probe-export-bootstrap");
+    let clock_file = flags.values.remove("--private-probe-clock-file");
     let paid_request = flags.values.remove("--private-probe-paid-request");
     let paid_output = flags.values.remove("--private-probe-export-paid-work");
     let generate = flags.values.remove("--private-probe-generate-paid-request");
@@ -226,6 +242,11 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         return Err("request generation requires its RPC, pinned block, spec, inputs and fresh output together".into());
     }
     let source_profile = matches!(profile.as_str(), "source-v1" | "source-paid-v1");
+    let protected_policy_file = flags.values.remove("--private-probe-protected-policy");
+    if (profile == "protected-v3") != protected_policy_file.is_some() {
+        return Err("protected-v3 requires its explicit policy file and other profiles cannot use it".into());
+    }
+    let protected_policy = protected_policy_file.map(|file| PrivateProtectedClaimProfileV3::read(Path::new(&file))).transpose()?;
     let paid_v4_profile = matches!(profile.as_str(), "paid-v4" | "source-paid-v1");
     let source_policy = flags.values.remove("--private-probe-source-policy");
     if source_profile != source_policy.is_some() {
@@ -396,6 +417,16 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     if !flags.values.is_empty() {
         return Err("unconsumed private option".into());
     }
+    if clock_file.is_some()
+        && (!cfg!(feature = "private-integration-clock")
+            || profile != "protected-v3"
+            || flags.print
+            || bootstrap.is_some()
+            || paid_output.is_some()
+            || generate.is_some())
+    {
+        return Err("historical clock requires the explicit private-integration-clock feature and protected-v3 node mode".into());
+    }
     if usize::from(flags.print) + usize::from(bootstrap.is_some()) + usize::from(paid_output.is_some()) > 1
         || paid_request.is_some() != paid_output.is_some()
     {
@@ -416,6 +447,7 @@ fn run(raw: Vec<String>) -> Result<(), String> {
         _ => None,
     };
     let params = match profile.as_str() {
+        "protected-v3" => protected_policy.as_ref().ok_or("protected policy absent")?.params_v3(&salt)?,
         "source-v1" => private_source_bootstrap_params_v1(&salt, Path::new(source_policy.as_ref().ok_or("source policy absent")?))?,
         "source-paid-v1" => private_source_bootstrap_paid_params_with_consumer_v6(
             &salt,
@@ -488,7 +520,8 @@ fn run(raw: Vec<String>) -> Result<(), String> {
             "paid-v3" => export_private_paid_bootstrap_v3(&config, Path::new(&output))?,
             "paid-v4" => export_private_paid_bootstrap_v4(&config, Path::new(&output))?,
             "source-paid-v1" => export_private_source_paid_bootstrap_v1(&config, Path::new(&output))?,
-            _ => return Err("bootstrap export requires complete-v1, paid-v3, paid-v4 or source-paid-v1".into()),
+            "protected-v3" => export_private_protected_bootstrap_v3(&config, Path::new(&output))?,
+            _ => return Err("bootstrap export requires complete-v1, paid-v3, paid-v4, source-paid-v1 or protected-v3".into()),
         };
         println!("{}", serde_json::to_string_pretty(&exported).map_err(|e| e.to_string())?);
         return Ok(());
@@ -503,6 +536,11 @@ fn run(raw: Vec<String>) -> Result<(), String> {
     }
     // Ownership must be pinned before the logger can make a nonempty directory.
     prepare_private_integration_probe(&args, &config)?;
+    #[cfg(feature = "private-integration-clock")]
+    let _historical_clock = clock_file
+        .as_deref()
+        .map(|path| kaspad_lib::private_integration::PrivateHistoricalClockV1::start(&args, &config, Path::new(path)))
+        .transpose()?;
     let limit = kaspa_utils::fd_budget::try_set_fd_limit(DESIRED_DAEMON_SOFT_FD_LIMIT).map_err(|e| e.to_string())?;
     if limit < MINIMUM_DAEMON_SOFT_FD_LIMIT {
         return Err(format!("private node needs at least {MINIMUM_DAEMON_SOFT_FD_LIMIT} file descriptors"));

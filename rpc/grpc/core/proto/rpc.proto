@@ -3722,6 +3722,7 @@ message GetPalwAcceptanceReadsResponseMessage {
 message GetPalwTirOriginalQuoteRequestMessage {
   string commitmentHex = 1;
   string bindingHex = 2;
+  optional string protectedMaterialHex = 3;
 }
 
 message GetPalwTirOriginalQuoteResponseMessage {
@@ -3730,6 +3731,7 @@ message GetPalwTirOriginalQuoteResponseMessage {
   string refusal = 3;
   uint64 quoteDaa = 4;
   string planHex = 5;
+  optional string protectedQuoteHex = 6;
   RPCError error = 1000;
 }
 

@@ -900,7 +900,8 @@ pub fn palw_vertex_claim_licenses_by_tally_v1(
     daa_score: u64,
     claim_id: &Hash64,
 ) -> bool {
-    !state.claim(claim_id).is_some_and(|claim| params.model_panel_one_governs_v1(claim.accepted_daa))
+    !crate::palw_state_v2::claim_has_protected_frame_v1(state, claim_id)
+        && !state.claim(claim_id).is_some_and(|claim| params.model_panel_one_governs_v1(claim.accepted_daa))
         && params.vertex_active_at(daa_score)
         && params.vertex_from_daa().is_some_and(|fence| state.panel(claim_id).is_some_and(|panel| panel.bound_daa >= fence))
 }

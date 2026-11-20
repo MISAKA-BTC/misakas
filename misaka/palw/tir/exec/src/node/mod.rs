@@ -34,6 +34,7 @@ pub mod positive_typed_adapter;
 #[cfg(feature = "positive-panel")]
 pub mod positive_typed_capture;
 mod public_source;
+pub mod protected_original_material;
 pub mod residency;
 pub mod run;
 pub mod run_wide_q24_v2;

@@ -94,6 +94,64 @@ pub(crate) struct FundedBatchScheduleV1 {
     pub stop_filing: crate::palw_court_service_v1::ServiceCost,
 }
 
+impl FundedBatchScheduleV1 {
+    /// The same carrier tariff for ordinary and protected admission. Semantic
+    /// replay has separate graph nodes; it is not charged again on every part.
+    pub(crate) fn price_delivery_v1(
+        self,
+        stage: crate::palw_court_shared_material_intake_v1::batch::admission::BatchDeliveryV1,
+        bytes: u64,
+    ) -> Result<crate::palw_court_service_v1::ServiceCost, String> {
+        use crate::palw_court_shared_material_intake_v1::batch::{Stage, admission::BatchDeliveryV1};
+        let (index, units, work_rate, io_rate) = match stage {
+            BatchDeliveryV1::Open { range_count, .. } => (0, range_count as u64, self.open_work_per_range, 0),
+            BatchDeliveryV1::Response { stage: Stage::Begin, .. } => (1, 0, 0, 0),
+            BatchDeliveryV1::Response { stage: Stage::Part(_), .. } => (2, 0, 0, 0),
+            BatchDeliveryV1::Response { stage: Stage::Finish, maximum_body_bytes, .. } => {
+                (3, maximum_body_bytes, self.finish_work_per_byte, self.finish_io_per_byte)
+            }
+        };
+        let mut cost = self.carrier_costs[index];
+        let price = |base: u64, rate| {
+            units
+                .checked_mul(rate)
+                .and_then(|extra| base.checked_add(extra))
+                .ok_or_else(|| "Batch delivery service cost overflows".to_string())
+        };
+        cost.bytes = bytes;
+        cost.work = price(cost.work, work_rate)?;
+        cost.io = price(cost.io, io_rate)?;
+        Ok(cost)
+    }
+}
+
+#[cfg(test)]
+mod delivery_pricing_tests {
+    use super::*;
+    use crate::palw_court_shared_material_intake_v1::batch::{BatchResponsePositionV1, Stage, admission::BatchDeliveryV1};
+
+    #[test]
+    fn delivery_pricing_uses_stage_and_full_response_bound() {
+        let pinned = crate::palw_g14_values_v1::palw_g14_funded_batch_schedule_estimate_v1();
+        let position = BatchResponsePositionV1 { demand_ordinal: 1, range_index: 0 };
+        let response = |stage| BatchDeliveryV1::Response { position, stage, maximum_body_bytes: 100 };
+        let open = BatchDeliveryV1::Open { ordinal: 1, range_count: 3 };
+        for (stage, index) in [(open, 0), (response(Stage::Begin), 1), (response(Stage::Part(0)), 2), (response(Stage::Finish), 3)] {
+            let cost = pinned.price_delivery_v1(stage, 19).unwrap();
+            assert_eq!(cost, crate::palw_court_service_v1::ServiceCost { bytes: 19, ..pinned.carrier_costs[index] });
+        }
+        // Nonzero tariffs exercise the existing profile semantics: Open pays
+        // per range; Finish pays for all authenticated bytes, not its carrier.
+        let schedule = FundedBatchScheduleV1 { open_work_per_range: 2, finish_work_per_byte: 3, finish_io_per_byte: 5, ..pinned };
+        assert_eq!(schedule.price_delivery_v1(open, 19).unwrap().work, pinned.carrier_costs[0].work + 6);
+        let finish = schedule.price_delivery_v1(response(Stage::Finish), 19).unwrap();
+        assert_eq!(finish.work, pinned.carrier_costs[3].work + 300);
+        assert_eq!(finish.io, pinned.carrier_costs[3].io + 500);
+        let overflow = FundedBatchScheduleV1 { finish_work_per_byte: u64::MAX, ..schedule };
+        assert!(overflow.price_delivery_v1(response(Stage::Finish), 19).is_err());
+    }
+}
+
 /// `SourceGraphBudgetV3` has no `PartialEq`; its four bounds are kept here and rebuilt on read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]

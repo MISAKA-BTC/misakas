@@ -334,6 +334,6 @@ pub(super) fn check_legacy_tfp1_pairing_v1(
         _ => return Err(PanelSourceErrorR1::Binding),
     }
     check_public_input_token_entry_v1(original, manifest, context.prompt_form)?;
-    manifest.open_prompt_text(context.literal_prompt).map_err(|_| PanelSourceErrorR1::Binding)?;
+    manifest.open_prompt_material_v2(context.literal_prompt).map_err(|_| PanelSourceErrorR1::Binding)?;
     Ok(())
 }

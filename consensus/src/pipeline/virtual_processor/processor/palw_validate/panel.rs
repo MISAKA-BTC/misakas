@@ -222,6 +222,8 @@ impl VirtualStateProcessor {
                 ));
             }
             Obj::PanelBound { claim, anchor, seats } => {
+                kaspa_consensus_core::palw_state_v2::palw_protected_panel_bind_admits_v1(state, claim, seats.len(), point.daa_score)
+                    .map_err(|e| e.to_string())?;
                 let claim_record = state.claim(claim).ok_or_else(|| format!("panel names unknown claim {claim}"))?;
                 // RFC-0010: a claim accepted under the permissionless rule is bound by the fold, never by an object — a
                 // lane-A binding of it would be a second, operator-anchored answer to a question the engine answers.
@@ -298,7 +300,7 @@ impl VirtualStateProcessor {
             // two provably disjoint, so exactly one of these objects can ever be acceptable
             // for a given receipt set.
             Obj::ReceiptLicensed { claim, receipts } | Obj::ProducerDefaulted { claim, receipts } => {
-                let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_economy(
+                let quorum = match kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_economy(
                     state,
                     panel_params,
                     state_params,
@@ -315,12 +317,26 @@ impl VirtualStateProcessor {
                     self.palw_panel_economy_active_at(point.daa_score),
                     // ADR-0147: a bought class's licence carries its outsider's `Valid`.
                     self.palw_admission_independence_daa(),
-                )
-                .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
+                ) {
+                    Ok(quorum) => quorum,
+                    Err(error) => {
+                        return Err(format!("claim {claim}'s receipt set does not carry a quorum: {error}"));
+                    }
+                };
                 use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
                 match (object, quorum) {
-                    (Obj::ReceiptLicensed { .. }, Q::Licensed { .. })
-                    | (Obj::ProducerDefaulted { .. }, Q::ProducerUnavailable { .. }) => {}
+                    (Obj::ReceiptLicensed { .. }, Q::Licensed { .. }) => {
+                        if let Some(panel) = state.panel(claim) {
+                            kaspa_consensus_core::palw_state_v2::palw_protected_licence_receipts_v1(
+                                state,
+                                claim,
+                                &panel.seats,
+                                receipts,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    (Obj::ProducerDefaulted { .. }, Q::ProducerUnavailable { .. }) => {}
                     // ADR-0124 Decision 2: a supplementary set rides the licensing object's kind
                     // and credits seats on a claim already licensed; it can default nobody.
                     (Obj::ReceiptLicensed { .. }, Q::Supplementary { .. }) => {}
@@ -380,7 +396,18 @@ impl VirtualStateProcessor {
                     .map_err(|e| format!("claim {claim}'s segment receipts do not license: {e}"))?
                 };
                 match quorum {
-                    kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } if !supplementary => {}
+                    kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } if !supplementary => {
+                        if let Some(panel) = state.panel(claim) {
+                            let inner: Vec<_> = receipts.iter().map(|receipt| receipt.receipt.clone()).collect();
+                            kaspa_consensus_core::palw_state_v2::palw_protected_licence_receipts_v1(
+                                state,
+                                claim,
+                                &panel.seats,
+                                &inner,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                    }
                     kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Supplementary { .. } if supplementary => {}
                     kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } => {
                         return Err(format!("claim {claim} is already licensed; a supplementary set licenses nothing"));
@@ -551,6 +578,9 @@ impl VirtualStateProcessor {
                 {
                     return Err(format!("claim {claim}'s optimistic receipts do not verify: {e}"));
                 }
+                let inner: Vec<_> = receipts.iter().map(|receipt| receipt.receipt.clone()).collect();
+                kaspa_consensus_core::palw_state_v2::palw_protected_licence_receipts_v1(state, claim, &panel.seats, &inner)
+                    .map_err(|e| e.to_string())?;
             }
             Obj::TirShardReceiptLicensed { part } => {
                 if state.claim(&part.claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
@@ -571,6 +601,8 @@ impl VirtualStateProcessor {
                     Self::verify_mldsa87_with_context_bool,
                 )
                 .map_err(|e| format!("claim {} shard {}: the part does not license its shard: {e}", part.claim, part.shard))?;
+                kaspa_consensus_core::palw_state_v2::palw_protected_tir_shard_part_timely_v1(state, part)
+                    .map_err(|e| e.to_string())?;
             }
             Obj::ShardReceiptLicensed { part } => {
                 if state.claim(&part.claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa)) {
@@ -593,6 +625,8 @@ impl VirtualStateProcessor {
                     self.palw_unavailable_abstains_at(point.daa_score),
                 )
                 .map_err(|e| format!("claim {} shard {}: the part does not carry a quorum: {e}", part.claim, part.shard_index))?;
+                kaspa_consensus_core::palw_state_v2::palw_protected_shard_part_timely_v1(state, part, panel_params.seat_count())
+                    .map_err(|e| e.to_string())?;
             }
             // **ADR-0062 SA-2: the disclosure is signed by the CLAIM's bond, and bounded by the
             // ruleset's close ceiling before a single Merkle path is walked.**

@@ -799,6 +799,9 @@ pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1() -> (
 }
 
 /// Fix the real companion signer before execution, hashing and source capture.
+/// Use an ordinary history-reduction execution so the protected admission
+/// fixture also books genuine numerical Batch ranges. The small fixed-state
+/// tokenizer fixture has no dissected H-reduction roots to book.
 /// This does not add native FP signature/payment admission to the fixture.
 #[cfg(test)]
 pub(crate) fn palw_tir_public_tokenizer_frame_with_executor_fixture_v1(
@@ -810,7 +813,10 @@ pub(crate) fn palw_tir_public_tokenizer_frame_with_executor_fixture_v1(
     Vec<u8>,
     crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
 ) {
-    tests::tokenizer_frame_with_executor(None, Some(key))
+    let material = tests::source_tokenizer_frame_v1(Some(key), None, false);
+    let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(&material.0.record.program).unwrap();
+    assert!(!crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program).is_empty());
+    material
 }
 
 #[cfg(test)]
@@ -2108,10 +2114,20 @@ mod tests {
                 if compact_pair && matches!(condition, HistoryConditionV1::Constraint) { "" } else { ",\"added_tokens\":[]" };
             format!("{{\"model\":{{\"vocab\":{{{vocabulary}}},\"merges\":[]}}{added_tokens}}}").into_bytes()
         });
-        let mut f = if let Some(raw) = &family_raw {
-            let tokenizer = crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw);
-            crate::palw_tir_corpus_fixture_v1::fixture_tiled_with_tokenizer(
-                name, program, params, tokens, prefill, decode, 4096, tokenizer,
+        let mut f = if family_material || clock_v2_material {
+            let tokenizer = family_raw
+                .as_ref()
+                .map_or(Hash64::from_bytes([3; 64]), |raw| crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw));
+            crate::palw_tir_corpus_fixture_v1::fixture_tiled_with_tokenizer_and_context(
+                name,
+                program,
+                params,
+                tokens,
+                prefill,
+                decode,
+                4096,
+                tokenizer,
+                prefill + decode,
             )
         } else {
             fixture_with(name, program, params, tokens, prefill, decode)
@@ -2146,7 +2162,10 @@ mod tests {
         job.prompt_token_ids_hash = crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(prompt_form, &f.prompt).unwrap();
         job.prompt_tokens = f.prompt.len() as u32;
         job.decode_token_limit = f.generated.len() as u32;
-        job.max_context_tokens = 64;
+        // Include the last output token in the FP budget, and pin the same
+        // capacity in the family/protected class before committing job/execution
+        // roots. Historical fixtures outside those routes keep their old IDs.
+        job.max_context_tokens = if family_material || clock_v2_material { f.class.layout.max_context } else { 64 };
         if let HistoryConditionV1::Prefix { fault } = condition {
             let k = 4;
             let before = f.honest();

@@ -275,6 +275,22 @@ fn da_sessions_json(state: &PalwChainStateV2, claim_id: &Hash64, now_daa: u64) -
         .collect()
 }
 
+/// Keep the ordinary detail response bounded even for a large lifetime spent
+/// set. A truncated prefix is explicitly incomplete and cannot prove absence
+/// of an index. The accepting receipt block must still be checked separately.
+fn receipt_quanta_json(source: &crate::palw_state_v2::PalwClaimSourceV2) -> Value {
+    const MAX_SPENT_INDICES: usize = 256;
+    match source {
+        crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, spent } => json!({
+            "total": quanta,
+            "spentCount": spent.len(),
+            "spentIndices": spent.iter().take(MAX_SPENT_INDICES).copied().collect::<Vec<_>>(),
+            "spentIndicesComplete": spent.len() <= MAX_SPENT_INDICES,
+        }),
+        crate::palw_state_v2::PalwClaimSourceV2::Attempt => Value::Null,
+    }
+}
+
 fn claim_row_json(row: &crate::palw_producer_v2::PalwClaimRowV1, accepted_blue_score: u64) -> Value {
     let (phase, phase_daa, void_reason) = palw_claim_phase_text_v1(&row.phase);
     json!({
@@ -341,6 +357,24 @@ pub fn palw_claim_detail_json_v1(
         "tipDaa": tip.map(|p| p.daa_score).unwrap_or(0),
         "tipBlock": tip.map(|p| p.block.to_string()),
         "claim": claim_row_json(&row, claim.accepted_blue_score),
+        // Read from the same immutable snapshot as origin/phase. These are
+        // consumed indices, not currently winning or spendable tickets; an
+        // auditor must separately match the receipt block's signed envelope.
+        "receiptQuanta": receipt_quanta_json(&claim.source),
+        "protectedOriginal": match crate::palw_protected_original_readback_v1::protected_original_readback_v1(state, *claim_id) {
+            Ok(readback) => json!(readback),
+            Err(reason) => json!({ "error": reason }),
+        },
+        "protectedReplayApprovals": crate::palw_state_v2::included_replay::protected_replay_approval_origins_v1(state, *claim_id)
+            .map(|(bond, origin)| json!({
+                "bond": format!("{}:{}", bond.0.transaction_id, bond.0.index),
+                "acceptingBlock": Hash64::from_bytes(origin.accepting_block.0),
+                "carrierBlock": Hash64::from_bytes(origin.carrier_block.0),
+                "carrierTransaction": Hash64::from_bytes(origin.carrier_transaction.0),
+                "acceptedTxOrdinal": origin.accepted_tx_ordinal,
+                "acceptedDaa": origin.accepted_daa,
+            }))
+            .collect::<Vec<_>>(),
         "gateCGoverns": crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim),
         "accusationPending": state.palw_accusation_pending_v1(claim_id),
         "receiptPause": receipt_pause_json(state, params, claim_id, claim),
@@ -380,12 +414,26 @@ pub fn palw_court_state_json_v1(
     target: PalwCourtTargetV1,
     clock: &PalwUserViewClockV1,
 ) -> Option<Value> {
+    palw_court_state_json_with_planning_v3(state, params, target, clock, None)
+}
+
+/// Node-owned declaration resolved at the candidate DAA, shared by Open and
+/// response quotes. This read-only projection cannot approve a carrier.
+pub fn palw_court_state_json_with_planning_v3(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    target: PalwCourtTargetV1,
+    clock: &PalwUserViewClockV1,
+    declaration: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,
+) -> Option<Value> {
+    let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_selected_v3(true, declaration)
+        .map_err(|_| "Batch material schedule is absent or invalid".to_string());
     let now = clock.next_daa;
     let (claim_id, only_session) = match target {
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => {
-            return batch_response_json_v1(state, claim, ordinal, target, now);
+            return batch_response_json_v1(state, claim, ordinal, target, now, schedule);
         }
         PalwCourtTargetV1::BatchStop { .. }
         | PalwCourtTargetV1::BatchVerifyNumerical { .. }
@@ -393,7 +441,7 @@ pub fn palw_court_state_json_v1(
         | PalwCourtTargetV1::BatchTerminalPlainOutputV2 { .. }
         | PalwCourtTargetV1::BatchPlainOutputFullIdsOpenV2 { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
-            return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
+            return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now, schedule));
         }
         PalwCourtTargetV1::BatchStopFullIdsOpen { claim, notice } => {
             use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::{
@@ -526,6 +574,7 @@ pub fn palw_batch_numerical_verify_quote_json_v1(
     ) -> Option<(
         crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
         crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1,
+        crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
     )>,
 ) -> Value {
     let result = crate::palw_court_shared_material_intake_v1::batch::numerical_verification::quote_numerical_verification_v1(
@@ -670,14 +719,17 @@ fn numerical_batch_open_json_v1(
     leaf: u64,
     lengths: &[(MaterialTargetV1, u64)],
     now: u64,
+    schedule: Result<crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1, String>,
 ) -> Value {
-    use crate::palw_court_shared_material_intake_v1::quote_numerical_batch_open_v1;
+    use crate::palw_court_shared_material_intake_v1::batch::native_ranges::quote_numerical_batch_open_with_schedule_v1;
     // This view only serves the bounded numerical profile. The fold still
     // authenticates and accounts for the final signed carrier independently.
     const MAX_QUOTE_RANGES: usize = 4_096;
-    let result = quote_numerical_batch_open_v1(state, claim, notice, leaf, ordinal, MAX_QUOTE_RANGES, lengths)
-        .map_err(|error| error.to_string())
-        .and_then(|open| batch_open_body_json_v1(&open));
+    let result = schedule.and_then(|schedule| {
+        quote_numerical_batch_open_with_schedule_v1(state, claim, notice, leaf, ordinal, MAX_QUOTE_RANGES, lengths, schedule)
+            .map_err(|error| error.to_string())
+            .and_then(|open| batch_open_body_json_v1(&open))
+    });
     let (open, error) = match result {
         Ok(open) => (open, None),
         Err(error) => (Value::Null, Some(error)),
@@ -714,8 +766,9 @@ fn batch_response_json_v1(
     ordinal: u64,
     target: crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
     now: u64,
+    schedule: Result<crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1, String>,
 ) -> Option<Value> {
-    use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1, quote_batch_response_v1};
+    use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1, batch::quote_batch_response_with_schedule_v1};
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
     let PalwStagedCourtRowV1::CourtBatchDemand(demand) =
         state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))?
@@ -730,24 +783,25 @@ fn batch_response_json_v1(
         MaterialTargetV1::Parameter { leaf } => format!("parameter:{leaf}"),
         MaterialTargetV1::Unit { ordinal } => format!("unit:{ordinal}"),
     };
-    let (response, error) = match quote_batch_response_v1(state, claim, ordinal, target) {
-        Ok(quote) => (
-            json!({
-                "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
-                "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
-                "responseDeadlineDaa": quote.response_deadline_daa,
-                "draftExpiresDaa": quote.draft_expires_daa,
-                "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
-                "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
-                "materialAvailable": quote.material_available,
-                "parts": quote.parts.iter().map(|part| json!({
-                    "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
-                })).collect::<Vec<_>>(),
-            }),
-            None,
-        ),
-        Err(error) => (Value::Null, Some(error)),
-    };
+    let (response, error) =
+        match schedule.and_then(|schedule| quote_batch_response_with_schedule_v1(state, claim, ordinal, target, schedule)) {
+            Ok(quote) => (
+                json!({
+                    "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
+                    "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
+                    "responseDeadlineDaa": quote.response_deadline_daa,
+                    "draftExpiresDaa": quote.draft_expires_daa,
+                    "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
+                    "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
+                    "materialAvailable": quote.material_available,
+                    "parts": quote.parts.iter().map(|part| json!({
+                        "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
+                    })).collect::<Vec<_>>(),
+                }),
+                None,
+            ),
+            Err(error) => (Value::Null, Some(error)),
+        };
     Some(json!({
         "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchResponse", "nowDaa": now,
         "tipDaa": tip.map(|p| p.daa_score), "tipBlock": tip.map(|p| p.block.to_string()),
@@ -998,6 +1052,25 @@ mod tests {
             );
         }
         assert_eq!(palw_typed_missing_json_v1()["values"][0]["status"], "not adopted");
+    }
+
+    #[test]
+    fn receipt_quantum_readback_keeps_sparse_indices_and_marks_truncation() {
+        use crate::palw_state_v2::PalwClaimSourceV2;
+        assert!(receipt_quanta_json(&PalwClaimSourceV2::Attempt).is_null());
+        let source = PalwClaimSourceV2::FreePrompt { quanta: 1000, spent: (0..257).map(|i| i * 3).collect() };
+        let view = receipt_quanta_json(&source);
+        assert_eq!(view["total"], 1000);
+        assert_eq!(view["spentCount"], 257);
+        assert_eq!(view["spentIndicesComplete"], false);
+        assert_eq!(view["spentIndices"].as_array().unwrap().len(), 256);
+        assert_eq!(view["spentIndices"][255], 765);
+        assert!(!view["spentIndices"].as_array().unwrap().contains(&json!(768)));
+        let source = PalwClaimSourceV2::FreePrompt { quanta: 1000, spent: [9, 768].into_iter().collect() };
+        let view = receipt_quanta_json(&source);
+        assert_eq!(view["spentIndices"], json!([9, 768]));
+        assert_eq!(view["spentCount"], 2);
+        assert_eq!(view["spentIndicesComplete"], true);
     }
 
     #[test]

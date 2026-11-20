@@ -40,6 +40,7 @@
 #![allow(warnings)]
 #[path = "rail_answer_accounting/mod.rs"]
 mod rail_answer_accounting;
+mod rail_protected_publisher;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -218,6 +219,8 @@ fn main() {
     // G14: an external producer's original public envelope — the run's public binding header and the
     // standing custody delegation its node custodian co-signed. Both hex files of borsh bytes.
     let mut public_binding_path: Option<PathBuf> = None;
+    let mut protected_material_path: Option<PathBuf> = None;
+    let mut protected_publisher_config: Option<PathBuf> = None;
     let mut custody_delegation_path: Option<PathBuf> = None;
     // Lane UX-B: whether a TIR original attaches its TFP1 frame (op 248). `auto` (default) as before; `require` refuses to sign
     // without a quoted frame; `off` skips the frame (only for a claim below `palw_tir_public_conviction_v1`: G-03 refuses it past).
@@ -294,6 +297,8 @@ fn main() {
             "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
             "--dsl" => dsl_path = Some(PathBuf::from(value("--dsl"))),
             "--public-binding" => public_binding_path = Some(PathBuf::from(value("--public-binding"))),
+            "--protected-material" => protected_material_path = Some(PathBuf::from(value("--protected-material"))),
+            "--protected-publisher-config" => protected_publisher_config = Some(PathBuf::from(value("--protected-publisher-config"))),
             "--tfp1" => tfp1 = Tfp1ModeV1::parse(&value("--tfp1")).unwrap_or_else(|e| die(e)),
             "--custody-delegation" => custody_delegation_path = Some(PathBuf::from(value("--custody-delegation"))),
             "--anchor-ttl-daa" => anchor_ttl_daa = value("--anchor-ttl-daa").parse().unwrap_or_else(|e| die(format!("{e}"))),
@@ -389,6 +394,17 @@ fn main() {
     if redemption_providers.is_some() && redeem_auth_out.is_none() {
         die("--redemption-providers needs --redeem-auth-out".into());
     }
+    if protected_publisher_config.is_some() {
+        if protected_material_path.is_some() || public_binding_path.is_some() || class_id.is_some() {
+            die("--protected-publisher-config uses the retained job unchanged; omit --protected-material, --public-binding and --class-id".into());
+        }
+        if tfp1 == Tfp1ModeV1::Off || rpc_endpoint.is_none() {
+            die("--protected-publisher-config needs --rpc and an enabled TIR frame".into());
+        }
+    }
+    if protected_material_path.is_some() && tfp1 == Tfp1ModeV1::Off {
+        die("--protected-material cannot be combined with --tfp1 off".into());
+    }
     if let Some(outbox) = watch_outbox {
         let seed = seed_path.unwrap_or_else(|| die("--watch needs --bond-key-seed <file>: it signs every job it submits".into()));
         let rpc = rpc_endpoint
@@ -401,6 +417,18 @@ fn main() {
             (None, _) => None,
         };
         let mut pass_through = Vec::new();
+        if let Some(path) = &protected_publisher_config {
+            pass_through.extend(["--protected-publisher-config".into(), path.display().to_string()]);
+        }
+        if let Some(path) = &protected_material_path {
+            if !path.to_string_lossy().contains("{claim_id}") {
+                die("--watch --protected-material needs a {claim_id} path template for each job's literal material".into());
+            }
+            pass_through.extend(["--protected-material".into(), path.display().to_string()]);
+        }
+        if let Some(path) = &public_binding_path {
+            pass_through.extend(["--public-binding".into(), path.display().to_string()]);
+        }
         if let Some(fee) = fee {
             pass_through.extend(["--fee".to_string(), fee.to_string()]);
         }
@@ -503,7 +531,7 @@ fn main() {
         );
         return;
     }
-    if !print_claim {
+    if !print_claim && protected_publisher_config.is_none() {
         tfp1.check_inputs(public_binding_path.as_deref(), rpc_endpoint.as_deref()).unwrap_or_else(|why| die(why.into()));
     }
     let stem = artifact_stem.unwrap_or_else(|| die("--artifact <outbox/fp-job-XXXX> is required (the path WITHOUT a suffix)".into()));
@@ -677,6 +705,61 @@ fn main() {
     if let Err(g) = misaka_palw_remote::verify::signing_gate_v1(mode, accept_unverified) {
         die(format!("nothing was signed: {g}"));
     }
+    // The protected route is explicit until its draft policy is adopted. The
+    // same worker/result gate above and the same submit path below own the claim.
+    if (protected_publisher_config.is_some() || protected_material_path.is_some())
+        && commitment.job.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA
+    {
+        die("protected public material requires a PublicDa job; the retained job's disclosure mode is unchanged".into());
+    }
+    let mut generated_publication = None;
+    if let Some(config) = &protected_publisher_config {
+        let capture = capture_path.as_deref().unwrap_or_else(|| die("protected publisher needs the retained --capture".into()));
+        let published = rail_protected_publisher::publish(config, &stem, capture, claim_id)
+            .unwrap_or_else(|why| die(format!("protected publisher unavailable; nothing signed: {why}")));
+        public_binding_path = Some(published.binding.clone());
+        protected_material_path = Some(published.material.clone());
+        generated_publication = Some(published);
+    }
+    let protected = protected_material_path
+        .as_ref()
+        .map(|template| {
+            use kaspa_consensus_core::palw_protected_original_quote_v1::{
+                PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1, ProtectedOriginalQuoteMaterialV1,
+            };
+            use kaspa_rpc_core::api::rpc::RpcApi;
+            let path = PathBuf::from(template.to_string_lossy().replace("{claim_id}", &claim_id.to_string()));
+            let bytes = read_bounded_hex_file_v1(&path, PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1)
+                .map_err(|e| format!("--protected-material {}: {e}", path.display()))?;
+            let material = ProtectedOriginalQuoteMaterialV1::decode_v1(&bytes).map_err(|e| format!("protected material: {e}"))?;
+            let binding = public_binding_path.as_ref().ok_or("--protected-material needs --public-binding")?;
+            let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
+                read_borsh_hex_v1(binding, 2048).map_err(|e| format!("--public-binding: {e}"))?;
+            let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = header else {
+                return Err("protected material requires a TIR binding".into());
+            };
+            let endpoint = rpc_endpoint.as_deref().ok_or("--protected-material needs --rpc")?;
+            let runtime = rpc_runtime();
+            let client = try_rpc_connect(&runtime, endpoint)?;
+            let quoted = runtime.block_on(client.get_palw_protected_original_quote_v1(&commitment, &header, &material));
+            let _ = runtime.block_on(client.disconnect());
+            let quote = quoted.map_err(|e| format!("protected original quote refused: {e}"))?;
+            quote
+                .check_signing_material_v1(&commitment, &header, &material, signer.public_key())
+                .map_err(|e| format!("protected original signing refused: {e}"))?;
+            Ok::<_, String>((header, material, quote))
+        })
+        .transpose()
+        .unwrap_or_else(|why| {
+            // No signature or submission exists on this branch. A transient quote
+            // refusal must not leave a new full trace behind on every watch tick.
+            if let Some(publication) = generated_publication.take()
+                && let Err(cleanup) = publication.discard_unquoted()
+            {
+                die(format!("{why}; {cleanup}"));
+            }
+            die(why)
+        });
     // **G14: the original public envelope.** A claim whose class requires a staged public family is
     // refused at admission without the producer's pledge over the node's native quote (op 244), and an
     // external producer, which runs no node, must name the node custodian that answers its DA demands.
@@ -685,7 +768,7 @@ fn main() {
     // shared assembly (`palw_tir_public_original_pledges_v1`), and the plan's rent declared and paid on top of relay. No quote (below
     // the fence, a legacy header, an original the frame does not admit) keeps the routes below; consensus refuses a frameless TIR
     // original past the fence (G-03), so nothing here can make one rewardable.
-    let tir_frame = public_binding_path.as_ref().filter(|_| tfp1 != Tfp1ModeV1::Off).and_then(|path| {
+    let tir_frame = public_binding_path.as_ref().filter(|_| tfp1 != Tfp1ModeV1::Off && protected.is_none()).and_then(|path| {
         let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
             read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
         let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(tir) = &header else {
@@ -735,7 +818,7 @@ fn main() {
         eprintln!("[misaka-palw-fp-rail] TFP1: original frame quoted at DAA {} (rent {} sompi)", quote.quote_daa, pledges.rent_sompi);
         Some((tir.clone(), header, pledges))
     });
-    let public = public_binding_path.as_ref().filter(|_| tir_frame.is_none()).and_then(|path| {
+    let public = public_binding_path.as_ref().filter(|_| tir_frame.is_none() && protected.is_none()).and_then(|path| {
         let header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
             read_borsh_hex_v1(path, 2048).unwrap_or_else(|e| die(format!("--public-binding {}: {e}", path.display())));
         let endpoint =
@@ -787,10 +870,11 @@ fn main() {
         Some((pledge, header, delegation, daa))
     });
     let accounting_context = match chain_price.as_ref().filter(|quote| quote.accounting_active) {
-        Some(_) => Some(match (&tir_frame, &public) {
-            (Some((_, header, _)), _) => header.job_context_v1(),
-            (None, Some(public)) => public.1.job_context_v1(),
-            (None, None) => {
+        Some(_) => Some(match (&protected, &tir_frame, &public) {
+            (Some((header, _, _)), _, _) => &header.job_context,
+            (None, Some((_, header, _)), _) => header.job_context_v1(),
+            (None, None, Some(public)) => public.1.job_context_v1(),
+            (None, None, None) => {
                 die("native accounting requires this rail's quoted public binding context; plain worker results carry no context"
                     .into())
             }
@@ -798,6 +882,34 @@ fn main() {
         None => None,
     };
     let build_plain = |fee: u64| {
+        if let Some((header, material, quote)) = &protected {
+            let total_fee = fee.checked_add(quote.original_fee_sompi).unwrap_or_else(|| die("protected original fee overflow".into()));
+            let signed = build_fp_commitment_tx_with(
+                signer,
+                commitment.job.network_domain,
+                prompt_ids_form,
+                commitment.clone(),
+                result.prompt_token_ids.clone(),
+                price,
+                funding_outpoint,
+                &funding_entry,
+                total_fee,
+            )
+            .unwrap_or_else(|e| die(format!("protected original FP signature: {e}")));
+            return kaspa_pq_validator_core::build_quoted_protected_original_carrier_v1_with(
+                signer,
+                signer,
+                signed.payload,
+                header.clone(),
+                material,
+                quote,
+                claim_id,
+                funding_outpoint,
+                &funding_entry,
+                total_fee,
+            )
+            .unwrap_or_else(|e| die(format!("protected original carrier: {e}")));
+        }
         if let Some((tir, _, pledges)) = &tir_frame {
             // The rent rides on top of relay: consensus burns exactly the declaration from this carrier's fee.
             return kaspa_pq_validator_core::build_fp_commitment_tx_with_tir_public_original_v1(
@@ -959,7 +1071,7 @@ fn main() {
         Some(relay_through_many(&relay_endpoints, &tx, &funding_entry, relay_min_accept, view_checkpoint.as_deref()))
     };
     let submitted = if submit {
-        let endpoint = rpc_endpoint.unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
+        let endpoint = rpc_endpoint.as_deref().unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
         let capture = capture_path.as_ref().map(|path| {
             let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the capture at {}: {e}", path.display())));
             misaka_palw_fp_submit::check_capture_shape(&bytes).unwrap_or_else(|e| die(e.to_string()));
@@ -1019,19 +1131,33 @@ fn main() {
     // parent. Named here, from the transaction itself, so a caller chaining submissions (the
     // `--watch` loop, or an operator by hand) never has to re-derive the index or the amount; the
     // amount matters because the signature commits to it.
-    let next_funding = tx
-        .outputs
-        .iter()
-        .enumerate()
-        .find(|(_, output)| output.script_public_key == funding_spk)
-        .map(|(index, output)| serde_json::json!({ "outpoint": format!("{}:{index}", tx.id()), "amount": output.value }));
-    let summary = serde_json::json!({
+    let next_funding = rail_next_funding_v1(&tx, &funding_spk, protected.as_ref().map(|_| 0))
+        .map(|(index, amount)| serde_json::json!({ "outpoint": format!("{}:{index}", tx.id()), "amount": amount }));
+    let protected_readback = protected.as_ref().filter(|_| submitted.is_some()).map(|_| {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let runtime = rpc_runtime();
+        let result = (|| {
+            let client = try_rpc_connect(&runtime, rpc_endpoint.as_deref().ok_or("readback RPC missing")?)?;
+            let observed =
+                runtime.block_on(client.get_palw_protected_original_readback_v1(claim_id, tx.id(), commitment.execution_root));
+            let _ = runtime.block_on(client.disconnect());
+            observed.map_err(|e| e.to_string())
+        })();
+        match result {
+            Ok(Some(row)) => serde_json::json!({ "included": true, "admission": row }),
+            Ok(None) => serde_json::json!({ "included": false }),
+            Err(reason) => serde_json::json!({ "included": false, "error": reason }),
+        }
+    });
+    let mut summary = serde_json::json!({
         "schema": "misaka.palw.fp-rail-tx.v1",
         "fp_claim_id": hex(claim_id),
         "subnetwork": "0x4a (PALW_FP_COMMITMENT)",
         "transaction_bytes": tx_bytes.len(),
         "payload_bytes": tx.payload.len(),
-        "fee_sompi": fee,
+        "fee_sompi": protected.as_ref().map_or(fee, |(_, _, quote)| fee + quote.original_fee_sompi),
+        "protected_funding_sompi": protected.as_ref().map(|(_, _, quote)| quote.funding.required_amount_sompi),
+        "protected_readback": protected_readback,
         "work_leaves": commitment.work_leaves,
         "quanta": quanta,
         "pwu": pwu,
@@ -1075,6 +1201,11 @@ fn main() {
             ]
         },
     });
+    if protected.is_some() {
+        summary["protected_execution_root"] = serde_json::json!(hex(commitment.execution_root));
+        summary["protected_material_file"] = serde_json::json!(protected_material_path);
+        summary["public_binding_file"] = serde_json::json!(public_binding_path);
+    }
     let summary_path = PathBuf::from(format!("{}.rail.json", stem.display()));
     std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap())
         .unwrap_or_else(|e| die(format!("cannot write {}: {e}", summary_path.display())));
@@ -1741,6 +1872,60 @@ fn chain_class_leaves(endpoint: &str, class_id: Hash64) -> u64 {
 /// the ids the fold reads; the job's full prompt would price a different prefix. `None` when the
 /// node does not answer (or holds no PALW state): the caller keeps the leaves era's rule.
 /// A bounded hex file of borsh bytes (whitespace trimmed), decoded strictly.
+/// The payer also owns the protected funding output. Only ordinary change
+/// may be chained into the next Studio job before the court releases escrow.
+fn rail_next_funding_v1(
+    tx: &kaspa_consensus_core::tx::Transaction,
+    script: &kaspa_consensus_core::tx::ScriptPublicKey,
+    reserved_index: Option<usize>,
+) -> Option<(usize, u64)> {
+    tx.outputs
+        .iter()
+        .enumerate()
+        .find(|(index, output)| Some(*index) != reserved_index && output.script_public_key == *script)
+        .map(|(index, output)| (index, output.value))
+}
+
+#[cfg(test)]
+mod protected_change_tests {
+    #[test]
+    fn next_job_cannot_select_the_same_payers_reserved_output() {
+        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
+        let script = ScriptPublicKey::default();
+        let mut tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(100, script.clone()), TransactionOutput::new(20, script.clone())],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+            0,
+            vec![],
+        );
+        assert_eq!(super::rail_next_funding_v1(&tx, &script, Some(0)), Some((1, 20)));
+        tx.outputs.pop();
+        assert_eq!(super::rail_next_funding_v1(&tx, &script, Some(0)), None);
+        assert_eq!(super::rail_next_funding_v1(&tx, &script, None), Some((0, 100)));
+    }
+}
+
+fn read_bounded_hex_file_v1(path: &Path, maximum_bytes: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let limit = maximum_bytes.checked_mul(2).and_then(|n| n.checked_add(2)).ok_or("hex file bound overflow")?;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    file.take(limit as u64 + 1).read_to_string(&mut text).map_err(|e| e.to_string())?;
+    if text.len() > limit {
+        return Err("hex file exceeds its bound".into());
+    }
+    let hex = text.trim();
+    if !hex.len().is_multiple_of(2) || hex.len() / 2 > maximum_bytes {
+        return Err("hex is malformed or exceeds its bound".into());
+    }
+    let mut bytes = vec![0; hex.len() / 2];
+    faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
 fn read_borsh_hex_v1<T: borsh::BorshDeserialize>(path: &Path, maximum_bytes: usize) -> Result<T, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     read_hex_borsh_v1(text.trim(), maximum_bytes)
@@ -1826,6 +2011,7 @@ fn chain_tir_original_quote_v1(
     let request = kaspa_rpc_core::GetPalwTirOriginalQuoteRequest {
         commitment_hex: faster_hex::hex_string(&borsh::to_vec(commitment).map_err(|e| e.to_string())?),
         binding_hex: faster_hex::hex_string(&borsh::to_vec(header).map_err(|e| e.to_string())?),
+        protected_material_hex: None,
     };
     let quote = runtime.block_on(client.get_palw_tir_original_quote(request)).map_err(|e| e.to_string());
     let _ = runtime.block_on(client.disconnect());
@@ -1928,6 +2114,7 @@ fn class_leaves_from_facts(facts: &kaspa_rpc_core::GetPalwProducerFactsResponse)
 ///   reach `Final`, which is when exposure is released; one that can never fit is given up.
 mod watch {
     use super::{class_leaves_from_facts, die, rpc_runtime, try_rpc_connect};
+    use kaspa_consensus_core::Hash64;
     use kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3;
     use kaspa_pq_validator_core::ValidatorKey;
     use kaspa_rpc_core::api::rpc::RpcApi;
@@ -1981,6 +2168,25 @@ mod watch {
         pub claim: String,
         pub txid: String,
         pub submitted_daa: u64,
+        #[serde(default)]
+        pub protected_execution_root: Option<Hash64>,
+    }
+
+    fn check_protected_landing_v1(
+        awaiting: &Awaiting,
+        row: Option<&kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>,
+        accepted_daa: u64,
+        accepted_block: &str,
+    ) -> Result<bool, String> {
+        let Some(root) = awaiting.protected_execution_root else { return Ok(true) };
+        let Some(row) = row else { return Ok(false) };
+        let claim = awaiting.claim.parse().map_err(|_| "unreadable protected claim in state")?;
+        let txid = awaiting.txid.parse().map_err(|_| "unreadable protected carrier in state")?;
+        row.check_carrier_v1(claim, txid, root)?;
+        if row.accepted_daa != accepted_daa || row.accepting_block.to_string() != accepted_block {
+            return Err("protected admission and claim views differ; retry".into());
+        }
+        Ok(true)
     }
 
     #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -2227,6 +2433,8 @@ mod watch {
             "literal accounting carrier refused",
             "native accounting requires this rail's quoted public binding context",
             "public binding requires native price context",
+            "protected publisher unavailable",
+            "protected original quote refused",
         ]
         .iter()
         .any(|m| text.contains(m))
@@ -2301,6 +2509,23 @@ mod watch {
                 .block_on(client.get_palw_free_prompt_claim(awaiting.claim.clone()))
                 .map_err(|e| format!("cannot read the node's claim facts: {e}"))?;
             if claim.found {
+                if let Some(root) = awaiting.protected_execution_root {
+                    let claim_id = awaiting.claim.parse().map_err(|_| "unreadable protected claim in state")?;
+                    let txid = awaiting.txid.parse().map_err(|_| "unreadable protected carrier in state")?;
+                    let row = runtime
+                        .block_on(client.get_palw_protected_original_readback_v1(claim_id, txid, root))
+                        .map_err(|e| format!("protected admission readback unavailable: {e}"))?;
+                    if !check_protected_landing_v1(&awaiting, row.as_ref(), claim.accepted_daa, &claim.accepted_block)? {
+                        quiet.say(
+                            "await",
+                            format!("{}: claim exists; its exact protected admission is not available yet", awaiting.stem),
+                        );
+                        return Ok(());
+                    }
+                    let receipt = config.outbox.join(format!("{}.admission.json", awaiting.stem));
+                    std::fs::write(&receipt, serde_json::to_vec_pretty(&row).map_err(|e| e.to_string())?)
+                        .map_err(|e| format!("cannot retain protected admission readback: {e}"))?;
+                }
                 log(format!(
                     "{}: claim {} is on the chain — phase {}, accepted at DAA {}. Follow it with `misaka palw claim {}`",
                     awaiting.stem, awaiting.claim, claim.phase, claim.accepted_daa, awaiting.claim
@@ -2384,7 +2609,8 @@ mod watch {
                 true,
             ))
             .map_err(|e| format!("cannot read the node's producer facts: {e}"))?;
-        if !facts.available || !facts.fp_certified || !facts.bond_known || facts.bond_producer_floor_shortfall > 0 {
+        let protected = config.pass_through.iter().any(|arg| arg == "--protected-publisher-config");
+        if !facts.available || (!facts.fp_certified && !protected) || !facts.bond_known || facts.bond_producer_floor_shortfall > 0 {
             quiet.say(
                 "chain",
                 format!(
@@ -2464,8 +2690,16 @@ mod watch {
                     .and_then(|v| serde_json::from_value::<Funding>(v.clone()).ok())
                     .filter(|f| f.amount >= MIN_FUNDING_SOMPI);
                 state.attempts.remove(&job.name);
-                state.awaiting =
-                    Some(Awaiting { stem: job.name.clone(), claim: job.claim.clone(), txid: txid.clone(), submitted_daa: daa });
+                state.awaiting = Some(Awaiting {
+                    stem: job.name.clone(),
+                    claim: job.claim.clone(),
+                    txid: txid.clone(),
+                    submitted_daa: daa,
+                    protected_execution_root: summary
+                        .get("protected_funding_sompi")
+                        .filter(|v| !v.is_null())
+                        .map(|_| commitment.execution_root),
+                });
                 save_state(&config.outbox, &state)?;
                 log(format!(
                     "{}: SUBMITTED carrier {txid} — pwu {} quanta {} fee {} sompi{}",
@@ -2625,7 +2859,9 @@ mod watch {
             // G14 lane FPSEL: the fp-worker's retained TIR header (`tir-public-binding.hex`) makes the one-shot rail quote and attach
             // the original's TFP1 frame (op 248), as the node producer does.
             let tir_binding = capture.with_file_name("tir-public-binding.hex");
-            if tir_binding.is_file() && !config.pass_through.iter().any(|a| a == "--public-binding") {
+            if tir_binding.is_file()
+                && !config.pass_through.iter().any(|a| a == "--public-binding" || a == "--protected-publisher-config")
+            {
                 command.arg("--public-binding").arg(tir_binding);
             }
         }
@@ -2652,6 +2888,52 @@ mod watch {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn protected_watch_requires_the_same_carrier_execution_and_acceptance_point() {
+            use kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1;
+            let h = Hash64::from_u64_word;
+            let awaiting = Awaiting {
+                stem: "job".into(),
+                claim: h(1).to_string(),
+                txid: h(2).to_string(),
+                submitted_daa: 5,
+                protected_execution_root: Some(h(3)),
+            };
+            let row = ProtectedOriginalReadbackV1 {
+                version: 1,
+                claim: h(1),
+                execution_root: h(3),
+                original: h(4),
+                carrier_transaction: h(2),
+                carrier_block: h(5),
+                accepting_block: h(6),
+                accepted_tx_ordinal: 0,
+                event_ordinal: 0,
+                accepted_daa: 7,
+                accepted_blue_score: 7,
+                observed_tip: h(8),
+                observed_tip_daa: 9,
+                full_replay_approval_recorded: false,
+                public_refutation_recorded: false,
+            };
+            assert!(!check_protected_landing_v1(&awaiting, None, 7, &h(6).to_string()).unwrap());
+            assert!(check_protected_landing_v1(&awaiting, Some(&row), 7, &h(6).to_string()).unwrap());
+            for field in 0..5 {
+                let mut wrong = row.clone();
+                match field {
+                    0 => wrong.carrier_transaction = h(99),
+                    1 => wrong.execution_root = h(99),
+                    2 => wrong.claim = h(99),
+                    3 => wrong.accepting_block = h(99),
+                    _ => wrong.accepted_daa += 1,
+                }
+                assert!(check_protected_landing_v1(&awaiting, Some(&wrong), 7, &h(6).to_string()).is_err());
+            }
+            // Old non-protected pending rows keep their existing claim lookup.
+            let old: Awaiting = serde_json::from_str(r#"{"stem":"job","claim":"c","txid":"t","submitted_daa":5}"#).unwrap();
+            assert!(check_protected_landing_v1(&old, None, 7, "").unwrap());
+        }
 
         #[test]
         fn tfp1_require_rejects_absent_binding_or_node() {
@@ -2770,6 +3052,8 @@ mod watch {
                 "literal accounting carrier refused: Resource",
                 "the chain would refuse this original public claim: native resource unavailable",
                 "cannot build the original public commitment transaction: quote window changed",
+                "protected original quote refused: selected view changed; retry",
+                "protected original quote refused: native resource unavailable",
             ] {
                 assert_eq!(classify(text), Failure::Transient, "one-shot quote retries must not spend attempts");
             }
@@ -2828,6 +3112,7 @@ mod watch {
         #[test]
         fn a_failure_is_counted_only_when_it_is_the_jobs() {
             assert_eq!(classify("cannot reach ws://127.0.0.1:27210: connection refused"), Failure::Transient);
+            assert_eq!(classify("protected publisher unavailable; nothing signed: publisher input unavailable"), Failure::Transient);
             assert_eq!(
                 classify(
                     "the commitment was not submitted: submit ab: the funding UTXO is spent by a transaction still in the mempool (an earlier submission's change has not been mined yet) — wait for a block and re-run; nothing was carried: already spent"
@@ -2849,7 +3134,13 @@ mod watch {
             let outbox = scratch("state");
             let state = State {
                 next_funding: Some(Funding { outpoint: format!("{}:0", "cd".repeat(64)), amount: 99_700_000 }),
-                awaiting: Some(Awaiting { stem: "fp-job-1".into(), claim: "c".into(), txid: "t".into(), submitted_daa: 7 }),
+                awaiting: Some(Awaiting {
+                    stem: "fp-job-1".into(),
+                    claim: "c".into(),
+                    txid: "t".into(),
+                    submitted_daa: 7,
+                    protected_execution_root: None,
+                }),
                 ..Default::default()
             };
             save_state(&outbox, &state).unwrap();

@@ -206,7 +206,7 @@ pub fn inspect_transaction_v1(tx: &Transaction, output_index: u32) -> Result<Act
 
 /// Values recomputed by a future original coordinator. Constructing this DTO
 /// from peer values is not graph closure, price calibration or admission.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct OriginalFundingScopeV1 {
     pub claim: Hash64,
     pub job_identity: Hash64,

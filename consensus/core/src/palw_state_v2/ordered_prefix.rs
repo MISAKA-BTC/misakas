@@ -3,6 +3,22 @@
 //! labels a partial state/delta as a completed block transition.
 use super::*;
 
+/// Fee effects from one successful complete prefix rehearsal. This owner
+/// retains the map allocation; it is not an accepted block or paid receipt.
+pub type PalwManifestRequestFeeProjectionV3 = crate::palw_native_resource_v1::NativeRetainedV1<
+    BTreeMap<crate::TransactionId, crate::palw_positive_contract_v2::ManifestRequestFeeV1>,
+>;
+
+/// Relay proposals retain their allocation and preserve the original raw
+/// inputs. They are never evidence that UTXO collection paid these amounts.
+pub type PalwRelayFeeProjectionV3 = crate::palw_native_resource_v1::NativeRetainedV1<
+    BTreeMap<crate::TransactionId, misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2>,
+>;
+pub struct PalwJointFeeProjectionV3 {
+    pub manifest: PalwManifestRequestFeeProjectionV3,
+    pub relay: PalwRelayFeeProjectionV3,
+}
+
 /// Read-only rehearsal of a complete candidate accepted list. Every native
 /// writer and its journal stay under one construction reservation. This is
 /// NOT a finalized state, an accepted block or permission to publish a delta.
@@ -87,6 +103,7 @@ impl<'a> PalwOrderedReplayBudgetV1<'a> {
         let canonical = objects
             .checked_add(extras.batch_court_carriers_v1.len())
             .and_then(|n| n.checked_add(extras.tokenizer_registration_carriers_v1.len()))
+            .and_then(|n| n.checked_add(extras.manifest_request_carriers_v3.len()))
             .ok_or_else(|| replay_capacity_v1("candidate event count overflow"))?;
         let events = canonical.max(physical_events.unwrap_or(0));
         let counts = [events, extras.positive_assignment_actions.len()];
@@ -121,6 +138,7 @@ pub enum PalwOrderedReplayLocationV1 {
     Ordinary { object_index: usize },
     Batch { accepted_tx_ordinal: usize },
     Tokenizer { accepted_tx_ordinal: usize },
+    Manifest { accepted_tx_ordinal: usize },
     RawAssignment { action_index: usize, accepted_tx_ordinal: Option<u32> },
 }
 #[derive(Debug)]
@@ -175,13 +193,15 @@ pub enum PalwOrderedPhysicalKindV3 {
     Ordinary,
     Batch,
     Tokenizer,
+    Manifest,
     OmittedOrdinary,
     OmittedBatch,
+    OmittedManifest,
 }
 
 impl PalwOrderedPhysicalKindV3 {
     fn omitted_v3(self) -> bool {
-        matches!(self, Self::OmittedOrdinary | Self::OmittedBatch)
+        matches!(self, Self::OmittedOrdinary | Self::OmittedBatch | Self::OmittedManifest)
     }
 }
 
@@ -252,7 +272,7 @@ pub fn palw_v2_replay_accepted_prefix_with_checks_v2<'parent: 'pass, 'pass, E>(
     extras: &'pass PalwTransitionExtrasV1,
     check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
 ) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
-    replay_accepted_prefix_v3(budget, accepted_objects, block_work, merged_work, own_execution_key, extras, check, None)
+    replay_accepted_prefix_v3(budget, accepted_objects, block_work, merged_work, own_execution_key, extras, check, None, None, None)
 }
 
 /// Uses the physical acceptance order for both raw interleaving and Node
@@ -279,7 +299,94 @@ pub fn palw_v2_replay_accepted_prefix_with_physical_checks_v3<'parent: 'pass, 'p
         extras,
         check,
         Some(PhysicalReplayV3 { events, observe }),
+        None,
+        None,
     )
+}
+
+/// Derive Manifest fees from the same complete ordered execution as the
+/// canonical fold, including ordinary gates and physical/raw interleaving.
+/// `manifest_request_expected_fees_v3` must be empty here. The UTXO owner must
+/// reconcile the returned effects against its actual transactions, replay body
+/// acceptance if fees change it, and supply the same effects to the canonical
+/// fold. A failed pass returns neither partial fees nor partial state. The
+/// ordinary replay entry points always require expected fees and never enter
+/// this projection mode.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_project_manifest_fees_with_physical_checks_v3<'parent: 'pass, 'pass, E>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    extras: &'pass PalwTransitionExtrasV1,
+    events: &[PalwOrderedPhysicalEventV3],
+    observe: &mut impl FnMut(Option<usize>, usize, &PalwChainStateV2) -> Result<(), E>,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+) -> Result<(PalwOrderedPrefixV1<'pass>, PalwManifestRequestFeeProjectionV3), PalwOrderedCandidateFailureV2<E>> {
+    let mut projection = None;
+    let prefix = replay_accepted_prefix_v3(
+        budget,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        extras,
+        check,
+        Some(PhysicalReplayV3 { events, observe }),
+        Some(&mut projection),
+        None,
+    )?;
+    let fees = projection.ok_or_else(|| {
+        PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::Order,
+            error: PalwStateV2Error::DeltaMismatch("successful Manifest projection returned no fee owner"),
+        })
+    })?;
+    Ok((prefix, fees))
+}
+
+/// Reprice Manifest and relay registration in one complete physical prefix.
+/// Strict replay still consumes only amounts collected by the actual UTXO pass.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_project_joint_fees_with_physical_checks_v3<'parent: 'pass, 'pass, E>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    extras: &'pass PalwTransitionExtrasV1,
+    events: &[PalwOrderedPhysicalEventV3],
+    observe: &mut impl FnMut(Option<usize>, usize, &PalwChainStateV2) -> Result<(), E>,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+) -> Result<(PalwOrderedPrefixV1<'pass>, PalwJointFeeProjectionV3), PalwOrderedCandidateFailureV2<E>> {
+    let mut projection = None;
+    let mut relay_projection = None;
+    let prefix = replay_accepted_prefix_v3(
+        budget,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        extras,
+        check,
+        Some(PhysicalReplayV3 { events, observe }),
+        Some(&mut projection),
+        Some(&mut relay_projection),
+    )?;
+    let fees = projection.ok_or_else(|| {
+        PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::Order,
+            error: PalwStateV2Error::DeltaMismatch("successful Manifest projection returned no fee owner"),
+        })
+    })?;
+    let relay = relay_projection.ok_or_else(|| {
+        PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::Order,
+            error: PalwStateV2Error::DeltaMismatch("successful joint projection returned no relay owner"),
+        })
+    })?;
+    Ok((prefix, PalwJointFeeProjectionV3 { manifest: fees, relay }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -292,6 +399,8 @@ fn replay_accepted_prefix_v3<'parent: 'pass, 'pass, E>(
     extras: &'pass PalwTransitionExtrasV1,
     check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
     physical: Option<PhysicalReplayV3<'_, E>>,
+    projection: Option<&mut Option<PalwManifestRequestFeeProjectionV3>>,
+    relay_projection: Option<&mut Option<PalwRelayFeeProjectionV3>>,
 ) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
     use PalwOrderedReplayLocationV1 as At;
     budget
@@ -318,7 +427,17 @@ fn replay_accepted_prefix_v3<'parent: 'pass, 'pass, E>(
         )
         .map_err(|error| PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 { location: At::Preparation, error }))?;
         let mut location = At::Order;
-        apply_ordered_prefix_checked_v2(&mut prefix.builder, parent, ctx, accepted_objects, &mut location, check, physical)?;
+        apply_ordered_prefix_checked_v2(
+            &mut prefix.builder,
+            parent,
+            ctx,
+            accepted_objects,
+            &mut location,
+            check,
+            physical,
+            projection,
+            relay_projection,
+        )?;
         Ok(prefix)
     })
 }
@@ -537,10 +656,13 @@ fn apply_ordered_prefix_located_v1(
         location,
         &mut |_, _, _, _| Ok::<(), std::convert::Infallible>(()),
         None,
+        None,
+        None,
     )
     .map_err(|failure| without_candidate_error_v2(failure).error)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_ordered_prefix_checked_v2<E>(
     builder: &mut TransitionBuilder<'_>,
     parent: &PalwChainStateV2,
@@ -549,6 +671,8 @@ fn apply_ordered_prefix_checked_v2<E>(
     location: &mut PalwOrderedReplayLocationV1,
     check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
     mut physical: Option<PhysicalReplayV3<'_, E>>,
+    projection: Option<&mut Option<PalwManifestRequestFeeProjectionV3>>,
+    relay_projection: Option<&mut Option<PalwRelayFeeProjectionV3>>,
 ) -> Result<(), PalwOrderedCandidateFailureV2<E>> {
     use PalwOrderedCandidateFailureV2::{Candidate, Native};
     use PalwOrderedObjectStageV2::{After, Before};
@@ -556,16 +680,20 @@ fn apply_ordered_prefix_checked_v2<E>(
     let extras = builder.extras;
     use PalwOrderedReplayLocationV1 as At;
     *location = At::Order;
-    use crate::palw_batch_court_v1::fold_order::{AcceptedNativeCourtItemV1, in_accepted_native_order_v1};
+    use crate::palw_batch_court_v1::fold_order::{
+        AcceptedPublicNativeCourtItemV2 as AcceptedNativeCourtItemV1, in_accepted_public_native_order_v2,
+    };
     // Only this whole ordered fold can name positions in its persistent delta.
     // Single-object rehearsal builders deliberately keep this scope absent.
     builder.tfp1_history_journal_parent = parent.last_point().map(|point| point.block);
-    let ordered = in_accepted_native_order_v1(
+    let ordered = in_accepted_public_native_order_v2(
         accepted_objects.iter(),
         &extras.batch_court_carriers_v1,
         &extras.tokenizer_registration_carriers_v1,
+        &extras.manifest_request_carriers_v3,
         |carrier| carrier.accepted_ordinal_v1(),
         |carrier| carrier.accepted_ordinal_v1(),
+        |carrier| carrier.accepted_ordinal_v3(),
     )
     .ok_or_else(|| {
         native(*location, PalwStateV2Error::CarriageInconsistent("native carriers do not follow accepted lifecycle order".into()))
@@ -576,7 +704,51 @@ fn apply_ordered_prefix_checked_v2<E>(
             PalwStateV2Error::CarriageInconsistent("tokenizer fee projection and carrier counts differ".into()),
         ));
     }
-    let tokenizer_parent_root = (!extras.tokenizer_registration_carriers_v1.is_empty()).then(|| parent.state_root());
+    if projection.is_some() && !extras.manifest_request_expected_fees_v3.is_empty() {
+        return Err(native(
+            *location,
+            PalwStateV2Error::CarriageInconsistent("Manifest projection received precomputed fee effects".into()),
+        ));
+    }
+    if projection.is_none() && extras.manifest_request_expected_fees_v3.len() != extras.manifest_request_carriers_v3.len() {
+        return Err(native(
+            *location,
+            PalwStateV2Error::CarriageInconsistent("Manifest request fee projection and carrier counts differ".into()),
+        ));
+    }
+    // This allocation is reached only after the outer cumulative pass/visit
+    // budget has been charged. It is retained with the returned projection.
+    let mut projected_fees = BTreeMap::new();
+    let projected_owner = if projection.is_some() {
+        use crate::palw_native_resource_v1::{BTreeNodeEnvelopeV1, TirNativeRequestsV1, reserve_native_pending_requests_v1};
+        let mut q = TirNativeRequestsV1::new();
+        let count = u64::try_from(extras.manifest_request_carriers_v3.len())
+            .map_err(|_| native(*location, replay_capacity_v1("Manifest fee projection count overflow")))?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<crate::TransactionId, crate::palw_positive_contract_v2::ManifestRequestFeeV1>>(count)
+            .map_err(|why| native(*location, PalwStateV2Error::NativeResource(why)))?;
+        reserve_native_pending_requests_v1(q.bytes_v1()).map_err(|why| native(*location, PalwStateV2Error::NativeResource(why)))?
+    } else {
+        None
+    };
+    let native_parent_root = (!extras.manifest_request_carriers_v3.is_empty()
+        || !extras.tokenizer_registration_carriers_v1.is_empty())
+    .then(|| parent.state_root());
+    // Both fee maps are charged after the cumulative pass/visit budget.
+    let mut relay_fees = BTreeMap::new();
+    let relay_owner = if relay_projection.is_some() {
+        use crate::palw_native_resource_v1::{BTreeNodeEnvelopeV1, TirNativeRequestsV1, reserve_native_pending_requests_v1};
+        use misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2;
+        let count = u64::try_from(
+            extras.positive_assignment_actions.iter().filter(|scheduled| scheduled.action.relay_carrier_fees_v2().is_some()).count(),
+        )
+        .map_err(|_| native(*location, replay_capacity_v1("relay projection count overflow")))?;
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<BTreeNodeEnvelopeV1<crate::TransactionId, FundingRelayCarrierFeesV2>>(count)
+            .map_err(|why| native(*location, PalwStateV2Error::NativeResource(why)))?;
+        reserve_native_pending_requests_v1(q.bytes_v1()).map_err(|why| native(*location, PalwStateV2Error::NativeResource(why)))?
+    } else {
+        None
+    };
     let mut raw_cursor = 0;
     let mut previous_raw_ordinal = None;
     let mut index = 0;
@@ -593,6 +765,7 @@ fn apply_ordered_prefix_checked_v2<E>(
     }
     for item in ordered {
         let (kind, before) = match &item {
+            AcceptedNativeCourtItemV1::Manifest(carrier) => (PalwOrderedPhysicalKindV3::Manifest, Some(carrier.accepted_ordinal_v3())),
             AcceptedNativeCourtItemV1::Ordinary(_) => (PalwOrderedPhysicalKindV3::Ordinary, None),
             AcceptedNativeCourtItemV1::Batch(carrier) => (PalwOrderedPhysicalKindV3::Batch, Some(carrier.accepted_ordinal_v1())),
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
@@ -608,8 +781,17 @@ fn apply_ordered_prefix_checked_v2<E>(
                     return Err(inconsistent("physical candidate differs from canonical fold input"));
                 }
                 if let Some(ordinal) = event.accepted_ordinal {
-                    apply_raw_located_v1(builder, ctx, index, Some(ordinal), &mut raw_cursor, &mut previous_raw_ordinal, location)
-                        .map_err(|error| native(*location, error))?;
+                    apply_raw_located_v1(
+                        builder,
+                        ctx,
+                        index,
+                        Some(ordinal),
+                        &mut raw_cursor,
+                        &mut previous_raw_ordinal,
+                        location,
+                        relay_projection.is_some().then_some(&mut relay_fees),
+                    )
+                    .map_err(|error| native(*location, error))?;
                 }
                 (physical.observe)(Some(event_index), index, &builder.state)
                     .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: Some(event_index), error })?;
@@ -619,10 +801,46 @@ fn apply_ordered_prefix_checked_v2<E>(
                 }
             }
         } else {
-            apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)
-                .map_err(|error| native(*location, error))?;
+            apply_raw_located_v1(
+                builder,
+                ctx,
+                index,
+                before,
+                &mut raw_cursor,
+                &mut previous_raw_ordinal,
+                location,
+                relay_projection.is_some().then_some(&mut relay_fees),
+            )
+            .map_err(|error| native(*location, error))?;
         }
         match item {
+            AcceptedNativeCourtItemV1::Manifest(carrier) => {
+                *location = At::Manifest { accepted_tx_ordinal: carrier.accepted_ordinal_v3() };
+                let fee = builder
+                    .install_shared_paid_manifest_request_v1(
+                        native_parent_root.expect("carrier requires parent root"),
+                        ctx,
+                        &carrier.prepared,
+                        &carrier.seed,
+                    )
+                    .map_err(|error| native(*location, error))?;
+                *location = At::Order;
+                if projection.is_some() {
+                    if projected_fees.insert(carrier.carrier_v3(), fee).is_some() {
+                        return Err(native(
+                            *location,
+                            PalwStateV2Error::CarriageInconsistent("Manifest projection repeats a carrier transaction".into()),
+                        ));
+                    }
+                } else if extras.manifest_request_expected_fees_v3.get(&carrier.carrier_v3()) != Some(&fee) {
+                    return Err(native(
+                        *location,
+                        PalwStateV2Error::CarriageInconsistent(
+                            "Manifest request fee projection differs on actual accepted prefix".into(),
+                        ),
+                    ));
+                }
+            }
             AcceptedNativeCourtItemV1::Ordinary(object) => {
                 *location = At::Ordinary { object_index: index };
                 check(Before, index, &builder.state, object).map_err(|error| Candidate {
@@ -643,7 +861,7 @@ fn apply_ordered_prefix_checked_v2<E>(
                 let (fee, _refusal) = builder
                     .apply_tokenizer_registration_at_v1(
                         parent,
-                        tokenizer_parent_root.expect("carrier requires parent root"),
+                        native_parent_root.expect("carrier requires parent root"),
                         ctx,
                         carrier,
                     )
@@ -664,15 +882,33 @@ fn apply_ordered_prefix_checked_v2<E>(
                 return Err(inconsistent("physical candidate remains outside canonical fold input"));
             }
             if let Some(ordinal) = event.accepted_ordinal {
-                apply_raw_located_v1(builder, ctx, index, Some(ordinal), &mut raw_cursor, &mut previous_raw_ordinal, location)
-                    .map_err(|error| native(*location, error))?;
+                apply_raw_located_v1(
+                    builder,
+                    ctx,
+                    index,
+                    Some(ordinal),
+                    &mut raw_cursor,
+                    &mut previous_raw_ordinal,
+                    location,
+                    relay_projection.is_some().then_some(&mut relay_fees),
+                )
+                .map_err(|error| native(*location, error))?;
             }
             (physical.observe)(Some(event_index), index, &builder.state)
                 .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: Some(event_index), error })?;
         }
     }
-    apply_raw_located_v1(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal, location)
-        .map_err(|error| native(*location, error))?;
+    apply_raw_located_v1(
+        builder,
+        ctx,
+        index,
+        None,
+        &mut raw_cursor,
+        &mut previous_raw_ordinal,
+        location,
+        relay_projection.is_some().then_some(&mut relay_fees),
+    )
+    .map_err(|error| native(*location, error))?;
     if let Some(physical) = &mut physical {
         (physical.observe)(None, index, &builder.state)
             .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: None, error })?;
@@ -681,6 +917,12 @@ fn apply_ordered_prefix_checked_v2<E>(
     *location = At::Order;
     if raw_cursor != extras.positive_assignment_actions.len() {
         return Err(native(*location, PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix")));
+    }
+    if let Some(output) = relay_projection {
+        *output = Some(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(relay_fees, relay_owner));
+    }
+    if let Some(projection) = projection {
+        *projection = Some(crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(projected_fees, projected_owner));
     }
     Ok(())
 }
@@ -694,8 +936,31 @@ fn apply_raw_located_v1(
     cursor: &mut usize,
     previous: &mut Option<u32>,
     location: &mut PalwOrderedReplayLocationV1,
+    mut relay: Option<
+        &mut BTreeMap<crate::TransactionId, misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2>,
+    >,
 ) -> Result<(), PalwStateV2Error> {
-    positive_assignment::apply_raw_before_object_v2(builder, ctx, index, before, cursor, previous).map_err(|error| {
+    positive_assignment::apply_raw_before_object_with_v3(builder, ctx, index, before, cursor, previous, &mut |builder, ctx, action| {
+        let Some(fees) = relay.as_deref_mut().filter(|_| action.relay_carrier_fees_v2().is_some()) else {
+            return builder.apply_positive_assignment_raw_v2(ctx, action);
+        };
+        let checkpoint = builder.try_checkpoint()?;
+        let result = (|| {
+            builder.require_raw_assignment_origin_v2(ctx, action)?;
+            let projected =
+                builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
+            if fees.contains_key(&action.transaction().id()) {
+                return Err(PalwStateV2Error::DeltaMismatch("joint projection repeats a relay carrier"));
+            }
+            fees.insert(action.transaction().id(), projected);
+            Ok(())
+        })();
+        if result.is_err() {
+            builder.restore(checkpoint);
+        }
+        result
+    })
+    .map_err(|error| {
         *location = PalwOrderedReplayLocationV1::RawAssignment {
             action_index: *cursor,
             accepted_tx_ordinal: builder

@@ -28922,6 +28922,7 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
@@ -28953,6 +28954,8 @@ mod evm_market {
             tokenizer_registration_open_cutoff_daa_v1: None,
             tokenizer_registration_carriers_v1: Vec::new(),
             tokenizer_registration_expected_fees_v1: Default::default(),
+            manifest_request_carriers_v3: Default::default(),
+            manifest_request_expected_fees_v3: Default::default(),
             staged_float_constraint_active: false,
             memory_routing_court: None,
             tir_public_allocation_rules_v1: None,
@@ -29242,6 +29245,7 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
@@ -29273,6 +29277,8 @@ mod evm_market {
             tokenizer_registration_open_cutoff_daa_v1: None,
             tokenizer_registration_carriers_v1: Vec::new(),
             tokenizer_registration_expected_fees_v1: Default::default(),
+            manifest_request_carriers_v3: Default::default(),
+            manifest_request_expected_fees_v3: Default::default(),
             staged_float_constraint_active: false,
             memory_routing_court: None,
             tir_public_allocation_rules_v1: None,

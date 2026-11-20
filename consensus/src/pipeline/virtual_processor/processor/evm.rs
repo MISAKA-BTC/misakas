@@ -1,6 +1,13 @@
 //! **`VirtualStateProcessor`: evm methods** — moved out of `processor.rs` (2026-10-13, a behaviour-preserving split: the methods are the same; each keeps the reach it had).
 
 use super::*;
+
+/// Returned only after the joint UTXO/EVM/PALW batch has been written. The
+/// deposit vector moves from the staged result; retries allocate no log copy.
+pub(super) struct CommittedEvmObservationV3 {
+    pub gas_used: u64,
+    pub deposit_claims: Vec<kaspa_consensus_core::evm::DepositClaim>,
+}
 #[cfg(feature = "evm")]
 #[path = "evm_market_owned_v2.rs"]
 mod market_owned_v2;
@@ -13,6 +20,176 @@ pub(crate) enum EvmChainContextFaultV2 {
 }
 
 impl VirtualStateProcessor {
+    /// Disposable market effects for Manifest fee selection. No UTXO bridge
+    /// effects or commit-ready EVM rows escape this method: acceptance can
+    /// still change when the projected fees are applied. The converged pass
+    /// must call `evm_chain_context_step` to check deposit locks and the header
+    /// commitment and produce the only EVM stage eligible for persistence.
+    #[cfg(feature = "evm")]
+    fn execute_manifest_evm_projection_v3(
+        &self,
+        current: BlockHash,
+        header: &Header,
+        ctx: &UtxoProcessingContext<'_>,
+        palw_state: &kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        template_payload: Option<&kaspa_consensus_core::evm::EvmExecutionPayload>,
+    ) -> Result<Option<kaspa_consensus_core::evm::EvmExecutionResult>, EvmChainContextFaultV2> {
+        use crate::model::stores::evm::EvmPayloadStoreReader;
+        ctx.require_no_evm_stage_v3().map_err(|why| EvmChainContextFaultV2::Local(why.into()))?;
+        let fences = self.palw_evm_market_fences_at(header.daa_score);
+        if header.daa_score < self.evm_activation_daa_score {
+            return Ok(None);
+        }
+        let parent = ctx.selected_parent();
+        let stored_payload;
+        let payload = if let Some(payload) = template_payload {
+            payload
+        } else {
+            stored_payload = match self.evm_payload_store.get(current) {
+                Ok(payload) => payload,
+                Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => Default::default(),
+                Err(why) => return Err(market_owned_v2::local_store_v2(why).into()),
+            };
+            &stored_payload
+        };
+        let market_context = self.evm_market_context_owned_v2(Some(palw_state), parent, header.daa_score)?;
+        let settlements = market_context.as_ref().map(|c| c.settlements.as_slice()).unwrap_or(&[]);
+        // Settlements depend only on the immutable selected parent, unlike
+        // deposit-lock availability and the final round gas limit.
+        crate::processes::evm::validate_evm_market_settlements(&payload, settlements)?;
+        let market = kaspa_evm::EvmMarketInput {
+            palw_view: None,
+            palw_view_owned_v2: market_context.as_ref().map(|c| c.view.clone()),
+            fences,
+            expected_settlements: settlements,
+            chain_id: kaspa_consensus_core::evm::EVM_CHAIN_ID,
+        };
+        let seed =
+            (self.evm_flat_authoritative && self.evm_shadow_state_backend).then(|| self.validated_flat_parent_seed(parent)).flatten();
+        let seed_prevalidated = seed.is_some();
+        if seed.is_none() && self.evm_retire_206 {
+            match self.evm_header_store.has(parent) {
+                Ok(false) => {}
+                Ok(true) => {
+                    return Err(EvmChainContextFaultV2::Local(PalwLocalTransitionFaultV1::Context(
+                        kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                    )));
+                }
+                Err(why) => return Err(market_owned_v2::local_store_v2(why).into()),
+            }
+        }
+        let gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
+            ctx.palw_round_verdicts.as_ref().map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses)).unwrap_or(0)
+        }));
+        let ordered = self.acceptance_ordered_mergeset(&ctx.ghostdag_data, header.daa_score);
+        let (result, _, _, _, _) = crate::processes::evm::evm_execute_acceptance_with_parent(
+            &self.evm_header_store,
+            &self.evm_state_store,
+            &self.evm_payload_store,
+            parent,
+            &ordered,
+            header,
+            &payload,
+            seed,
+            self.evm_gas_pool_v2_activation_daa_score,
+            self.evm_f002_withdraw_cap_activation_daa_score,
+            self.evm_bridge_ledger_activation_daa_score,
+            self.evm_f003_mldsa_verify_activation_daa_score,
+            self.evm_typed_receipt_root_activation_daa_score,
+            gas_cap,
+            market,
+        )
+        .map_err(market_owned_v2::execution_fault_v2)?;
+        if self.evm_shadow_state_backend && !seed_prevalidated {
+            self.shadow_validate_parent_seed(parent);
+        }
+        Ok(Some(result))
+    }
+
+    #[cfg(not(feature = "evm"))]
+    fn execute_manifest_evm_projection_v3(
+        &self,
+        _current: BlockHash,
+        header: &Header,
+        ctx: &UtxoProcessingContext<'_>,
+        _palw_state: &kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        _template_payload: Option<&kaspa_consensus_core::evm::EvmExecutionPayload>,
+    ) -> Result<Option<kaspa_consensus_core::evm::EvmExecutionResult>, EvmChainContextFaultV2> {
+        ctx.require_no_evm_stage_v3().map_err(|why| EvmChainContextFaultV2::Local(why.into()))?;
+        if header.daa_score >= self.evm_activation_daa_score {
+            panic!("Manifest fee projection reached an active EVM lane in a binary built without evm");
+        }
+        Ok(None)
+    }
+
+    pub(super) fn project_manifest_evm_actions_v3(
+        &self,
+        current: BlockHash,
+        header: &Header,
+        ctx: &UtxoProcessingContext<'_>,
+        state: &kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        payload: Option<&kaspa_consensus_core::evm::EvmExecutionPayload>,
+    ) -> Result<Vec<kaspa_consensus_core::evm::model_market::PalwEvmMarketActionV1>, EvmChainContextFaultV2> {
+        Ok(self
+            .execute_manifest_evm_projection_v3(current, header, ctx, state, payload)?
+            .map(|result| result.market_actions)
+            .unwrap_or_default())
+    }
+
+    /// Only after native fees converge may bridge inputs be checked against
+    /// the resulting UTXOs. Rebuild commitments without producing a DB stage.
+    #[cfg(feature = "evm")]
+    pub(super) fn recommit_manifest_template_evm_v3<V: UtxoView>(
+        &self,
+        header: &mut Header,
+        ctx: &mut UtxoProcessingContext<'_>,
+        selected_parent_utxo_view: &V,
+        state: &kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
+    ) -> Result<(), EvmChainContextFaultV2> {
+        let Some(result) = self.execute_manifest_evm_projection_v3(header.hash, header, ctx, state, Some(payload))? else {
+            return Ok(());
+        };
+        let claim_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
+        let locks = crate::processes::evm::validate_evm_deposit_claims(payload, &claim_view, header.daa_score)?;
+        let parent = ctx.selected_parent();
+        let market = self.evm_market_context_owned_v2(Some(state), parent, header.daa_score)?;
+        let settlements = market.as_ref().map(|context| context.settlements.as_slice()).unwrap_or(&[]);
+        crate::processes::evm::validate_evm_market_settlements(payload, settlements)?;
+        crate::processes::evm::apply_evm_bridge_effects(
+            &mut ctx.mergeset_diff,
+            &mut ctx.multiset_hash,
+            header.daa_score,
+            &locks,
+            &result.withdrawals,
+        )?;
+        crate::processes::evm::apply_evm_market_effects(
+            &mut ctx.mergeset_diff,
+            &mut ctx.multiset_hash,
+            header.daa_score,
+            parent,
+            settlements,
+        )?;
+        header.evm_payload_hash = payload.payload_hash();
+        header.evm_commitment_root = result.header.commitment_root();
+        header.utxo_commitment = ctx.multiset_hash.clone().finalize();
+        header.finalize();
+        Ok(())
+    }
+
+    #[cfg(not(feature = "evm"))]
+    pub(super) fn recommit_manifest_template_evm_v3<V: UtxoView>(
+        &self,
+        header: &mut Header,
+        ctx: &mut UtxoProcessingContext<'_>,
+        _selected_parent_utxo_view: &V,
+        state: &kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        payload: &kaspa_consensus_core::evm::EvmExecutionPayload,
+    ) -> Result<(), EvmChainContextFaultV2> {
+        self.execute_manifest_evm_projection_v3(header.hash, header, ctx, state, Some(payload))?;
+        Ok(())
+    }
+
     /// kaspa-pq EVM Lane v0.4 (§2.3): the lazy chain-context EVM step for one
     /// selected-chain candidate. Gated on `evm_activation_daa_score` (a single
     /// u64 compare on every current network); no-replay and the commitment
@@ -28,11 +205,12 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         pipeline: Option<&crate::processes::evm::EvmPipeline>,
         palw_state: Option<&kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
-    ) -> Result<Option<crate::processes::evm::EvmStaged>, EvmChainContextFaultV2> {
+    ) -> Result<(), EvmChainContextFaultV2> {
         use crate::model::stores::evm::EvmPayloadStoreReader; // EvmHeaderStoreReader is in module scope
         use crate::processes::evm::{apply_evm_bridge_effects, evm_validate, evm_validate_chained, validate_evm_deposit_claims};
+        ctx.require_no_evm_stage_v3().map_err(|why| EvmChainContextFaultV2::Local(why.into()))?;
         if header.daa_score < self.evm_activation_daa_score {
-            return Ok(None);
+            return Ok(());
         }
         // The §4.3 version rule admits only v2+ headers at/after activation.
         debug_assert!(header.version >= kaspa_consensus_core::constants::EVM_HEADER_VERSION);
@@ -206,18 +384,8 @@ impl VirtualStateProcessor {
             selected_parent,
             expected_settlements,
         )?;
-        // kaspa-pq EVM bridge observability (P0-4): a deposit lock that reaches
-        // this point is being APPLIED into this accepted chain block's committed
-        // UTXO diff (consumed). Log each so a successful claim is directly visible
-        // — the accepted-gas KPI rounds to 0.00% even for several real claims.
-        for (outpoint, entry) in &consumed_locks {
-            info!(
-                "[evm-claim-applied] accepting_block={current} deposit_outpoint={outpoint} amount_sompi={} pov_daa={}",
-                entry.amount, header.daa_score
-            );
-        }
-        // O9: chain-rate / mergeset / gas-utilization observability + applied-claim count.
-        self.evm_lane_kpi.record(ctx.ghostdag_data.mergeset_size(), staged.result.header.gas_used, consumed_locks.len());
+        // This is still a disposable candidate. Applied-claim logs and the
+        // lane KPI are published only after the joint batch commits.
         // C-01 (slice S6/S9) shadow seed validation: confirm the flat/reconstruct PARENT seed source
         // reproduces the committed 206 parent snapshot byte-for-byte (HALT on divergence; never
         // disqualifies — 206 is still written). Skipped when the flat-authoritative inline path
@@ -227,7 +395,8 @@ impl VirtualStateProcessor {
         if self.evm_shadow_state_backend && !seed_prevalidated {
             self.shadow_validate_parent_seed(selected_parent);
         }
-        Ok(Some(staged))
+        ctx.evm_staged = Some(staged);
+        Ok(())
     }
 
     /// Non-`evm` builds cannot validate the lane. On every default network the
@@ -240,18 +409,19 @@ impl VirtualStateProcessor {
         _current: BlockHash,
         _selected_parent: BlockHash,
         header: &Header,
-        _ctx: &mut UtxoProcessingContext<'_>,
+        ctx: &mut UtxoProcessingContext<'_>,
         _selected_parent_utxo_view: &V,
         _pipeline: Option<&crate::processes::evm::EvmPipeline>,
         _palw_state: Option<&kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
-    ) -> Result<Option<crate::processes::evm::EvmStaged>, EvmChainContextFaultV2> {
+    ) -> Result<(), EvmChainContextFaultV2> {
+        ctx.require_no_evm_stage_v3().map_err(|why| EvmChainContextFaultV2::Local(why.into()))?;
         if header.daa_score >= self.evm_activation_daa_score {
             panic!(
                 "the EVM lane is active at DAA {} but this kaspad was built without the `evm` feature — refusing to follow a chain it cannot validate (rebuild with --features evm)",
                 header.daa_score
             );
         }
-        Ok(None)
+        Ok(())
     }
 
     /// kaspa-pq EVM Lane v0.4 (§15): producer-side EVM fields for a template

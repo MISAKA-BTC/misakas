@@ -204,6 +204,18 @@ impl super::PalwPanelService {
     ) -> Result<PreparedCarrierV1, String> {
         self.build_lifecycle_tx(object, outpoint, entry).map(|tx| PreparedCarrierV1::new(tx, 0, daa))
     }
+
+    pub(super) fn prepare_native_payload_carrier_v1(
+        &self,
+        payload: &[u8],
+        outpoint: TransactionOutpoint,
+        entry: &UtxoEntry,
+    ) -> Result<PreparedCarrierV1, String> {
+        let kp = self.keypair.as_ref().ok_or("no signing key")?;
+        let daa = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+        super::palw_carrier_fees::build_native_payload_carrier_v1(&self.consensus_config, kp, payload.to_vec(), outpoint, entry, None)
+            .map(|tx| PreparedCarrierV1::new(tx, 0, daa))
+    }
     /// Retain the existing drill filter and stuck-tip replacement door.
     pub(super) async fn submit_prepared_carrier_v1(
         &self,

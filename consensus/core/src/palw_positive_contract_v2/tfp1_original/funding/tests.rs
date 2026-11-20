@@ -13,8 +13,8 @@ use crate::{
 };
 use misaka_palw_positive_contract::{public_one_honest::SignedPublicOriginalV1, rows::NativeHash64};
 
-/// Native booking/companion and payer signatures are exercised together.
-/// FP validation, accepted UTXOs and profile prices are fixtures, not public
+/// Native booking, original FP, companion and payer signatures are exercised
+/// together. Accepted UTXOs and profile prices are fixtures, not public
 /// payment or a complete protected original admission.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn exercise_funding_v1(
@@ -30,6 +30,7 @@ pub(crate) fn exercise_funding_v1(
     empty_book: &ServiceReservations,
     maximum_packets: usize,
     sign_companion: impl Fn(&OriginalCommit) -> Vec<u8>,
+    sign_fp: impl Fn(&PalwFreePromptCommitmentV3) -> Vec<u8>,
 ) {
     let frame = &fixture.frame;
     let fp = frame.original_v1();
@@ -132,13 +133,18 @@ pub(crate) fn exercise_funding_v1(
         crate::palw_court_original_escrow_v1::FundingConsentV1 { terms, signature: signature.as_ref().to_vec() }
     };
     let signed: [u8; SignedPublicOriginalV1::WIRE_BYTES] = sign_companion(companion).try_into().unwrap();
+    let fp_signature = sign_fp(fp);
+    let signed_fp =
+        crate::palw_freeprompt_v3::PalwFreePromptCommitmentEnvelopeV3 { commitment: fp.clone(), signature: fp_signature.clone() };
+    signed_fp.validate_stateless_v3(fp.job.network_domain).unwrap();
+    signed_fp.validate_signature_v3(crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1).unwrap();
     let make = |funding: crate::palw_court_original_escrow_v1::FundingConsentV1, attach: bool| {
         let mut envelope = crate::palw_tir_funded_original_envelope_v1::funded_original_transport_fixture_v1();
         let payload = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
             version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
             commitment: fp.clone(),
             prompt_token_ids: fixture.execution.prompt.clone(),
-            signature: vec![7; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            signature: fp_signature.clone(),
         };
         envelope.original_envelope = crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
             borsh::to_vec(&payload).unwrap(),

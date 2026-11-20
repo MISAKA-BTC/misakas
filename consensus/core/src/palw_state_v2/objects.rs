@@ -1753,6 +1753,7 @@ fn apply_object_batch_03_v1(
                         return Ok(());
                     }
                     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
+                    palw_tir_public_fold_v1::require_protected_seats_valid_v1(builder, claim_id, &slice, &part.receipts)?;
                     // ADR-0124 Decision 2: a shard's `Valid` seats are credited as the part lands.
                     builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score)?;
                     if builder.extras.audit_2026_09_23_active {
@@ -2650,6 +2651,7 @@ fn apply_object_batch_05_v1(
                 if builder.claim_licenses_by_parts(claim_id) {
                     return Err(PalwStateV2Error::LicensedByParts(*claim_id));
                 }
+                palw_tir_public_fold_v1::require_protected_panel_valid_v1(builder, *claim_id, receipts)?;
                 // ADR-0152 S-SPEC §3.4: past `palw_rcore_plus` the licence is the backed subset's.
                 if builder.params.rcore_plus_active_at(ctx.daa_score) {
                     let carried: Vec<_> = receipts.iter().map(|receipt| (receipt.clone(), None)).collect();
@@ -2664,6 +2666,9 @@ fn apply_object_batch_05_v1(
                 if builder.extras.audit_2026_09_23_active
                     && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?
                 {
+                    if super::claim_has_protected_frame_v1(&builder.state, claim_id) {
+                        return builder.license_protected_one_approval_v1(*claim_id, &claim, receipts, ctx.daa_score);
+                    }
                     return Ok(());
                 }
                 let verdicts = palw_seat_verdicts_of_v2(receipts);
@@ -2674,13 +2679,18 @@ fn apply_object_batch_05_v1(
                 // arm, through the one function, so no path licenses by a rule another path refuses.
                 // A genesis class is never outsider-judged; neither is a claim accepted below the
                 // fence (the predicate reads the claim's own `accepted_daa`).
-                palw_licence_names_its_outsider_v1(
+                if let Err(error) = palw_licence_names_its_outsider_v1(
                     &builder.state,
                     claim_id,
                     &claim,
                     &verdicts,
                     builder.extras.admission_independence_daa,
-                )?;
+                ) {
+                    if super::claim_has_protected_frame_v1(&builder.state, claim_id) {
+                        return builder.license_protected_one_approval_v1(*claim_id, &claim, receipts, ctx.daa_score);
+                    }
+                    return Err(error);
+                }
                 builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
                 // …and the seats that said nothing while their panel concluded without them (P0-7).
                 builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
@@ -3260,6 +3270,7 @@ fn apply_object_batch_07_v1(
                 return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Optimistic, &carried, ctx.daa_score);
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+            palw_tir_public_fold_v1::require_protected_panel_valid_v1(builder, *claim_id, &inner)?;
             // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
             // able to post the whole gain; if it cannot, the set is inert and the other doors stay open.
             if builder.extras.audit_2026_09_23_active
@@ -4198,7 +4209,14 @@ fn apply_object_batch_10_v1(
             // ADR-0074 Decision 6): a class whose free-prompt path no drill has certified takes
             // no free-prompt claim, so nothing it could not be convicted over ever licenses a
             // block.
-            if !palw_fp_lane_available_v1(&builder.state, builder.params, class_id, builder.extras.tir_public_conviction_active) {
+            let protected_original = builder
+                .extras
+                .tir_funded_originals
+                .get(claim_id)
+                .is_some_and(|pair| pair.envelope().is_protected_v2());
+            if !protected_original
+                && !palw_fp_lane_available_v1(&builder.state, builder.params, class_id, builder.extras.tir_public_conviction_active)
+            {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
             // **ADR-0082 Decision 10: what this claim is CREDITED for.**
@@ -4459,11 +4477,15 @@ fn apply_object_batch_10_v1(
             };
             let mut claim = claim;
             let public_job_wire = builder.public_fp_job_wire_v1(claim_id, &claim, public_job.as_deref())?;
-            let tir_original = palw_tir_public_fold_v1::prepare_paired_original_v1(builder, ctx, object, public_job.as_deref())?;
-            // **G14 item 1 (RFC-0035 A): the funded-original coordinator**, here — after native preparation, before the first
-            // reservation — so a funded TFO1 original is admitted whole (frame + escrow row, installed below) or refused whole by the
-            // paired checkpoint. A claim without a funded pairing keeps the TFP1 path unchanged.
-            let tir_original = palw_tir_public_fold_v1::admit_original_v1(builder, ctx, *claim_id, tir_original)?;
+            let tir_original = if protected_original {
+                Some(palw_tir_public_fold_v1::admit_protected_original_from_entry_v2(builder, ctx, *claim_id, public_job.as_deref())?)
+            } else {
+                let prepared = palw_tir_public_fold_v1::prepare_paired_original_v1(builder, ctx, object, public_job.as_deref())?;
+                // **G14 item 1 (RFC-0035 A): the funded-original coordinator**, here — after native preparation, before the first
+                // reservation — so a funded TFO1 original is admitted whole (frame + escrow row, installed below) or refused whole by the
+                // paired checkpoint. A claim without a funded pairing keeps the TFP1 path unchanged.
+                palw_tir_public_fold_v1::admit_original_v1(builder, ctx, *claim_id, prepared)?
+            };
             let staged_contract = if let Some(frame) = &tir_original {
                 // This is an ORIGINAL prospective allocation, not a repricing
                 // of an old claim or a second old required-family bundle.

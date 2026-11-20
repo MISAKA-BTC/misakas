@@ -79,6 +79,7 @@ mod answer_accounting;
 mod collector;
 mod court_progress;
 mod ingress;
+mod protected_replay;
 mod registration;
 mod retirement;
 mod seat_progress;
@@ -1347,7 +1348,8 @@ impl Drop for PalwTickGuardV1 {
 ///   back, so counting only the running ones let a re-attach put two 2M replays in both slots (the
 ///   SEAT-R review, MEDIUM). And a light replay (the floor, the 8k row) may start whenever no light
 ///   replay runs, whatever the heavy and the detached ones hold: no mix of days-long replays,
-///   detached or not, keeps a floor claim behind it. The duty loop hands slots out by receipt
+///   detached or not, keeps a floor claim behind it while the total held-task bound has room.
+///   Detached light replays still count toward that bound. The duty loop hands slots out by receipt
 ///   deadline ([`palw_seat_duty_order_v1`]).
 /// * **Timing** ([`Self::fits`]). A replay is not started when the last replay of its class this
 ///   host ran to a result would return after the claim's deadline: a class's first replay on a host
@@ -1373,6 +1375,9 @@ pub(crate) struct PalwSeatReplaysV1 {
     timed: HashMap<Hash64, u64>,
     /// Whether a served job is the claim's own, and over how many of its payloads that was asked.
     own_jobs: HashMap<PalwSeatReplayKeyV1, (bool, usize)>,
+    /// Exact accepted protected inputs, including their retained memory lease.
+    /// Rechecked against native inclusion each pass and released with the duty.
+    protected_inputs: HashMap<Hash64, Arc<protected_replay::AcceptedReplayInputsV1>>,
     /// `--palw-seat-replay-slots` (0 = [`Self::IN_FLIGHT`]).
     configured_slots: usize,
     /// The host's load per CPU is over [`Self::LOAD_LIMIT_MILLI`]: one replay at a time until it falls
@@ -1568,8 +1573,11 @@ impl PalwSeatReplaysV1 {
         let light_running = self.running.values().filter(|run| !run.heavy && !run.overdue).count();
         let slot_holders = self.running.values().filter(|run| !run.overdue).count();
         let heavy_held = self.running.values().chain(self.detached.values()).filter(|run| run.heavy).count();
-        let open = slot_holders < slots && self.running.len() + self.detached.len() < 2 * slots;
-        if heavy { heavy_held < Self::HEAVY_IN_FLIGHT && open } else { light_running == 0 || open }
+        // Detached and overdue blocking tasks still own their memory. The
+        // light-seat exception must not bypass this bound during catch-up.
+        let below_held_limit = self.running.len() + self.detached.len() < 2 * slots;
+        let open = slot_holders < slots;
+        below_held_limit && if heavy { heavy_held < Self::HEAVY_IN_FLIGHT && open } else { light_running == 0 || open }
     }
 
     /// **Whether a replay of `class` started at `now_daa` returns by `deadline`**, as far as this host
@@ -1771,6 +1779,7 @@ impl PalwSeatReplaysV1 {
         self.done.retain(|(claim, _), _| live(claim));
         self.retried.retain(|(claim, _)| live(claim));
         self.own_jobs.retain(|(claim, _), _| live(claim));
+        self.protected_inputs.retain(|claim, _| live(claim));
     }
 }
 
@@ -4017,7 +4026,7 @@ fn seat_duty_is_due_until_v1(
     current_daa: u64,
     deadline: u64,
 ) -> bool {
-    !answered.iter().any(|key| seat_duty_key_answers_v1(key, duty)) && current_daa <= deadline
+    (duty.protected_replay.is_some() || !answered.iter().any(|key| seat_duty_key_answers_v1(key, duty))) && current_daa <= deadline
 }
 
 /// **Whether a receipt this seat filed under `key` answers `duty`** — the same claim, anchor, seat
@@ -4525,6 +4534,17 @@ impl PendingProviderMaterialV1 {
     }
 }
 
+/// Completed replay retained through its hard deadline. Inclusion is read from
+/// current consensus state, so a reorg can make the approval due again.
+#[derive(Clone, Copy)]
+struct PendingFullReplayV1 {
+    binding: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+    claim: Hash64,
+    bond: PalwBondKeyV2,
+    hard: u64,
+    submitted: Option<kaspa_consensus_core::tx::TransactionId>,
+}
+
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
     /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
@@ -4546,6 +4566,8 @@ pub struct PalwPanelService {
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
     keypair: Option<Arc<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
+    /// Completed replays awaiting canonical approval, retained for reorg retry.
+    pending_full_replay: std::sync::Mutex<std::collections::VecDeque<PendingFullReplayV1>>,
     bond: Option<TransactionOutpoint>,
     /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
     /// a cadence rather than inside every write (audit M2-2).
@@ -5077,6 +5099,7 @@ impl PalwPanelService {
             improve_holdings: std::sync::Mutex::new(Vec::new()),
             root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
+            pending_full_replay: std::sync::Mutex::new(std::collections::VecDeque::new()),
             provider_http_fetch: Arc::new(tokio::sync::Semaphore::new(1)),
             pending_provider_http: Arc::new(std::sync::Mutex::new(None)),
             provider_court_request: std::sync::Mutex::new(None),
@@ -7630,6 +7653,37 @@ impl PalwPanelService {
         self.build_lifecycle_tx_priced_v1(object, funding_outpoint, funding, extra_outputs, None)
     }
 
+    /// Keep the completed full replay while its draw or funding is still pending.
+    /// The collector keeps it through the hard deadline, including after a send.
+    fn stage_full_replay_payload_v1(&self, checked: protected_replay::CheckedReplayInputsV1, bond: PalwBondKeyV2) {
+        let binding = checked.binding();
+        let Some(hard) = binding.accepted_daa.checked_add(kaspa_consensus_core::palw_court_policy_v1::DISPUTE_WINDOW_DAA) else {
+            return;
+        };
+        let mut pending = self.pending_full_replay.lock().unwrap();
+        if pending.iter().any(|entry| entry.binding == binding && entry.bond == bond) {
+            return;
+        }
+        pending.push_back(PendingFullReplayV1 { binding, claim: binding.claim, bond, hard, submitted: None });
+    }
+
+    fn full_replay_payload_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, item: PendingFullReplayV1) -> Option<Vec<u8>> {
+        if session.get_virtual_daa_score() > item.hard {
+            return None;
+        }
+        let kp = self.keypair.as_ref()?;
+        let key = kp.verification_key.as_ref();
+        let digest = session.palw_protected_full_replay_digest_v1(item.binding, item.bond, key)?;
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &kp.signing_key,
+            &digest,
+            misaka_palw_positive_contract::public_one_honest::FULL_REPLAY_SIGN_CONTEXT,
+            [0u8; 32],
+        )
+        .ok()?;
+        session.palw_protected_full_replay_payload_v1(item.binding, item.bond, key, signature.as_ref())
+    }
+
     /// [`Self::build_lifecycle_tx_with_outputs`] paying above `replaces_feerate` (sompi a gram) when
     /// it is `Some` — the carrier that replaces one of ours in the pool
     /// ([`Self::replace_late_carrier_v1`]; [`palw_replacement_fee_v1`]).
@@ -10095,6 +10149,9 @@ impl PalwPanelService {
                 .iter()
                 .map(|duty| {
                     let class = seat_classes.class(&duty.class_id);
+                    if let Some(protected) = protected_replay::seat_r_duty_v1(duty, class.held_to_final() != Some(false)) {
+                        return protected;
+                    }
                     let seats = duty.panel_seat_count.max(1);
                     let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
                         duty.panel_anchor,
@@ -10139,6 +10196,18 @@ impl PalwPanelService {
                     .map(|(duty, view)| {
                         let mut valid = receipt_pool_v2.checked_valid_seats(&duty.claim_id, &receipt_facts);
                         valid.extend(receipt_pool_v3.checked_valid_seats(&duty.claim_id, &receipt_facts));
+                        // A pooled ordinary receipt is no evidence of this seat's
+                        // separately authenticated, complete protected replay.
+                        if duty.protected_replay.is_some() {
+                            valid.clear();
+                        }
+                        let replay_queued = duty.protected_replay.is_some_and(|binding| {
+                            self.pending_full_replay
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .any(|item| item.binding == binding && item.bond == duty.seat_bond)
+                        });
                         crate::palw_seat_schedule::PalwSeatScheduleInV1 {
                             claim_id: duty.claim_id,
                             deadline: view.deadline,
@@ -10146,7 +10215,7 @@ impl PalwPanelService {
                             me: duty.seat_bond,
                             panel: receipt_facts.panel(&duty.claim_id).map(|panel| panel.seats.clone()),
                             valid,
-                            due: seat_duty_is_due_until_v1(duty, &answered, current_daa, view.deadline),
+                            due: !replay_queued && seat_duty_is_due_until_v1(duty, &answered, current_daa, view.deadline),
                             big: seat_replays.is_slow_class(&duty.class_id)
                                 && view.deadline.saturating_sub(current_daa) > crate::palw_seat_schedule::PALW_SEAT_BIG_URGENT_DAA_V1,
                         }
@@ -14298,36 +14367,66 @@ impl PalwPanelService {
         current_daa: u64,
         pooled: &[Vec<u8>],
         replays: &mut PalwSeatReplaysV1,
-    ) -> (PalwSeatReplayStepV1, Option<Vec<u8>>) {
+    ) -> (PalwSeatReplayStepV1, Option<Vec<u8>>, Option<protected_replay::CheckedReplayInputsV1>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PalwFpMaterialV1, fp_job_id_v3, palw_fp_capture_decode_v1, palw_fp_job_material_decode_v1, palw_fp_material_encode_v1,
             palw_fp_seat_prompt_admit_v1,
         };
         let form = self.class_prompt_ids_form(duty.class_id);
         let Ok(probe) = self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id)) else {
-            return (PalwSeatReplayStepV1::NoVerdict, None);
+            return (PalwSeatReplayStepV1::NoVerdict, None, None);
         };
-        // The distinct jobs this seat holds, in pool order, each with every payload that spells it.
-        let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
-        let mut jobs: Vec<(Hash64, PalwFpMaterialV1, Vec<Vec<u8>>)> = Vec::new();
-        for bytes in pooled.iter().cloned().chain(disk) {
-            let Some(material) = palw_fp_job_material_decode_v1(&bytes, form) else { continue };
-            if material.job.class_id != duty.class_id
-                || material.job.executor_bond != duty.executor_bond.0
-                || !self.fp_privacy_mode_judgeable(material.job.privacy_mode)
-                || palw_fp_seat_prompt_admit_v1(&material.job, Some(&material.prompt_token_ids), form).is_err()
-            {
-                continue;
+        // Protected jobs are reconstructed from their accepted TFO3, so a
+        // missed FPM broadcast or a restart cannot strand a selected Panel.
+        // Keep the returned material lease through this pass; the asynchronous
+        // replay takes its own reservation before copying the job and prompt.
+        let cached = replays.protected_inputs.remove(&duty.claim_id);
+        let protected_inputs = match self.load_protected_replay_inputs_v1(session, duty, cached).await {
+            Ok(inputs) => inputs,
+            Err(why) => {
+                crate::palw_backends::note_throttled_v1("protected-replay-inputs", || {
+                    format!("[{PALW_PANEL}] claim {}: accepted replay inputs unavailable: {why}", duty.claim_id)
+                });
+                return (PalwSeatReplayStepV1::Waiting, None, None);
             }
-            let job_id = fp_job_id_v3(&material.job);
-            match jobs.iter_mut().find(|(id, _, _)| *id == job_id) {
-                Some((_, _, payloads)) => payloads.push(bytes),
-                None => jobs.push((job_id, material, vec![bytes])),
+        };
+        if let Some(inputs) = &protected_inputs {
+            replays.protected_inputs.insert(duty.claim_id, inputs.clone());
+        }
+        let mut jobs: Vec<(Hash64, PalwFpMaterialV1, Vec<Vec<u8>>)> = Vec::new();
+        if let Some(inputs) = &protected_inputs {
+            if !self.fp_privacy_mode_judgeable(inputs.material.job.privacy_mode) {
+                return (PalwSeatReplayStepV1::NoVerdict, None, None);
+            }
+            jobs.push((fp_job_id_v3(&inputs.material.job), inputs.material.clone(), Vec::new()));
+        } else {
+            // Legacy jobs retain their served/retained material route.
+            let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
+            for bytes in pooled.iter().cloned().chain(disk) {
+                let Some(material) = palw_fp_job_material_decode_v1(&bytes, form) else { continue };
+                if material.job.class_id != duty.class_id
+                    || material.job.executor_bond != duty.executor_bond.0
+                    || !self.fp_privacy_mode_judgeable(material.job.privacy_mode)
+                    || palw_fp_seat_prompt_admit_v1(&material.job, Some(&material.prompt_token_ids), form).is_err()
+                {
+                    continue;
+                }
+                let job_id = fp_job_id_v3(&material.job);
+                match jobs.iter_mut().find(|(id, _, _)| *id == job_id) {
+                    Some((_, _, payloads)) => payloads.push(bytes),
+                    None => jobs.push((job_id, material, vec![bytes])),
+                }
             }
         }
         // Whose each job is: asked again only when a payload has arrived since a `false`.
         let mut own: Vec<bool> = Vec::with_capacity(jobs.len());
         for (job_id, _, payloads) in &jobs {
+            if protected_inputs.is_some() {
+                // The native carrier binds this job to the duty. That identity
+                // alone grants no Valid or approval: replay must finish below.
+                own.push(true);
+                continue;
+            }
             let key = (duty.claim_id, *job_id);
             let answer = match replays.own_job(&key, payloads.len()) {
                 Some(answer) => answer,
@@ -14372,7 +14471,18 @@ impl PalwPanelService {
             let is_own = own[index];
             // Whether this job's replay can decide the claim: the claim's own, or any while none is.
             let decides = is_own || !holds_own;
-            let key = (duty.claim_id, *job_id);
+            // A replacement can re-admit the same Studio job under a new
+            // original. A detached task belongs only to the original it read.
+            let replay_id = protected_inputs.as_ref().map_or(*job_id, |inputs| {
+                let binding = inputs.binding();
+                let mut identity = Vec::with_capacity(192 + 4);
+                identity.extend_from_slice(job_id.as_byte_slice());
+                identity.extend_from_slice(binding.accepting_block.as_byte_slice());
+                identity.extend_from_slice(binding.carrier_transaction.as_byte_slice());
+                identity.extend_from_slice(&binding.accepted_tx_ordinal.to_le_bytes());
+                Hash64::from_bytes(misaka_palw_kernel::hash::id(b"misaka-palw/protected-fp-seat-replay/v1", &identity))
+            });
+            let key = (duty.claim_id, replay_id);
             let mut poll = replays.poll(&key, current_daa).await;
             if decides
                 && let PalwSeatReplayPollV1::Done { result: Err(e), fresh } = &poll
@@ -14407,6 +14517,28 @@ impl PalwPanelService {
                         duty.output_root,
                     );
                     if step == PalwSeatReplayStepV1::Licensed {
+                        let checked = match &protected_inputs {
+                            Some(inputs) => inputs.check_completed_v1(session, material).map(Some),
+                            None => session.palw_protected_original_readback_v1(duty.claim_id).and_then(|read| {
+                                if read.is_some() {
+                                    Err("protected replay admission changed during legacy replay".into())
+                                } else {
+                                    Ok(None)
+                                }
+                            }),
+                        };
+                        let public_inputs = match checked {
+                            Ok(checked) => checked,
+                            Err(why) => {
+                                crate::palw_backends::note_throttled_v1("protected-replay-inputs", || {
+                                    format!(
+                                        "[{PALW_PANEL}] claim {}: full replay awaits its exact public inputs: {why}",
+                                        duty.claim_id
+                                    )
+                                });
+                                return (PalwSeatReplayStepV1::Waiting, None, None);
+                            }
+                        };
                         if fresh {
                             info!(
                                 "[{PALW_PANEL}] claim {}: licensed by replay — the job reproduces the claim's roots and answer at its \
@@ -14424,6 +14556,7 @@ impl PalwPanelService {
                         return (
                             PalwSeatReplayStepV1::Licensed,
                             Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),
+                            public_inputs,
                         );
                     }
                     if fresh {
@@ -14444,7 +14577,7 @@ impl PalwPanelService {
                     }
                     // SEAT-S2: an answer the replay cannot name refutes nothing.
                     if is_own && step == PalwSeatReplayStepV1::Refuted {
-                        return (PalwSeatReplayStepV1::Refuted, None);
+                        return (PalwSeatReplayStepV1::Refuted, None, None);
                     }
                 }
                 PalwSeatReplayPollV1::Done { result: Err(e), fresh } => {
@@ -14479,7 +14612,7 @@ impl PalwPanelService {
                     let Ok(backend) =
                         self.resolve_backend_for_claim_v1(session, duty.class_id, duty.artifact_root, Some(duty.claim_id))
                     else {
-                        return (PalwSeatReplayStepV1::NoVerdict, None);
+                        return (PalwSeatReplayStepV1::NoVerdict, None, None);
                     };
                     let active = self.consensus_config.params.palw_memory_routing_court_v2.is_some_and(|f| {
                         f != kaspa_consensus_core::config::params::ForkActivation::never()
@@ -14592,7 +14725,7 @@ impl PalwPanelService {
             }
         }
         // Nothing held, every deciding job refused or late, or every one replayed and none the claim's.
-        if waiting { (PalwSeatReplayStepV1::Waiting, None) } else { (PalwSeatReplayStepV1::NoVerdict, None) }
+        if waiting { (PalwSeatReplayStepV1::Waiting, None, None) } else { (PalwSeatReplayStepV1::NoVerdict, None, None) }
     }
 
     /// **SEAT-S4 past SEAT-R, one tick** ([`PalwSeatResumesV1`]): the C7 partial seat's resume of its
@@ -15391,6 +15524,7 @@ mod seat_duty_panel_key_tests {
         let h = Hash64::from_u64_word;
         PalwSeatDutyV2 {
             model_panel_one: false,
+            protected_replay: None,
             accepted_block: h(1),
             claim_id: h(claim),
             class_id: h(2),

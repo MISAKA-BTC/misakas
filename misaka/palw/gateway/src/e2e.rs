@@ -198,6 +198,28 @@ fn a_chat_request_becomes_a_queued_commitment_and_says_it_is_not_final() {
     let commitment: PalwFreePromptCommitmentV3 = borsh::from_slice(&std::fs::read(&commitments[0]).unwrap()).unwrap();
     assert_eq!(faster_hex::hex_string(fp_claim_id_v3(&commitment).as_byte_slice()), claim_of(&body));
     assert_eq!(h.outbox_files(".result.borsh").len(), 1);
+    // The later protected publisher gets the executed request, not a display
+    // string whose control-token boundaries it would have to guess.
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PalwFpWorkerInputV3, PalwFpWorkerRequestV3, PalwFpWorkerResultV3, fp_worker_request_hash_v3,
+    };
+    let requests = h.outbox_files(".request.borsh");
+    assert_eq!(requests.len(), 1);
+    let request_bytes = std::fs::read(&requests[0]).unwrap();
+    let request: PalwFpWorkerRequestV3 = borsh::from_slice(&request_bytes).unwrap();
+    let result: PalwFpWorkerResultV3 = borsh::from_slice(&std::fs::read(&h.outbox_files(".result.borsh")[0]).unwrap()).unwrap();
+    result.validate_against_request(&request, fp_worker_request_hash_v3(&request_bytes), PalwPromptIdsFormV1::Flat).unwrap();
+    assert!(matches!(request.input, PalwFpWorkerInputV3::Segments(_)));
+    // This harness selects the passthrough sidecar because its floor model has
+    // only twelve context tokens. The saved execution must preserve that choice,
+    // rather than silently applying the model's generic chat template afterwards.
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwFpPromptSegmentV1;
+    assert_eq!(request.input, PalwFpWorkerInputV3::Segments(vec![PalwFpPromptSegmentV1::Text(b"hi".to_vec())]));
+    assert_eq!(std::fs::read(&h.outbox_files(".prompt.utf8")[0]).unwrap(), b"hi");
+    let stem = requests[0].file_name().unwrap().to_str().unwrap().strip_suffix(".request.borsh").unwrap();
+    let summary: serde_json::Value = serde_json::from_slice(&std::fs::read(h.dir.join(format!("{stem}.json"))).unwrap()).unwrap();
+    assert_eq!(summary["request_hash"], crate::hex(fp_worker_request_hash_v3(&request_bytes)));
+    assert_eq!(summary["fp_claim_id"], claim_of(&body));
     assert_eq!(h.traces(), 1, "the worker's retained trace is where the gateway looks for it");
 }
 

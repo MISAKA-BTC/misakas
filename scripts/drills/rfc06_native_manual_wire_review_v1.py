@@ -5,6 +5,11 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Protected frame v1/v2: u16 version, two separately u32-length-capped bodies,
+# FramePinsV1, a nonzero Hash64 service graph only for v2, then identity.
+# The owner scanner checks exactly the same version, length bounds and graph;
+# nested body readers must consume their complete slices before allocation.
+'crate::palw_positive_contract_v2::tfp1_original::native_frame::PublicTfp1FrameV1': ('adapter', '8b5649a99cb1e080386af7f8fe191cfa402572c1fb64d4f25dd0f23088e0a98c'),
 # RFC-0051: derived field order; bounded Part bytes and EOG vectors; semantic subset checks.
 'crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1': ('reviewed-field-layout', '573c1020c772630340d1af5ff5da629a5a5d146eebf212dc4b3c2945b38e04cb'),
 'crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1': ('reviewed-field-layout', 'b64d372cf2a4b95e48cbcd40b9f1e1a39425c56b8d0a8febaa48d4948f899230'),

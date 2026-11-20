@@ -277,6 +277,7 @@ pub(super) fn apply_part_v1(
         }
     };
     let receipts_v2: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = part.receipts.iter().map(|r| r.receipt.clone()).collect();
+    palw_tir_public_fold_v1::require_protected_seats_valid_v1(builder, claim_id, &slice, &receipts_v2)?;
     // The price a counted signer posts: `lock_{k'}` of the claim, `k' = max(2, this shard's weakest cell)`, scaled by the
     // signer's share of the claim's work (decision 6) and floored. Priced ONCE here, from the same reads
     // `rcore_backed_set` prices a licence with, so a lock written now is the lock the licence would post.

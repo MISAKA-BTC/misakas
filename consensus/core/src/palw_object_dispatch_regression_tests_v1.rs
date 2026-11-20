@@ -121,7 +121,7 @@ fn paired_fp_late_original_deposit_failure_restores_the_entire_checkpoint() {
     // the existing court fixture. The late failure below runs the actual
     // paired object writer; this is not a service admission fixture.
     let unrelated = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
-    let (unrelated_state, unrelated_params, unrelated_extras) = world(&unrelated, &unrelated.frame);
+    let (unrelated_state, unrelated_params, unrelated_extras) = self::world(&unrelated, &unrelated.frame);
     let service_state = bind_clock_service(&unrelated_state, &unrelated.frame, &unrelated_params, &unrelated_extras);
     assert_ne!(unrelated.frame.plan_v1().original_claim, claim);
     state.staged_courts.insert(Key::CourtService, service_state.staged_courts[&Key::CourtService].clone());

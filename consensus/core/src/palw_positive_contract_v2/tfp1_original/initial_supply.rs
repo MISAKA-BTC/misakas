@@ -24,14 +24,13 @@ use misaka_palw_positive_contract::{
     identity::Digest,
     public_one_honest::{
         CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalId, hf_artifact_material_codec_v1,
-        prompt_text_material_codec_v1, tir_cold_dependencies_codec_v1, tir_cold_initial_state_codec_v1,
-        tir_ordinary_tfp1_rules_material_codec_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
-        tir_trace_material_codec_v1, tokenizer_json_material_codec_v1,
+        tir_cold_dependencies_codec_v1, tir_cold_initial_state_codec_v1, tir_ordinary_tfp1_rules_material_codec_v1,
+        tir_output_material_codec_v1, tir_program_material_codec_v1, tir_trace_material_codec_v1, tokenizer_json_material_codec_v1,
     },
     reservations::RemainingCapacity,
 };
 
-const MATERIAL_SCOPES: [MaterialScope; MaterialScope::COUNT] = [
+pub(super) const MATERIAL_SCOPES: [MaterialScope; MaterialScope::COUNT] = [
     MaterialScope::Artifact,
     MaterialScope::Program,
     MaterialScope::Prompt,
@@ -96,6 +95,7 @@ pub(crate) struct PublicTfp1InitialSupplyV1 {
     claim: Hash64,
     source: Hash64,
     literal_prompt: Hash64,
+    prompt_encoding: misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1,
     hf_content_root: Digest,
     hf_chunk_bytes: u32,
     input_tokens: Digest,
@@ -245,6 +245,7 @@ impl PublicTfp1InitialSupplyV1 {
             claim,
             source: source_id,
             literal_prompt: literal_prompt_id,
+            prompt_encoding: misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::LiteralUtf8,
             hf_content_root: hf_entry.content_root,
             hf_chunk_bytes: hf_entry.chunk_bytes,
             input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
@@ -326,15 +327,35 @@ impl PublicTfp1InitialSupplyV1 {
         {
             return Err(ContractError::Identity.into());
         }
-        manifest.open_prompt_text(literal_prompt)?;
+        match self.prompt_encoding {
+            misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::LiteralUtf8 => {
+                manifest.open_prompt_text(literal_prompt)?;
+            }
+            misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::SegmentsV1 => {
+                manifest.open_prompt_segments_v1(literal_prompt, u32::MAX)?;
+            }
+        }
         Ok(())
+    }
+
+    pub(crate) fn with_prompt_encoding_v5(
+        mut self,
+        encoding: misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1,
+        body: &[u8],
+    ) -> Result<Self, InitialSupplyErrorV1> {
+        encoding.check_body_v1(body, PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 as u64)?;
+        if literal_prompt_id_v1(body)? != self.literal_prompt {
+            return Err(ContractError::Identity.into());
+        }
+        self.prompt_encoding = encoding;
+        Ok(self)
     }
 
     fn codecs_v1(&self) -> [Digest; MaterialScope::COUNT] {
         [
             hf_artifact_material_codec_v1(),
             tir_program_material_codec_v1(),
-            prompt_text_material_codec_v1(),
+            self.prompt_encoding.codec_v1(),
             Digest(prompt_ids_form_id_v1(self.prompt_form).as_bytes()),
             tokenizer_json_material_codec_v1(),
             tir_ordinary_tfp1_rules_material_codec_v1(),
@@ -448,6 +469,7 @@ pub(crate) mod tests {
         palw_step::PalwStepCoordinateV1,
         palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1},
     };
+    use misaka_palw_positive_contract::public_one_honest::prompt_text_material_codec_v1;
 
     /// Reuse the ordinary TFP1 fixture with an actual earlier registration,
     /// bound container and native Source. The descriptor is local fixture data.
@@ -884,6 +906,7 @@ pub(crate) mod tests {
             claim: Hash64::from_u64_word(1),
             source: Hash64::from_u64_word(2),
             literal_prompt: Hash64::from_u64_word(3),
+            prompt_encoding: misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::LiteralUtf8,
             hf_content_root: Digest([4; 64]),
             hf_chunk_bytes: 450,
             input_tokens: Digest([6; 64]),

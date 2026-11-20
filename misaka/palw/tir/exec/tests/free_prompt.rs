@@ -37,6 +37,10 @@ const LADDER: u64 = 1 << 26;
 
 /// Every admissible tiny program under the tiled scheme, served by an IR backend that knows its network.
 fn backends(tag: &str) -> Vec<(String, TirBackendV1)> {
+    backends_with_tokenizer(tag, [2; 64])
+}
+
+fn backends_with_tokenizer(tag: &str, tokenizer: [u8; 64]) -> Vec<(String, TirBackendV1)> {
     let dir = std::env::temp_dir().join(format!("tir-exec-fp-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut out = Vec::new();
@@ -54,7 +58,7 @@ fn backends(tag: &str) -> Vec<(String, TirBackendV1)> {
             &path,
             &program,
             borsh::to_vec(&lay).unwrap(),
-            [2; 64],
+            tokenizer,
             name.clone(),
             &mut tensor,
         )
@@ -106,6 +110,190 @@ fn prompt_of(backend: &TirBackendV1, k: usize) -> Vec<u32> {
 
 fn usize_ids(ids: &[u32]) -> Vec<usize> {
     ids.iter().map(|t| *t as usize).collect()
+}
+
+#[test]
+fn protected_publisher_uses_retained_roots_and_refuses_missing_or_changed_bodies() {
+    use misaka_palw_positive_contract::{
+        identity::{Digest, PUBKEY_BYTES},
+        public_one_honest::{HfArtifactDescriptorV1, HfArtifactNativePinsV1, MaterialScope},
+    };
+    use misaka_palw_tir_exec::node::{backend::TirCaptureV1, protected_original_material::prepare_protected_original_material_v1};
+    // Raw tokenizer identity only: the CLI separately parses/tokenizes the
+    // literal prompt. This fixture does not assert that relation or admission.
+    let raw = br#"{"fixture":"raw tokenizer identity"}"#;
+    let tokenizer = kaspa_consensus_core::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw);
+    let (_, backend) = backends_with_tokenizer("protected-material", tokenizer.as_bytes()).remove(0);
+    let backend = backend.with_dense_capture_bytes(256 << 20);
+    let prompt = prompt_of(&backend, 0);
+    let mut job = fp_job(&backend, &prompt, 2);
+    job.executor_pubkey = vec![7; PUBKEY_BYTES];
+    let run = backend.execute_free_prompt(&job, &usize_ids(&prompt)).unwrap();
+    let capture = TirCaptureV1::decode(&run.outcome.material).unwrap();
+    assert!(!capture.leaves.is_empty());
+    let fp = palw_fp_commitment_from_context_v3(&job, &capture.binding.job_context, &run, 99_999).unwrap();
+    let descriptor = HfArtifactDescriptorV1::new_v1(
+        HfArtifactNativePinsV1 {
+            class: Digest(job.class_id.as_bytes()),
+            program: Digest(backend.class().graph_ir_root().as_bytes()),
+            tokenizer: Digest(tokenizer.as_bytes()),
+            inventory: Digest(backend.artifact_root().as_bytes()),
+            // These two are checked against native registration during admission.
+            container: Digest([5; 64]),
+            binding_manifest: Digest([6; 64]),
+        },
+        "fixture/model",
+        [3; 20],
+        Digest([7; 64]),
+        Digest([8; 64]),
+    )
+    .unwrap()
+    .encode_v1()
+    .unwrap();
+    let prepare = |fp: &_, capture: &_, raw: &[u8]| {
+        prepare_protected_original_material_v1(
+            fp,
+            capture,
+            "fixture literal prompt",
+            raw,
+            &descriptor,
+            PalwPromptIdsFormV1::Flat,
+            LADDER,
+        )
+    };
+    let mut private = fp.clone();
+    private.job.privacy_mode = kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+    assert_eq!(prepare(&private, &capture, raw).err().as_deref(), Some("protected public material requires a PublicDa job"));
+    let published = prepare(&fp, &capture, raw).unwrap();
+    let material = &published.quote_material;
+    assert_eq!(material.entries[MaterialScope::Output as usize].total_bytes, capture.generated.len() as u64 * 4);
+    assert_eq!(material.entries[MaterialScope::Trace as usize].content_root, Digest(fp.execution_root.as_bytes()));
+    assert_eq!(
+        kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1::decode_v1(
+            &material.encode_v1().unwrap()
+        )
+        .unwrap(),
+        *material
+    );
+    assert!(prepare(&fp, &capture, b"another tokenizer").is_err());
+    let mut changed = capture.clone();
+    changed.leaves[0].values_le[0] ^= 1;
+    assert!(prepare(&fp, &changed, raw).is_err());
+    changed.leaves.clear();
+    assert!(prepare(&fp, &changed, raw).is_err());
+    let mut other = fp.clone();
+    other.output_root = Hash64::from_u64_word(999);
+    assert!(prepare(&other, &capture, raw).is_err());
+    other = fp.clone();
+    other.job.job_nonce[0] ^= 1;
+    assert!(prepare(&other, &capture, raw).is_err());
+
+    use kaspa_consensus_core::{
+        palw_backend::{PalwOriginalCaptureReaderV1, PalwTirPublicCaptureWorkV1},
+        palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    };
+    use misaka_palw_tir_exec::node::protected_original_material::{
+        ProtectedTraceWriteLimitsV1, prepare_protected_original_material_from_stream_v1, write_protected_original_trace_v1,
+    };
+    struct OriginalBytes(Vec<u8>);
+    impl PalwOriginalCaptureReaderV1 for OriginalBytes {
+        fn len_v1(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String> {
+            let first = usize::try_from(offset).map_err(|_| "offset overflow")?;
+            let end = first.checked_add(length as usize).ok_or("range overflow")?;
+            self.0.get(first..end).map(<[u8]>::to_vec).ok_or("capture range outside source".into())
+        }
+    }
+    let (record, _) =
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(backend.class(), &backend.artifact_root()).unwrap();
+    let source =
+        PalwTirPublicSourceV1::new_v1(&record, &backend.class().layout, &published.header, fp.execution_root, fp.trace_root, LADDER)
+            .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let mut folded = capture.clone();
+    folded.leaves.clear();
+    let original = Arc::new(OriginalBytes(folded.encode()));
+    let need = backend.tir_public_capture_need_v1(&published.header, original.len_v1()).unwrap();
+    let mut limits = ProtectedTraceWriteLimitsV1 {
+        maximum_resident_bytes: need.resident_ram_bytes,
+        maximum_slices: 100_000,
+        maximum_work: PalwTirPublicCaptureWorkV1 {
+            io_bytes: 1 << 50,
+            hash_bytes: 1 << 50,
+            tree_hashes: 1 << 50,
+            replay_leaves: need.maximum_replay_leaves,
+            replay_positions: need.maximum_replay_positions,
+            replay_id_words: need.maximum_replay_id_words,
+            arithmetic_work: 1 << 80,
+            traffic_bytes: 1 << 80,
+        },
+    };
+    let mut reader = backend.open_tir_public_capture_v1(&published.header, original.clone(), directory.path()).unwrap();
+    let mut streamed = Vec::new();
+    let receipt = write_protected_original_trace_v1(&source, &mut *reader, &mut streamed, &limits).unwrap();
+    assert!(reader.progress_v1().charged.replay_positions > 0, "folded input really replayed");
+    let mut dense = borsh::to_vec(&published.trace_index).unwrap();
+    for leaf in &capture.leaves {
+        dense.extend_from_slice(&leaf.values_le);
+    }
+    assert_eq!(streamed, dense, "streamed body must be the complete original trace in canonical order");
+    let rebuilt = prepare_protected_original_material_from_stream_v1(
+        &fp,
+        &folded,
+        "fixture literal prompt",
+        raw,
+        &descriptor,
+        PalwPromptIdsFormV1::Flat,
+        LADDER,
+        &receipt,
+    )
+    .unwrap();
+    assert_eq!(rebuilt.quote_material, published.quote_material);
+    // The new explicit carrier mode changes only the prompt's public identity;
+    // dense and reconstructed traces still authenticate the same execution.
+    use misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1;
+    use misaka_palw_tir_exec::node::protected_original_material::prepare_protected_original_material_with_prompt_v2;
+    let encoding = PromptMaterialEncodingV1::SegmentsV1;
+    let body = "PPS1\ns:128\nt:22:fixture literal prompt";
+    let segmented = |capture: &_, stream: Option<&_>| {
+        prepare_protected_original_material_with_prompt_v2(
+            &fp,
+            capture,
+            encoding,
+            body,
+            raw,
+            &descriptor,
+            PalwPromptIdsFormV1::Flat,
+            LADDER,
+            stream,
+        )
+    };
+    let segmented_dense = segmented(&capture, None).unwrap();
+    let segmented_stream = segmented(&folded, Some(&receipt)).unwrap();
+    assert_eq!(segmented_dense.quote_material, segmented_stream.quote_material);
+    assert_eq!(segmented_dense.quote_material.prompt_encoding, encoding);
+    assert_ne!(
+        segmented_dense.quote_material.entries[MaterialScope::Prompt as usize],
+        published.quote_material.entries[MaterialScope::Prompt as usize],
+    );
+    assert_eq!(
+        segmented_dense.quote_material.entries[MaterialScope::Trace as usize],
+        published.quote_material.entries[MaterialScope::Trace as usize],
+    );
+    assert_eq!(segmented_dense.header, published.header);
+    drop(reader);
+    let mut reader = backend.open_tir_public_capture_v1(&published.header, original, directory.path()).unwrap();
+    limits.maximum_slices = 0;
+    assert!(write_protected_original_trace_v1(&source, &mut *reader, &mut Vec::new(), &limits).is_err());
+    assert_eq!(reader.progress_v1().sequence, 0, "budget refusal precedes replay work");
+    drop(reader);
+    limits.maximum_slices = 100_000;
+    folded.generated[0] ^= 1;
+    let mut reader =
+        backend.open_tir_public_capture_v1(&published.header, Arc::new(OriginalBytes(folded.encode())), directory.path()).unwrap();
+    assert!(write_protected_original_trace_v1(&source, &mut *reader, &mut Vec::new(), &limits).is_err());
 }
 
 /// The frame's native rules at testnet-12's step ladder (`2^22`) and the network's staged config, for a native custodian upper of

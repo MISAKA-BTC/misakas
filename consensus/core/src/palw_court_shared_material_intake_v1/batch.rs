@@ -18,10 +18,11 @@ pub(crate) mod admission;
 pub(crate) mod constraint_stop;
 pub(crate) mod native_ranges;
 pub(crate) mod numerical_verification;
+pub mod operand_floors_v1;
 pub(crate) mod plain_output;
 pub(crate) mod plain_tokenizer;
-pub(crate) mod tokenizer_transport;
 pub(crate) mod selection;
+pub(crate) mod tokenizer_transport;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
@@ -322,6 +323,19 @@ pub fn quote_batch_response_v1(
     ordinal: u64,
     target: MaterialTargetV1,
 ) -> Result<BatchResponseQuoteV1, String> {
+    let schedule = super::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
+    quote_batch_response_with_schedule_v1(state, claim, ordinal, target, schedule)
+}
+
+/// The caller's selected schedule governs new drafts only. An already accepted
+/// draft keeps its stored expiry and never gets repriced or extended by a quote.
+pub(crate) fn quote_batch_response_with_schedule_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    ordinal: u64,
+    target: MaterialTargetV1,
+    schedule: super::MaterialIntakeScheduleV1,
+) -> Result<BatchResponseQuoteV1, String> {
     use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
     let key = Key::CourtBatchDemand(claim, ordinal);
     let Some(Row::CourtBatchDemand(rooted)) = state.staged_court_row_v1(&key) else {
@@ -376,10 +390,7 @@ pub fn quote_batch_response_v1(
             }
             (draft.expires_daa, Some(draft.submitter), Some(draft.body_hash))
         }
-        None => {
-            let schedule = super::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
-            (schedule.draft_expires_v1(begin_daa, context.hard_daa, context.material_until_daa)?, None, None)
-        }
+        None => (schedule.draft_expires_v1(begin_daa, context.hard_daa, context.material_until_daa)?, None, None),
         _ => return Err("Batch response draft has another row type".into()),
     };
     if finish_daa >= draft_expires_daa {
@@ -751,7 +762,7 @@ pub(crate) fn reserve_rooted_batch_repair_v1(
     q.add_v1(TirNativeRequestsV1::product_v1(largest, per_slot as u64)?)?;
     q.add_v1(TirNativeRequestsV1::product_v1(route_largest, (2 * btree_node_envelope_bytes_v1::<Id, ()>()) as u64)?)?;
     q.vec_v1::<Id>(route_largest)?;
-    q.vec_v1::<(Id, Id, u64, u64)>(largest)?;
+    q.vec_v1::<(Id, Id, u64, u64, Option<u64>)>(largest)?;
     reserve_native_requests_v1(q.bytes_v1())
 }
 
@@ -762,6 +773,7 @@ pub(crate) fn repair_rooted_batch_slots_v1(
     hard: u64,
     edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
     book: &mut ServiceReservations,
+    schedule: MaterialIntakeScheduleV1,
 ) -> Result<usize, ServiceRefusal> {
     use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
     use ServiceRefusal::{DeadlineExhausted, InvalidState};
@@ -827,7 +839,6 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             }
         }
     }
-    let schedule = super::material_intake_schedule_v1().map_err(|_| InvalidState)?;
     let full_ids = MaterialTargetV1::FullIds.id_v1(claim).map_err(|_| InvalidState)?;
     let mut expires = BTreeMap::new();
     let mut bound = |id, before| {
@@ -910,7 +921,7 @@ pub(crate) fn repair_rooted_batch_slots_v1(
                 repairable.remove(&finish);
                 continue;
             }
-            spans.push((begin, finish, rooted.material_until(), before));
+            spans.push((begin, finish, rooted.material_until(), before, draft.map(|draft| draft.expires_daa)));
         }
     }
     if !retained.is_empty() {
@@ -922,10 +933,15 @@ pub(crate) fn repair_rooted_batch_slots_v1(
         edges,
         |id| expires.get(id).copied(),
         |candidate| {
-            for (begin, finish, material, deadline) in spans {
+            for (begin, finish, material, deadline, retained_expiry) in spans {
                 let begin = candidate.assigned_daa(&begin).ok_or(InvalidState)?;
                 let finish = candidate.assigned_daa(&finish).ok_or(InvalidState)?;
-                let expires = schedule.draft_expires_v1(begin, hard, material).map_err(|_| DeadlineExhausted)?;
+                // A retained Begin has already fixed its expiry. Re-selecting
+                // a shorter or longer TTL may only affect drafts not yet begun.
+                let expires = match retained_expiry {
+                    Some(expires) => expires,
+                    None => schedule.draft_expires_v1(begin, hard, material).map_err(|_| DeadlineExhausted)?,
+                };
                 if finish >= expires.min(deadline) {
                     return Err(DeadlineExhausted);
                 }

@@ -53,9 +53,24 @@ impl TransactionValidator {
             outer
         };
         if kaspa_consensus_core::palw_tir_funded_original_envelope_v3::recognizes_v3(payload) {
-            // No released profile resolves the complete paired admission yet.
-            // Never return its stripped inner as an ordinary legacy FP door.
-            return Err(invalid());
+            if !active(self.palw_protected_original_fence)
+                || !active(self.palw_tir_public_conviction_fence)
+            {
+                return Err(invalid());
+            }
+            let envelope =
+                kaspa_consensus_core::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::decode_v3(payload)
+                    .map_err(|_| invalid())?;
+            if !envelope.is_protected_v3() {
+                return Err(invalid());
+            }
+            // This borrowed view runs the unchanged FP shape/header rules on
+            // the literal original. The actual TX remains the complete TFO3:
+            // signatures, fees, companion and reservation are judged together
+            // by native admission. No stripped TX is submitted or folded.
+            let original = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_bytes_v1(payload)
+                .ok_or_else(invalid)?;
+            return Ok(Cow::Borrowed(original));
         }
         if payload.starts_with(b"TFP1") {
             if !active(self.palw_tir_public_conviction_fence) {
@@ -1724,6 +1739,7 @@ mod pq_output_class_enforcement_tests {
         assert!(new_lane.validate_tx_in_isolation(&funded).is_ok());
         assert!(matches!(old_lane_only.validate_tx_in_isolation(&funded), Err(TxRuleError::InvalidPalwFpPayload(_))));
         include!("tx_family_supplier_isolation_test_block.rs");
+        include!("tx_protected_original_isolation_test_block.rs");
         // RFC38 outer accounting door: own height, inner fence/version checks, no TX mutation.
         let accounting = validator(PqEnforcementMode::Disabled)
             .with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)))

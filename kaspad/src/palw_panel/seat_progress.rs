@@ -95,8 +95,16 @@ impl PalwPanelService {
 
         for index in order {
             let (duty, seat_r_duty) = (&duties[index], seat_r_duties[index]);
+            let seat_r = seat_r || duty.protected_replay.is_some();
             let deadline = seat_r_duty.deadline;
-            if !seat_duty_is_due_until_v1(duty, answered, current_daa, deadline) {
+            let receipt_already_filed = answered.iter().any(|key| seat_duty_key_answers_v1(key, duty));
+            if let Some(binding) = duty.protected_replay {
+                if current_daa > deadline
+                    || self.pending_full_replay.lock().unwrap().iter().any(|item| item.binding == binding && item.bond == bond_key)
+                {
+                    continue;
+                }
+            } else if !seat_duty_is_due_until_v1(duty, answered, current_daa, deadline) {
                 continue;
             }
             first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
@@ -185,6 +193,7 @@ impl PalwPanelService {
             // replays' `Licensed` arms and nowhere else, and read before anything is signed — past
             // SEAT-R a `Valid` without it files nothing, in a release build as in a test.
             let mut licensed_by_replay = false;
+            let mut checked_public_replay = None;
             // Its SEAT-S4 twin: set by the verified resume's `Licensed` arms alone, for a
             // `PartialResumes` seat's own-mask V3 (`PalwSeatArmV1::VerifiedSegmentResume`).
             let mut licensed_by_verified_resume = false;
@@ -502,28 +511,29 @@ impl PalwPanelService {
                             service.note_served(duty.claim_id);
                         }
                         match pass {
-                            (PalwSeatReplayStepV1::Licensed, bytes) => {
+                            (PalwSeatReplayStepV1::Licensed, bytes, checked) => {
                                 // X7: past the fence, a job this seat could not keep is a Valid it cannot answer for.
                                 if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {
                                     break 'verdict None;
                                 }
                                 debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::FreePromptReplay));
+                                checked_public_replay = checked;
                                 licensed_by_replay = true;
                                 break 'verdict Some(PalwReceiptVerdictV2::Valid);
                             }
                             // Terminal for `Valid`; the full seat's fault finders run on.
-                            (PalwSeatReplayStepV1::Refuted, _) => {
+                            (PalwSeatReplayStepV1::Refuted, _, _) => {
                                 replay_refuted.insert(duty.claim_id);
                                 if seat_r_duty.role != PalwSeatRRoleV1::FullSeat {
                                     break 'verdict None;
                                 }
                             }
-                            (PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,
+                            (PalwSeatReplayStepV1::Waiting, _, _) => break 'verdict None,
                             // A partial seat that replays is the licence's fallback, not a fault
                             // finder: holding no job that replays, it asks for the claim's — at the
                             // tail's pace, since nothing it holds verified (audit M2-1) — and files
                             // nothing.
-                            (PalwSeatReplayStepV1::NoVerdict, _) if seat_r_duty.role == PalwSeatRRoleV1::PartialReplays => {
+                            (PalwSeatReplayStepV1::NoVerdict, _, _) if seat_r_duty.role == PalwSeatRRoleV1::PartialReplays => {
                                 let reask_daa = seat_reask_daa_v1(deadline.saturating_sub(duty.bound_daa));
                                 if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)) {
                                     requested.insert(duty.claim_id, current_daa);
@@ -556,7 +566,7 @@ impl PalwPanelService {
                                 }
                                 break 'verdict None;
                             }
-                            (PalwSeatReplayStepV1::NoVerdict, _) => {}
+                            (PalwSeatReplayStepV1::NoVerdict, _, _) => {}
                         }
                     }
                     // **Past Verification V2 a partial seat resumes assigned segments first**
@@ -1726,6 +1736,20 @@ impl PalwPanelService {
                 });
                 continue;
             }
+            if let Some(binding) = duty.protected_replay {
+                if matches!(verdict, PalwReceiptVerdictV2::Valid) && !colluding {
+                    let Some(checked) = checked_public_replay else { continue };
+                    if checked.binding() != binding || !licensed_by_replay {
+                        continue;
+                    }
+                    self.stage_full_replay_payload_v1(checked, bond_key);
+                }
+                // Full replay may finish through hard. Its late approval must
+                // never be backdated into a notice-window receipt.
+                if !protected_replay::receipt_may_be_filed_v1(binding, current_daa, receipt_already_filed) {
+                    continue;
+                }
+            }
             // **SEAT-S4's licence is its own mask's V3, by a resuming seat, and nothing wider**: a
             // verified resume that is not a `PartialResumes` seat's, or whose mask is not the one the
             // assignment gave this seat, files nothing.
@@ -1798,6 +1822,7 @@ impl PalwPanelService {
             // and a `Valid` leaf attests exactly the seat's assigned mask, which is all the chain takes of it.
             if let Some(fence) = vertex_fence
                 && !duty.model_panel_one
+                && duty.protected_replay.is_none()
                 && duty.bound_daa >= fence
             {
                 if forms.segments.is_none() {
@@ -1834,6 +1859,9 @@ impl PalwPanelService {
                 );
                 if valid {
                     service.note_served(duty.claim_id);
+                    if !colluding && let Some(checked) = checked_public_replay {
+                        self.stage_full_replay_payload_v1(checked, bond_key);
+                    }
                 }
                 if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })
                     && service.is_unserved(&duty.claim_id)
@@ -1942,6 +1970,9 @@ impl PalwPanelService {
             }
             if valid {
                 service.note_served(duty.claim_id);
+                if !colluding && let Some(checked) = checked_public_replay {
+                    self.stage_full_replay_payload_v1(checked, bond_key);
+                }
             }
             // **P2-6: an `Unavailable` files a `DefaultAccused` too** (ADR-0152 §3.8, DA-1: every
             // class) — only a seat that was never served the claim (`PalwSeatServiceV1`: a seat

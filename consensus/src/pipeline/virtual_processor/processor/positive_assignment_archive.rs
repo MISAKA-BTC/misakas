@@ -35,7 +35,7 @@ use kaspa_consensus_core::{
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignedCaseBackingV2,
         NativeAssignmentRulesV2, NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
-        PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
+        PalwBlockContextV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
     palw_tfp1_original_history_v1::{Tfp1OriginalHistoryBoundaryV1, rooted_tfp1_original_history_v1},
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
@@ -122,8 +122,48 @@ pub(in crate::pipeline::virtual_processor) struct NativeCaseJournalCarriagesV2 {
 
 pub(super) struct NativeArchiveCarriageV2 {
     pub(super) carriage: NativeAcceptedCaseCarriageV2,
+    // TFO3 planning reads immutable identities at the accepting block's
+    // selected parent, not at the later transaction prefix or current tip.
+    // Move the already reserved replay owner here; do not clone its state or
+    // release its allocation lease while a caller reconstructs admission.
+    original_parent: Option<NativeChainStateV1>,
+    // Keep the complete accepted delta point, including subsidy. AcceptedOrigin
+    // contains only the clock/hash subset and cannot reconstruct this context.
+    original_point: Option<PalwBlockContextV2>,
     pub(super) work: u64,
     pub(super) heap: u64,
+}
+
+/// Reconstructed immutable request inputs. Archive read work is only one part
+/// of request pricing; this result neither accepts nor pays for a request.
+pub(super) struct NativeRestoredTfp1OriginalV3 {
+    pub(super) inputs: kaspa_consensus_core::palw_positive_contract_v2::RestoredProtectedOriginalV3,
+    pub(super) archive_work: u64,
+}
+
+impl NativeArchiveCarriageV2 {
+    pub(super) fn original_point_v3(&self) -> Result<PalwBlockContextV2, NativeAssignmentArchiveErrorV2> {
+        let point = self.original_point.ok_or(NativeAssignmentArchiveErrorV2::Unavailable("archived original point unavailable"))?;
+        let origin = self.carriage.origin();
+        if point.block.as_bytes() != origin.accepting_block.0
+            || point.daa_score != origin.accepted_daa
+            || point.blue_score != origin.accepted_blue_score
+        {
+            return Err(NativeAssignmentArchiveErrorV2::Invalid("archived original point differs"));
+        }
+        Ok(point)
+    }
+
+    pub(super) fn original_parent_v3(&self) -> Result<&PalwChainStateV2, NativeAssignmentArchiveErrorV2> {
+        let parent = self
+            .original_parent
+            .as_deref()
+            .ok_or(NativeAssignmentArchiveErrorV2::Unavailable("archived original selected-parent owner unavailable"))?;
+        if parent.last_point().map(|point| point.block) != Some(self.carriage.selected_parent()) {
+            return Err(NativeAssignmentArchiveErrorV2::Invalid("archived original selected-parent owner differs"));
+        }
+        Ok(parent)
+    }
 }
 
 fn case_journal_fault_v2(error: CaseJournalChainErrorV2<StoreError>) -> NativeAssignmentArchiveErrorV2 {
@@ -953,8 +993,127 @@ impl VirtualStateProcessor {
         Ok(accepted)
     }
 
+    /// Connect the concrete archive to core's original admission reconstruction.
+    /// The limits here bound archive reads/retention, not the complete admission
+    /// planner CPU/IO tariff. Live accepted-order intake must account for both.
+    pub(super) fn restore_tfp1_original_request_inputs_v3(
+        &self,
+        current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
+        claim: kaspa_consensus_core::Hash64,
+        maximum_archive_heap: u64,
+        maximum_archive_work: u64,
+    ) -> Result<NativeRestoredTfp1OriginalV3, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let archived = self.load_tfp1_original_carriage_v1(
+            current_selected_parent,
+            current_state,
+            claim,
+            maximum_archive_heap,
+            maximum_archive_work,
+        )?;
+        let point = archived.original_point_v3()?;
+        let parent = archived.original_parent_v3()?;
+        // A protected original carries no class-registration operation. Resolve
+        // its block rules and source bootstrap at its actual selected parent.
+        // The core separately uses the archived executed prefix for policy/book.
+        let extras = self.palw_transition_extras_for_objects(parent, &point, &[]).into_legacy_extras();
+        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
+        let inputs = kaspa_consensus_core::palw_positive_contract_v2::restore_protected_native_carriage_v3(
+            current_state,
+            parent,
+            &archived.carriage,
+            &point,
+            &extras,
+            params,
+        )
+        .map_err(|error| match error {
+            NativeDecodeErrorV1::Resource(coverage) => E::Resource(coverage),
+            NativeDecodeErrorV1::Decode(_) => E::Invalid("archived protected original reconstruction differs"),
+        })?;
+        if inputs.claim_v3() != claim {
+            return Err(E::Invalid("restored protected original names another claim"));
+        }
+        Ok(NativeRestoredTfp1OriginalV3 { inputs, archive_work: archived.work })
+    }
+
+    /// Prepare a request at its actual candidate prefix using the concrete
+    /// native archive. The immutable parent is for archive ancestry; Panel,
+    /// slot and signature checks use the executed prefix. A caller must repeat
+    /// this preparation after filtering/reordering and discard the whole body
+    /// if subsequent fee reconciliation fails. No public tariff is selected
+    /// here: the pricing owner must include archive work as well as execution.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_tfp1_manifest_request_v3(
+        &self,
+        current_selected_parent: BlockHash,
+        current_parent: &PalwChainStateV2,
+        current_parent_root: kaspa_consensus_core::Hash64,
+        executed_prefix: &PalwChainStateV2,
+        at: &PalwBlockContextV2,
+        candidate: &kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3,
+        maximum_archive_heap: u64,
+        maximum_archive_work: u64,
+        quote_charge: impl FnOnce(
+            kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+            u64,
+            u64,
+        ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3>,
+        NativeAssignmentArchiveErrorV2,
+    > {
+        use NativeAssignmentArchiveErrorV2 as E;
+        candidate.check_context_v3(current_parent_root, at).map_err(|error| match error {
+            NativeDecodeErrorV1::Resource(coverage) => E::Resource(coverage),
+            NativeDecodeErrorV1::Decode(_) => E::Invalid("native ManifestRequest belongs to another candidate"),
+        })?;
+        // Absence in the executed prefix is a deterministic request refusal.
+        // A present claim with unavailable/corrupt archived admission remains
+        // a local history fault; it must never be converted into an omission.
+        let Some(claim) = executed_prefix.claim(&candidate.claim_v3()) else { return Ok(None) };
+        let frame_key =
+            kaspa_consensus_core::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(candidate.claim_v3());
+        if executed_prefix.staged_court_row_v1(&frame_key).is_none() {
+            return Ok(None); // An ordinary/legacy claim cannot authorize this protected request.
+        }
+        if !kaspa_consensus_core::palw_state_v2::claim_has_protected_frame_v1(executed_prefix, &candidate.claim_v3()) {
+            return Err(E::Invalid("stored protected frame differs from its claim key"));
+        }
+        // A protected draw must be strictly later than its original in both
+        // DAA and blue score (check_public_draw_record_v1). A request accepted
+        // at that original point cannot have a valid drawn member yet. Omit
+        // it before archive access: the original's DB rows are still pending,
+        // and their absence is not a local-history failure for this request.
+        if claim.accepted_daa >= at.daa_score || claim.accepted_blue_score >= at.blue_score {
+            kaspa_consensus_core::palw_state_v2::palw_protected_admission_reads_back_v1(executed_prefix, &candidate.claim_v3(), claim)
+                .map_err(|why| match why {
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => E::Resource(why),
+                    _ => E::Invalid("undrawn original does not match its protected admission"),
+                })?;
+            if claim.accepted_daa > at.daa_score || claim.accepted_blue_score > at.blue_score {
+                return Err(E::Invalid("original admission is after this candidate"));
+            }
+            return Ok(None);
+        }
+        let restored = self.restore_tfp1_original_request_inputs_v3(
+            current_selected_parent,
+            current_parent,
+            candidate.claim_v3(),
+            maximum_archive_heap,
+            maximum_archive_work,
+        )?;
+        match candidate.prepare_at_v3(&restored.inputs, executed_prefix, current_parent_root, at, |cost, retained| {
+            quote_charge(cost, retained, restored.archive_work)
+        }) {
+            Ok(prepared) => Ok(Some(prepared)),
+            Err(NativeDecodeErrorV1::Resource(coverage)) => Err(E::Resource(coverage)),
+            Err(NativeDecodeErrorV1::Decode(_)) => Ok(None),
+        }
+    }
+
     /// Restore the rooted TFO3 transaction and its exact historical native
-    /// prefix. The caller must still rederive admission and authenticate the
+    /// prefix and immutable selected parent. The caller must still rederive admission and authenticate the
     /// payer, FP and companion consents under the original policy.
     pub(super) fn load_tfp1_original_carriage_v1(
         &self,
@@ -1015,6 +1174,8 @@ impl VirtualStateProcessor {
             return Err(E::Invalid("TFO3 answer wrapper was dormant at original acceptance"));
         }
         PalwTirFundedOriginalEnvelopeV3::decode_v3(payload).map_err(|_| E::Invalid("original actual carrier is not valid TFO3"))?;
+        accepted.original_parent_v3()?;
+        accepted.original_point_v3()?;
         accepted.work = maximum_work - remaining_work;
         Ok(accepted)
     }
@@ -1136,10 +1297,17 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r) => E::Resource(r),
             _ => E::Invalid("original executed native prefix mismatch"),
         })?;
+        // Assignment/Case callers only need the executed prefix. TFO3 also
+        // needs the immutable parent to rederive its native planning inputs.
+        // Its retained heap must include BOTH owners, even if no event before
+        // this original changed their contents.
+        let original_parent = matches!(&boundary, NativeArchiveBoundaryV2::Tfp1Original(_)).then_some(parent);
+        let original_point = original_parent.as_ref().map(|_| delta.point);
         let heap = carrier
             .heap
             .checked_add(retained_heap)
             .and_then(|n| n.checked_add(prefix_heap))
+            .and_then(|n| n.checked_add(if original_parent.is_some() { parent_heap } else { 0 }))
             .ok_or(E::Invalid("retained carriage heap overflow"))?;
         let entries = populated.entries;
         let carriage = NativeAcceptedCaseCarriageV2::from_native_history_v2(
@@ -1156,7 +1324,7 @@ impl VirtualStateProcessor {
             NativeAssignedCaseBackingErrorV2::NativeResource(r) => E::Resource(r),
             _ => E::Invalid("actual prefix owner mismatch"),
         })?;
-        Ok(NativeArchiveCarriageV2 { carriage, work: maximum_work - remaining_work, heap })
+        Ok(NativeArchiveCarriageV2 { carriage, original_parent, original_point, work: maximum_work - remaining_work, heap })
     }
 
     /// Start with the exact selected-parent view already held by the caller.
@@ -1814,6 +1982,91 @@ impl VirtualStateProcessor {
 #[cfg(test)]
 mod archive_fault_tests {
     use super::*;
+
+    #[test]
+    fn original_archive_keeps_parent_separate_from_executed_prefix() {
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::reserve_native_pending_requests_v1,
+            palw_state_v2::{PalwBlockContextV2, PalwStateCarriageV2, PalwStateParamsV2},
+            subnets::SUBNETWORK_ID_NATIVE,
+            tx::Transaction,
+        };
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, BlockHash::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let state_at = |number| {
+            let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+            carriage.last_point = Some(PalwBlockContextV2 {
+                block: BlockHash::from_u64_word(number),
+                daa_score: number,
+                blue_score: number,
+                subsidy: 0,
+            });
+            carriage.into_state(&params, None).unwrap()
+        };
+        let parent = state_at(1);
+        let later = state_at(2);
+        let parent_root = parent.state_root();
+        let later_root = later.state_root();
+        assert_ne!(parent_root, later_root);
+        // DATA ownership/scope fixture, not archived Full validation or a
+        // protected original admission. The real loader validates both roots
+        // against header and delta before handing either owner to its caller.
+        let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([3; 64]),
+            carrier_block: NativeHash64([4; 64]),
+            carrier_transaction: NativeHash64(tx.id().as_bytes()),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 3,
+            accepted_blue_score: 3,
+        };
+        let transaction_lease = reserve_native_pending_requests_v1(size_of::<Transaction>() as u64).unwrap().unwrap();
+        let lease = reserve_native_pending_requests_v1(size_of::<NativeAcceptedCaseCarriageV2>() as u64).unwrap().unwrap();
+        let carriage = NativeAcceptedCaseCarriageV2::from_native_history_v2(
+            tx,
+            transaction_lease,
+            vec![],
+            0,
+            origin,
+            parent.last_point().unwrap().block,
+            lease,
+        )
+        .unwrap()
+        .with_native_prefix_state_v2(Arc::new(NativeChainStateV1::try_from_clone_v1(&later).unwrap()), later_root)
+        .unwrap();
+        let mut archive = NativeArchiveCarriageV2 {
+            carriage,
+            original_parent: Some(NativeChainStateV1::try_from_clone_v1(&parent).unwrap()),
+            original_point: Some(PalwBlockContextV2 {
+                block: Hash64::from_bytes(origin.accepting_block.0),
+                daa_score: origin.accepted_daa,
+                blue_score: origin.accepted_blue_score,
+                subsidy: 97,
+            }),
+            work: 0,
+            heap: 0,
+        };
+        let point = archive.original_point_v3().unwrap();
+        assert_eq!(point.subsidy, 97, "preserve the delta point, do not synthesize a zero subsidy");
+        for altered in [
+            PalwBlockContextV2 { block: Hash64::from_u64_word(99), ..point },
+            PalwBlockContextV2 { daa_score: point.daa_score + 1, ..point },
+            PalwBlockContextV2 { blue_score: point.blue_score + 1, ..point },
+        ] {
+            archive.original_point = Some(altered);
+            assert!(matches!(archive.original_point_v3(), Err(NativeAssignmentArchiveErrorV2::Invalid(_))));
+        }
+        archive.original_point = None;
+        assert!(matches!(archive.original_point_v3(), Err(NativeAssignmentArchiveErrorV2::Unavailable(_))));
+        archive.original_point = Some(point);
+        drop(parent);
+        assert_eq!(archive.original_parent_v3().unwrap().state_root(), parent_root);
+        assert_eq!(archive.carriage.prefix_state().unwrap().state_root(), later_root);
+        archive.original_parent = None;
+        assert!(matches!(archive.original_parent_v3(), Err(NativeAssignmentArchiveErrorV2::Unavailable(_))));
+        archive.original_parent = Some(NativeChainStateV1::try_from_clone_v1(&later).unwrap());
+        assert!(matches!(archive.original_parent_v3(), Err(NativeAssignmentArchiveErrorV2::Invalid(_))));
+    }
 
     #[test]
     fn case_boundary_is_unique_and_scoped_to_the_literal_record() {

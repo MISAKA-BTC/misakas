@@ -55,6 +55,11 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
         None,
         misaka_palw_kernel::rows::LedgerScalarsV1 { daa: prior.daa_score, burned: 0 },
     ));
+    extras.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+        network_domain: h64(1),
+        ruleset_digest: h64(2),
+        ..Default::default()
+    });
 
     // Reuse the native source/class, with a fresh original in this separate
     // fixture. Strip the old claim, panel, collateral and material rows.
@@ -154,6 +159,7 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
                     pairing,
                     admission,
                     reservation,
+                    Some(prepared.companion_v1().prepare_storage_record(reservation_id)),
                 )
             };
             let wrong_origin = PublicOriginalReservationV1 {
@@ -244,6 +250,9 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
 
         builder.state.last_point = Some(*at);
         builder.entries.push(PalwDeltaEntryV2::LastPoint { old: Some(prior), new: Some(*at) });
+        // Match the actual fold's tail: the paired installer queues the
+        // admission and its authenticated accepting point makes it writable.
+        builder.write_queued_public_admissions_v1(at).unwrap();
         let delta = PalwStateDeltaV2 { point: *at, entries: builder.entries };
         let replayed = apply_delta_v2(&parent, &delta, &params).unwrap();
         assert_eq!(replayed.state_root(), builder.state.state_root());
@@ -254,7 +263,44 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
         assert_eq!(history.before_delta_end, 0);
         assert_eq!(history.pre_event_root, Digest(parent_root.as_bytes()));
 
+        use crate::palw_protected_original_readback_v1::{ProtectedOriginalReadbackV1, protected_original_readback_v1};
+        let observed = protected_original_readback_v1(&replayed, claim_id).unwrap().unwrap();
+        let txid = Hash64::from_bytes(reservation.origin.carrier_transaction.0);
+        observed.check_carrier_v1(claim_id, txid, claim.execution_root).unwrap();
+        assert_eq!(observed.accepting_block, claim.accepted_block);
+        assert_eq!(observed.carrier_block.as_bytes(), reservation.origin.carrier_block.0);
+        assert_eq!(observed.accepted_tx_ordinal, reservation.origin.accepted_tx_ordinal);
+        assert_eq!(observed.event_ordinal, reservation.origin.event_ordinal);
+        assert!(!observed.full_replay_approval_recorded);
+        assert!(observed.check_carrier_v1(claim_id, h64(0x5199), claim.execution_root).is_err());
+        assert!(observed.check_carrier_v1(claim_id, txid, h64(0x5199)).is_err());
+        let json = serde_json::to_value(&observed).unwrap();
+        assert_eq!(json["carrierTransaction"], txid.to_string());
+        assert_eq!(serde_json::from_value::<ProtectedOriginalReadbackV1>(json).unwrap(), observed);
+        let view = crate::palw_user_views_v1::palw_claim_detail_json_v1(
+            &replayed,
+            &params,
+            &claim_id,
+            &crate::palw_user_views_v1::PalwUserViewClockV1 { next_daa: at.daa_score + 1, ..Default::default() },
+            None,
+        )
+        .unwrap();
+        assert_eq!(view["protectedOriginal"]["carrierTransaction"], txid.to_string());
+        let mut substituted_claim = replayed.clone();
+        substituted_claim.claims.get_mut(&claim_id).unwrap().execution_root = h64(0x5199);
+        assert!(protected_original_readback_v1(&substituted_claim, claim_id).is_err());
+        let mut missing_link = replayed.clone();
+        missing_link
+            .kernel_route
+            .as_mut()
+            .unwrap()
+            .aux
+            .remove(&(crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1, claim_id.as_bytes().to_vec()));
+        assert!(protected_original_readback_v1(&missing_link, claim_id).is_err());
+        assert_eq!(protected_original_readback_v1(&parent, claim_id).unwrap(), None);
+
         replayed.validate_public_verification_rows_v1().unwrap();
+        super::super::included_replay::exercise_included_replay_v1(&replayed, &params, &extras, claim_id, prepared);
         let encoded = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
         crate::palw_native_resource_v1::preflight_native_carriage_v1(&encoded[..], encoded.len() as u64).unwrap();
         let snapshot =
@@ -466,5 +512,51 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
         assert!(restored.claim(&claim_id).is_none());
         assert!(restored.staged_court_row_v1(&frame_key).is_none());
         assert!(!restored.funded_escrows_v1().contains_key(&escrow.contract_id));
+    }
+}
+
+#[test]
+fn protected_service_resolution_binds_selected_profile_and_capacity_for_both_row_versions() {
+    use crate::palw_court_service_release_v1::CourtServiceRowV3;
+    use crate::palw_positive_contract_v2::tfp1_original::service_booking::ProtectedServiceBaseV1;
+    let mut state = PalwChainStateV2::genesis();
+    let params = PalwStateParamsV2::new(500, 10, 10, 10, 10, 100, h64(1), 2, 1000, 1, 1000, 1).unwrap();
+    let extras = PalwTransitionExtrasV1::default();
+    let profile = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.unwrap();
+    let original = CourtServiceStateV2 {
+        version: 2,
+        source_profile_id: profile.id(),
+        profile_id: court_service_profile_id_v2(profile.id()),
+        book: ServiceReservations::new(profile.budget).unwrap(),
+        claims: BTreeMap::new(),
+    };
+    for released in [false, true] {
+        let row = |value: &CourtServiceStateV2| {
+            if released {
+                Row::CourtServiceV3(Box::new(CourtServiceRowV3::from_v2(value)).into())
+            } else {
+                Row::CourtService(Box::new(value.clone()).into())
+            }
+        };
+        state.staged_courts.insert(Key::CourtService, row(&original));
+        let base = ProtectedServiceBaseV1::resolve_v1(&state, &params, &extras, 100, &profile).unwrap();
+        assert_eq!(base.book_v1(), &original.book);
+        drop(base);
+        let mut foreign = profile;
+        foreign.service_span_daa += 1;
+        assert!(ProtectedServiceBaseV1::resolve_v1(&state, &params, &extras, 100, &foreign).is_err());
+        for field in 0..3 {
+            let mut corrupt = original.clone();
+            match field {
+                0 => corrupt.source_profile_id = h64(991),
+                1 => corrupt.profile_id = h64(992),
+                2 => corrupt.book.budget.controls += 1,
+                _ => unreachable!(),
+            }
+            state.staged_courts.insert(Key::CourtService, row(&corrupt));
+            let before = state.staged_court_row_v1(&Key::CourtService).unwrap().clone();
+            assert!(ProtectedServiceBaseV1::resolve_v1(&state, &params, &extras, 100, &profile).is_err());
+            assert_eq!(state.staged_court_row_v1(&Key::CourtService), Some(&before));
+        }
     }
 }

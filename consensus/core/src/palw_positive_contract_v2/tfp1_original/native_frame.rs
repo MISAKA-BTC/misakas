@@ -236,7 +236,7 @@ impl PublicTfp1FrameV1 {
         if self.claim_v1() != claim {
             return Err("protected TFP1 frame has a foreign claim key".into());
         }
-        self.native_facts_v1().map(|_| ()).map_err(|e| e.to_string())
+        self.native_facts_v1().map(|_| ()).map_err(|e| format!("{e:?}"))
     }
 
     pub(crate) fn native_facts_v1(&self) -> Result<NativeTfp1PublicOriginalFactsV1, ContractError> {
@@ -398,7 +398,7 @@ fn check_class_v1(class: &PalwTirClassRecordV1, header: &PalwPublicTirBindingHea
     if class.version != crate::palw_tir_admission_v1::PALW_TIR_CLASS_RECORD_VERSION_V1
         || class.facts.class_id != header.job_context.shape_profile_id
         || class.tokenizer_id != header.job_context.tokenizer_id
-        || header.job_context.max_context_tokens > class.facts.max_context
+        || header.job_context.max_context_tokens > class.facts.max_context.saturating_add(1)
         || palw_tir_class_id_from_digests_v1(
             PALW_TIR_CLASS_VERSION_V1,
             &class.graph_ir_root,

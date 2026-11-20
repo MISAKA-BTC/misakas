@@ -232,6 +232,7 @@ impl ConsensusServices {
         .with_tir_public_conviction_fence(params.palw_tir_public_conviction_v1_fence())
         .with_fp_answer_accounting_fence(params.palw_fp_answer_accounting_v1_fence())
         .with_court_family_supplier_fence(params.palw_court_family_supplier_v1)
+        .with_protected_original_fence(params.palw_protected_planning_v3.map(|policy| policy.activation))
         .with_prefix_dependency_fence(params.palw_claim_local_settlement_v1)
         .with_fp_constraint_v2_fence(params.palw_fp_constraint_v2_fence());
 

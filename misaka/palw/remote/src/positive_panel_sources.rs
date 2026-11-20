@@ -766,8 +766,8 @@ pub fn check_public_tokenizer_v1(manifest: &CheckedManifestV1, bytes: &[u8]) -> 
     Ok(())
 }
 
-/// Replay plain text with the native byte-level tokenizer, without allowing
-/// text to introduce special tokens. Run inside the Panel's reserved work.
+/// Replay literal Text pieces and explicitly framed controls with the native
+/// tokenizer. Text cannot introduce controls. Run inside the Panel's reserved work.
 pub fn check_public_prompt_v1(
     original: &OriginalCommit,
     manifest: &CheckedManifestV1,
@@ -778,10 +778,20 @@ pub fn check_public_prompt_v1(
     if manifest.original() != original.id() {
         return Err(PanelSourceErrorR1::Binding);
     }
-    let text = manifest.open_prompt_text(prompt)?;
+    use misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1;
+    let encoding = PromptMaterialEncodingV1::from_codec_v1(manifest.entry(MaterialScope::Prompt).codec)?;
+    let text = match encoding {
+        PromptMaterialEncodingV1::LiteralUtf8 => manifest.open_prompt_text(prompt)?,
+        PromptMaterialEncodingV1::SegmentsV1 => manifest.open_prompt_segments_v1(prompt, u32::MAX)?.body_v1(),
+    };
     check_public_tokenizer_v1(manifest, tokenizer)?;
     let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(tokenizer).map_err(|_| PanelSourceErrorR1::Binding)?;
-    let ids = tokenizer.encode_without_specials(text).map_err(|_| PanelSourceErrorR1::Binding)?;
+    let ids = encoding.encode_ids_v1(
+        text,
+        original.prefill,
+        |text| tokenizer.encode_without_specials(text).map_err(|_| misaka_palw_positive_contract::ContractError::Identity),
+        |id| tokenizer.is_added_id(id),
+    )?;
     check_public_input_tokens_v1(original, manifest, form, &ids)?;
     Ok(ids)
 }

@@ -2132,6 +2132,35 @@ impl TransitionBuilder<'_> {
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        // A source response for a Case absent from the authenticated current
+        // prefix is peer-invalid. Do not ask for an archive that cannot exist.
+        // Presence (including an unreadable row) still requires the ordinary
+        // native history path; never turn missing/corrupt history into absence.
+        if let crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceResponse { case, .. } =
+            &body.operation
+        {
+            let Some(route) = self.state.kernel_route_state_v1() else {
+                return Err(refuse("source response has no native Case"));
+            };
+            let encoded = (
+                misaka_palw_positive_contract::CONTRACT_VERSION,
+                misaka_palw_positive_contract::CONTRACT_REVISION,
+                NativeRowKey::Case(*case),
+            );
+            let size = borsh::object_length(&encoded).map_err(refuse)?;
+            let fault = || NativeCoverageV1::unsupported::<NativeRowKey>("source response Case lookup", "key allocation refused");
+            let _lease = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(size as u64)
+                .map_err(PalwStateV2Error::NativeResource)?;
+            let mut key = Vec::new();
+            key.try_reserve_exact(size).map_err(|_| PalwStateV2Error::NativeResource(fault()))?;
+            if key.capacity() != size {
+                return Err(PalwStateV2Error::NativeResource(fault()));
+            }
+            borsh::to_writer(&mut key, &encoded).map_err(refuse)?;
+            if !route.aux.contains_key(&(misaka_palw_positive_contract::native::KERNEL_AUX_TABLE, key)) {
+                return Err(refuse("source response has no native Case"));
+            }
+        }
         let (backing, mut machine, prior) = self.prepare_case_predecessor_v2(action, body)?;
         let origin = action.origin();
         if origin.accepting_block.0 != ctx.block.as_bytes()

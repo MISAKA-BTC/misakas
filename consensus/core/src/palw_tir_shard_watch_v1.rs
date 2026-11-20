@@ -50,6 +50,7 @@ pub fn palw_tir_shard_watch_duties_v1(
             }
             out.push(PalwSeatDutyV2 {
                 model_panel_one: false,
+                protected_replay: None,
                 accepted_block: claim.accepted_block,
                 claim_id: *claim_id,
                 class_id: claim.class_id,

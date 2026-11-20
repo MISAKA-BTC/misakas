@@ -2,7 +2,7 @@
 
 use super::*;
 
-fn template_parent_fault_v1(why: PalwWeighFaultV2) -> RuleError {
+pub(super) fn template_parent_fault_v1(why: PalwWeighFaultV2) -> RuleError {
     use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
     RuleError::LocalNativeStateContextUnavailable(match why {
         PalwWeighFaultV2::NoOpinion => F::HistoryUnavailable,
@@ -514,6 +514,7 @@ impl VirtualStateProcessor {
         };
         let batch_point = self.palw_v2_template_point(&virtual_state);
         let batch_active = self.palw_lifecycle_kind_fences.batch_court_in_force_at(batch_point.daa_score);
+        let batch_material_schedule = self.palw_material_schedule_v3(batch_point.daa_score);
         let plain_output = self
             .palw_lifecycle_kind_fences
             .batch_plain_output_v2_at(virtual_state.daa_score)
@@ -536,7 +537,10 @@ impl VirtualStateProcessor {
             }
             prepared.checked.is_ok()
                 && prepared.state.as_ref().is_some_and(|(_, state)| {
-                    kaspa_consensus_core::palw_state_v2::palw_batch_template_slot_v1(state, tx, &batch_point).is_ok()
+                    batch_material_schedule.is_ok_and(|schedule| {
+                        kaspa_consensus_core::palw_state_v2::palw_batch_template_slot_with_schedule_v1(state, tx, &batch_point, schedule)
+                            .is_ok()
+                    })
                 })
         };
         // A Batch carrier outside its booked slot can become eligible on a

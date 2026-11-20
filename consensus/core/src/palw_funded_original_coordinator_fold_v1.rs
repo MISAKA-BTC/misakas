@@ -262,6 +262,7 @@ pub(super) struct PreparedProtectedOriginalInstallationV1 {
     service: crate::palw_positive_contract_v2::tfp1_original::service_booking::PreparedProtectedServiceBookingV1,
     escrow: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
     prefix: super::objects::Tfp1OriginalPrefixV1,
+    admission_record: Option<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
 }
 
 impl PreparedProtectedOriginalInstallationV1 {
@@ -275,6 +276,7 @@ impl PreparedProtectedOriginalInstallationV1 {
         pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
         admission: &crate::palw_positive_contract_v2::PublicOriginalAdmissionV1<'_>,
         reservation: &crate::palw_positive_contract_v2::PublicOriginalReservationV1<'_>,
+        admission_record: Option<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
     ) -> Result<Self, PalwStateV2Error> {
         let claim = frame.claim_v1();
         if b.paired_original_checkpoint_claim != Some(claim) || b.tfp1_original_prefix.is_some() {
@@ -282,7 +284,7 @@ impl PreparedProtectedOriginalInstallationV1 {
         }
         let prefix = super::objects::capture_tfp1_prefix_v1(b, ctx, claim)?;
         let previous = b.tfp1_original_prefix.replace(prefix);
-        let result = Self::prepare_v1(b, ctx, frame, service, funding, pairing, admission, reservation);
+        let result = Self::prepare_v1(b, ctx, frame, service, funding, pairing, admission, reservation, admission_record);
         if result.is_err() {
             b.tfp1_original_prefix = previous;
         }
@@ -299,6 +301,7 @@ impl PreparedProtectedOriginalInstallationV1 {
         pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
         admission: &crate::palw_positive_contract_v2::PublicOriginalAdmissionV1<'_>,
         reservation: &crate::palw_positive_contract_v2::PublicOriginalReservationV1<'_>,
+        admission_record: Option<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
     ) -> Result<Self, PalwStateV2Error> {
         use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_pending_requests_v1};
         use crate::palw_positive_contract_v2::tfp1_original::service_graph::check_frame_service_graph_v2;
@@ -380,7 +383,7 @@ impl PreparedProtectedOriginalInstallationV1 {
         let history = admission
             .prepare_tfp1_history_v1(ctx, pairing, obligation, reservation, frame.reservation_v1(), &prefix)
             .map_err(|_| bad())?;
-        Ok(Self { frame, history, service, escrow, prefix })
+        Ok(Self { frame, history, service, escrow, prefix, admission_record })
     }
 }
 
@@ -707,8 +710,7 @@ fn prepare_funded_batch_book_v1(
     use crate::palw_batch_court_v1::BatchCourtErrorV1;
     use crate::palw_court_shared_material_intake_v1::{
         batch::{
-            Stage,
-            admission::{BatchDeliveryV1, reserve_native_batch_delivery_v1},
+            admission::reserve_native_batch_delivery_v1,
             constraint_stop::ConstraintStopBatchOperandsV1,
         },
         material_intake_schedule_v1,
@@ -735,23 +737,7 @@ fn prepare_funded_batch_book_v1(
         book, frame, &envelope,
         stop.as_ref().map(|stop| (stop, batch.stop_verification, batch.stop_filing)),
         batch.delivery, storage,
-        |stage, bytes| {
-            let (index, units, work_rate, io_rate) = match stage {
-                BatchDeliveryV1::Open { range_count, .. } => (0, range_count as u64, batch.open_work_per_range, 0),
-                BatchDeliveryV1::Response { stage: Stage::Begin, .. } => (1, 0, 0, 0),
-                BatchDeliveryV1::Response { stage: Stage::Part(_), .. } => (2, 0, 0, 0),
-                BatchDeliveryV1::Response { stage: Stage::Finish, maximum_body_bytes, .. } => {
-                    (3, maximum_body_bytes, batch.finish_work_per_byte, batch.finish_io_per_byte)
-                }
-            };
-            let mut cost = batch.carrier_costs[index];
-            let price = |base: u64, rate| units.checked_mul(rate).and_then(|extra| base.checked_add(extra))
-                .ok_or_else(|| "Batch delivery service cost overflows".to_string());
-            cost.bytes = bytes;
-            cost.work = price(cost.work, work_rate)?;
-            cost.io = price(cost.io, io_rate)?;
-            Ok(cost)
-        },
+        |stage, bytes| batch.price_delivery_v1(stage, bytes),
     ).map_err(|why| match why {
         BatchCourtErrorV1::LocalResource(coverage) => FundedOriginalRefusalV1::Resource(coverage),
         other => FundedOriginalRefusalV1::State(refused(format!("Batch Court admission reservation refused: {other:?}"))),
@@ -1125,7 +1111,7 @@ pub(super) fn install_original_admission_v1(
                 palw_court_clock_v2_required_retention_with,
             };
 
-            let PreparedProtectedOriginalInstallationV1 { frame, history, service, escrow, prefix } = plan;
+            let PreparedProtectedOriginalInstallationV1 { frame, history, service, escrow, prefix, admission_record } = plan;
             let claim_id = frame.claim_v1();
             if b.paired_original_checkpoint_claim != Some(claim_id)
                 || b.tfp1_original_prefix != Some(prefix)
@@ -1154,6 +1140,11 @@ pub(super) fn install_original_admission_v1(
             b.install_funded_escrow_v1(escrow)?;
             b.install_public_tfp1_original_frame_v1(ctx, frame, history)?;
             b.install_public_tfp1_service_booking_v1(ctx, service)?;
+            if b.extras.kernel_route.is_some()
+                && let Some(record) = admission_record
+            {
+                b.queue_public_original_admission_v1(record);
+            }
             b.check_funded_original_court_admission_native_v2(claim_id, ctx.daa_score)
         }
         OriginalAdmissionV1::Funded(plan) => {

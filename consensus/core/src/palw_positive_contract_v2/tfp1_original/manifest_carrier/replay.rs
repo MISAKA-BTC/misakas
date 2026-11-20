@@ -8,7 +8,7 @@ use std::sync::Arc;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ManifestRequestReplaySeedV1 {
     parent_root: Hash64,
     initial: ValidatedManifestRequestCarrierV1,
@@ -21,7 +21,7 @@ crate::palw_native_resource_v1::native_struct!(ManifestRequestReplaySeedV1; pare
 /// must reconcile preview/observed/actual at this exact parent and ordinal,
 /// then deduct `charge` once from the same carrier's collectible fee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ManifestRequestFeeV1 {
+pub struct ManifestRequestFeeV1 {
     parent_root: Hash64,
     context: ManifestRequestCarrierContextV1,
     actual_fee: u64,
@@ -69,6 +69,19 @@ impl ValidatedManifestRequestCarrierV1 {
 }
 
 impl ManifestRequestReplaySeedV1 {
+    pub(super) fn check_context_v3(&self, parent_root: Hash64, at: &PalwBlockContextV2) -> Result<(), ManifestRequestCarrierErrorV1> {
+        if parent_root != self.parent_root || at != &self.initial.context.at {
+            return Err(ManifestRequestCarrierErrorV1::Context);
+        }
+        Ok(())
+    }
+
+    pub(super) fn collectible_for_seed_v3(&self, effect: &ManifestRequestFeeV1) -> Result<u64, ManifestRequestCarrierErrorV1> {
+        let actual_fee = self.initial.budget.actual_fee_v1();
+        let preceding_fee = actual_fee.checked_sub(self.initial.budget.remaining_v1()).ok_or(ManifestRequestCarrierErrorV1::Charge)?;
+        effect.collectible_at_v1(self.parent_root, &self.initial.context, actual_fee, preceding_fee)
+    }
+
     pub(crate) fn context_v1(&self) -> ManifestRequestCarrierContextV1 {
         self.initial.context
     }
@@ -88,14 +101,13 @@ impl ManifestRequestReplaySeedV1 {
         parent_root: Hash64,
         at: &PalwBlockContextV2,
     ) -> Result<ValidatedManifestRequestCarrierV1, ManifestRequestCarrierErrorV1> {
-        use ManifestRequestCarrierErrorV1::{Context, Resource};
-        if parent_root != self.parent_root || at != &self.initial.context.at {
-            return Err(Context);
-        }
+        use ManifestRequestCarrierErrorV1::Resource;
+        self.check_context_v3(parent_root, at)?;
         let owner = reserve_native_pending_requests_v1(fee_ledger_bytes_v1(1)).map_err(Resource)?;
         Ok(ValidatedManifestRequestCarrierV1 {
             context: self.initial.context,
             request: self.initial.request,
+            request_version: self.initial.request_version,
             budget: NativeRetainedV1::from_owner_reserved_v1(CarrierFeeBudgetV1::clone(&self.initial.budget), owner),
             charged: false,
             charge_purpose: None,
@@ -112,12 +124,13 @@ impl ManifestRequestReplaySeedV1 {
         charged: u64,
     ) -> Result<ManifestRequestFeeV1, ManifestRequestCarrierErrorV1> {
         use ManifestRequestCarrierErrorV1::Charge;
-        let signed = SignedManifestRequestV1::decode(&self.initial.request).map_err(|_| Charge)?;
+        let request = self.initial.request_message_v2().map_err(|_| Charge)?;
         let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
             self.initial.context.scope.claim,
             self.initial.context.scope.reservation_scope,
-        ).map_err(|_| Charge)?;
-        let purpose = super::super::manifest_paid::manifest_request_charge_purpose_v1(signed.request.original, packet).map_err(|_| Charge)?;
+        )
+        .map_err(|_| Charge)?;
+        let purpose = super::super::manifest_paid::manifest_request_charge_purpose_v1(request.original, packet).map_err(|_| Charge)?;
         self.project_with_purpose_v2(candidate, charged, purpose)
     }
 
@@ -143,6 +156,7 @@ impl ManifestRequestReplaySeedV1 {
         if candidate.replay_parent_root != Some(self.parent_root)
             || candidate.context != self.initial.context
             || candidate.request != self.initial.request
+            || candidate.request_version != self.initial.request_version
             || candidate.budget.actual_fee_v1() != self.initial.budget.actual_fee_v1()
         {
             return Err(Context);

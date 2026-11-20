@@ -8,8 +8,13 @@ use crate::rows::AcceptedOrigin;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 mod hf_artifact;
+mod prompt_segments;
 pub use hf_artifact::{
     HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1, HfArtifactDescriptorV1, HfArtifactNativePinsV1, hf_artifact_material_codec_v1,
+};
+pub use prompt_segments::{
+    PromptMaterialEncodingV1, PromptSegmentRefV1, PromptSegmentsV1, encode_prompt_segments_v1, prompt_segments_material_codec_v1,
+    prompt_segments_material_v1,
 };
 
 pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
@@ -28,6 +33,43 @@ pub fn stateless_wide_replay_plan_v1() -> Digest {
 /// original's existing signed service-contract field.
 pub fn public_original_service_contract_id_v1(obligation: Digest, budget: &crate::messages::AggregateBudget) -> Digest {
     hash(b"misaka/palw/public-original-service/v1", &(obligation, budget))
+}
+
+/// Version 2 binds the retention duration from actual acceptance. The native
+/// owner still books absolute deadlines; payer consent separately bounds its
+/// acceptance interval and maximum material horizon. Legacy v1 is unchanged.
+pub fn public_original_service_contract_id_v2(
+    obligation: Digest,
+    budget: &crate::messages::AggregateBudget,
+    accepted_daa: u64,
+) -> Result<Digest, ContractError> {
+    let retention_daa = budget.retention_until.checked_sub(accepted_daa).filter(|n| *n > 0).ok_or(ContractError::Budget)?;
+    Ok(hash(
+        b"misaka/palw/public-original-service/v2",
+        &(
+            obligation,
+            budget.rounds,
+            budget.unique_source_bytes,
+            budget.transmitted_bytes,
+            budget.additional_work,
+            budget.retained_bytes,
+            retention_daa,
+            budget.fee,
+            budget.witness_attempts,
+        ),
+    ))
+}
+
+/// The expected metadata owner chooses the version. This additional check
+/// binds that choice to its recomputed obligation and exact budget dimensions.
+pub fn public_original_service_contract_matches_v2(
+    id: Digest,
+    obligation: Digest,
+    budget: &crate::messages::AggregateBudget,
+    accepted_daa: u64,
+) -> bool {
+    id == public_original_service_contract_id_v1(obligation, budget)
+        || public_original_service_contract_id_v2(obligation, budget, accepted_daa).is_ok_and(|expected| id == expected)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -63,6 +105,13 @@ pub struct PublicDrawMemberV1 {
 /// Compact identity of the ordered membership and its protected allocations.
 pub fn public_draw_members_digest_v1(members: &[PublicDrawMemberV1]) -> Digest {
     hash(b"misaka/palw/public-draw-members/v1", &members)
+}
+
+/// Identity of one bound seat's rescue reservation. It is derived from the
+/// original's already accepted reservation and that seat's bond. It does not
+/// book capacity and it is not a computation certificate.
+pub fn protected_seat_rescue_reservation_v1(reservation: Digest, bond: PanelBond) -> Digest {
+    hash(b"misaka/palw/public-draw-rescue/v1", &(reservation, bond))
 }
 
 /// Identity of a draw whose beacon and membership were resolved by consensus.
@@ -723,6 +772,40 @@ impl SignedManifestRequestV1 {
             return Err(ContractError::NonCanonical);
         }
         borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)
+    }
+}
+
+/// Draft PMR2 body: the selected bond's registered key is read from native
+/// state, not repeated on the wire. The request and signature domain remain
+/// identical to PMR1. Resolving a key is not authentication or draw admission.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RegisteredKeyManifestRequestV2 {
+    pub request: ManifestRequest,
+    pub signature: [u8; SIGNATURE_BYTES],
+}
+
+impl RegisteredKeyManifestRequestV2 {
+    pub const WIRE_BYTES: usize = SignedManifestRequestV1::MAX_WIRE_BYTES - PUBKEY_BYTES;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ContractError> {
+        if bytes.len() != Self::WIRE_BYTES {
+            return Err(ContractError::NonCanonical);
+        }
+        let value: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if !matches!(value.request.claimant, Claimant::DrawnBond(_)) {
+            return Err(ContractError::Identity);
+        }
+        Ok(value)
+    }
+
+    /// The native owner must resolve this key from the named bond and still
+    /// check the actual draw, original, slot and inclusion point. No signature
+    /// check is skipped: the returned body uses the unchanged verifier.
+    pub fn with_registered_key(self, key: [u8; PUBKEY_BYTES]) -> Result<SignedManifestRequestV1, ContractError> {
+        if !matches!(self.request.claimant, Claimant::DrawnBond(_)) || principal(&key) != self.request.signer {
+            return Err(ContractError::Identity);
+        }
+        Ok(SignedManifestRequestV1 { request: self.request, key, signature: self.signature })
     }
 }
 
@@ -1543,6 +1626,80 @@ impl ProtectedRescueDemand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn registered_key_manifest_preserves_signature_and_rejects_key_or_body_substitution() {
+        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([48; 32]);
+        let key = *pair.verification_key.as_ref();
+        let request = ManifestRequest {
+            original: OriginalId(Digest([1; 64])),
+            manifest_root: Digest([2; 64]),
+            claimant: Claimant::DrawnBond(PanelBond { transaction: Digest([3; 64]), index: 4 }),
+            signer: principal(&key),
+            inspection_scope: Digest([5; 64]),
+            supply_obligation: Digest([6; 64]),
+            collect_until: 700,
+            reservation: Digest([8; 64]),
+        };
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [49; 32])
+                .unwrap();
+        let compact = RegisteredKeyManifestRequestV2 { request, signature: *signature.as_ref() };
+        let wire = borsh::to_vec(&compact).unwrap();
+        assert_eq!(wire.len(), RegisteredKeyManifestRequestV2::WIRE_BYTES);
+        assert_eq!(RegisteredKeyManifestRequestV2::decode(&wire), Ok(compact.clone()));
+        let expanded = compact.clone().with_registered_key(key).unwrap();
+        assert_eq!(borsh::to_vec(&expanded).unwrap().len() - wire.len(), PUBKEY_BYTES);
+        expanded.request.authenticate(expanded.request.signer, &expanded.key, &expanded.signature).unwrap();
+        assert_eq!(compact.clone().with_registered_key([0; PUBKEY_BYTES]), Err(ContractError::Identity));
+        let mut changed = compact.clone();
+        changed.request.reservation.0[0] ^= 1;
+        let changed = changed.with_registered_key(key).unwrap();
+        assert_eq!(
+            changed.request.authenticate(changed.request.signer, &changed.key, &changed.signature),
+            Err(ContractError::Signature)
+        );
+        assert!(RegisteredKeyManifestRequestV2::decode(&wire[..wire.len() - 1]).is_err());
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert!(RegisteredKeyManifestRequestV2::decode(&trailing).is_err());
+        let mut outsider = compact;
+        outsider.request.claimant = Claimant::Outsider(outsider.request.signer);
+        assert!(outsider.clone().with_registered_key(key).is_err());
+        let mut padded = borsh::to_vec(&outsider).unwrap();
+        padded.resize(RegisteredKeyManifestRequestV2::WIRE_BYTES, 0);
+        assert!(RegisteredKeyManifestRequestV2::decode(&padded).is_err());
+    }
+
+    #[test]
+    fn relative_service_identity_survives_acceptance_delay_without_reinterpreting_v1() {
+        let obligation = Digest([42; 64]);
+        let budget = crate::messages::AggregateBudget {
+            rounds: 2,
+            unique_source_bytes: 100,
+            transmitted_bytes: 300,
+            additional_work: 400,
+            retained_bytes: 500,
+            retention_until: 10_100,
+            fee: 600,
+            witness_attempts: 3,
+        };
+        let later = crate::messages::AggregateBudget { retention_until: 10_107, ..budget };
+        let id = public_original_service_contract_id_v2(obligation, &budget, 100).unwrap();
+        assert_eq!(id, public_original_service_contract_id_v2(obligation, &later, 107).unwrap());
+        assert_ne!(id, public_original_service_contract_id_v1(obligation, &budget));
+        assert_ne!(
+            public_original_service_contract_id_v1(obligation, &budget),
+            public_original_service_contract_id_v1(obligation, &later)
+        );
+        assert!(!public_original_service_contract_matches_v2(id, obligation, &later, 106));
+        assert!(!public_original_service_contract_matches_v2(id, Digest([43; 64]), &later, 107));
+        let mut altered = later;
+        altered.fee += 1;
+        assert!(!public_original_service_contract_matches_v2(id, obligation, &altered, 107));
+        assert!(public_original_service_contract_id_v2(obligation, &budget, 10_100).is_err());
+        assert!(public_original_service_contract_id_v2(obligation, &budget, u64::MAX).is_err());
+    }
 
     #[test]
     fn tir_inventory_descriptor_binds_root_and_raw_parameter_length() {

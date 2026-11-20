@@ -1,7 +1,7 @@
 //! Causal all-branch scheduling component for RFC-0026. The original coordinator
 //! must derive the complete graph, authenticated actors and funded real costs.
 //! A planned slot is not prerequisite completion, delivery, supply or default.
-use super::{ServicePacket, ServiceRefusal, ServiceReservations};
+use super::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations};
 use std::collections::{BTreeMap, BTreeSet};
 type Id = [u8; 64];
 /// Internal planning input, not a peer-deserializable admission certificate.
@@ -10,6 +10,35 @@ pub struct CausalServicePacketV1 {
     pub packet: ServicePacket,
     pub predecessors: Vec<Id>,
 }
+
+/// Fixed-size explanation of the first capacity refusal. This is not a quote
+/// for replacement capacity, a complete feasibility proof or an admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CausalCapacityStageV1 {
+    AtomicPacketExceedsBudget,
+    NoFreeSlot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CausalCapacityRefusalV1 {
+    pub stage: CausalCapacityStageV1,
+    pub packet: crate::Hash64,
+    pub required: ServiceCost,
+    pub budget: ServiceCost,
+    /// Includes every predecessor's proposed slot plus one, for NoFreeSlot.
+    pub effective_release_daa: u64,
+    pub service_before: u64,
+    pub existing_packets: usize,
+    /// Placements in the disposable candidate; all are rolled back on refusal.
+    pub proposed_packets: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CausalReservationErrorV1 {
+    pub refusal: ServiceRefusal,
+    pub capacity: Option<CausalCapacityRefusalV1>,
+}
+
 impl ServiceReservations {
     /// Atomic conservative topological first-fit. Every dependent packet starts
     /// strictly after all its predecessors' reserved slots. Existing assignments
@@ -20,6 +49,16 @@ impl ServiceReservations {
         self.reserve_causal_checked_v1(graph, hard, |_| Ok(()))
     }
 
+    /// The identical atomic scheduler with a bounded failure witness. No
+    /// retry, widened window or capacity change is performed on a failure.
+    pub fn reserve_causal_with_diagnostic_v1(
+        &mut self,
+        graph: &[CausalServicePacketV1],
+        hard: u64,
+    ) -> Result<(), CausalReservationErrorV1> {
+        self.reserve_causal_checked_diagnostic_v1(graph, hard, |_| Ok(()))
+    }
+
     /// Run a native constraint on the proposed assignments before committing
     /// the candidate. A constraint failure leaves the original book intact.
     pub(crate) fn reserve_causal_checked_v1(
@@ -27,6 +66,27 @@ impl ServiceReservations {
         graph: &[CausalServicePacketV1],
         hard: u64,
         check_assignments: impl FnOnce(&Self) -> Result<(), ServiceRefusal>,
+    ) -> Result<(), ServiceRefusal> {
+        self.reserve_causal_checked_diagnostic_v1(graph, hard, check_assignments).map_err(|error| error.refusal)
+    }
+
+    pub(crate) fn reserve_causal_checked_diagnostic_v1(
+        &mut self,
+        graph: &[CausalServicePacketV1],
+        hard: u64,
+        check_assignments: impl FnOnce(&Self) -> Result<(), ServiceRefusal>,
+    ) -> Result<(), CausalReservationErrorV1> {
+        let mut capacity = None;
+        self.reserve_causal_checked_inner_v1(graph, hard, check_assignments, &mut capacity)
+            .map_err(|refusal| CausalReservationErrorV1 { refusal, capacity })
+    }
+
+    fn reserve_causal_checked_inner_v1(
+        &mut self,
+        graph: &[CausalServicePacketV1],
+        hard: u64,
+        check_assignments: impl FnOnce(&Self) -> Result<(), ServiceRefusal>,
+        capacity: &mut Option<CausalCapacityRefusalV1>,
     ) -> Result<(), ServiceRefusal> {
         if graph.is_empty() {
             return Err(ServiceRefusal::InvalidState);
@@ -50,6 +110,18 @@ impl ServiceReservations {
                 return Err(ServiceRefusal::ReservationInThePast);
             }
             if self.budget.subtract(p.cost).is_none() {
+                *capacity = Some(CausalCapacityRefusalV1 {
+                    stage: CausalCapacityStageV1::AtomicPacketExceedsBudget,
+                    packet: crate::Hash64::from_bytes(p.id),
+                    required: p.cost,
+                    budget: self.budget,
+                    effective_release_daa: p.release_daa,
+                    service_before: p.service_before,
+                    existing_packets: self.packets.len(),
+                    proposed_packets: 0,
+                });
+                #[cfg(test)]
+                self.write_capacity_diagnostic_v1(graph, hard, p.id);
                 return Err(ServiceRefusal::NoCapacity);
             }
         }
@@ -91,7 +163,19 @@ impl ServiceReservations {
             }
             let (slot, left) = (p.release_daa..p.service_before)
                 .find_map(|d| candidate.remaining.get(&d).copied().unwrap_or(candidate.budget).subtract(p.cost).map(|left| (d, left)))
-                .ok_or(ServiceRefusal::NoCapacity)?;
+                .ok_or_else(|| {
+                    *capacity = Some(CausalCapacityRefusalV1 {
+                        stage: CausalCapacityStageV1::NoFreeSlot,
+                        packet: crate::Hash64::from_bytes(p.id),
+                        required: p.cost,
+                        budget: self.budget,
+                        effective_release_daa: p.release_daa,
+                        service_before: p.service_before,
+                        existing_packets: self.packets.len(),
+                        proposed_packets: done,
+                    });
+                    ServiceRefusal::NoCapacity
+                })?;
             candidate.remaining.insert(slot, left);
             candidate.assignments.insert(id, slot);
             candidate.packets.insert(id, n.packet.clone());
@@ -112,6 +196,46 @@ impl ServiceReservations {
         check_assignments(&candidate)?;
         *self = candidate;
         Ok(())
+    }
+
+    /// Opt-in test diagnostic of the actual refused input. It does not change
+    /// costs, reserve slots, or establish that the unbooked graph is valid.
+    /// Keep this out of daemon builds and native resource measurements.
+    #[cfg(test)]
+    fn write_capacity_diagnostic_v1(&self, graph: &[CausalServicePacketV1], hard: u64, refused: Id) {
+        use std::io::Write;
+        let Some(path) = std::env::var_os("MISAKA_PALW_CAPACITY_DIAGNOSTIC_V1") else { return };
+        let cost = |c: super::ServiceCost| {
+            serde_json::json!({
+                "bytes": c.bytes, "work": c.work, "io": c.io, "controls": c.controls,
+            })
+        };
+        let id = |value: Id| crate::Hash64::from_bytes(value).to_string();
+        let value = serde_json::json!({
+            "version": 1,
+            "kind": "unbookedCausalServiceInput",
+            "hard": hard,
+            "budget": cost(self.budget),
+            "existingPacketCount": self.packets.len(),
+            "lastObservedDaa": self.last_observed_daa,
+            "refusedPacket": id(refused),
+            "graph": graph.iter().map(|node| serde_json::json!({
+                "id": id(node.packet.id),
+                "release": node.packet.release_daa,
+                "before": node.packet.service_before,
+                "cost": cost(node.packet.cost),
+                "predecessors": node.predecessors.iter().map(|value| id(*value)).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        });
+        let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+            serde_json::to_writer(&mut file, &value)?;
+            file.write_all(b"\n")?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            eprintln!("capacity diagnostic unavailable: {error}");
+        }
     }
     /// Conservative recovery: preserve every original promise and supplied slot.
     /// If ordinary repair would move a prerequisite after a retained descendant,
@@ -261,5 +385,71 @@ mod tests {
         let mut broken = b.clone();
         broken.assignments.insert([1; 64], 7);
         assert!(broken.check_causal_v1(&g).is_err());
+    }
+
+    #[test]
+    fn diagnostics_distinguish_each_atomic_dimension_without_changing_refusal() {
+        for dimension in 0..3 {
+            let mut graph = vec![packet(1, 8, &[])];
+            let budget = ServiceCost { bytes: 2, work: 2, io: 2, controls: 1 };
+            match dimension {
+                0 => graph[0].packet.cost.bytes = 3,
+                1 => graph[0].packet.cost.work = 3,
+                2 => graph[0].packet.cost.io = 3,
+                _ => unreachable!(),
+            }
+            let mut observed = ServiceReservations::new(budget).unwrap();
+            let saved = observed.clone();
+            let failure = observed.reserve_causal_with_diagnostic_v1(&graph, 8).unwrap_err();
+            assert_eq!(failure.refusal, ServiceRefusal::NoCapacity);
+            let witness = failure.capacity.unwrap();
+            assert_eq!(witness.stage, CausalCapacityStageV1::AtomicPacketExceedsBudget);
+            assert_eq!(witness.packet.as_bytes(), graph[0].packet.id);
+            assert_eq!(witness.required, graph[0].packet.cost);
+            assert_eq!(witness.budget, budget);
+            assert_eq!(witness.effective_release_daa, 1);
+            assert_eq!(witness.service_before, 8);
+            assert_eq!((witness.existing_packets, witness.proposed_packets), (0, 0));
+            assert_eq!(observed, saved);
+            assert_eq!(observed.reserve_causal_v1(&graph, 8), Err(failure.refusal));
+            assert_eq!(observed, saved);
+        }
+    }
+
+    #[test]
+    fn occupied_window_diagnostic_keeps_causal_release_and_rolls_back_candidate() {
+        let mut observed = book();
+        observed.reserve(&[packet(9, 8, &[]).packet], 8).unwrap();
+        let saved = observed.clone();
+        let graph = vec![packet(1, 4, &[]), packet(2, 4, &[1]), packet(3, 4, &[1])];
+        let failure = observed.reserve_causal_with_diagnostic_v1(&graph, 8).unwrap_err();
+        assert_eq!(failure.refusal, ServiceRefusal::NoCapacity);
+        let witness = failure.capacity.unwrap();
+        assert_eq!(witness.stage, CausalCapacityStageV1::NoFreeSlot);
+        assert_eq!(witness.packet.as_bytes(), [3; 64]);
+        assert_eq!((witness.effective_release_daa, witness.service_before), (3, 4));
+        assert_eq!((witness.existing_packets, witness.proposed_packets), (1, 2));
+        assert_eq!(observed, saved);
+        assert_eq!(observed.reserve_causal_v1(&graph, 8), Err(failure.refusal));
+        assert_eq!(observed, saved);
+    }
+
+    #[test]
+    fn diagnostic_entry_preserves_success_and_noncapacity_constraint_failure() {
+        let graph = vec![packet(1, 8, &[]), packet(2, 8, &[1])];
+        let mut old = book();
+        let mut observed = old.clone();
+        old.reserve_causal_v1(&graph, 8).unwrap();
+        observed.reserve_causal_with_diagnostic_v1(&graph, 8).unwrap();
+        assert_eq!(old, observed);
+        let mut observed = book();
+        let saved = observed.clone();
+        let failure = observed.reserve_causal_checked_diagnostic_v1(&graph, 8, |_| Err(ServiceRefusal::InvalidBudget)).unwrap_err();
+        assert_eq!(failure, CausalReservationErrorV1 { refusal: ServiceRefusal::InvalidBudget, capacity: None });
+        assert_eq!(observed, saved);
+        let deadline_graph = vec![packet(1, 4, &[]), packet(2, 2, &[1])];
+        let failure = observed.reserve_causal_with_diagnostic_v1(&deadline_graph, 4).unwrap_err();
+        assert_eq!(failure, CausalReservationErrorV1 { refusal: ServiceRefusal::DeadlineExhausted, capacity: None });
+        assert_eq!(observed, saved);
     }
 }

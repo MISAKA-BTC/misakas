@@ -7,10 +7,69 @@ use kaspa_consensus_core::palw_tokenizer_registration_v1::{
 };
 use kaspa_rpc_core::{GetPalwTokenizerRegistrationQuoteRequest, GetPalwTokenizerRegistrationStatusRequest, api::rpc::RpcApi};
 use std::{io::Read, path::PathBuf};
+mod draft;
+mod inventory;
 mod sender;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum TokenizerRegistrationCmd {
+    /// Sign the prerequisite EOF inventory Open; writes files without submitting or paying.
+    InventoryOpen {
+        #[arg(long)]
+        class_semantics: PathBuf,
+        #[arg(long)]
+        raw_tokenizer: PathBuf,
+        /// Registered opener bond, <transaction-id>:<index>.
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        accept_until_daa: u64,
+        /// Ceiling on native rent plus deposit, excluding later transaction fees.
+        #[arg(long)]
+        max_prepaid_sompi: u64,
+        #[arg(long)]
+        key_file: Option<String>,
+        #[arg(long)]
+        key_stdin: bool,
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
+    /// Sign EOF Parts and Finish for an Open's observed accepting DAA; no submission.
+    InventoryContinue {
+        /// offer.borsh produced by inventory-open, including its original signature.
+        #[arg(long)]
+        offer: PathBuf,
+        #[arg(long)]
+        raw_tokenizer: PathBuf,
+        /// Actual accepting point read from the chain, not the carrier's own DAA.
+        #[arg(long)]
+        accepted_open_daa: u64,
+        #[arg(long)]
+        key_file: Option<String>,
+        #[arg(long)]
+        key_stdin: bool,
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
+    /// Build an unsigned Open from explicit JSON pins and the actual tokenizer; no RPC or payment.
+    DraftOpen {
+        /// Version 1 JSON: network, policy_id, class_id, container_root, semantics_id,
+        /// inventory_id, artifact_root, tokenizer_id, table_root, vocab, rendering_rule,
+        /// opener_transaction_id, opener_index, nonce, proposed_accepting_daa,
+        /// accept_until_daa, finish_until_daa, max_registration_charge, declared_key_events.
+        #[arg(long)]
+        specification: PathBuf,
+        /// Exact binary Borsh policy; its ID must equal the specification's policy_id.
+        #[arg(long)]
+        policy: PathBuf,
+        #[arg(long)]
+        raw_tokenizer: PathBuf,
+        #[arg(long)]
+        eog_opening: PathBuf,
+        /// New directory containing open-body.borsh and draft.json, usable by quote/prepare.
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
     /// Quote a canonical unsigned Open body. Does not sign, pay or reserve slots.
     Quote {
         /// Binary Borsh TokenizerRegistrationOpenBodyV1, without a carrier or signature.
@@ -91,6 +150,42 @@ fn print_observation<T: serde::Serialize>(reply: &T, observation: &str) -> CliRe
 
 pub(crate) async fn run(ctx: &Ctx, command: TokenizerRegistrationCmd) -> CliResult {
     match command {
+        TokenizerRegistrationCmd::InventoryOpen {
+            class_semantics,
+            raw_tokenizer,
+            bond,
+            accept_until_daa,
+            max_prepaid_sompi,
+            key_file,
+            key_stdin,
+            output_dir,
+        } => {
+            inventory::open(
+                ctx,
+                &class_semantics,
+                &raw_tokenizer,
+                &bond,
+                accept_until_daa,
+                max_prepaid_sompi,
+                crate::keys::KeySource { key_file, key_stdin },
+                &output_dir,
+            )
+            .await?;
+        }
+        TokenizerRegistrationCmd::InventoryContinue { offer, raw_tokenizer, accepted_open_daa, key_file, key_stdin, output_dir } => {
+            inventory::continuation(
+                ctx,
+                &offer,
+                &raw_tokenizer,
+                accepted_open_daa,
+                crate::keys::KeySource { key_file, key_stdin },
+                &output_dir,
+            )
+            .await?;
+        }
+        TokenizerRegistrationCmd::DraftOpen { specification, policy, raw_tokenizer, eog_opening, output_dir } => {
+            draft::write(&specification, &policy, &raw_tokenizer, &eog_opening, &output_dir).map_err(input_error)?;
+        }
         TokenizerRegistrationCmd::Send { payload, quote, key_file, key_stdin, max_fee, submit } => {
             sender::run(ctx, &payload, &quote, crate::keys::KeySource { key_file, key_stdin }, max_fee, submit).await?;
         }

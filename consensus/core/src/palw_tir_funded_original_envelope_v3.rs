@@ -14,13 +14,15 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    public_one_honest::{HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1, ManifestV1, SignedPublicOriginalV1},
+    public_one_honest::{HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1, ManifestV1, PromptMaterialEncodingV1, SignedPublicOriginalV1},
 };
 
 pub const MAGIC: &[u8; 4] = b"TFO3";
 const VERSION_V1: u16 = 1;
 const VERSION_WITH_MANIFEST_V2: u16 = 2;
 const PROTECTED_WIRE_VERSION: u16 = 3;
+const RELATIVE_PROTECTED_WIRE_VERSION: u16 = 4;
+const SEGMENTED_PROTECTED_WIRE_VERSION: u16 = 5;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 4 + 4;
 const COMPANION_BYTES: usize = SignedPublicOriginalV1::WIRE_BYTES;
 const MANIFEST_BYTES: usize = ManifestV1::WIRE_BYTES as usize;
@@ -51,6 +53,8 @@ pub struct PalwTirFundedOriginalEnvelopeV3<'a> {
     manifest_material: Option<ManifestMaterialV2<'a>>,
     inner_shape: NativeWireShapeV1,
     protected: bool,
+    relative_service: bool,
+    prompt_encoding: PromptMaterialEncodingV1,
 }
 
 impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
@@ -65,7 +69,14 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
             return Err("TFO3 exceeds its total transport bound or has wrong magic".into());
         }
         let version = read_field::<2>(bytes, MAGIC.len()).map(u16::from_le_bytes)?;
-        if !matches!(version, VERSION_V1 | VERSION_WITH_MANIFEST_V2 | PROTECTED_WIRE_VERSION) {
+        if !matches!(
+            version,
+            VERSION_V1
+                | VERSION_WITH_MANIFEST_V2
+                | PROTECTED_WIRE_VERSION
+                | RELATIVE_PROTECTED_WIRE_VERSION
+                | SEGMENTED_PROTECTED_WIRE_VERSION
+        ) {
             return Err("unknown TFO3 version".into());
         }
         let inner_bytes = read_field::<4>(bytes, MAGIC.len() + 2).map(u32::from_le_bytes)? as usize;
@@ -90,7 +101,11 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         if descriptor.len() != descriptor_len {
             return Err("TFO3 HF descriptor does not reach exact EOF".into());
         }
-        if version == PROTECTED_WIRE_VERSION {
+        if version == SEGMENTED_PROTECTED_WIRE_VERSION {
+            Self::from_parts_segmented_v5(funded, prompt, companion, manifest, descriptor)
+        } else if version == RELATIVE_PROTECTED_WIRE_VERSION {
+            Self::from_parts_relative_v4(funded, prompt, companion, manifest, descriptor)
+        } else if version == PROTECTED_WIRE_VERSION {
             Self::from_parts_protected_v3(funded, prompt, companion, manifest, descriptor)
         } else {
             Self::from_parts_with_manifest_v2(funded, prompt, companion, manifest, descriptor)
@@ -121,6 +136,40 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         Self::from_parts(funded, prompt, companion, Some(ManifestMaterialV2 { manifest, hf_descriptor }), true)
     }
 
+    /// Explicit v4 selects relative service identities. The literal FP and
+    /// payer's absolute acceptance/material bounds keep their existing codec.
+    pub fn from_parts_relative_v4(
+        funded: &'a [u8],
+        prompt: &'a [u8],
+        companion: &'a [u8; COMPANION_BYTES],
+        manifest: &'a [u8; MANIFEST_BYTES],
+        hf_descriptor: &'a [u8],
+    ) -> Result<Self, String> {
+        let mut out = Self::from_parts_protected_v3(funded, prompt, companion, manifest, hf_descriptor)?;
+        out.relative_service = true;
+        Ok(out)
+    }
+
+    /// Explicit v5 preserves Studio text/control boundaries with relative service clocks.
+    pub fn from_parts_segmented_v5(
+        funded: &'a [u8],
+        prompt: &'a [u8],
+        companion: &'a [u8; COMPANION_BYTES],
+        manifest: &'a [u8; MANIFEST_BYTES],
+        hf_descriptor: &'a [u8],
+    ) -> Result<Self, String> {
+        PromptMaterialEncodingV1::SegmentsV1
+            .check_body_v1(prompt, MAX_BYTES as u64)
+            .map_err(|e| format!("segmented prompt: {e:?}"))?;
+        let mut out = Self::from_parts_relative_v4(funded, prompt, companion, manifest, hf_descriptor)?;
+        out.prompt_encoding = PromptMaterialEncodingV1::SegmentsV1;
+        Ok(out)
+    }
+
+    pub fn prompt_encoding_v5(&self) -> PromptMaterialEncodingV1 {
+        self.prompt_encoding
+    }
+
     fn from_parts(
         funded: &'a [u8],
         prompt: &'a [u8],
@@ -131,7 +180,16 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         encoded_len_v3(funded.len(), prompt.len(), manifest_material)?;
         let prompt = std::str::from_utf8(prompt).map_err(|_| "TFO3 prompt is not UTF-8")?;
         let inner_shape = if protected { scan_protected_funded_v3(funded)? } else { scan_funded_v3(funded)? };
-        Ok(Self { funded, prompt, companion, manifest_material, inner_shape, protected })
+        Ok(Self {
+            funded,
+            prompt,
+            companion,
+            manifest_material,
+            inner_shape,
+            protected,
+            relative_service: false,
+            prompt_encoding: PromptMaterialEncodingV1::LiteralUtf8,
+        })
     }
 
     pub fn encode_v3(&self) -> Result<Vec<u8>, String> {
@@ -142,6 +200,8 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         bytes.try_reserve_exact(total).map_err(|_| "TFO3 output allocation failed")?;
         bytes.extend_from_slice(MAGIC);
         let version = match (self.protected, self.manifest_material.is_some()) {
+            (true, true) if self.prompt_encoding == PromptMaterialEncodingV1::SegmentsV1 => SEGMENTED_PROTECTED_WIRE_VERSION,
+            (true, true) if self.relative_service => RELATIVE_PROTECTED_WIRE_VERSION,
             (true, true) => PROTECTED_WIRE_VERSION,
             (false, true) => VERSION_WITH_MANIFEST_V2,
             (false, false) => VERSION_V1,
@@ -164,6 +224,10 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
 
     pub fn is_protected_v3(&self) -> bool {
         self.protected
+    }
+
+    pub fn uses_relative_service_v4(&self) -> bool {
+        self.relative_service
     }
 
     /// This owned decode is selected only from the bounded exact outer view.
@@ -371,6 +435,8 @@ mod tests {
                 crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(view.funded_original_v3()).unwrap();
             assert_eq!(decoded, base);
             assert_eq!(decoded.original_v1().unwrap().original_fp_v1().unwrap().claim_id(), old_claim);
+            let material_fp = crate::palw_fp_answer_accounting_v1::palw_fp_accounting_original_decode_v1(&wire).unwrap();
+            assert_eq!(material_fp.claim_id(), old_claim);
             assert!(view.inner_native_shape_v3().heap > 0);
             let companion = view.companion_v3().unwrap();
             assert!(companion.original.authenticate(&companion.key, &companion.signature).is_err());
@@ -644,6 +710,63 @@ mod tests {
                 .unwrap();
         let view = PalwTirFundedOriginalEnvelopeV3::decode_v3(&wire).unwrap();
         assert!(view.is_protected_v3());
+        assert!(!view.uses_relative_service_v4());
+        let relative =
+            PalwTirFundedOriginalEnvelopeV3::from_parts_relative_v4(&inner, PROMPT.as_bytes(), &companion, &manifest, &descriptor)
+                .unwrap()
+                .encode_v3()
+                .unwrap();
+        assert_eq!(&relative[4..6], &4u16.to_le_bytes());
+        assert_eq!(&relative[6..], &wire[6..], "version selection does not rewrite signed inner bytes");
+        let relative_view = PalwTirFundedOriginalEnvelopeV3::decode_v3(&relative).unwrap();
+        assert!(relative_view.is_protected_v3() && relative_view.uses_relative_service_v4());
+        assert_eq!(relative_view.encode_v3().unwrap(), relative);
+        assert_eq!(decode_funded_original_carrier_v3(&relative).unwrap(), base);
+        let segmented_prompt = b"PPS1\ns:128\nt:1:a";
+        let segmented =
+            PalwTirFundedOriginalEnvelopeV3::from_parts_segmented_v5(&inner, segmented_prompt, &companion, &manifest, &descriptor)
+                .unwrap()
+                .encode_v3()
+                .unwrap();
+        let segmented_view = PalwTirFundedOriginalEnvelopeV3::decode_v3(&segmented).unwrap();
+        assert_eq!(&segmented[4..6], &5u16.to_le_bytes());
+        assert_eq!(segmented_view.prompt_encoding_v5(), PromptMaterialEncodingV1::SegmentsV1);
+        assert_eq!(segmented_view.prompt_bytes_v3(), segmented_prompt);
+        assert_eq!(segmented_view.encode_v3().unwrap(), segmented);
+        assert!(
+            PalwTirFundedOriginalEnvelopeV3::from_parts_segmented_v5(&inner, b"ordinary text", &companion, &manifest, &descriptor)
+                .is_err()
+        );
+        let literal_marker =
+            PalwTirFundedOriginalEnvelopeV3::from_parts_relative_v4(&inner, segmented_prompt, &companion, &manifest, &descriptor)
+                .unwrap();
+        assert_eq!(literal_marker.prompt_encoding_v5(), PromptMaterialEncodingV1::LiteralUtf8);
+
+        // This is the decoder used by fp-submit::plan_submission before it
+        // stages the job/capture for Panel replay and broadcasts the carrier.
+        // It must read the same signed FP from both protected wire versions.
+        use crate::palw_fp_answer_accounting_v1::{palw_fp_accounting_original_bytes_v1, palw_fp_accounting_original_decode_v1};
+        for encoded in [&wire, &relative, &segmented] {
+            assert_eq!(palw_fp_accounting_original_bytes_v1(encoded), Some(literal_fp.as_slice()));
+            let decoded = palw_fp_accounting_original_decode_v1(encoded).unwrap();
+            assert_eq!(decoded.claim_id(), claim);
+            assert_eq!(borsh::to_vec(&*decoded).unwrap(), literal_fp);
+            for cut in [0, 3, 4, 6, 14, encoded.len() - 1] {
+                assert!(palw_fp_accounting_original_decode_v1(&encoded[..cut]).is_err());
+            }
+            let mut trailing = encoded.clone();
+            trailing.push(0);
+            assert!(palw_fp_accounting_original_bytes_v1(&trailing).is_none());
+            let mut overflow = encoded.clone();
+            overflow[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(palw_fp_accounting_original_bytes_v1(&overflow).is_none());
+        }
+        assert!(palw_fp_accounting_original_bytes_v1(&protected_wire).is_none());
+        assert!(palw_fp_accounting_original_bytes_v1(&inner).is_none());
+        let mut unknown = relative.clone();
+        unknown[4..6].copy_from_slice(&6u16.to_le_bytes());
+        assert!(PalwTirFundedOriginalEnvelopeV3::classify_v3(&unknown).unwrap().is_err());
+        assert!(palw_fp_accounting_original_bytes_v1(&unknown).is_none());
         assert_eq!(view.encode_v3().unwrap(), wire);
         assert_eq!(view.funded_original_v3(), inner);
         assert_eq!(view.companion_bytes_v3(), &companion);

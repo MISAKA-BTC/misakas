@@ -21,8 +21,9 @@ impl NativeWireScanV1 for PalwFpCommitmentTxPayloadV3 {
 }
 
 /// Locate the old literal original inside a previously validated accounting inner payload. This is not an envelope validator.
-/// Exactly the specified order: FPA1 outside plain/TFP1/HFP1/TFO1/TFO2;
-/// TFO2 retains literal TFO1, which retains literal TFP1. No claim authorization is inferred.
+/// FPA1 may contain plain/TFP1/HFP1/TFO1/TFO2 or an exact bounded TFO3.
+/// Protected TFP2 is exposed only through its complete TFO3 wrapper; bare
+/// TFP2 and protected TFO1 remain unsupported. No claim authorization is inferred.
 pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
     fn bytes_at(payload: &[u8], offset: usize, cap: usize) -> Option<&[u8]> {
         let count = u32::from_le_bytes(payload.get(offset..offset.checked_add(4)?)?.try_into().ok()?) as usize;
@@ -33,6 +34,25 @@ pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
         payload.get(start..start.checked_add(count)?)
     }
     use crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as FP_MAX;
+    // The submit/material path reads the same literal FP as native admission.
+    // Validate the entire new wrapper before exposing its borrowed body: a
+    // truncated companion, unknown version or stripped protected frame must
+    // never fall back to a legacy identity view.
+    let (inner, protected) = match crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::classify_v3(inner) {
+        Some(view) => {
+            let view = view.ok()?;
+            let funded = view.funded_original_v3();
+            // The checked outer view also accepts TFO2's signature-alias
+            // version. Its literal TFO1 has the same bounded position.
+            let funded = if funded.starts_with(b"TFO2") {
+                bytes_at(funded, 6, crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1)?
+            } else {
+                funded
+            };
+            (funded, view.is_protected_v3())
+        }
+        None => (inner, false),
+    };
     // Read-only identity view. Native admission separately decodes TFO2 and
     // verifies every new supplier consent against its actual original carrier.
     let inner = if inner.starts_with(b"TFO2") {
@@ -47,7 +67,11 @@ pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
     } else {
         inner
     };
-    let original = if inner.starts_with(b"TFP1") {
+    let original = if protected {
+        let tfp = bytes_at(inner, 6, crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1)?;
+        // The TFO3 scanner already checked TFO1 v2 / TFP2 v1 and exact EOF.
+        bytes_at(tfp, 6, FP_MAX)?
+    } else if inner.starts_with(b"TFP1") {
         bytes_at(inner, 14, FP_MAX)?
     } else if inner.starts_with(b"HFP1") {
         bytes_at(inner, 6, FP_MAX)?
@@ -67,6 +91,8 @@ pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
         || original.starts_with(b"HFP1")
         || original.starts_with(b"TFO1")
         || original.starts_with(b"TFO2")
+        || original.starts_with(b"TFO3")
+        || original.starts_with(b"TFP2")
     {
         return None;
     }

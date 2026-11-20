@@ -1203,8 +1203,8 @@ impl TransitionBuilder<'_> {
             },
         }))))
     }
-    /// Proposed native journal adapter. Production block/admission callers are
-    /// still absent. Recovery cannot clear a binding, move a duty deadline,
+    /// Native journal adapter called by the canonical service lifecycle sweep.
+    /// Recovery cannot clear a binding, move a duty deadline,
     /// release collateral, or turn quota into default permission.
     pub(super) fn recover_court_service_supply_v1(
         &mut self,
@@ -1219,13 +1219,19 @@ impl TransitionBuilder<'_> {
         let mut next = old.clone();
         // G14 lane r6-d1-release: the sweep keeps causal order along the row's recorded edges (none on a legacy row).
         let edges = self.state.court_service_causal_edges_v1();
-        let batch_state = self.extras.batch_court_active_v1.then_some(&self.state);
-        let _batch_workspace = match batch_state {
-            Some(state) => crate::palw_court_shared_material_intake_v1::batch::reserve_rooted_batch_repair_v1(state, old)
+        let batch_context = if self.extras.batch_court_active_v1 {
+            let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_selected_v3(true, self.extras.protected_planning_v3)
+                .map_err(|_| PalwStateV2Error::CarriageInconsistent("Batch recovery material schedule is absent".into()))?;
+            Some((&self.state, schedule))
+        } else {
+            None
+        };
+        let _batch_workspace = match batch_context {
+            Some((state, _)) => crate::palw_court_shared_material_intake_v1::batch::reserve_rooted_batch_repair_v1(state, old)
                 .map_err(PalwStateV2Error::NativeResource)?,
             None => None,
         };
-        let report = next.repair_missing_supply_with_v1(&edges, batch_state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let report = next.repair_missing_supply_with_v1(&edges, batch_context).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if &next != old {
             self.write_court_service_state_v1(next)?;
         }
@@ -1395,7 +1401,7 @@ impl TransitionBuilder<'_> {
             return Err(bad("protected service publication changes the accepting prefix"));
         }
         let row = prepared.row_v1();
-        let scratch = writer_scratch_requests_v1(prepared.before_v1().expect("prepared service prior"), row)
+        let scratch = writer_scratch_requests_v1(prepared.before_v1(), row)
             .map_err(PalwStateV2Error::NativeResource)?;
         let _scratch =
             crate::palw_native_resource_v1::reserve_native_pending_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?;
@@ -1510,7 +1516,11 @@ impl TransitionBuilder<'_> {
         if !self.extras.batch_court_active_v1 {
             return Err(PalwStateV2Error::CarriageInconsistent("Batch Court is dormant".into()));
         }
-        if let Some((wire, bytes)) = carrier.plain_output_at_v2(at).map_err(PalwStateV2Error::CarriageInconsistent)? {
+        // The fee owner retains the entire pricing/TTL/cover preimage. Do not
+        // consume a handoff priced under another schedule, even at the same point.
+        let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_selected_v3(true, self.extras.protected_planning_v3)
+            .map_err(|_| PalwStateV2Error::CarriageInconsistent("Batch material storage schedule missing".into()))?;
+        if let Some((wire, bytes)) = carrier.plain_output_at_v2(at, &schedule).map_err(PalwStateV2Error::CarriageInconsistent)? {
             if self.extras.batch_plain_output_transport_v2.is_none_or(|policy| !policy.active_at(at.daa_score)) {
                 return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output transport is dormant".into()));
             }
@@ -1524,7 +1534,7 @@ impl TransitionBuilder<'_> {
             }
             return result;
         }
-        let wire = carrier.wire_at_v1(at).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let wire = carrier.wire_at_v1(at, &schedule).map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut request_root = None;
         if let BatchCourtWireV1::Respond(control) = wire
             && matches!(control.intake.action, MaterialActionV1::Begin { .. })
@@ -1536,7 +1546,7 @@ impl TransitionBuilder<'_> {
             request_root = Some(demand.request_root);
         }
         let debit = carrier.storage_debit_v1(request_root).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        self.apply_batch_court_wire_v1(at, wire, debit.as_ref())
+        self.apply_batch_court_wire_v1(at, wire, debit.as_ref(), schedule)
     }
 
     /// Native candidate entry for an already accepted Batch carrier.
@@ -1545,10 +1555,11 @@ impl TransitionBuilder<'_> {
         at: &PalwBlockContextV2,
         wire: &crate::palw_batch_court_v1::carriage::BatchCourtWireV1,
         storage_debit: Option<&crate::palw_court_shared_material_intake_v1::MaterialBatchStorageDebitV1>,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::carriage::BatchCourtWireV1;
         match wire {
-            BatchCourtWireV1::Open(open) => self.install_batch_demand_v1(at, open),
+            BatchCourtWireV1::Open(open) => self.install_batch_demand_v1(at, open, schedule),
             BatchCourtWireV1::Respond(control) => {
                 super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
                     self,
@@ -1556,11 +1567,12 @@ impl TransitionBuilder<'_> {
                     &control.intake,
                     control.demand_ordinal,
                     storage_debit,
+                    schedule,
                 )?;
                 Ok(())
             }
             BatchCourtWireV1::Stop(control) => self.install_batch_stop_receipt_v1(at, &control.operands),
-            BatchCourtWireV1::VerifyNumerical(signed) => self.install_batch_numerical_receipt_v1(at, signed),
+            BatchCourtWireV1::VerifyNumerical(signed) => self.install_batch_numerical_receipt_v1(at, signed, schedule),
             BatchCourtWireV1::ConvictNumerical(control) => self.apply_batch_numerical_conviction_v1(at, control),
         }
     }
@@ -1736,6 +1748,7 @@ impl TransitionBuilder<'_> {
         &mut self,
         at: &PalwBlockContextV2,
         signed: &crate::palw_court_shared_material_intake_v1::batch::numerical_verification::SignedNumericalBatchVerificationV1,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1;
         use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verify_rooted_numerical_batch_v1;
@@ -1750,7 +1763,7 @@ impl TransitionBuilder<'_> {
                 _ => Err(refused("accepted numerical Batch receipt is immutable")),
             };
         }
-        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, budget)
+        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, budget, schedule.cover)
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
         if (finding.claim, finding.scope, finding.notice, finding.leaf, finding.at)
             != (signed.claim, signed.scope, signed.notice, signed.leaf, *at)
@@ -1990,6 +2003,7 @@ impl TransitionBuilder<'_> {
         &mut self,
         at: &PalwBlockContextV2,
         signed: &crate::palw_batch_court_v1::carriage::SignedBatchDemandV1,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::rooted::RootedBatchDemandV1;
         let refused = |reason: &str| PalwStateV2Error::CarriageInconsistent(reason.into());
@@ -2027,7 +2041,7 @@ impl TransitionBuilder<'_> {
         };
         let signed_bytes = borsh::object_length(signed).map_err(|err| refused(&err.to_string()))? as u64
             + crate::palw_batch_court_v1::carriage::BATCH_OPEN_WIRE_OVERHEAD_V1;
-        demand.check_adoption(&self.state, at, signed_bytes)?;
+        demand.check_adoption(&self.state, at, signed_bytes, schedule)?;
         let key = demand.key();
         if let Some(old) = self.state.staged_court_row_v1(&key) {
             return match old {

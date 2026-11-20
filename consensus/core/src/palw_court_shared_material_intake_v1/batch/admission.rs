@@ -976,6 +976,48 @@ impl BatchAdmissionV1<'_> {
     }
 }
 
+/// Namespace-independent costs of a compiled graph. These amounts do not
+/// establish book capacity, payment, or an accepted original.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BatchAdmissionAccountingV1 {
+    pub service: ServiceCost,
+    pub retained_payload_bytes: u64,
+    pub retained_numerical_fault_bytes: u64,
+    pub storage_rent_sompi: u64,
+}
+
+impl BatchAdmissionAccountingV1 {
+    pub(crate) fn with_requests_v1(
+        self,
+        request: ServiceCost,
+        retained: u64,
+        count: usize,
+        storage: MaterialIntakeScheduleV1,
+    ) -> Result<Self, BatchCourtErrorV1> {
+        if count == 0 {
+            return Ok(self);
+        }
+        let count = u64::try_from(count).map_err(|_| BatchCourtErrorV1::DeliveryCost)?;
+        let add =
+            |base: u64, each: u64| each.checked_mul(count).and_then(|n| base.checked_add(n)).ok_or(BatchCourtErrorV1::DeliveryCost);
+        let a = self;
+        Ok(BatchAdmissionAccountingV1 {
+            service: ServiceCost {
+                bytes: add(a.service.bytes, request.bytes)?,
+                work: add(a.service.work, request.work)?,
+                io: add(a.service.io, request.io)?,
+                controls: add(a.service.controls, request.controls)?,
+            },
+            retained_payload_bytes: add(a.retained_payload_bytes, retained)?,
+            retained_numerical_fault_bytes: a.retained_numerical_fault_bytes,
+            storage_rent_sompi: add(
+                a.storage_rent_sompi,
+                storage.rent_for_bytes_v1(retained).map_err(|_| BatchCourtErrorV1::DeliveryCost)?,
+            )?,
+        })
+    }
+}
+
 /// An unreserved graph is not an admission quote. It exposes only the relative
 /// funding commitment; reservation consumes this owner and retains its native
 /// memory lease through scheduling and the final graph handoff.
@@ -1010,6 +1052,18 @@ struct LateSelectionPacketsV3 {
 }
 
 impl CompiledBatchAdmissionV1 {
+    pub(crate) fn accounting_v1(&self) -> Result<BatchAdmissionAccountingV1, BatchCourtErrorV1> {
+        Ok(BatchAdmissionAccountingV1 {
+            service: self.service,
+            retained_payload_bytes: self.retained_payload_bytes,
+            retained_numerical_fault_bytes: self.retained_numerical_fault_bytes,
+            storage_rent_sompi: self
+                .carrier_storage_rent_sompi
+                .checked_add(self.numerical_fault_storage_rent_sompi)
+                .ok_or(BatchCourtErrorV1::DeliveryCost)?,
+        })
+    }
+
     pub(crate) fn packet_count_v1(&self) -> usize {
         self.graph.len()
     }

@@ -619,6 +619,8 @@ pub enum PalwPanelV2Error {
     /// RFC-0006: the part's receipts are sound but do not license the shard yet — the assembler keeps collecting.
     #[error("the shard's receipts are not yet a licence: {0}")]
     TirShardPartShort(&'static str),
+    #[error("protected licence refused: {0}")]
+    ProtectedLicenceRefused(String),
 }
 
 impl PalwPanelV2Error {
@@ -3206,6 +3208,7 @@ where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     let original = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    let protected = crate::palw_state_v2::claim_has_protected_frame_v1(state, claim_id);
     let effective =
         crate::palw_model_panel_one_v1::model_claim_panel_v1(state_params.model_panel_one_from_daa(), original.accepted_daa, params)?;
     let params = &effective;
@@ -3221,7 +3224,7 @@ where
     let outsider = (!state_params.model_panel_one_governs_v1(original.accepted_daa))
         .then(|| palw_panel_outsider_bond_v1(state, claim_id, independence_daa))
         .flatten();
-    receipt_quorum_over_seats_v2(
+    let verdict = receipt_quorum_over_seats_v2(
         state,
         state_params,
         ctx,
@@ -3230,7 +3233,8 @@ where
         "ReceiptQuorum",
         || {
             let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
-            if !state_params.model_panel_one_governs_v1(original.accepted_daa)
+            if !protected
+                && !state_params.model_panel_one_governs_v1(original.accepted_daa)
                 && crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count).is_some()
             {
                 return Err(PalwPanelV2Error::LicensedByParts(*claim_id));
@@ -3242,7 +3246,24 @@ where
         verify_mldsa87,
         unavailable_abstains,
         outsider,
-    )
+    );
+    // All signatures, seat identities and receipt clocks were checked above.
+    // The collector and block admission must offer the same protected door:
+    // one timely Valid may license, while Final separately needs the included
+    // full-replay approval. Never turn an invalid receipt into a shortfall.
+    if protected
+        && receipts.iter().any(|receipt| receipt.verdict == PalwReceiptVerdictV2::Valid)
+        && (matches!(&verdict, Ok(PalwReceiptQuorumV2::Licensed { .. }))
+            || verdict.as_ref().is_err_and(|error| error.is_receipt_set_shortfall()))
+    {
+        let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
+        crate::palw_state_v2::palw_protected_licence_receipts_v1(state, claim_id, &panel.seats, receipts)
+            .map_err(|error| PalwPanelV2Error::ProtectedLicenceRefused(error.to_string()))?;
+        return Ok(PalwReceiptQuorumV2::Licensed {
+            valid: receipts.iter().filter(|receipt| receipt.verdict == PalwReceiptVerdictV2::Valid).count() as u16,
+        });
+    }
+    verdict
 }
 
 /// **ADR-0147: the bond whose `Valid` a licence of this claim must carry**, or `None` for a claim

@@ -450,6 +450,15 @@ impl ConsensusSessionOwned {
     }
 
     /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame.
+    pub fn palw_protected_original_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        material: kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteV1>, String> {
+        self.consensus.palw_protected_original_quote_v1(original, header, material)
+    }
+
     pub fn palw_tir_public_original_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
@@ -921,6 +930,36 @@ impl ConsensusSessionOwned {
         claim: kaspa_consensus_core::Hash64,
     ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
         self.consensus.palw_claim_roots_v2(claim)
+    }
+
+    pub fn palw_protected_original_readback_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>, String> {
+        self.consensus.palw_protected_original_readback_v1(claim)
+    }
+
+    pub fn palw_protected_full_replay_deadline_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<u64> {
+        self.consensus.palw_protected_full_replay_deadline_v1(claim)
+    }
+
+    pub fn palw_protected_full_replay_digest_v1(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+    ) -> Option<[u8; 64]> {
+        self.consensus.palw_protected_full_replay_digest_v1(expected, bond, key)
+    }
+
+    pub fn palw_protected_full_replay_payload_v1(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+        signature: &[u8],
+    ) -> Option<Vec<u8>> {
+        self.consensus.palw_protected_full_replay_payload_v1(expected, bond, key, signature)
     }
 
     /// Where a bond's rewards are paid, as the registered payload. See the trait's doc: a panel

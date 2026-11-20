@@ -30,29 +30,33 @@ pub struct PotentialParameterCoverV1 {
 #[derive(Debug)]
 pub(crate) enum CoverErrorV1 {
     Semantic(String),
+    Static(&'static str),
     Local(&'static str),
 }
 impl From<String> for CoverErrorV1 {
+    #[inline]
     fn from(s: String) -> Self {
         Self::Semantic(s)
     }
 }
-impl From<&str> for CoverErrorV1 {
-    fn from(s: &str) -> Self {
-        Self::Semantic(s.into())
+impl From<&'static str> for CoverErrorV1 {
+    #[inline]
+    fn from(s: &'static str) -> Self {
+        Self::Static(s)
     }
 }
 impl CoverErrorV1 {
     pub(crate) fn legacy(self) -> String {
         match self {
             Self::Semantic(s) => s,
-            Self::Local(s) => s.into(),
+            Self::Static(s) | Self::Local(s) => s.into(),
         }
     }
     pub(crate) fn native(self) -> crate::palw_native_resource_v1::NativeDecodeErrorV1<String> {
         use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
         match self {
             Self::Semantic(s) => E::Decode(s),
+            Self::Static(s) => E::Decode(s.into()),
             Self::Local(s) => {
                 E::Resource(NativeCoverageV1::unsupported::<PotentialParameterCoverV1>("local parameter exploration", s))
             }
@@ -99,12 +103,19 @@ pub(crate) struct PreparedParameterCoverV1 {
     context: PalwJobContextV2,
     inventory: PalwTirInventoryIndexV1,
     intervals: Vec<Vec<Interval>>,
+    param_lens: Vec<Option<usize>>,
+    const_lens: Vec<Option<usize>>,
+    state_lens: Vec<Option<usize>>,
 }
 impl PreparedParameterCoverV1 {
     pub(crate) fn new(verified: Box<PalwTirVerifiedBindingV1>, context: PalwJobContextV2) -> Result<Self, String> {
         let inventory = PalwTirInventoryIndexV1::new(&verified.space.program).ok_or("the class has no inventory")?;
         let intervals = analyze_ranges(&verified.space.program).map_err(|e| e.to_string())?;
-        Ok(Self { verified, context, inventory, intervals })
+        let slice_len = |shape: &[u32]| RankVec::from_u32_slice(shape).and_then(|s| count(&s)).ok();
+        let param_lens = verified.space.program.params.iter().map(|p| slice_len(&p.shape)).collect();
+        let const_lens = verified.space.program.consts.iter().map(|c| slice_len(&c.shape)).collect();
+        let state_lens = verified.space.program.states.iter().map(|s| slice_len(&s.shape)).collect();
+        Ok(Self { verified, context, inventory, intervals, param_lens, const_lens, state_lens })
     }
     /// Conservative simultaneous allocation peak for the existing all-root
     /// materializer. Counts are checked local limits, never adopted network caps.
@@ -279,9 +290,11 @@ impl PreparedParameterCoverV1 {
         let block = occurrence_block(&self.verified.space, site.ctx.occurrence).ok_or("cover occurrence missing")?;
         let layer = self.verified.space.occurrences().get(usize::from(site.ctx.occurrence)).ok_or("cover occurrence missing")?.1;
         let h = usize::try_from(site.history_positions).map_err(|_| "cover H overflow")?;
+        let block_usize = usize::from(block);
+        let initial_ctx = SeenContext::new(&self.verified.space.program, block_usize, site.ctx.pos, site.ctx.occurrence, h);
         let mut walk = Walk {
             program: &self.verified.space.program,
-            block: usize::from(block),
+            block: block_usize,
             layer,
             h,
             space: &self.verified.space,
@@ -291,12 +304,22 @@ impl PreparedParameterCoverV1 {
             pos: site.ctx.pos,
             occurrence: site.ctx.occurrence,
             inventory: &self.inventory,
+            param_lens: &self.param_lens,
+            const_lens: &self.const_lens,
+            state_lens: &self.state_lens,
             budget,
             leaf_limit: max_leaves,
             edges: 0,
-            seen: BTreeSet::new(),
+            seen_count: 0,
+            contexts: vec![initial_ctx],
+            active_ctx: 0,
             pending: Vec::new(),
             leaves: BTreeSet::new(),
+            leaves_bits: vec![0u64; (self.inventory.leaf_count() as usize).div_ceil(64)],
+            last_node_tile: None,
+            last_coord: None,
+            recorded_coords: Vec::new(),
+            last_hist_node: None,
         };
         if let PalwTirLeafKindV1::Commit { first_element, .. } = leaf.kind {
             for element in first_element..first_element + u64::from(leaf.value_count) {
@@ -315,8 +338,94 @@ impl PreparedParameterCoverV1 {
         Ok(Some(PotentialParameterCoverV1 {
             leaves: walk.leaves.into_iter().collect(),
             explored_edges: walk.edges,
-            explored_coordinates: walk.seen.len() as u64,
+            explored_coordinates: walk.seen_count,
         }))
+    }
+}
+
+struct SeenContext {
+    pos: u32,
+    occ: u16,
+    nodes: Vec<Option<Vec<u64>>>,
+    node_lens: Vec<Option<usize>>,
+    carry_lens: Vec<Option<usize>>,
+}
+impl SeenContext {
+    fn new(program: &TirProgramV1, block: usize, pos: u32, occ: u16, h: usize) -> Self {
+        let Some(b) = program.blocks.get(block) else {
+            return Self { pos, occ, nodes: Vec::new(), node_lens: Vec::new(), carry_lens: Vec::new() };
+        };
+        let node_lens = b.nodes.iter().map(|n| RankVec::from_tensor(&n.out, h).and_then(|s| count(&s)).ok()).collect();
+        let carry_lens = b.carry_in.iter().map(|c| RankVec::from_tensor(c, h).and_then(|s| count(&s)).ok()).collect();
+        Self { pos, occ, nodes: vec![None; b.nodes.len()], node_lens, carry_lens }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct RankVec {
+    buf: [usize; 8],
+    len: u8,
+}
+impl RankVec {
+    #[inline]
+    fn empty() -> Self {
+        Self { buf: [0; 8], len: 0 }
+    }
+    #[inline]
+    fn zeros(len: usize) -> Result<Self, CoverErrorV1> {
+        if len > 8 {
+            return Err("cover coordinate rank".into());
+        }
+        Ok(Self { buf: [0; 8], len: len as u8 })
+    }
+    #[inline]
+    fn from_tensor(t: &misaka_palw_tir::types::TensorType, h: usize) -> Result<Self, CoverErrorV1> {
+        let mut out = Self::zeros(t.shape.len())?;
+        for (slot, dim) in out.buf[..t.shape.len()].iter_mut().zip(&t.shape) {
+            *slot = dim.at(h);
+        }
+        Ok(out)
+    }
+    #[inline]
+    fn from_u32_slice(shape: &[u32]) -> Result<Self, CoverErrorV1> {
+        let mut out = Self::zeros(shape.len())?;
+        for (slot, dim) in out.buf[..shape.len()].iter_mut().zip(shape) {
+            *slot = *dim as usize;
+        }
+        Ok(out)
+    }
+    #[inline]
+    fn push(&mut self, v: usize) -> Result<(), CoverErrorV1> {
+        let idx = self.len as usize;
+        if idx >= 8 {
+            return Err("cover coordinate rank".into());
+        }
+        self.buf[idx] = v;
+        self.len += 1;
+        Ok(())
+    }
+    #[inline]
+    fn extend_from_slice(&mut self, slice: &[usize]) -> Result<(), CoverErrorV1> {
+        let start = self.len as usize;
+        if start + slice.len() > 8 {
+            return Err("cover coordinate rank".into());
+        }
+        self.buf[start..start + slice.len()].copy_from_slice(slice);
+        self.len += slice.len() as u8;
+        Ok(())
+    }
+}
+impl std::ops::Deref for RankVec {
+    type Target = [usize];
+    #[inline]
+    fn deref(&self) -> &[usize] {
+        &self.buf[..self.len as usize]
+    }
+}
+impl std::ops::DerefMut for RankVec {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [usize] {
+        &mut self.buf[..self.len as usize]
     }
 }
 
@@ -332,46 +441,66 @@ struct Walk<'a, 'sink> {
     pos: u32,
     occurrence: u16,
     inventory: &'a PalwTirInventoryIndexV1,
+    param_lens: &'a [Option<usize>],
+    const_lens: &'a [Option<usize>],
+    state_lens: &'a [Option<usize>],
     budget: ParameterCoverBudgetV1,
     leaf_limit: u64,
     edges: u64,
-    seen: BTreeSet<(u32, u16, u16, usize)>,
+    seen_count: u64,
+    contexts: Vec<SeenContext>,
+    active_ctx: usize,
     pending: Vec<(u32, u16, u16, usize)>,
     leaves: BTreeSet<u32>,
+    leaves_bits: Vec<u64>,
+    last_node_tile: Option<(u32, u16, u16, u64, bool)>,
+    last_coord: Option<(PalwStepCoordinateV1, u8)>,
+    recorded_coords: Vec<(PalwStepCoordinateV1, u8)>,
+    last_hist_node: Option<((u16, Option<u16>, u32), (DemandContext, u16))>,
 }
+#[inline]
 fn count(shape: &[usize]) -> Result<usize, CoverErrorV1> {
-    shape.iter().try_fold(1usize, |a, b| a.checked_mul(*b).ok_or("cover shape overflow".into()))
+    shape.iter().try_fold(1usize, |a, b| a.checked_mul(*b).ok_or(CoverErrorV1::Static("cover shape overflow")))
 }
-fn coords(mut index: usize, shape: &[usize]) -> Result<Vec<usize>, CoverErrorV1> {
+#[inline]
+fn coords(mut index: usize, shape: &[usize]) -> Result<RankVec, CoverErrorV1> {
     if index >= count(shape)? {
-        return Err("cover index outside shape".into());
+        return Err(CoverErrorV1::Static("cover index outside shape"));
     }
-    let mut out = vec![0; shape.len()];
+    let mut out = RankVec::zeros(shape.len())?;
     for i in (0..shape.len()).rev() {
         out[i] = index % shape[i];
         index /= shape[i];
     }
     Ok(out)
 }
+#[inline]
 fn index(c: &[usize], shape: &[usize]) -> Result<usize, CoverErrorV1> {
     if c.len() != shape.len() {
-        return Err("cover coordinate rank".into());
+        return Err(CoverErrorV1::Static("cover coordinate rank"));
     }
     c.iter().zip(shape).try_fold(0usize, |a, (v, n)| {
         if v >= n {
-            return Err("cover coordinate outside shape".into());
+            return Err(CoverErrorV1::Static("cover coordinate outside shape"));
         }
-        a.checked_mul(*n).and_then(|x| x.checked_add(*v)).ok_or("cover coordinate overflow".into())
+        a.checked_mul(*n).and_then(|x| x.checked_add(*v)).ok_or(CoverErrorV1::Static("cover coordinate overflow"))
     })
 }
+#[inline]
 fn broadcast(c: &[usize], shape: &[usize]) -> Result<usize, CoverErrorV1> {
     if shape.len() > c.len() {
-        return Err("cover broadcast rank".into());
+        return Err(CoverErrorV1::Static("cover broadcast rank"));
     }
-    let mapped: Vec<_> = c[c.len() - shape.len()..].iter().zip(shape).map(|(v, n)| if *n == 1 { 0 } else { *v }).collect();
-    index(&mapped, shape)
+    c[c.len() - shape.len()..].iter().zip(shape).try_fold(0usize, |a, (v, n)| {
+        let mv = if *n == 1 { 0 } else { *v };
+        if mv >= *n {
+            return Err(CoverErrorV1::Static("cover coordinate outside shape"));
+        }
+        a.checked_mul(*n).and_then(|x| x.checked_add(mv)).ok_or(CoverErrorV1::Static("cover coordinate overflow"))
+    })
 }
 impl Walk<'_, '_> {
+    #[inline]
     fn edge(&mut self) -> Result<(), CoverErrorV1> {
         self.edges = self.edges.checked_add(1).ok_or(CoverErrorV1::Local("cover edge overflow"))?;
         if self.edges > self.budget.max_edges {
@@ -379,33 +508,61 @@ impl Walk<'_, '_> {
         }
         Ok(())
     }
+    #[inline]
     fn node(&mut self, n: u16, i: usize) -> Result<(), CoverErrorV1> {
         self.edge()?;
-        let shape = self.program.blocks[self.block].nodes.get(n as usize).ok_or("cover node missing")?.out.resolve(self.h);
-        if i >= count(&shape)? {
-            return Err("cover node element outside shape".into());
+        let ctx = &mut self.contexts[self.active_ctx];
+        let node_len = match ctx.node_lens.get(n as usize).copied().flatten() {
+            Some(len) => len,
+            None => {
+                let out = &self.program.blocks[self.block].nodes.get(n as usize).ok_or("cover node missing")?.out;
+                count(&RankVec::from_tensor(out, self.h)?)?
+            }
+        };
+        if i >= node_len {
+            return Err(CoverErrorV1::Static("cover node element outside shape"));
         }
-        let key = (self.pos, self.occurrence, n, i);
-        if !self.seen.contains(&key) {
-            if self.seen.len() as u64 >= self.budget.max_coordinates {
+        let bits = ctx.nodes[n as usize].get_or_insert_with(|| vec![0u64; node_len.div_ceil(64)]);
+        let word = &mut bits[i >> 6];
+        let mask = 1u64 << (i & 63);
+        if (*word & mask) == 0 {
+            if self.seen_count >= self.budget.max_coordinates {
                 return Err(CoverErrorV1::Local("parameter cover coordinate budget exhausted"));
             }
-            self.seen.insert(key);
-            self.pending.push(key);
+            *word |= mask;
+            self.seen_count += 1;
+            self.pending.push((self.pos, self.occurrence, n, i));
         }
         Ok(())
     }
-    fn shape(&self, r: Ref) -> Result<Vec<usize>, CoverErrorV1> {
+    #[inline]
+    fn operand_len(&self, r: Ref) -> Result<usize, CoverErrorV1> {
+        let ctx = &self.contexts[self.active_ctx];
+        let cached = match r {
+            Ref::Node(j) => ctx.node_lens.get(j as usize).copied().flatten(),
+            Ref::CarryIn(j) => ctx.carry_lens.get(j as usize).copied().flatten(),
+            Ref::Param(j) => self.param_lens.get(j as usize).copied().flatten(),
+            Ref::Const(j) => self.const_lens.get(j as usize).copied().flatten(),
+            Ref::State(j) => self.state_lens.get(j as usize).copied().flatten(),
+            Ref::Input(_) => Some(1),
+        };
+        match cached {
+            Some(len) => Ok(len),
+            None => count(&self.shape(r)?),
+        }
+    }
+    #[inline]
+    fn shape(&self, r: Ref) -> Result<RankVec, CoverErrorV1> {
         let p = self.program;
         let b = &p.blocks[self.block];
-        Ok(match r {
-            Ref::Node(j) => b.nodes.get(j as usize).ok_or("cover node missing")?.out.resolve(self.h),
-            Ref::CarryIn(j) => b.carry_in.get(j as usize).ok_or("cover carry missing")?.resolve(self.h),
-            Ref::Param(j) => p.params.get(j as usize).ok_or("cover param missing")?.shape.iter().map(|d| *d as usize).collect(),
-            Ref::Const(j) => p.consts.get(j as usize).ok_or("cover const missing")?.shape.iter().map(|d| *d as usize).collect(),
-            Ref::State(j) => p.states.get(j as usize).ok_or("cover state missing")?.shape.iter().map(|d| *d as usize).collect(),
-            Ref::Input(_) => vec![],
-        })
+        match r {
+            Ref::Node(j) => RankVec::from_tensor(&b.nodes.get(j as usize).ok_or("cover node missing")?.out, self.h),
+            Ref::CarryIn(j) => RankVec::from_tensor(b.carry_in.get(j as usize).ok_or("cover carry missing")?, self.h),
+            Ref::Param(j) => RankVec::from_u32_slice(&p.params.get(j as usize).ok_or("cover param missing")?.shape),
+            Ref::Const(j) => RankVec::from_u32_slice(&p.consts.get(j as usize).ok_or("cover const missing")?.shape),
+            Ref::State(j) => RankVec::from_u32_slice(&p.states.get(j as usize).ok_or("cover state missing")?.shape),
+            Ref::Input(_) => Ok(RankVec::empty()),
+        }
     }
     fn bounds(&self, r: Ref, i: usize) -> Result<Interval, CoverErrorV1> {
         Ok(match r {
@@ -429,8 +586,8 @@ impl Walk<'_, '_> {
     }
     fn fetch(&mut self, r: Ref, i: usize) -> Result<(), CoverErrorV1> {
         self.edge()?;
-        if i >= count(&self.shape(r)?)? {
-            return Err("cover operand index outside shape".into());
+        if i >= self.operand_len(r)? {
+            return Err(CoverErrorV1::Static("cover operand index outside shape"));
         }
         match r {
             Ref::Node(j) => {
@@ -447,10 +604,15 @@ impl Walk<'_, '_> {
                     .inventory
                     .leaf_of(j, if p.per_layer { self.layer } else { None }, byte)
                     .ok_or("cover parameter coordinate missing")?;
-                if !self.leaves.contains(&leaf) && self.leaves.len() as u64 >= self.leaf_limit {
-                    return Err(CoverErrorV1::Local("parameter cover leaf budget exhausted"));
+                let word_idx = (leaf as usize) >> 6;
+                let mask = 1u64 << (leaf & 63);
+                if (self.leaves_bits[word_idx] & mask) == 0 {
+                    if self.leaves.len() as u64 >= self.leaf_limit {
+                        return Err(CoverErrorV1::Local("parameter cover leaf budget exhausted"));
+                    }
+                    self.leaves_bits[word_idx] |= mask;
+                    self.leaves.insert(leaf);
                 }
-                self.leaves.insert(leaf);
             }
             Ref::State(j) => {
                 if self.boundaries.is_some() {
@@ -501,6 +663,9 @@ impl Walk<'_, '_> {
         Ok(())
     }
     fn record_coordinate(&mut self, coord: PalwStepCoordinateV1, kind: u8) -> Result<(), CoverErrorV1> {
+        if self.last_coord == Some((coord, kind)) || self.recorded_coords.contains(&(coord, kind)) {
+            return Ok(());
+        }
         let leaf = self.space.leaf_index(self.context, &coord).ok_or("cover source coordinate has no original leaf")?;
         if leaf >= self.original_leaf {
             return Err("cover source leaf does not precede original root".into());
@@ -512,6 +677,8 @@ impl Walk<'_, '_> {
             _ => RootInputBoundaryV1::HistoryStepLeaf(leaf),
         };
         self.boundaries.as_mut().ok_or("cover boundary sink missing")?.insert(item);
+        self.last_coord = Some((coord, kind));
+        self.recorded_coords.push((coord, kind));
         Ok(())
     }
     fn record_node(&mut self, ctx: DemandContext, node: u16, index: usize, carry: bool) -> Result<(), CoverErrorV1> {
@@ -523,9 +690,16 @@ impl Walk<'_, '_> {
         if width == 0 {
             return Err("cover source zero tile width".into());
         }
+        let tile = index as u64 / u64::from(width);
+        let key = (ctx.pos, ctx.occurrence, node, tile, carry);
+        if self.last_node_tile == Some(key) {
+            return Ok(());
+        }
         let job = self.space.job_shape(self.context).map_err(|e| e.to_string())?;
-        let coord = source_geometry::commit(self.space, job, ctx, node, index as u64 / u64::from(width)).map_err(|e| e.to_string())?;
-        self.record_coordinate(coord, if carry { 0 } else { 1 })
+        let coord = source_geometry::commit(self.space, job, ctx, node, tile).map_err(|e| e.to_string())?;
+        self.record_coordinate(coord, if carry { 0 } else { 1 })?;
+        self.last_node_tile = Some(key);
+        Ok(())
     }
     fn record_fixed(&mut self, state: u16, index: usize) -> Result<(), CoverErrorV1> {
         let decl = self.program.states.get(usize::from(state)).ok_or("cover source state absent")?;
@@ -568,6 +742,22 @@ impl Walk<'_, '_> {
     fn record_history(&mut self, state: u16, row_pos: u32, index: usize) -> Result<(), CoverErrorV1> {
         let decl = self.program.states.get(usize::from(state)).ok_or("cover history state absent")?;
         let layer = if decl.per_layer { self.layer } else { None };
+        let h_tile = self.space.layout.h_tile;
+        let tile_start = row_pos - row_pos % h_tile;
+        let tile_end = tile_start + (h_tile - 1);
+        if tile_end >= self.pos {
+            let key = (state, layer, row_pos);
+            let (ctx, node) = match self.last_hist_node {
+                Some((k, val)) if k == key => val,
+                _ => {
+                    let val = hist_row_node_v1(&self.space.program, state, layer, row_pos)
+                        .ok_or("cover history state appends nothing")?;
+                    self.last_hist_node = Some((key, val));
+                    val
+                }
+            };
+            return self.record_node(ctx, node, index, false);
+        }
         let job = self.space.job_shape(self.context).map_err(|e| e.to_string())?;
         match source_geometry::history(self.space, job, self.pos, state, layer, row_pos, index).map_err(|e| e.to_string())? {
             source_geometry::SupplyGeometryV1::Step { coord, .. } => self.record_coordinate(coord, 3),
@@ -575,20 +765,33 @@ impl Walk<'_, '_> {
             _ => Err("cover history source geometry".into()),
         }
     }
+    #[inline]
     fn set_context(&mut self, pos: u32, occ: u16) -> Result<(), CoverErrorV1> {
+        if self.pos == pos && self.occurrence == occ {
+            return Ok(());
+        }
         let (block, layer) = *self.space.occurrences().get(usize::from(occ)).ok_or("cover replay occurrence missing")?;
-        self.block = usize::from(block);
+        let block_usize = usize::from(block);
+        self.block = block_usize;
         self.layer = layer;
         self.pos = pos;
         self.occurrence = occ;
         self.h = history_length_v1(&self.space.info, block, pos).ok_or("cover replay H missing")?;
+        if let Some(idx) = self.contexts.iter().position(|c| c.pos == pos && c.occ == occ) {
+            self.active_ctx = idx;
+        } else {
+            let ctx = SeenContext::new(self.program, block_usize, pos, occ, self.h);
+            self.active_ctx = self.contexts.len();
+            self.contexts.push(ctx);
+        }
         Ok(())
     }
     fn run(&mut self) -> Result<(), CoverErrorV1> {
+        let program = self.program;
         while let Some((pos, occ, n, i)) = self.pending.pop() {
             self.set_context(pos, occ)?;
-            let node = self.program.blocks[self.block].nodes[n as usize].clone();
-            let shape = node.out.resolve(self.h);
+            let node = &program.blocks[self.block].nodes[n as usize];
+            let shape = RankVec::from_tensor(&node.out, self.h)?;
             let c = coords(i, &shape)?;
             let inputs = &node.inputs;
             match node.prim {
@@ -601,9 +804,9 @@ impl Walk<'_, '_> {
                 | Prim::IntRsqrt
                 | Prim::IntLn
                 | Prim::StateWrite { .. } => self.fetch(inputs[0], i)?,
-                Prim::Transpose { perm } => {
+                Prim::Transpose { ref perm } => {
                     let s = self.shape(inputs[0])?;
-                    let mut q = vec![0; s.len()];
+                    let mut q = RankVec::zeros(s.len())?;
                     for (k, p) in perm.iter().enumerate() {
                         q[*p as usize] = c[k];
                     }
@@ -611,12 +814,12 @@ impl Walk<'_, '_> {
                 }
                 Prim::Slice { axis, start } => {
                     let s = self.shape(inputs[0])?;
-                    let mut q = c.clone();
+                    let mut q = c;
                     q[axis as usize] = q[axis as usize].checked_add(start as usize).ok_or("cover Slice overflow")?;
                     self.fetch(inputs[0], index(&q, &s)?)?;
                 }
                 Prim::Concat { axis } => {
-                    let mut q = c.clone();
+                    let mut q = c;
                     for r in inputs {
                         let s = self.shape(*r)?;
                         if q[axis as usize] < s[axis as usize] {
@@ -653,8 +856,9 @@ impl Walk<'_, '_> {
                     let d = self.shape(inputs[0])?;
                     let x = self.shape(inputs[1])?;
                     let m = x.len().checked_sub(bd).ok_or("cover Gather batch rank")?;
-                    let mut xi = c[..bd].to_vec();
-                    xi.extend_from_slice(&c[a..a + m]);
+                    let mut xi = RankVec::empty();
+                    xi.extend_from_slice(&c[..bd])?;
+                    xi.extend_from_slice(&c[a..a + m])?;
                     let ix = index(&xi, &x)?;
                     self.fetch(inputs[1], ix)?;
                     let iv = self.bounds(inputs[1], ix)?;
@@ -664,9 +868,10 @@ impl Walk<'_, '_> {
                         for v in usize::try_from(lo).map_err(|_| "cover Gather lower overflow")?
                             ..=usize::try_from(hi).map_err(|_| "cover Gather upper overflow")?
                         {
-                            let mut q = c[..a].to_vec();
-                            q.push(v);
-                            q.extend_from_slice(&c[a + m..]);
+                            let mut q = RankVec::empty();
+                            q.extend_from_slice(&c[..a])?;
+                            q.push(v)?;
+                            q.extend_from_slice(&c[a + m..])?;
                             self.fetch(inputs[0], index(&q, &d)?)?;
                         }
                     }
@@ -687,13 +892,13 @@ impl Walk<'_, '_> {
                 Prim::ReduceSum { axis } | Prim::ReduceMax { axis } | Prim::TopK { axis, .. } => {
                     let s = self.shape(inputs[0])?;
                     for t in 0..s[axis as usize] {
-                        let mut q = c.clone();
+                        let mut q = c;
                         q[axis as usize] = t;
                         self.fetch(inputs[0], index(&q, &s)?)?;
                     }
                 }
                 Prim::HistAppend { state } => {
-                    let row = count(&self.program.states[state as usize].shape.iter().map(|d| *d as usize).collect::<Vec<_>>())?;
+                    let row = count(&RankVec::from_u32_slice(&program.states[state as usize].shape)?)?;
                     if i / row + 1 == self.h {
                         self.fetch(inputs[0], i % row)?;
                     } else if self.boundaries.is_some() {

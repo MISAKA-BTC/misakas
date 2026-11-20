@@ -9,7 +9,13 @@ mod tfp1_hf_artifact;
 mod tfp1_material;
 pub use tfp1_hf_artifact::PublicTfp1HfArtifactV1;
 pub(crate) mod tfp1_original;
+pub use tfp1_original::manifest_carrier::{
+    accepted::{NativeManifestRequestCandidateV3, PreparedNativeManifestRequestV3, SharedPreparedNativeManifestRequestV3},
+    replay::ManifestRequestFeeV1,
+};
 pub use tfp1_original::native_frame::PublicTfp1FrameV1;
+pub use tfp1_original::native_restore::{RestoredProtectedOriginalV3, restore_protected_native_carriage_v3};
+pub use tfp1_original::public_policy::ProtectedPlanningDeclarationV3;
 
 pub use tfp1_material::{PublicTfp1ColdMaterialV1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1};
 
@@ -26,7 +32,7 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
+    identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId, principal},
     messages::{
         AdmissionContext, AggregateBudget, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit,
         PanelWitnessCommit, coverage_plan_id,
@@ -36,9 +42,10 @@ use misaka_palw_positive_contract::{
         CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestEntryV1, ManifestRequest, ManifestRequestContext,
         ManifestResponseRecordV1, ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialId, MaterialScope,
         MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
-        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
-        VerificationSchedule, VerifiedManifestDeliveryV1, manifest_limits_id_v1, public_draw_id_v1, public_draw_members_digest_v1,
-        public_original_service_contract_id_v1, require_accepted_after_v1, tir_wide_rules_material_entry_v1,
+        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedFullReplayApprovalV1,
+        SignedPublicOriginalV1, VerificationSchedule, VerifiedManifestDeliveryV1, manifest_limits_id_v1, public_draw_id_v1,
+        public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
+        stateless_wide_replay_plan_v1, tir_wide_rules_material_entry_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -424,6 +431,10 @@ pub struct PublicDrawRecordV1 {
 pub struct PreparedPublicDrawRecordV1(PublicDrawRecordV1);
 
 impl PreparedPublicDrawRecordV1 {
+    pub(crate) fn as_record_v1(&self) -> &PublicDrawRecordV1 {
+        &self.0
+    }
+
     pub(crate) fn storage_row(
         &self,
         state: &crate::palw_state_v2::PalwChainStateV2,
@@ -525,8 +536,81 @@ impl NativeWireScanV1 for ManifestResponseRecordV1 {
     }
 }
 
+impl PublicDrawRecordV1 {
+    pub(crate) fn original_v1(&self) -> OriginalId {
+        self.original
+    }
+
+    pub(crate) fn draw_point_v1(&self) -> crate::palw_state_v2::PalwBlockContextV2 {
+        self.draw_point
+    }
+
+    pub(crate) fn draw_v1(&self) -> Digest {
+        self.draw
+    }
+
+    pub(crate) fn full_scope_v1(&self) -> Digest {
+        self.full_scope
+    }
+
+    pub(crate) fn accepts_members_v1(&self, members: &[PublicDrawMemberV1]) -> bool {
+        public_draw_members_digest_v1(members) == self.ordered_members
+    }
+
+    /// Check one included full-replay carrier against this stored draw and the
+    /// seat list that produced `ordered_members`. The signature domain is the
+    /// full-replay approval, not a seat receipt.
+    pub(crate) fn verify_panel_replay_bytes_v1(
+        &self,
+        members: &[PublicDrawMemberV1],
+        origin: AcceptedOrigin,
+        bytes: &[u8],
+        seat_key: &[u8; PUBKEY_BYTES],
+    ) -> Result<PreparedPublicReplayApprovalV1, ContractError> {
+        if public_draw_members_digest_v1(members) != self.ordered_members {
+            return Err(ContractError::Identity);
+        }
+        if origin.accepted_daa > self.hard || !(self.draw_point.daa_score..=self.hard).contains(&origin.accepted_daa) {
+            return Err(ContractError::Range);
+        }
+        check_public_origin_after_draw_v1(origin, &self.draw_point)?;
+        let signed = SignedFullReplayApprovalV1::decode(bytes)?;
+        if signed.key != *seat_key || principal(seat_key) != signed.approval.member {
+            return Err(ContractError::Identity);
+        }
+        let member = members.iter().find(|member| member.bond == signed.approval.bond).ok_or(ContractError::Identity)?;
+        if member.principal != signed.approval.member {
+            return Err(ContractError::Identity);
+        }
+        let context = ReplayApprovalContext {
+            original: self.original,
+            draw: self.draw,
+            bond: signed.approval.bond,
+            member: member.principal,
+            full_scope: self.full_scope,
+        };
+        signed.approval.authenticate(&context, seat_key, &signed.signature)?;
+        Ok(PreparedPublicReplayApprovalV1 {
+            row: PublicReplayApprovalRecordV1 {
+                original: self.original,
+                draw: self.draw,
+                full_scope: self.full_scope,
+                ordered_members: self.ordered_members,
+                bond: signed.approval.bond,
+                origin,
+                approval_digest: signed.approval.signing_digest(),
+            },
+            draw: *self,
+        })
+    }
+}
+
 impl PublicReplayApprovalRecordV1 {
     pub(crate) const KEY_BYTES: usize = 2 * 64 + 4;
+
+    pub(crate) fn accepted_origin_v1(&self) -> AcceptedOrigin {
+        self.origin
+    }
 
     fn key(original: OriginalId, bond: PanelBond) -> [u8; Self::KEY_BYTES] {
         let mut key = [0; Self::KEY_BYTES];
@@ -868,7 +952,20 @@ impl PreparedPublicOriginalV1 {
         bytes: &[u8],
         context: &ManifestRequestContext<'_>,
     ) -> Result<PreparedDrawnPublicManifestCaseV1, ContractError> {
-        let pending = self.verify_manifest_request_bytes(PublicManifestClaimantAuthorityV1::Drawn(draw), bytes, context)?;
+        let signed = misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1::decode(bytes)?;
+        self.prepare_drawn_manifest_storage_record_signed_v2(admission_reservation, draw, &signed, context)
+    }
+
+    /// Shared verifier after either inline-key decoding or native registered-key
+    /// resolution. Transport choice cannot replace the original/draw checks.
+    pub(crate) fn prepare_drawn_manifest_storage_record_signed_v2(
+        &self,
+        admission_reservation: Digest,
+        draw: &PreparedPublicDrawV1,
+        signed: &misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1,
+        context: &ManifestRequestContext<'_>,
+    ) -> Result<PreparedDrawnPublicManifestCaseV1, ContractError> {
+        let pending = self.verify_drawn_manifest_request(draw, &signed.request, context, &signed.key, &signed.signature)?;
         Ok(PreparedDrawnPublicManifestCaseV1 {
             case: pending.id(),
             row: pending.record(),
@@ -1064,6 +1161,52 @@ impl PreparedPublicOriginalV1 {
                 self.schedule.terminal_by(),
             ],
         }
+    }
+}
+
+impl PublicOriginalAdmissionRecordV1 {
+    /// Draw record for the bound panel at this accepting point. Membership is
+    /// the caller's ordered seat list. The relation plan is the stateless wide
+    /// replay the panel signs. A later block verifies that signature against
+    /// this record; this function does not select seats.
+    pub(crate) fn panel_draw_at_v1(
+        &self,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+        beacon: Digest,
+        members: &[PublicDrawMemberV1],
+    ) -> Result<PreparedPublicDrawRecordV1, ContractError> {
+        if point.daa_score <= self.carrier.origin.accepted_daa
+            || point.daa_score > self.deadlines[0]
+            || point.blue_score <= self.carrier.origin.accepted_blue_score
+        {
+            return Err(ContractError::Range);
+        }
+        if members.is_empty() || members.len() as u64 > self.rescue.max_drawn_bonds {
+            return Err(ContractError::Budget);
+        }
+        let mut bonds = std::collections::BTreeSet::new();
+        let mut reservations = std::collections::BTreeSet::new();
+        for member in members {
+            if !bonds.insert((member.bond.transaction, member.bond.index)) || !reservations.insert(member.rescue_reservation) {
+                return Err(ContractError::Identity);
+            }
+        }
+        let full_scope = self.original.full_replay_scope(stateless_wide_replay_plan_v1());
+        let ordered_members = public_draw_members_digest_v1(members);
+        let hard = OriginalClock::new(self.carrier.origin.accepted_daa)?.hard();
+        let draw =
+            public_draw_id_v1(self.original, self.carrier.digest, Digest(point.block.as_bytes()), beacon, full_scope, ordered_members);
+        Ok(PreparedPublicDrawRecordV1(PublicDrawRecordV1 {
+            original: self.original,
+            admission_carrier: self.carrier,
+            draw,
+            beacon,
+            draw_point: *point,
+            hard,
+            full_scope,
+            ordered_members,
+            per_bond: self.rescue.per_drawn_bond,
+        }))
     }
 }
 
@@ -1942,16 +2085,25 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 
     /// A rooted link never substitutes for restoring the literal companion,
     /// draw and request. It pins which OriginalId may be used for this claim.
-    pub(crate) fn public_tfp1_original_link_v1(
+    pub(crate) fn public_tfp1_original_link_at_v1(
         &self,
         claim: Hash64,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
     ) -> Result<Option<tfp1_original::native_link::Tfp1PublicOriginalLinkV1>, ContractError> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
         let key = claim.as_bytes();
         let Some(bytes) = route.aux.get(&(PUBLIC_TFP1_LINK_TABLE_V1, key.to_vec())) else { return Ok(None) };
         let row = tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(&key, bytes)?;
-        row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)?;
+        row.check_state_at_v1(self, point)?;
         Ok(Some(row))
+    }
+
+    pub(crate) fn public_tfp1_original_link_v1(
+        &self,
+        claim: Hash64,
+    ) -> Result<Option<tfp1_original::native_link::Tfp1PublicOriginalLinkV1>, ContractError> {
+        let point = self.last_point().ok_or(ContractError::Scope)?;
+        self.public_tfp1_original_link_at_v1(claim, point)
     }
 
     pub(crate) fn public_tfp1_link_holds_claim_v1(&self, claim: &Hash64) -> bool {
@@ -2015,7 +2167,12 @@ impl PublicOriginalAdmissionV1<'_> {
         }
         let schedule = VerificationSchedule::new(clock, reservation.notice, reservation.case)?;
         capacity.check(reservation.usage, reservation.budget)?;
-        if original.service_contract != public_original_service_contract_id_v1(reservation.service_obligation, reservation.budget) {
+        if !misaka_palw_positive_contract::public_one_honest::public_original_service_contract_matches_v2(
+            original.service_contract,
+            reservation.service_obligation,
+            reservation.budget,
+            reservation.accepted_daa,
+        ) {
             return Err(ContractError::Scope);
         }
         Ok((manifest_payload_bytes, capacity, schedule))

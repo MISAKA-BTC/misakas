@@ -444,26 +444,13 @@ impl TransitionBuilder<'_> {
         self.reserve_kernel_row_write_v1(PUBLIC_PENDING_MANIFEST_TABLE_V1, &pending_key, &pending_bytes, false)?;
         self.reserve_kernel_row_write_v1(PUBLIC_MANIFEST_PAID_TABLE_V1, &paid_key, &paid_bytes, false)?;
         // Every state write can fail on its context/index hooks. Restore both
-        // rows and all journals together. The external fee ledger is changed
+        // insertions together. The external fee ledger is changed
         // only after all row writes. The borrowed-ledger path's finish cannot
         // fail; the shared-seed path drops its ledger if projection fails.
-        // Own this temporary clone only for this attempt. A rejected sequence
-        // must not retain one whole-state reservation per failed request.
-        // Replacing the clone with bounded local undo is still a production
-        // profile resource requirement, not implied by this temporary lease.
-        let checkpoint_bytes =
-            crate::palw_native_resource_v1::native_typed_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
-        let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
-            .map_err(PalwStateV2Error::NativeResource)?;
-        let saved = (
-            self.state.clone(),
-            self.entries.len(),
-            crate::palw_court_observation_v1::checkpoint_v1(),
-            palw_claim_local_object_spans_v2::checkpoint(self),
-        );
-        if let Some(owner) = &_checkpoint_owner {
-            owner.materialized_v1();
-        }
+        // These two immutable aux rows have no derived indexes. The writer
+        // below refuses any future index hook before mutation; the inverse
+        // owns only these keys and the exact insertion journal suffix.
+        let inverse = super::paid_manifest_inverse_v1::PaidManifestInverseV1::prepare_v1(self, pending_key, paid_key)?;
         let result = (|| {
             self.apply_kernel_row_authorized_v1(PUBLIC_PENDING_MANIFEST_TABLE_V1, pending_key.to_vec(), pending_bytes)?;
             paid.check_state_at_v1(&self.state, point)
@@ -475,7 +462,7 @@ impl TransitionBuilder<'_> {
             finish(handoff, prepared.charge_sompi_v1())
         })();
         if result.is_err() {
-            self.restore(saved);
+            inverse.restore_v1(self)?;
         }
         result
     }
@@ -502,6 +489,8 @@ impl TransitionBuilder<'_> {
             crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1
                 | crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1
                 | crate::palw_tfp1_original_history_v1::PUBLIC_TFP1_HISTORY_TABLE_V1
+                | crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1
+                | crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1
         ) && (cohort_update.is_some()
             || compact_update.is_some()
             || gc_update.is_some()
@@ -510,7 +499,8 @@ impl TransitionBuilder<'_> {
             || crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table, &key))
         {
             return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "TFP1 original writer", "derived indexes require an extended insertion inverse",
+                "public insertion writer",
+                "derived indexes require an extended insertion inverse",
             )));
         }
         let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };

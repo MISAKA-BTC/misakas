@@ -32,7 +32,7 @@ pub(super) fn prepare_protected_original_candidate_v2(
         tfp1_original::{
             funding::admission::Tfp1ProtectedFundingAdmissionErrorV1,
             native_plan::NativeTfp1OriginalPlanV3,
-            service_booking::{PreparedProtectedServiceBookingV1, ProtectedServiceBookingErrorV1},
+            service_booking::{PreparedProtectedServiceBookingV1, ProtectedServiceBaseV1, ProtectedServiceBookingErrorV1},
         },
     };
 
@@ -60,6 +60,15 @@ pub(super) fn prepare_protected_original_candidate_v2(
     if !pairing.envelope().is_protected_v2() || pairing.public_companion_v3().is_none() {
         return Err(refused("protected original literal carrier differs from native acceptance"));
     }
+    let actual = crate::palw_tir_funded_original_envelope_v1::actual_funded_payload_v1(pairing.carrier()).map_err(refused)?;
+    let wire = crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::decode_v3(actual).map_err(refused)?;
+    if wire.uses_relative_service_v4() != policy.relative_service_v2
+        || wire.prompt_encoding_v5().codec_v1()
+            != policy.admission.manifest_scope_limits[misaka_palw_positive_contract::public_one_honest::MaterialScope::Prompt as usize]
+                .codec
+    {
+        return Err(refused("protected original wire and service commitment versions differ"));
+    }
     let prompt = pairing.public_prompt_bytes_v3().ok_or_else(|| refused("protected original has no literal prompt"))?;
     let descriptor = pairing.public_hf_descriptor_bytes_v2().ok_or_else(|| refused("protected original has no HF reference"))?;
     let plan = NativeTfp1OriginalPlanV3::derive_v3(
@@ -86,9 +95,9 @@ pub(super) fn prepare_protected_original_candidate_v2(
     let class = parent
         .tir_class_v1(&original.job.class_id)
         .ok_or_else(|| refused("protected original class is absent from its accepted parent"))?;
-    let prior_book =
-        &b.state.court_service_state_v1().ok_or_else(|| refused("protected original has no native service namespace"))?.book;
-    let mut candidate_book = NativeRetainedV1::try_from_clone_v1(prior_book).map_err(PalwStateV2Error::NativeResource)?;
+    let service_base = ProtectedServiceBaseV1::resolve_v1(&b.state, b.params, extras, ctx.daa_score, &policy.service_book_profile)
+        .map_err(protected_native_plan_error_v3)?;
+    let mut candidate_book = NativeRetainedV1::try_from_clone_v1(service_base.book_v1()).map_err(PalwStateV2Error::NativeResource)?;
     let (prepared, booking, funding) = admission
         .prepare_tfp1_material_funding_v3(
             parent,
@@ -117,10 +126,13 @@ pub(super) fn prepare_protected_original_candidate_v2(
                 NativeDecodeErrorV1::Decode(other) => refused(format!("protected original frame refused: {other:?}")),
             })?;
     let service =
-        PreparedProtectedServiceBookingV1::prepare_v1(&b.state, &frame, &booking, candidate_book).map_err(|error| match error {
-            ProtectedServiceBookingErrorV1::LocalResource(coverage) => PalwStateV2Error::NativeResource(coverage),
-            other => refused(format!("protected original service publication refused: {other:?}")),
+        PreparedProtectedServiceBookingV1::prepare_from_base_v1(service_base, &frame, &booking, candidate_book).map_err(|error| {
+            match error {
+                ProtectedServiceBookingErrorV1::LocalResource(coverage) => PalwStateV2Error::NativeResource(coverage),
+                other => refused(format!("protected original service publication refused: {other:?}")),
+            }
         })?;
+    let admission_record = prepared.companion_v1().prepare_storage_record(frame.reservation_v1());
     let installation = PreparedProtectedOriginalInstallationV1::prepare_in_checkpoint_v2(
         b,
         ctx,
@@ -130,8 +142,55 @@ pub(super) fn prepare_protected_original_candidate_v2(
         pairing,
         &admission,
         &reservation,
+        Some(admission_record),
     )?;
     Ok(OriginalAdmissionV1::Protected(installation))
+}
+
+/// Dispatch a protected TFO3 carrier into the native planner. An opaque
+/// companion on an older funded body stays on the legacy refusal. This uses
+/// the pinned service estimate and adopted notice/hard windows. It does not
+/// change a preset, a public schedule, or a wallet payment.
+pub(super) fn admit_protected_original_from_entry_v2(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim: Hash64,
+    public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+) -> Result<OriginalAdmissionV1, PalwStateV2Error> {
+    let pairing = b.extras.tir_funded_originals.get(&claim).ok_or_else(|| refused("protected original has no funded carrier"))?;
+    let envelope = pairing.envelope();
+    let fp = envelope.original_fp_v2().map_err(refused)?;
+    let header = envelope.original_header_v2().map_err(refused)?;
+    let original = &fp.commitment;
+    if public_job != Some(original) {
+        return Err(refused("protected original job differs from the consensus object"));
+    }
+    let prompt = pairing.public_prompt_bytes_v3().ok_or_else(|| refused("protected original has no literal prompt"))?;
+    let descriptor = pairing.public_hf_descriptor_bytes_v2().ok_or_else(|| refused("protected original has no HF reference"))?;
+    let form = b.extras.prompt_ids_form_v1();
+    let actual = crate::palw_tir_funded_original_envelope_v1::actual_funded_payload_v1(pairing.carrier()).map_err(refused)?;
+    let wire = crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::decode_v3(actual).map_err(refused)?;
+    let schedules = crate::palw_positive_contract_v2::tfp1_original::public_policy::ProtectedPlanningSchedulesV3::selected_v3(b.extras.protected_planning_v3)
+        .map_err(|error| protected_native_plan_error_v3(error.into_native_v1()))?;
+    let pinned = crate::palw_positive_contract_v2::tfp1_original::public_policy::resolve_protected_planning_policy_v3(
+        &b.state,
+        b.extras,
+        b.params,
+        ctx.daa_score,
+        ctx.blue_score,
+        original,
+        &header,
+        prompt,
+        descriptor,
+        form,
+        wire.uses_relative_service_v4(),
+        wire.prompt_encoding_v5(),
+        schedules,
+    )
+    .map_err(|error| protected_native_plan_error_v3(error.into_native_v1()))?;
+    let policy = pinned.policy();
+    let price = |stage, bytes| pinned.price_delivery_v1(stage, bytes);
+    prepare_protected_original_candidate_v2(b, ctx, claim, original, &header, form, &policy, price)
 }
 
 fn protected_native_plan_error_v3(error: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {

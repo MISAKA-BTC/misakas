@@ -298,6 +298,20 @@ pub trait ConsensusApi: Send + Sync {
         self.build_block_template_with_evm(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
+    /// Finalize native receipt fees and commitments at a single virtual
+    /// generation. The signer is called again if any signed field changes.
+    /// This produces a candidate only; normal acceptance consumes the quantum.
+    fn finalize_palw_receipt_template_v3(
+        &self,
+        _template: BlockTemplate,
+        _sign: &mut dyn FnMut(&mut crate::header::Header),
+    ) -> Result<BlockTemplate, RuleError> {
+        Err(RuleError::LocalNativeCapacityUnavailable(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<BlockTemplate>(
+            "receipt template convergence",
+            "consensus implementation has no finalizer",
+        )))
+    }
+
     /// ADR-0060 Decision 1: re-shape a standard template into the bondless HEARTBEAT lane —
     /// algo-3, the lane's own bits and slot, an empty `palw_commitment`, a zero-subsidy
     /// coinbase. Returns the adapted template and the EARLIEST timestamp (ms) the slot rule
@@ -1873,6 +1887,18 @@ pub trait ConsensusApi: Send + Sync {
         Err("TIR public original quote unavailable".into())
     }
 
+    /// Unsigned protected companion/manifest/funding quote on one authenticated
+    /// selected parent. Separate from the legacy allocation plan.
+    fn palw_protected_original_quote_v1(
+        &self,
+        original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        material: crate::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1,
+    ) -> Result<Option<crate::palw_protected_original_quote_v1::ProtectedOriginalQuoteV1>, String> {
+        let _ = (original, header, material);
+        Err("protected original quote unavailable".into())
+    }
+
     /// Same accepted-state quote with optional horizon-only diagnostics.
     fn palw_tir_public_original_quote_with_diagnostics_v1(
         &self,
@@ -2462,6 +2488,42 @@ pub trait ConsensusApi: Send + Sync {
     /// work_leaves)` — what an executor serving a leaf's evidence off chain binds its answer to
     /// (ADR-0111 Decision 2). `None` for a claim this chain does not hold.
     fn palw_claim_roots_v2(&self, _claim: crate::Hash64) -> Option<(crate::Hash64, crate::Hash64, u64)> {
+        None
+    }
+
+    fn palw_protected_original_readback_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>, String> {
+        Err("protected original readback unavailable".into())
+    }
+
+    /// Hard deadline of an admitted protected original, even before its draw is stored.
+    fn palw_protected_full_replay_deadline_v1(&self, _claim: crate::Hash64) -> Option<u64> {
+        None
+    }
+
+    /// Digest of the full-replay approval a bound seat signs for a protected claim.
+    /// `None` when this tip has no matching stored draw, already records this
+    /// seat's approval, or cannot read its approval row. Reorgs are read afresh.
+    fn palw_protected_full_replay_digest_v1(
+        &self,
+        _expected: crate::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _key: &[u8],
+    ) -> Option<[u8; 64]> {
+        None
+    }
+
+    /// Transaction payload of one signed full-replay approval. Inclusion stores it
+    /// only when these bytes are the whole payload of an accepted transaction.
+    fn palw_protected_full_replay_payload_v1(
+        &self,
+        _expected: crate::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _key: &[u8],
+        _signature: &[u8],
+    ) -> Option<Vec<u8>> {
         None
     }
 

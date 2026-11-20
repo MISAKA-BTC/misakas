@@ -247,6 +247,7 @@ pub fn palw_g14_batch_replay_budget_estimate_v1() -> crate::palw_court_shared_ma
             max_target_requests: 1,
             max_source_reads: 1,
         },
+        meter_checker_io: false,
         workspace_bytes: PALW_G14_HEAP_BYTES_PER_BRANCH_V1,
         max_fault_bytes: fault,
         base_work: 1,

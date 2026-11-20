@@ -615,6 +615,18 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
     let branch = derive(&b.state, &at, original).unwrap();
+    let Row::VerifiedTokenizerRegistration(registration) = b.state.staged_court_row_v1(&key).unwrap() else {
+        panic!("registration row")
+    };
+    crate::palw_court_shared_material_intake_v1::batch::operand_floors_v1::compare_registered_operands_v1(
+        original,
+        &source,
+        &fx.record,
+        &fx.layout,
+        b.state.class_semantics_v1(&class).unwrap(),
+        registration.facts_v1(),
+        &branch,
+    );
     crate::palw_positive_contract_v2::tfp1_original::initial_supply::tests::exercise_initial_supply_v1(
         &b.state,
         &extras,

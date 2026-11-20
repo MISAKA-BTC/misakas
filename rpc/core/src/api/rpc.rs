@@ -1055,6 +1055,42 @@ pub trait RpcApi: Sync + Send + AnySync {
     async fn get_palw_claim_detail(&self, request: GetPalwClaimDetailRequest) -> RpcResult<GetPalwClaimDetailResponse> {
         self.get_palw_claim_detail_call(None, request).await
     }
+    /// Read the exact protected carrier's committed admission. A missing claim
+    /// is pending; legacy/mismatched rows are errors. The result is node-local.
+    async fn get_palw_protected_original_readback_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        txid: kaspa_consensus_core::Hash64,
+        execution_root: kaspa_consensus_core::Hash64,
+    ) -> RpcResult<Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>> {
+        let response = self.get_palw_claim_detail(GetPalwClaimDetailRequest { claim_hex: claim.to_string() }).await?;
+        if !response.available {
+            return Err(RpcError::General("claim readback unavailable".into()));
+        }
+        if !response.found {
+            return Ok(None);
+        }
+        let document: serde_json::Value =
+            serde_json::from_str(&response.view_json).map_err(|e| RpcError::General(format!("claim readback: {e}")))?;
+        if document["version"] != 1 || document["kind"] != "palwClaimDetail" {
+            return Err(RpcError::General("unknown claim readback document".into()));
+        }
+        let readback: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1 =
+            serde_json::from_value(document["protectedOriginal"].clone())
+                .map_err(|e| RpcError::General(format!("protected admission is absent or inconsistent: {e}")))?;
+        readback.check_carrier_v1(claim, txid, execution_root).map_err(RpcError::General)?;
+        if document["tipBlock"] != readback.observed_tip.to_string()
+            || document["tipDaa"] != readback.observed_tip_daa
+            || document["claim"]["claimId"] != claim.to_string()
+            || document["claim"]["acceptedBlock"] != readback.accepting_block.to_string()
+            || document["claim"]["acceptedDaa"] != readback.accepted_daa
+            || document["claim"]["acceptedBlueScore"] != readback.accepted_blue_score
+        {
+            return Err(RpcError::General("protected readback differs from its claim snapshot".into()));
+        }
+        Ok(Some(readback))
+    }
+
     async fn get_palw_claim_detail_call(
         &self,
         connection: Option<&DynRpcConnection>,
@@ -1155,6 +1191,58 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetPalwTirOriginalQuoteResponse> {
         self.get_palw_tir_original_quote_call(None, request).await
     }
+    /// Read-only v2 quote for a protected original. Old servers/legacy plans
+    /// are rejected explicitly; callers never sign a v1 plan as a companion.
+    async fn get_palw_protected_original_quote_v1(
+        &self,
+        original: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        material: &kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1,
+    ) -> RpcResult<kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteV1> {
+        use kaspa_consensus_core::palw_protected_original_quote_v1::{
+            PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1, ProtectedOriginalQuoteV1,
+        };
+        let encode = |bytes: Result<Vec<u8>, std::io::Error>| {
+            bytes.map(|bytes| faster_hex::hex_string(&bytes)).map_err(|e| RpcError::General(e.to_string()))
+        };
+        let request = GetPalwTirOriginalQuoteRequest {
+            commitment_hex: encode(borsh::to_vec(original))?,
+            binding_hex: encode(borsh::to_vec(
+                &kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()),
+            ))?,
+            protected_material_hex: Some(faster_hex::hex_string(&material.encode_v1().map_err(RpcError::General)?)),
+        };
+        let response = self.get_palw_tir_original_quote(request).await?;
+        if !response.refusal.is_empty() {
+            return Err(RpcError::General(response.refusal));
+        }
+        if !response.available || !response.quoted || !response.plan_hex.is_empty() {
+            return Err(RpcError::General("node did not return a protected original quote".into()));
+        }
+        let hex =
+            response.protected_quote_hex.ok_or_else(|| RpcError::General("node returned only the legacy original quote".into()))?;
+        if hex.is_empty() || !hex.len().is_multiple_of(2) || hex.len() / 2 > PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1 {
+            return Err(RpcError::General("protected quote response length".into()));
+        }
+        let mut bytes = vec![0; hex.len() / 2];
+        faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        let quote: ProtectedOriginalQuoteV1 = borsh::from_slice(&bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        use kaspa_consensus_core::palw_protected_original_quote_v1::PromptMaterialEncodingV1;
+        if !matches!(
+            (quote.version, material.prompt_encoding),
+            (1 | 2, PromptMaterialEncodingV1::LiteralUtf8) | (3, PromptMaterialEncodingV1::SegmentsV1)
+        ) || quote.quote_daa != response.quote_daa
+            || quote.claim != kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(original)
+            || quote.funding.claim != quote.claim
+            || quote.funding.execution_root != original.execution_root
+            || quote.companion.registered_class.0 != original.job.class_id.as_bytes()
+            || quote.companion.scope.network.0 != original.job.network_domain.as_bytes()
+        {
+            return Err(RpcError::General("protected quote version, claim or execution identity differs".into()));
+        }
+        Ok(quote)
+    }
+
     async fn get_palw_tir_original_quote_call(
         &self,
         connection: Option<&DynRpcConnection>,

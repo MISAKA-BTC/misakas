@@ -1,0 +1,110 @@
+{
+  "version": 3,
+  "service_book": {
+    "budget": {
+      "bytes": 100000,
+      "work": 100000,
+      "io": 1,
+      "controls": 1
+    },
+    "packet_cost": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "service_span_daa": 1
+  },
+  "cover": {
+    "max_original_leaves": 1,
+    "max_total_edges": 1,
+    "max_total_coordinates": 1,
+    "max_root_memberships": 1,
+    "per_root_edges": 1,
+    "per_root_coordinates": 1,
+    "per_root_memberships": 1,
+    "maximum_ranges": 1,
+    "workspace_bytes": 1024
+  },
+  "batch": {
+    "numerical_replay": {
+      "max_elements": 1,
+      "max_terms": 1,
+      "max_target_requests": 1,
+      "max_source_reads": 1,
+      "workspace_bytes": 1024,
+      "max_fault_bytes": 1,
+      "base_work": 1,
+      "io": 1
+    },
+    "terminal": {
+      "bytes": 100000,
+      "work": 100000,
+      "io": 1,
+      "controls": 1
+    },
+    "recovery_daa": 1,
+    "maximum_packets": 1,
+    "timing": {
+      "open_daa": 1,
+      "provider_wait_daa": 0,
+      "begin_daa": 1,
+      "parts_daa": 1,
+      "finish_daa": 1,
+      "verification_daa": 1,
+      "stop_daa": 1,
+      "terminal_daa": 1
+    },
+    "open_carrier": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "begin_carrier": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "part_carrier": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "finish_carrier": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "open_work_per_range": 2,
+    "finish_work_per_byte": 3,
+    "finish_io_per_byte": 4,
+    "stop_verification": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    },
+    "stop_filing": {
+      "bytes": 1,
+      "work": 1,
+      "io": 1,
+      "controls": 1
+    }
+  },
+  "material": {
+    "sompi_per_byte": 1,
+    "draft_ttl_daa": 4
+  },
+  "funding": {
+    "original_fee_sompi": 1,
+    "capital_floor_sompi": 2,
+    "maximum_dependencies": 3,
+    "maximum_material_visits": 4
+  },
+  "packet_carriage_sompi": 5,
+  "rounds": 1
+}

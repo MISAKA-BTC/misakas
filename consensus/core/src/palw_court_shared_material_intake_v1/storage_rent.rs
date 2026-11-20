@@ -1,7 +1,8 @@
 //! Batch storage rent is allocated from the accepted carrier's fee budget.
 //! This projection is used alongside UTXO validation and the fee accumulator.
 use super::{
-    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1, SignedMaterialIntakeV1, material_intake_schedule_v1,
+    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1, MaterialIntakeScheduleV1, SignedMaterialIntakeV1,
+    material_intake_schedule_v1,
 };
 use crate::palw_batch_court_v1::{
     BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
@@ -24,13 +25,18 @@ use crate::{
 };
 use std::sync::Arc;
 
-fn storage_rent_for_bytes_v1(bytes: u64) -> Result<u64, String> {
-    let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
-    schedule.rent_for_bytes_v1(bytes)
-}
-
 /// Quote the existing per-byte storage rate for a V3 material declaration.
 pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result<Option<u64>, String> {
+    material_batch_storage_rent_with_schedule_v1(
+        intake,
+        material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?,
+    )
+}
+
+fn material_batch_storage_rent_with_schedule_v1(
+    intake: &SignedMaterialIntakeV1,
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<Option<u64>, String> {
     let MaterialActionV1::Begin { total_bytes, .. } = intake.action else { return Ok(None) };
     if intake.version != MATERIAL_BATCH_VERSION {
         return Ok(None);
@@ -38,7 +44,7 @@ pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result
     if !(1..=MATERIAL_PIPELINED_MAX_BYTES).contains(&total_bytes) {
         return Err("Batch storage rent declaration exceeds its part cap".into());
     }
-    storage_rent_for_bytes_v1(total_bytes).map(Some)
+    schedule.rent_for_bytes_v1(total_bytes).map(Some)
 }
 
 /// The storage rent comes after the existing obligations. An underpaid
@@ -67,10 +73,17 @@ struct PreparedBatchCarrierV1 {
     carrier: crate::TransactionId,
     wire: BatchCourtWireV1,
     storage_rent: Option<u64>,
+    schedule: MaterialIntakeScheduleV1,
 }
 
 impl PreparedBatchCarrierV1 {
     fn decode_v1(carrier: &Transaction) -> Result<Option<Self>, HandoffError> {
+        let schedule =
+            material_intake_schedule_v1().map_err(|_| NativeDecodeErrorV1::Decode("Batch storage rent schedule absent".into()))?;
+        Self::decode_with_schedule_v1(carrier, schedule)
+    }
+
+    fn decode_with_schedule_v1(carrier: &Transaction, schedule: MaterialIntakeScheduleV1) -> Result<Option<Self>, HandoffError> {
         use NativeDecodeErrorV1::{Decode, Resource};
         if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
             return Ok(None);
@@ -89,11 +102,13 @@ impl PreparedBatchCarrierV1 {
             return Err(Decode("Batch carrier transaction identity is stale".into()));
         }
         let storage_rent = match &wire {
-            BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake).map_err(Decode)?,
-            BatchCourtWireV1::Stop(stop) => Some(storage_rent_for_bytes_v1(stop.operands.len() as u64).map_err(Decode)?),
+            BatchCourtWireV1::Respond(control) => {
+                material_batch_storage_rent_with_schedule_v1(&control.intake, schedule).map_err(Decode)?
+            }
+            BatchCourtWireV1::Stop(stop) => Some(schedule.rent_for_bytes_v1(stop.operands.len() as u64).map_err(Decode)?),
             BatchCourtWireV1::Open(_) | BatchCourtWireV1::VerifyNumerical(_) | BatchCourtWireV1::ConvictNumerical(_) => None,
         };
-        Ok(Some(Self { carrier: carrier.id(), wire, storage_rent }))
+        Ok(Some(Self { carrier: carrier.id(), wire, storage_rent, schedule }))
     }
 
     fn wire_v1(&self) -> &BatchCourtWireV1 {
@@ -127,40 +142,57 @@ impl PreparedBatchCarrierV1 {
         let purpose =
             crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-storage-fee-purpose/v1", &self.carrier)?;
         budget.allocate_v1(purpose.as_bytes(), amount).map_err(|err| format!("Batch storage rent: {err:?}"))?;
-        Ok(Some(MaterialBatchStorageDebitV1 { at, declaration, amount }))
+        Ok(Some(MaterialBatchStorageDebitV1 { at, declaration, amount, schedule: self.schedule }))
     }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum PreparedBatchWireV2 {
     Legacy(PreparedBatchCarrierV1),
-    PlainOutput { wire: BatchPlainOutputWireV2, bytes: u64, rent: u64 },
+    PlainOutput { wire: BatchPlainOutputWireV2, bytes: u64, rent: u64, schedule: MaterialIntakeScheduleV1 },
 }
 
 impl crate::palw_native_resource_v1::NativeHeapV1 for PreparedBatchWireV2 {
     fn native_heap_v1(&self, component: &str) -> NativeCoverageV1 {
         match self {
             Self::Legacy(carrier) => carrier.native_heap_v1(component),
-            Self::PlainOutput { wire: BatchPlainOutputWireV2::Verify(control), .. } => control.native_heap_v1(component),
-            Self::PlainOutput { wire: BatchPlainOutputWireV2::Terminal(control), .. } => {
-                control.claim.native_heap_v1(component).add::<Self>(control.receipt_digest.native_heap_v1(component), component)
+            Self::PlainOutput { wire, bytes, rent, schedule } => {
+                let wire = match wire {
+                    BatchPlainOutputWireV2::Verify(control) => control.native_heap_v1(component),
+                    BatchPlainOutputWireV2::Terminal(control) => control
+                        .claim
+                        .native_heap_v1(component)
+                        .add::<Self>(control.receipt_digest.native_heap_v1(component), component),
+                };
+                wire.add::<Self>(bytes.native_heap_v1(component), component)
+                    .add::<Self>(rent.native_heap_v1(component), component)
+                    .add::<Self>(schedule.native_heap_v1(component), component)
             }
         }
     }
 }
 
 /// Use the same retained-control byte charge as the original reservation.
+#[cfg(test)]
 fn plain_output_storage_rent_v2(wire: &BatchPlainOutputWireV2) -> Result<u64, String> {
+    plain_output_storage_rent_with_schedule_v2(wire, material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?)
+}
+
+fn plain_output_storage_rent_with_schedule_v2(
+    wire: &BatchPlainOutputWireV2,
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<u64, String> {
     use super::batch::plain_output::BatchPlainOutputReceiptV2;
     match wire {
-        BatchPlainOutputWireV2::Verify(_) => storage_rent_for_bytes_v1(BatchPlainOutputReceiptV2::ROOTED_MAX_BYTES),
+        BatchPlainOutputWireV2::Verify(_) => schedule.rent_for_bytes_v1(BatchPlainOutputReceiptV2::ROOTED_MAX_BYTES),
         BatchPlainOutputWireV2::Terminal(_) => Ok(0),
     }
 }
 
 /// Ephemeral handoff for a ruleset that has accepted a Batch transaction.
 /// The UTXO walk constructs it before dropping the input view. The Court
-/// fold consumes it at the same accepting point without retaining UTXOs.
+/// fold consumes it at the same accepting point and under the same complete
+/// material schedule, without retaining UTXOs or repricing the carrier.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ValidatedBatchCarrierV1 {
     batch: PreparedBatchWireV2,
@@ -169,7 +201,7 @@ pub struct ValidatedBatchCarrierV1 {
     accepted_ordinal: usize,
 }
 
-crate::palw_native_resource_v1::native_struct!(PreparedBatchCarrierV1; carrier, wire, storage_rent);
+crate::palw_native_resource_v1::native_struct!(PreparedBatchCarrierV1; carrier, wire, storage_rent, schedule);
 crate::palw_native_resource_v1::native_struct!(ValidatedBatchCarrierV1; batch, budget, at, accepted_ordinal);
 
 /// Clones of the accepting-block handoff share the decoded bytes and lease.
@@ -210,7 +242,30 @@ impl ValidatedBatchCarrierV1 {
         accepted_ordinal: usize,
         plain_output: Option<BatchPlainOutputTransportV2>,
     ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
-        Self::prepare_reserved_v2(validated, preceding_fee, at, accepted_ordinal, plain_output, reserve_native_pending_requests_v1)
+        let schedule =
+            material_intake_schedule_v1().map_err(|_| NativeDecodeErrorV1::Decode("Batch storage rent schedule absent".into()))?;
+        Self::prepare_with_schedule_v3(validated, preceding_fee, at, accepted_ordinal, plain_output, schedule)
+    }
+
+    /// The UTXO owner supplies the same selected preimage used by its fee
+    /// lookahead and reward calculation. Decode never reselects a schedule.
+    pub fn prepare_with_schedule_v3(
+        validated: &ValidatedTransaction<'_>,
+        preceding_fee: u64,
+        at: PalwBlockContextV2,
+        accepted_ordinal: usize,
+        plain_output: Option<BatchPlainOutputTransportV2>,
+        schedule: MaterialIntakeScheduleV1,
+    ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
+        Self::prepare_reserved_v2(
+            validated,
+            preceding_fee,
+            at,
+            accepted_ordinal,
+            plain_output,
+            schedule,
+            reserve_native_pending_requests_v1,
+        )
     }
 
     #[cfg(test)]
@@ -221,7 +276,9 @@ impl ValidatedBatchCarrierV1 {
         accepted_ordinal: usize,
         reserve: impl FnMut(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
-        Self::prepare_reserved_v2(validated, preceding_fee, at, accepted_ordinal, None, reserve)
+        let schedule =
+            material_intake_schedule_v1().map_err(|_| NativeDecodeErrorV1::Decode("Batch storage rent schedule absent".into()))?;
+        Self::prepare_reserved_v2(validated, preceding_fee, at, accepted_ordinal, None, schedule, reserve)
     }
 
     fn prepare_reserved_v2(
@@ -230,6 +287,7 @@ impl ValidatedBatchCarrierV1 {
         at: PalwBlockContextV2,
         accepted_ordinal: usize,
         plain_output: Option<BatchPlainOutputTransportV2>,
+        schedule: MaterialIntakeScheduleV1,
         mut reserve: impl FnMut(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
         use NativeDecodeErrorV1::{Decode, Resource};
@@ -291,11 +349,11 @@ impl ValidatedBatchCarrierV1 {
             let wire = decode_batch_plain_output_payload_v2(payload)
                 .map_err(|why| Decode(why.to_string()))?
                 .ok_or_else(|| Decode("validated plain Output carrier lost its payload".into()))?;
-            let rent = plain_output_storage_rent_v2(&wire).map_err(Decode)?;
-            PreparedBatchWireV2::PlainOutput { wire, bytes: payload.len() as u64, rent }
+            let rent = plain_output_storage_rent_with_schedule_v2(&wire, schedule).map_err(Decode)?;
+            PreparedBatchWireV2::PlainOutput { wire, bytes: payload.len() as u64, rent, schedule }
         } else {
             PreparedBatchWireV2::Legacy(
-                PreparedBatchCarrierV1::decode_v1(validated.tx)?
+                PreparedBatchCarrierV1::decode_with_schedule_v1(validated.tx, schedule)?
                     .ok_or_else(|| Decode("validated Batch carrier lost its payload".into()))?,
             )
         };
@@ -318,20 +376,38 @@ impl ValidatedBatchCarrierV1 {
         }
     }
 
-    pub(crate) fn wire_at_v1(&self, at: &PalwBlockContextV2) -> Result<&BatchCourtWireV1, String> {
+    fn check_context_v1(&self, at: &PalwBlockContextV2, schedule: &MaterialIntakeScheduleV1) -> Result<(), String> {
         if self.at != *at {
             return Err("Batch carrier accepting point differs from its UTXO handoff".into());
         }
+        let retained_schedule = match &self.batch {
+            PreparedBatchWireV2::Legacy(batch) => &batch.schedule,
+            PreparedBatchWireV2::PlainOutput { schedule, .. } => schedule,
+        };
+        if retained_schedule != schedule {
+            return Err("Batch carrier material schedule differs from its UTXO handoff".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn wire_at_v1(
+        &self,
+        at: &PalwBlockContextV2,
+        schedule: &MaterialIntakeScheduleV1,
+    ) -> Result<&BatchCourtWireV1, String> {
+        self.check_context_v1(at, schedule)?;
         match &self.batch {
             PreparedBatchWireV2::Legacy(batch) => Ok(batch.wire_v1()),
             PreparedBatchWireV2::PlainOutput { .. } => Err("BCT2 cannot enter the BCT1 dispatcher".into()),
         }
     }
 
-    pub(crate) fn plain_output_at_v2(&self, at: &PalwBlockContextV2) -> Result<Option<(&BatchPlainOutputWireV2, u64)>, String> {
-        if self.at != *at {
-            return Err("Batch carrier accepting point differs from its UTXO handoff".into());
-        }
+    pub(crate) fn plain_output_at_v2(
+        &self,
+        at: &PalwBlockContextV2,
+        schedule: &MaterialIntakeScheduleV1,
+    ) -> Result<Option<(&BatchPlainOutputWireV2, u64)>, String> {
+        self.check_context_v1(at, schedule)?;
         match &self.batch {
             PreparedBatchWireV2::Legacy(_) => Ok(None),
             PreparedBatchWireV2::PlainOutput { wire, bytes, .. } => {
@@ -370,6 +446,15 @@ impl ValidatedBatchCarrierV1 {
 /// Shared fee accounting for an enabled Batch route. Callers supply the fee
 /// remaining after mandatory bond burn and all preceding fee allocations.
 pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
+    let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
+    material_batch_carrier_fee_with_schedule_v3(carrier, available_fee, schedule)
+}
+
+pub fn material_batch_carrier_fee_with_schedule_v3(
+    carrier: &Transaction,
+    available_fee: u64,
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<MaterialBatchCarrierFeeV1, String> {
     if carrier.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
         && batch_stop_wire_shape_v1(&carrier.payload).map_err(|why| why.to_string())?
     {
@@ -377,9 +462,9 @@ pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) 
             return Err("Batch carrier transaction identity is stale".into());
         }
         let operands_bytes = carrier.payload.len() as u64 - BATCH_STOP_WIRE_OVERHEAD_V1;
-        return Ok(MaterialBatchCarrierFeeV1::split(storage_rent_for_bytes_v1(operands_bytes)?, available_fee));
+        return Ok(MaterialBatchCarrierFeeV1::split(schedule.rent_for_bytes_v1(operands_bytes)?, available_fee));
     }
-    Ok(match PreparedBatchCarrierV1::decode_v1(carrier).map_err(|error| error.to_string())? {
+    Ok(match PreparedBatchCarrierV1::decode_with_schedule_v1(carrier, schedule).map_err(|error| error.to_string())? {
         Some(batch) => batch.split_v1(available_fee),
         None => MaterialBatchCarrierFeeV1::split(0, available_fee),
     })
@@ -392,6 +477,15 @@ pub fn material_batch_plain_output_carrier_fee_v2(
     carrier: &Transaction,
     available_fee: u64,
 ) -> Result<Option<MaterialBatchCarrierFeeV1>, String> {
+    let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
+    material_batch_plain_output_carrier_fee_with_schedule_v3(carrier, available_fee, schedule)
+}
+
+pub fn material_batch_plain_output_carrier_fee_with_schedule_v3(
+    carrier: &Transaction,
+    available_fee: u64,
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<Option<MaterialBatchCarrierFeeV1>, String> {
     if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return Ok(None);
     }
@@ -401,17 +495,19 @@ pub fn material_batch_plain_output_carrier_fee_v2(
     if !carrier.id_is_current() {
         return Err("plain Output carrier transaction identity is stale".into());
     }
-    Ok(Some(MaterialBatchCarrierFeeV1::split(plain_output_storage_rent_v2(&wire)?, available_fee)))
+    Ok(Some(MaterialBatchCarrierFeeV1::split(plain_output_storage_rent_with_schedule_v2(&wire, schedule)?, available_fee)))
 }
 
 /// One storage debit allocated from the same native budget as other costs.
 /// The caller keeps this fact with the exact accepted object and excludes the
-/// amount from collectible fees. It must not survive an accepting-point change.
+/// amount from collectible fees. It must not survive an accepting-point or
+/// material-schedule change, even when a new schedule charges the same amount.
 #[derive(Debug)]
 pub struct MaterialBatchStorageDebitV1 {
     at: PalwBlockContextV2,
     declaration: Hash64,
     amount: u64,
+    schedule: MaterialIntakeScheduleV1,
 }
 
 impl MaterialBatchStorageDebitV1 {
@@ -438,8 +534,13 @@ impl MaterialBatchStorageDebitV1 {
         demand_ordinal: u64,
         at: &PalwBlockContextV2,
         amount: u64,
+        schedule: &MaterialIntakeScheduleV1,
     ) -> Result<(), String> {
-        if self.at != *at || self.amount != amount || self.declaration != declaration_id(intake, request_root, demand_ordinal)? {
+        if self.at != *at
+            || self.amount != amount
+            || self.schedule != *schedule
+            || self.declaration != declaration_id(intake, request_root, demand_ordinal)?
+        {
             return Err("Batch storage rent debit differs from the accepted declaration".into());
         }
         Ok(())
@@ -467,6 +568,22 @@ mod tests {
         PopulatedTransaction, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction,
     };
+
+    fn different_schedules_v1(schedule: MaterialIntakeScheduleV1) -> [MaterialIntakeScheduleV1; 6] {
+        std::array::from_fn(|index| {
+            let mut changed = schedule;
+            match index {
+                0 => changed.sompi_per_byte += 1,
+                1 => changed.draft_ttl_daa += 1,
+                2 => changed.cover.max_original_leaves += 1,
+                3 => changed.cover.max_total_edges += 1,
+                4 => changed.cover.max_total_coordinates += 1,
+                5 => changed.cover.max_root_memberships += 1,
+                _ => unreachable!(),
+            }
+            changed
+        })
+    }
 
     fn assert_batch_lease_lifetime_v1(validated: &ValidatedTransaction<'_>, at: PalwBlockContextV2, retained: u64, scratch: u64) {
         use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
@@ -521,6 +638,7 @@ mod tests {
             // the signature, but upfront storage rent still has one debit.
             signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         });
+        let schedule = material_intake_schedule_v1().unwrap();
         let rent = plain_output_storage_rent_v2(&verify).unwrap();
         assert!(rent > 0);
         let terminal = BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim: h(1), receipt_digest: h(8) });
@@ -552,10 +670,33 @@ mod tests {
                     .unwrap();
             let projected = material_batch_plain_output_carrier_fee_v2(&tx, available).unwrap().unwrap();
             assert_eq!(actual.fee_v1(), projected);
+            let changed = MaterialIntakeScheduleV1 {
+                sompi_per_byte: schedule.sompi_per_byte + 1,
+                draft_ttl_daa: schedule.draft_ttl_daa + 1,
+                ..schedule
+            };
+            super::super::set_material_intake_test_schedule_v1(Some(changed));
+            let selected =
+                ValidatedBatchCarrierV1::prepare_with_schedule_v3(&native, preceding, at, index as usize, Some(policy), schedule);
+            let selected_fee = material_batch_plain_output_carrier_fee_with_schedule_v3(&tx, available, schedule);
+            let reselected_fee = material_batch_plain_output_carrier_fee_v2(&tx, available);
+            super::super::set_material_intake_test_schedule_v1(Some(schedule));
+            let selected = selected.unwrap().unwrap();
+            assert_eq!(selected.fee_v1(), projected);
+            assert_eq!(selected_fee.unwrap(), Some(projected));
+            assert_eq!(selected.plain_output_at_v2(&at, &schedule).is_ok(), available >= due);
+            assert!(selected.plain_output_at_v2(&at, &changed).is_err());
+            if due != 0 {
+                assert!(reselected_fee.unwrap().unwrap().required_storage_rent > due);
+            }
             assert_eq!((projected.required_storage_rent, projected.collectible_fee), (due, available.saturating_sub(due)));
-            assert!(actual.wire_at_v1(&at).is_err());
-            assert!(actual.plain_output_at_v2(&prior).is_err());
-            assert_eq!(actual.plain_output_at_v2(&at).is_ok(), available >= due);
+            assert!(actual.wire_at_v1(&at, &schedule).is_err());
+            assert!(actual.plain_output_at_v2(&prior, &schedule).is_err());
+            assert_eq!(actual.plain_output_at_v2(&at, &schedule).is_ok(), available >= due);
+            for changed in different_schedules_v1(schedule) {
+                assert!(actual.plain_output_at_v2(&at, &changed).is_err());
+                assert_eq!(actual.fee_v1(), projected, "a rejected schedule cannot reprice the retained carrier");
+            }
         }
     }
 
@@ -570,6 +711,7 @@ mod tests {
             action: MaterialActionV1::Begin { total_bytes: 1024, body_hash: Hash64::from_u64_word(4) },
             signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
+        let schedule = material_intake_schedule_v1().unwrap();
         let amount = material_batch_storage_rent_v1(&intake).unwrap().unwrap();
         assert!(amount > 0);
         let demand_ordinal = 8;
@@ -607,6 +749,24 @@ mod tests {
             PopulatedTransaction::new(&tx, vec![UtxoEntry::new(output + 2 * amount + 1, ScriptPublicKey::default(), 1, false)]),
             2 * amount + 1,
         );
+        let changed = MaterialIntakeScheduleV1 {
+            sompi_per_byte: schedule.sompi_per_byte + 1,
+            draft_ttl_daa: schedule.draft_ttl_daa + 1,
+            ..schedule
+        };
+        super::super::set_material_intake_test_schedule_v1(Some(changed));
+        let selected = ValidatedBatchCarrierV1::prepare_with_schedule_v3(&native, 1, at, 0, None, schedule);
+        let selected_fee = material_batch_carrier_fee_with_schedule_v3(&tx, 2 * amount, schedule);
+        let reselected_fee = material_batch_carrier_fee_v1(&tx, 2 * amount);
+        super::super::set_material_intake_test_schedule_v1(Some(schedule));
+        let selected = selected.unwrap().unwrap();
+        assert_eq!(selected_fee.unwrap(), full_split);
+        assert_eq!(selected.fee_v1(), full_split);
+        assert!(reselected_fee.unwrap().required_storage_rent > amount);
+        assert!(selected.wire_at_v1(&at, &schedule).is_ok());
+        assert!(selected.wire_at_v1(&at, &changed).is_err());
+        let debit = selected.storage_debit_v1(Some(request)).unwrap().unwrap();
+        assert!(debit.check_v1(&intake, request, demand_ordinal, &at, amount, &schedule).is_ok());
         let mut requests = Vec::new();
         let metered = ValidatedBatchCarrierV1::prepare_reserved_v1(&native, 1, at, 0, |bytes| {
             requests.push(bytes);
@@ -640,12 +800,12 @@ mod tests {
         assert_batch_lease_lifetime_v1(&native, at, requests[0], requests[1]);
         let handoff = ValidatedBatchCarrierV1::prepare_v1(&native, 1, at).unwrap().unwrap();
         assert_eq!(handoff.fee_v1(), full_split);
-        assert!(handoff.wire_at_v1(&at).is_ok());
-        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { block: other_request, ..at }).is_err());
+        assert!(handoff.wire_at_v1(&at, &schedule).is_ok());
+        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { block: other_request, ..at }, &schedule).is_err());
         assert!(handoff.storage_debit_v1(None).is_err());
         for _ in 0..2 {
             let debit = handoff.storage_debit_v1(Some(request)).unwrap().unwrap();
-            assert!(debit.check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
+            assert!(debit.check_v1(&intake, request, demand_ordinal, &at, amount, &schedule).is_ok());
             assert_eq!(handoff.fee_v1(), full_split);
         }
         let prepared = PreparedBatchCarrierV1::decode_v1(&tx).unwrap().unwrap();
@@ -660,12 +820,21 @@ mod tests {
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
         assert!(prepared.allocate_v1(&mut fees, other_request, at).is_err());
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
-        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
-        assert!(paid.check_v1(&intake, other_request, demand_ordinal, &at, amount).is_err());
-        assert!(paid.check_v1(&intake, request, demand_ordinal, &PalwBlockContextV2 { daa_score: 8, ..at }, amount).is_err());
-        assert!(paid.check_v1(&intake, request, demand_ordinal + 1, &at, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount, &schedule).is_ok());
+        for changed in different_schedules_v1(schedule) {
+            assert!(handoff.wire_at_v1(&at, &changed).is_err());
+            assert!(handoff.plain_output_at_v2(&at, &changed).is_err());
+            assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount, &changed).is_err());
+            assert_eq!(handoff.fee_v1(), full_split);
+            assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
+        }
+        assert!(paid.check_v1(&intake, other_request, demand_ordinal, &at, amount, &schedule).is_err());
+        assert!(
+            paid.check_v1(&intake, request, demand_ordinal, &PalwBlockContextV2 { daa_score: 8, ..at }, amount, &schedule).is_err()
+        );
+        assert!(paid.check_v1(&intake, request, demand_ordinal + 1, &at, amount, &schedule).is_err());
         intake.signature[0] ^= 1;
-        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount, &schedule).is_err());
         intake.version = 1;
         assert_eq!(material_batch_storage_rent_v1(&intake), Ok(None));
     }

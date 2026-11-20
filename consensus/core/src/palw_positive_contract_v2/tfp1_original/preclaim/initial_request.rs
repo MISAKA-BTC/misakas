@@ -4,7 +4,9 @@ use crate::{
     Hash64,
     palw_batch_court_v1::BatchCourtErrorV1,
     palw_court_service_v1::{ServiceCost, ServicePacket},
-    palw_court_shared_material_intake_v1::batch::admission::protected::{BatchInitialRequestV1, manifest_request_packet_id_v1, manifest_request_packet_id_v2},
+    palw_court_shared_material_intake_v1::batch::admission::protected::{
+        BatchInitialRequestV1, manifest_request_packet_id_v1, manifest_request_packet_id_v2,
+    },
 };
 use misaka_palw_positive_contract::public_one_honest::{FirstNoticeDemand, PendingManifestCaseRecordV1, VerificationSchedule};
 
@@ -35,23 +37,37 @@ impl MaterialRequestSeriesV2 {
         Ok(Self { first, max_gap_daa, notice_offset })
     }
 
-    pub(crate) fn first_v2(self) -> InitialMaterialRequestPlanV1 { self.first }
+    pub(crate) fn first_v2(self) -> InitialMaterialRequestPlanV1 {
+        self.first
+    }
 
     pub(crate) fn count_v2(self) -> usize {
         // Both offsets and the divisor are validated before construction.
         1 + (self.notice_offset - (self.first.before_offset - 1)).div_ceil(self.max_gap_daa) as usize
     }
 
-    pub(crate) fn request_v2(self, claim: Hash64, scope: Hash64, a: u64, slot: usize) -> Result<BatchInitialRequestV1, BatchCourtErrorV1> {
-        if slot >= self.count_v2() { return Err(BatchCourtErrorV1::CaseGraph); }
+    pub(crate) fn request_v2(
+        self,
+        claim: Hash64,
+        scope: Hash64,
+        a: u64,
+        slot: usize,
+    ) -> Result<BatchInitialRequestV1, BatchCourtErrorV1> {
+        if slot >= self.count_v2() {
+            return Err(BatchCourtErrorV1::CaseGraph);
+        }
         if slot == 0 {
             let mut request = self.first.request_v1(claim, scope, a)?;
             request.packet.release_daa = request.packet.service_before.checked_sub(1).ok_or(BatchCourtErrorV1::Clock)?;
             return Ok(request);
         }
-        let offset = self.first.before_offset.checked_sub(1)
+        let offset = self
+            .first
+            .before_offset
+            .checked_sub(1)
             .and_then(|n| self.max_gap_daa.checked_mul(slot as u64).and_then(|gap| n.checked_add(gap)))
-            .ok_or(BatchCourtErrorV1::Clock)?.min(self.notice_offset);
+            .ok_or(BatchCourtErrorV1::Clock)?
+            .min(self.notice_offset);
         let at = a.checked_add(offset).ok_or(BatchCourtErrorV1::Clock)?;
         Ok(BatchInitialRequestV1 {
             packet: ServicePacket {
@@ -161,8 +177,10 @@ mod tests {
     fn series_has_bounded_gaps_and_an_inclusive_last_notice_slot() {
         let a = 100;
         let first = InitialMaterialRequestPlanV1 {
-            ready_offset: 10, before_offset: 101,
-            service: ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 }, retained_bytes: 1,
+            ready_offset: 10,
+            before_offset: 101,
+            service: ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 },
+            retained_bytes: 1,
         };
         let series = MaterialRequestSeriesV2::new_v2(first, 256).unwrap();
         let claim = Hash64::from_u64_word(1);
@@ -173,7 +191,9 @@ mod tests {
             let request = series.request_v2(claim, scope, a, slot).unwrap();
             assert!(ids.insert(request.packet.id));
             assert_eq!(request.packet.service_before, request.packet.release_daa + 1);
-            if let Some(prior) = prior { assert!((1..=256).contains(&(request.packet.release_daa - prior))); }
+            if let Some(prior) = prior {
+                assert!((1..=256).contains(&(request.packet.release_daa - prior)));
+            }
             prior = Some(request.packet.release_daa);
         }
         assert_eq!(prior, Some(a + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA));

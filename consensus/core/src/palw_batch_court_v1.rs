@@ -209,7 +209,7 @@ impl BatchCourtWindowV1 {
 
         let mut terminal_daa = None;
         let mut span_refusal = None;
-        let reservation = book.reserve_causal_checked_v1(graph, service_before, |candidate| {
+        let reservation = book.reserve_causal_checked_diagnostic_v1(graph, service_before, |candidate| {
             check_assignments(candidate, &nodes)?;
             let last = terminals.iter().try_fold(0u64, |last, terminal| {
                 candidate.assigned_daa(terminal).map(|at| last.max(at)).ok_or(ServiceRefusal::InvalidState)
@@ -230,7 +230,10 @@ impl BatchCourtWindowV1 {
         if let Some(refusal) = span_refusal {
             return Err(refusal);
         }
-        reservation.map_err(Reservation)?;
+        reservation.map_err(|error| match error.capacity {
+            Some(capacity) if error.refusal == ServiceRefusal::NoCapacity => BatchCourtErrorV1::ReservationCapacity(capacity),
+            _ => Reservation(error.refusal),
+        })?;
         let terminal_daa = terminal_daa.expect("successful reservation checked every terminal");
         Ok(terminal_daa - self.claim_accepted_daa + recovery_daa + 1)
     }
@@ -387,6 +390,9 @@ pub enum BatchCourtErrorV1 {
     DeliveryCost,
     CaseGraph,
     Reservation(ServiceRefusal),
+    /// Same NoCapacity decision, retaining its native packet/window witness
+    /// through the unsigned quote's error path. No consensus row stores this.
+    ReservationCapacity(crate::palw_court_service_v1::causal::CausalCapacityRefusalV1),
     LocalResource(NativeCoverageV1),
     VerificationUnavailable,
     Checkpoint,

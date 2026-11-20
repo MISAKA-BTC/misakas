@@ -24,6 +24,7 @@ use misaka_palw_positive_contract::{
 
 /// Private construction prevents an extras caller from declaring an arbitrary
 /// row paid. The writer rechecks the current prefix and consumes the fee last.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedPaidManifestRequestV1 {
     link: Tfp1PublicOriginalLinkV1,
     pending: PreparedDrawnPublicManifestCaseV1,
@@ -32,6 +33,8 @@ pub(crate) struct PreparedPaidManifestRequestV1 {
     packet: ServicePacket,
     purpose: Hash64,
 }
+
+crate::palw_native_resource_v1::native_struct!(PreparedPaidManifestRequestV1; link, pending, paid, carrier, packet, purpose);
 
 impl PreparedTfp1PublicOriginalV1 {
     /// `context` and `quote_charge` come from the native original/profile and
@@ -82,6 +85,9 @@ impl PreparedTfp1PublicOriginalV1 {
         at: PalwBlockContextV2,
         quote_charge: impl FnOnce(ServiceCost, u64) -> Result<u64, ContractError>,
     ) -> Result<PreparedPaidManifestRequestV1, ContractError> {
+        if handoff.uses_registered_key_v2() && protected.is_none() {
+            return Err(ContractError::UnsupportedProfile);
+        }
         let link = self.rooted_link_v1(state)?;
         if protected.is_some_and(|terms| {
             !link.uses_public_frame_v1() || terms.obligation_v1() != self.obligation || terms.rescue_v1() != self.companion.rescue
@@ -115,8 +121,8 @@ impl PreparedTfp1PublicOriginalV1 {
             accepted_ordinal: usize::try_from(context.origin.accepted_tx_ordinal).map_err(|_| ContractError::Range)?,
             carrier: Hash64::from_bytes(context.origin.carrier_transaction.0),
         };
-        let bytes = handoff.request_at_v1(&carrier).map_err(|_| ContractError::Scope)?;
-        let pending = self.companion.prepare_drawn_manifest_storage_record(link.reservation_v1(), draw, bytes, context)?;
+        let signed = handoff.signed_request_at_v2(state, &carrier).map_err(|_| ContractError::Scope)?;
+        let pending = self.companion.prepare_drawn_manifest_storage_record_signed_v2(link.reservation_v1(), draw, &signed, context)?;
         let request = match protected {
             Some(terms) => {
                 let service = state.court_service_row_v3_v1().ok_or(ContractError::Scope)?;
@@ -124,13 +130,16 @@ impl PreparedTfp1PublicOriginalV1 {
                 for slot in 0..terms.request_count_v2() {
                     let request = terms.request_v2(scope.claim, scope.reservation_scope, slot).map_err(|_| ContractError::Scope)?;
                     if service.state.book.assigned_daa(&request.packet.id) == Some(at.daa_score) {
-                        if selected.is_some() { return Err(ContractError::Scope); }
+                        if selected.is_some() {
+                            return Err(ContractError::Scope);
+                        }
                         selected = Some(request);
                     }
                 }
                 selected.ok_or(ContractError::Scope)?
-            },
-            None => plan.request_v1(scope.claim, scope.reservation_scope, self.companion.carrier.origin.accepted_daa)
+            }
+            None => plan
+                .request_v1(scope.claim, scope.reservation_scope, self.companion.carrier.origin.accepted_daa)
                 .map_err(|_| ContractError::Scope)?,
         };
         let packet = request.packet;
@@ -141,9 +150,25 @@ impl PreparedTfp1PublicOriginalV1 {
         }
         let purpose = manifest_request_charge_purpose_v1(link.original_v1(), packet.id)?;
         let paid = if protected.is_some() {
-            PaidManifestRequestRowV1::new_for_slot_v2(scope, link.original_v1(), pending.case, context.origin, pending.row.request_digest(), packet.id, charge)?
+            PaidManifestRequestRowV1::new_for_slot_v2(
+                scope,
+                link.original_v1(),
+                pending.case,
+                context.origin,
+                pending.row.request_digest(),
+                packet.id,
+                charge,
+            )?
         } else {
-            PaidManifestRequestRowV1::new_v1(scope, link.original_v1(), pending.case, context.origin, pending.row.request_digest(), purpose, charge)?
+            PaidManifestRequestRowV1::new_v1(
+                scope,
+                link.original_v1(),
+                pending.case,
+                context.origin,
+                pending.row.request_digest(),
+                purpose,
+                charge,
+            )?
         };
         let prepared = PreparedPaidManifestRequestV1 { link, pending, paid, carrier, packet, purpose };
         prepared.storage_rows_at_v1(state, &at)?;
@@ -353,6 +378,44 @@ pub(crate) fn exercise_paid_request_v1(
     assert!(paired.prepare_paid_manifest_with_plan_v1(drawn, draw, plan, None, &handoff, &context, at, price).is_err());
     assert!(detached.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, price).is_err());
     let prepared = paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, price).unwrap();
+    // PMR2 is a separate draft transport; a legacy request plan cannot opt
+    // into it merely by changing the carrier tag or removing the inline key.
+    let signed = SignedManifestRequestV1::decode(literal).unwrap();
+    let compact = misaka_palw_positive_contract::public_one_honest::RegisteredKeyManifestRequestV2 {
+        request: signed.request,
+        signature: signed.signature,
+    };
+    let compact_wire = borsh::to_vec(&compact).unwrap();
+    let mut compact_tx = tx.clone();
+    compact_tx.payload =
+        super::manifest_carrier::encode_manifest_request_carrier_v2(scope, compact_wire.as_slice().try_into().unwrap())
+            .unwrap()
+            .to_vec();
+    compact_tx.finalize();
+    let compact_validated = ValidatedTransaction::new(
+        PopulatedTransaction::new(&compact_tx, vec![UtxoEntry::new(100, ScriptPublicKey::default(), 1, false)]),
+        20,
+    );
+    let compact_handoff = ValidatedManifestRequestCarrierV1::prepare_v1(
+        &compact_validated,
+        8,
+        Hash64::from_bytes(context.origin.carrier_block.0),
+        at,
+        0,
+    )
+    .unwrap()
+    .unwrap();
+    let compact_context = ManifestRequestContext {
+        origin: misaka_palw_positive_contract::rows::AcceptedOrigin {
+            carrier_transaction: NativeHash64(compact_tx.id().as_bytes()),
+            ..context.origin
+        },
+        ..context
+    };
+    assert!(matches!(
+        paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &compact_handoff, &compact_context, at, price,),
+        Err(ContractError::UnsupportedProfile)
+    ));
     for fee in [0, 13] {
         assert!(paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, |_, _| Ok(fee)).is_err());
     }

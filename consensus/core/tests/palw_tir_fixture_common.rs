@@ -167,7 +167,7 @@ pub fn fixture_tiled(
 /// Existing fixtures retain their literal historical tokenizer through the wrapper.
 pub fn fixture_tiled_with_tokenizer(
     name: String,
-    mut program: TirProgramV1,
+    program: TirProgramV1,
     params: MapParams,
     tokens: Vec<u32>,
     prefill: u32,
@@ -175,6 +175,34 @@ pub fn fixture_tiled_with_tokenizer(
     logits_tile: u32,
     tokenizer: Hash64,
 ) -> Fixture {
+    fixture_tiled_with_tokenizer_and_context(
+        name,
+        program,
+        params,
+        tokens,
+        prefill,
+        decode,
+        logits_tile,
+        tokenizer,
+        prefill + decode - 1,
+    )
+}
+
+/// Pin a job's declared context capacity before deriving class identity and
+/// execution. FP jobs include the last output token in their declared budget.
+#[allow(clippy::too_many_arguments)]
+pub fn fixture_tiled_with_tokenizer_and_context(
+    name: String,
+    mut program: TirProgramV1,
+    params: MapParams,
+    tokens: Vec<u32>,
+    prefill: u32,
+    decode: u32,
+    logits_tile: u32,
+    tokenizer: Hash64,
+    max_context: u32,
+) -> Fixture {
+    assert!(max_context >= prefill + decode - 1);
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let bytes = program.encode();
     let program = TirProgramV1::decode_canonical(&bytes).expect("still canonical under the tiled scheme");
@@ -214,7 +242,7 @@ pub fn fixture_tiled_with_tokenizer(
         }
     }
     // The class and its artifact.
-    let mut lay = layout(&program, positions);
+    let mut lay = layout(&program, max_context);
     let logits_index = program
         .blocks
         .iter()

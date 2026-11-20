@@ -338,6 +338,48 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     assert_eq!(open_public_output_tokens_v1(&original, &flat, &output_ids), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt[..prompt.len() - 1]), Err(PanelSourceErrorR1::Binding));
+
+    // Exercise the Panel entry point with an authenticated segmented prompt and
+    // raw tokenizer, including refusal of an ordinary vocabulary ID as control.
+    // Other placeholder scopes above do not constitute native admission.
+    use misaka_palw_positive_contract::public_one_honest::{PromptMaterialEncodingV1, PromptSegmentRefV1, encode_prompt_segments_v1};
+    let encoding = PromptMaterialEncodingV1::SegmentsV1;
+    let controlled_tokenizer = br#"{"model":{"type":"BPE","vocab":{"b":0,"a":1,"<|start|>":2},"merges":[]},"added_tokens":[{"id":2,"content":"<|start|>","special":true,"normalized":false}]}"#;
+    let token_entry = public_tokenizer_material_v1(controlled_tokenizer, tokenizer_rules).unwrap();
+    original.tokenizer = token_entry.subject;
+    original.scope.ruleset = encoding.ruleset_v1(original.scope.ruleset);
+    manifest.entries[MaterialScope::Tokenizer as usize] = token_entry;
+    let mut segmented_ids = prompt.clone();
+    segmented_ids[0] = 2;
+    context.tokenizer_id = Hash64::from_bytes(token_entry.subject.0);
+    context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &segmented_ids).unwrap();
+    original.input_tokens = Digest(context.prompt_token_ids_hash.as_bytes());
+    original.execution = Digest(context.context_hash().as_bytes());
+    original.output = Digest(palw_attempt_output_root_v1(&context, &output_ids).as_bytes());
+    manifest.entries[MaterialScope::InputTokens as usize].subject = original.input_tokens;
+    manifest.entries[MaterialScope::InputTokens as usize].content_root = original.input_tokens;
+    manifest.entries[MaterialScope::Output as usize] = output_entry(original.output);
+    rules[MaterialScope::Prompt as usize] = ManifestScopeRules { codec: encoding.codec_v1(), max_bytes: 128, chunk_bytes: 128 };
+    for special in [2, 0] {
+        let body =
+            encode_prompt_segments_v1(&[PromptSegmentRefV1::Special(special), PromptSegmentRefV1::Text(&prompt_text[1..])], 128)
+                .unwrap();
+        let prompt_entry = encoding.material_v1(original.scope.ruleset, &body, rules[MaterialScope::Prompt as usize]).unwrap();
+        original.prompt = prompt_entry.subject;
+        manifest.entries[MaterialScope::Prompt as usize] = prompt_entry;
+        let total = manifest.entries.iter().map(|entry| entry.total_bytes).sum();
+        let encoded = original.bind_manifest(&manifest, &rules, total, 4096).unwrap();
+        let checked = read_public_manifest_v1(&original, &rules, total, 4096, encoded.len() as u64, encoded.as_slice()).unwrap();
+        let replayed = check_public_prompt_v1(&original, &checked, form, body.as_bytes(), controlled_tokenizer);
+        if special == 2 {
+            assert_eq!(replayed, Ok(segmented_ids.clone()));
+            assert!(check_public_prompt_v1(&original, &checked, form, body.as_bytes(), tokenizer_json).is_err());
+            assert!(check_public_prompt_v1(&original, &checked, form, prompt_text.as_bytes(), controlled_tokenizer).is_err());
+            assert!(checked.open_prompt_text(body.as_bytes()).is_err());
+        } else {
+            assert!(replayed.is_err());
+        }
+    }
 }
 fn model_params(plan: &TirPlan, first: i128) -> TirParams<'static> {
     let mut map = MapParams::default();

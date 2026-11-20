@@ -3,10 +3,17 @@
 use super::*;
 use crate::pipeline::virtual_processor::utxo_validation::AcceptedTfp1HistorySeedsV1;
 use kaspa_consensus_core::palw_batch_court_v1::fold_order::{
-    AcceptedNativeCourtItemV1, in_accepted_native_order_v1, index_batch_carriers_v1,
+    AcceptedPublicNativeCourtItemV2 as AcceptedNativeCourtItemV1, in_accepted_public_native_order_v2, index_batch_carriers_v1,
 };
 
 use kaspa_consensus_core::palw_state_v2::{PalwOrderedPhysicalEventV3, PalwOrderedPhysicalKindV3};
+
+/// A local rehearsal choice only; strict canonical verification never selects
+/// projection, and no wire/preset flag can request it.
+enum NativeObservedPrefixModeV3 {
+    Strict,
+    ProjectJointFees,
+}
 
 pub(super) type BatchHandoffV1 = kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1;
 pub(super) type IndexedBatchHandoffsV1 = Vec<(usize, BatchHandoffV1)>;
@@ -37,6 +44,414 @@ pub(super) struct TokenizerRegistrationAcceptanceV1 {
         TransactionId,
         kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
     >,
+}
+
+/// Draft native request selection. Inputs are borrowed from the actual UTXO
+/// pass; preparation runs at each executed prefix, never against a cached
+/// Panel result. A complete price owner must be supplied explicitly.
+pub(super) struct NativeManifestRequestSelectionV3<'a> {
+    pass: &'a manifest_requests_v3::NativeManifestRequestPassV3,
+    selected_parent: BlockHash,
+    maximum_archive_heap: u64,
+    maximum_archive_work: u64,
+    quote: &'a mut dyn FnMut(
+        kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+        u64,
+        u64,
+    ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    candidates: Vec<(usize, &'a kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3)>,
+    accepted: Vec<(usize, kaspa_consensus_core::palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3)>,
+    omitted: Vec<(usize, kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3)>,
+    fees: std::collections::BTreeMap<TransactionId, kaspa_consensus_core::palw_positive_contract_v2::ManifestRequestFeeV1>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+
+/// Successful disposable Node selection. Its fields cannot be extracted as
+/// unowned vectors/maps: the allocation lease stays live while the complete
+/// replay borrows them, including on error or unwinding. This is not Final.
+pub(super) struct NativeManifestSelectedRequestsV3 {
+    selected_parent: BlockHash,
+    maximum_archive_heap: u64,
+    maximum_archive_work: u64,
+    parent_root: Hash64,
+    point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    carriers: Vec<(usize, kaspa_consensus_core::palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3)>,
+    omitted: Vec<(usize, kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3)>,
+    fees: std::collections::BTreeMap<TransactionId, kaspa_consensus_core::palw_positive_contract_v2::ManifestRequestFeeV1>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+
+/// Manifest inputs are installed before answer/prefix overlays become
+/// immutable. This owner retains their construction lease through every replay
+/// and fold, while the attached extras own the moved vectors/maps.
+pub(super) struct NativeManifestAttachedRequestsV3 {
+    owner: NativeManifestSelectedRequestsV3,
+    strict: bool,
+    count: usize,
+}
+
+impl NativeManifestAttachedRequestsV3 {
+    fn check_extras_v3(
+        &self,
+        parent_root: Hash64,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        if parent_root != self.owner.parent_root
+            || *point != self.owner.point
+            || extras.manifest_request_carriers_v3.len() != self.count
+            || (self.strict && extras.manifest_request_expected_fees_v3.len() != self.count)
+            || (!self.strict && !extras.manifest_request_expected_fees_v3.is_empty())
+        {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("attached Manifest inputs differ from their owner").into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn check_actual_projection_v3(
+        &self,
+        pass: &manifest_requests_v3::NativeManifestRequestPassV3,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        self.check_extras_v3(self.owner.parent_root, &self.owner.point, extras)?;
+        if !self.strict {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("fee projection is not strict Manifest input").into());
+        }
+        pass.check_scope_v3(self.owner.parent_root, Some(self.owner.point))?;
+        pass.check_selected_projection_v3(&extras.manifest_request_expected_fees_v3)?;
+        Ok(())
+    }
+
+    pub(super) fn reconcile_actual_fees_v3(
+        &self,
+        pass: &mut manifest_requests_v3::NativeManifestRequestPassV3,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        self.check_actual_projection_v3(pass, extras)?;
+        pass.reconcile_selected_fees_v3(&extras.manifest_request_expected_fees_v3)?;
+        pass.require_selected_fees_v3(&extras.manifest_request_expected_fees_v3)?;
+        Ok(())
+    }
+
+    pub(super) fn replay_preparation_v3<'a>(
+        &'a self,
+        quote: &'a mut dyn FnMut(
+            kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+            u64,
+            u64,
+        ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    ) -> NativeManifestReplayPreparationV3<'a> {
+        self.owner.replay_preparation_v3(quote)
+    }
+}
+
+struct NativeManifestExtrasGuardV3<'a> {
+    selected: &'a mut NativeManifestSelectedRequestsV3,
+    extras: &'a mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+    strict: bool,
+}
+
+impl Drop for NativeManifestExtrasGuardV3<'_> {
+    fn drop(&mut self) {
+        std::mem::swap(&mut self.selected.carriers, &mut self.extras.manifest_request_carriers_v3);
+        if self.strict {
+            std::mem::swap(&mut self.selected.fees, &mut self.extras.manifest_request_expected_fees_v3);
+        }
+    }
+}
+
+/// Rebuild authority at each physical Manifest position. This owner borrows
+/// only the complete tariff; it never borrows a previous approval or fee map.
+pub(super) struct NativeManifestReplayPreparationV3<'a> {
+    omitted: &'a [(usize, kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3)],
+    selected_parent: BlockHash,
+    maximum_archive_heap: u64,
+    maximum_archive_work: u64,
+    quote: &'a mut dyn FnMut(
+        kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+        u64,
+        u64,
+    ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+}
+
+impl NativeManifestSelectedRequestsV3 {
+    pub(super) fn attach_inputs_v3(
+        mut self,
+        parent_root: Hash64,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        extras: &mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        strict: bool,
+    ) -> Result<NativeManifestAttachedRequestsV3, PalwLocalTransitionFaultV1> {
+        if parent_root != self.parent_root
+            || *point != self.point
+            || !extras.manifest_request_carriers_v3.is_empty()
+            || !extras.manifest_request_expected_fees_v3.is_empty()
+        {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("Manifest attachment scope or existing input differs").into());
+        }
+        let count = self.carriers.len();
+        extras.manifest_request_carriers_v3 = std::mem::take(&mut self.carriers);
+        if strict {
+            extras.manifest_request_expected_fees_v3 = std::mem::take(&mut self.fees);
+        }
+        Ok(NativeManifestAttachedRequestsV3 { owner: self, strict, count })
+    }
+
+    pub(super) fn check_actual_projection_v3(
+        &self,
+        pass: &manifest_requests_v3::NativeManifestRequestPassV3,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        pass.check_scope_v3(self.parent_root, Some(self.point))?;
+        pass.check_selected_projection_v3(&self.fees)?;
+        Ok(())
+    }
+
+    pub(super) fn reconcile_actual_fees_v3(
+        &self,
+        pass: &mut manifest_requests_v3::NativeManifestRequestPassV3,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        pass.check_scope_v3(self.parent_root, Some(self.point))?;
+        pass.reconcile_selected_fees_v3(&self.fees)?;
+        Ok(())
+    }
+
+    pub(super) fn require_actual_fees_v3(
+        &self,
+        pass: &manifest_requests_v3::NativeManifestRequestPassV3,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        pass.check_scope_v3(self.parent_root, Some(self.point))?;
+        pass.require_selected_fees_v3(&self.fees)?;
+        Ok(())
+    }
+
+    pub(super) fn replay_preparation_v3<'a>(
+        &'a self,
+        quote: &'a mut dyn FnMut(
+            kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+            u64,
+            u64,
+        ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    ) -> NativeManifestReplayPreparationV3<'a> {
+        NativeManifestReplayPreparationV3 {
+            omitted: &self.omitted,
+            selected_parent: self.selected_parent,
+            maximum_archive_heap: self.maximum_archive_heap,
+            maximum_archive_work: self.maximum_archive_work,
+            quote,
+        }
+    }
+
+    /// Scope the same retained inputs through either whole-prefix projection
+    /// or strict replay. Existing inputs must be empty; replacing another
+    /// candidate's fees or silently appending its requests is forbidden.
+    fn with_extras_v3<R>(
+        &mut self,
+        parent_root: Hash64,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        extras: &mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        mode: NativeObservedPrefixModeV3,
+        action: impl FnOnce(&kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1) -> Result<R, PalwLocalTransitionFaultV1>,
+    ) -> Result<R, PalwLocalTransitionFaultV1> {
+        if self.parent_root != parent_root
+            || self.point != *point
+            || !extras.manifest_request_carriers_v3.is_empty()
+            || !extras.manifest_request_expected_fees_v3.is_empty()
+        {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("Manifest replay scope or existing inputs differ").into());
+        }
+        let strict = matches!(mode, NativeObservedPrefixModeV3::Strict);
+        std::mem::swap(&mut self.carriers, &mut extras.manifest_request_carriers_v3);
+        if strict {
+            std::mem::swap(&mut self.fees, &mut extras.manifest_request_expected_fees_v3);
+        }
+        let guard = NativeManifestExtrasGuardV3 { selected: self, extras, strict };
+        action(&*guard.extras)
+    }
+
+    pub(super) fn with_strict_extras_v3<R>(
+        &mut self,
+        parent_root: Hash64,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        extras: &mut kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        action: impl FnOnce(&kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1) -> Result<R, PalwLocalTransitionFaultV1>,
+    ) -> Result<R, PalwLocalTransitionFaultV1> {
+        self.with_extras_v3(parent_root, point, extras, NativeObservedPrefixModeV3::Strict, action)
+    }
+
+    fn check_projection_v3(
+        &self,
+        fees: &kaspa_consensus_core::palw_state_v2::PalwManifestRequestFeeProjectionV3,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        if &self.fees != &**fees {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("complete prefix changed selected Manifest fees").into());
+        }
+        Ok(())
+    }
+}
+
+impl<'a> NativeManifestRequestSelectionV3<'a> {
+    pub(super) fn new_v3(
+        ctx: &'a UtxoProcessingContext<'_>,
+        maximum_archive_heap: u64,
+        maximum_archive_work: u64,
+        quote: &'a mut dyn FnMut(
+            kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+            u64,
+            u64,
+        ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    ) -> Result<Self, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1};
+        use kaspa_consensus_core::palw_positive_contract_v2::{
+            ManifestRequestFeeV1, NativeManifestRequestCandidateV3, SharedPreparedNativeManifestRequestV3,
+        };
+        let fault = NativeAcceptedObjectOrderV1::inconsistent;
+        let pass = ctx.palw_manifest_requests_v3.as_ref().ok_or_else(|| fault("actual Manifest UTXO pass is unavailable"))?;
+        if ctx.positive_accepting_point.is_none()
+            || [maximum_archive_heap, maximum_archive_work].into_iter().any(|n| n == 0 || n == u64::MAX)
+        {
+            return Err(fault("Manifest selection requires concrete acceptance and bounded archive work").into());
+        }
+        let count = pass.carriers_v3().len();
+        let bytes = size_of::<(usize, &NativeManifestRequestCandidateV3)>()
+            .checked_add(size_of::<(usize, SharedPreparedNativeManifestRequestV3)>())
+            .and_then(|n| n.checked_add(size_of::<(usize, NativeManifestRequestCandidateV3)>()))
+            .and_then(|n| n.checked_add(btree_node_envelope_bytes_v1::<TransactionId, ManifestRequestFeeV1>()))
+            .and_then(|n| n.checked_mul(count))
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or_else(|| fault("Manifest selection storage overflow"))?;
+        let lease = reserve_native_pending_requests_v1(bytes)?;
+        let mut candidates = Vec::new();
+        let mut accepted = Vec::new();
+        let mut omitted = Vec::new();
+        omitted.try_reserve_exact(count).map_err(|_| fault("Manifest omission allocation refused"))?;
+        candidates.try_reserve_exact(count).map_err(|_| fault("Manifest candidate allocation refused"))?;
+        accepted.try_reserve_exact(count).map_err(|_| fault("Manifest acceptance allocation refused"))?;
+        if candidates.capacity() != count || accepted.capacity() != count || omitted.capacity() != count {
+            return Err(fault("Manifest selection allocation differs from its reservation").into());
+        }
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
+        Ok(Self {
+            pass,
+            selected_parent: ctx.selected_parent(),
+            maximum_archive_heap,
+            maximum_archive_work,
+            quote,
+            candidates,
+            accepted,
+            omitted,
+            fees: Default::default(),
+            _lease: lease,
+        })
+    }
+
+    /// Called only after the entire ordinary/native/raw selection succeeds.
+    /// The V3 entry owns Self, so every earlier error drops all partial output.
+    fn finish_v3(
+        self,
+        parent_root: Hash64,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<NativeManifestSelectedRequestsV3, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+        let fault = NativeAcceptedObjectOrderV1::inconsistent;
+        self.pass.check_scope_v3(parent_root, Some(point))?;
+        if self.candidates.len() != self.pass.carriers_v3().len()
+            || self.accepted.len().checked_add(self.omitted.len()) != Some(self.candidates.len())
+            || self.fees.len() != self.accepted.len()
+        {
+            return Err(fault("Manifest selection did not complete every captured request").into());
+        }
+        let mut accepted = self.accepted.iter().peekable();
+        let mut omitted = self.omitted.iter();
+        for (_, candidate) in &self.candidates {
+            if accepted.peek().is_some_and(|(_, prepared)| prepared.carrier_v3() == candidate.carrier_v3()) {
+                let (_, prepared) = accepted.next().expect("peeked accepted request");
+                if candidate.accepted_ordinal_v3() != prepared.accepted_ordinal_v3() {
+                    return Err(fault("selected Manifest request differs from its captured position").into());
+                }
+                let fee = self.fees.get(&candidate.carrier_v3()).ok_or_else(|| fault("selected Manifest request has no fee"))?;
+                candidate.collectible_fee_v3(fee).map_err(|error| match error {
+                    NativeDecodeErrorV1::Resource(why) => PalwLocalTransitionFaultV1::Resource(why),
+                    NativeDecodeErrorV1::Decode(_) => fault("selected fee differs from actual UTXO candidate").into(),
+                })?;
+            } else {
+                let (_, refused) = omitted.next().ok_or_else(|| fault("Manifest omission missing"))?;
+                if candidate.carrier_v3() != refused.carrier_v3()
+                    || candidate.accepted_ordinal_v3() != refused.accepted_ordinal_v3()
+                    || self.fees.contains_key(&candidate.carrier_v3())
+                {
+                    return Err(fault("Manifest omission differs from its captured carrier or charges a fee").into());
+                }
+            }
+        }
+        if accepted.next().is_some() || omitted.next().is_some() {
+            return Err(fault("Manifest selection contains an uncaptured request").into());
+        }
+        Ok(NativeManifestSelectedRequestsV3 {
+            selected_parent: self.selected_parent,
+            maximum_archive_heap: self.maximum_archive_heap,
+            maximum_archive_work: self.maximum_archive_work,
+            parent_root,
+            point,
+            carriers: self.accepted,
+            omitted: self.omitted,
+            fees: self.fees,
+            _lease: self._lease,
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn candidate_positions_v3(&self) -> Vec<(usize, TransactionId, usize)> {
+        self.candidates.iter().map(|(before, candidate)| (*before, candidate.carrier_v3(), candidate.accepted_ordinal_v3())).collect()
+    }
+
+    /// Derive ordinary positions anew from the complete actual transaction
+    /// list. Reusing this owner after a selection attempt is forbidden: old
+    /// prepared requests and fee effects cannot survive changed candidates.
+    pub(super) fn index_v3(
+        &mut self,
+        parent_root: Hash64,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        ids: &[TransactionId],
+        objects: &[PalwCarriedObjectV1],
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        let fault = NativeAcceptedObjectOrderV1::inconsistent;
+        self.pass.check_scope_v3(parent_root, Some(*point))?;
+        if !self.candidates.is_empty() || !self.accepted.is_empty() || !self.omitted.is_empty() || !self.fees.is_empty() {
+            return Err(fault("Manifest selection owner must be rebuilt for each candidate").into());
+        }
+        let ordinals = NativeAcceptedOrdinalsV1::new(ids.iter().copied())?;
+        let mut previous = 0;
+        for object in objects {
+            let key = ordinals.checked_order_key(object.native_carrier)?;
+            if key < previous {
+                return Err(fault("Manifest ordinary inputs are not in actual accepted order").into());
+            }
+            previous = key;
+        }
+        let mut before = 0;
+        for row in self.pass.carriers_v3() {
+            let candidate = &row.candidate;
+            let ordinal = candidate.accepted_ordinal_v3();
+            if ids.get(ordinal) != Some(&candidate.carrier_v3()) || ordinals.get(candidate.carrier_v3()) != Some(ordinal) {
+                return Err(fault("Manifest candidate differs from complete acceptance data").into());
+            }
+            let key = ordinal.checked_add(1).ok_or_else(|| fault("Manifest ordinal overflow"))?;
+            while let Some(object) = objects.get(before) {
+                let ordinary_key = ordinals.checked_order_key(object.native_carrier)?;
+                if ordinary_key == key {
+                    return Err(fault("Manifest carrier also appears as an ordinary object").into());
+                }
+                if ordinary_key > key {
+                    break;
+                }
+                before += 1;
+            }
+            self.candidates.push((before, candidate));
+        }
+        Ok(())
+    }
 }
 
 /// Index the complete accepted stream before any object decoder filters it.
@@ -122,7 +537,12 @@ impl NativeAcceptedObjectOrderV1 {
 
     fn observe_physical_v3(
         &mut self,
-        item: &AcceptedNativeCourtItemV1<PalwCarriedObjectV1, &BatchHandoffV1, &TokenizerHandoffV1>,
+        item: &AcceptedNativeCourtItemV1<
+            PalwCarriedObjectV1,
+            &BatchHandoffV1,
+            &TokenizerHandoffV1,
+            &&kaspa_consensus_core::palw_positive_contract_v2::NativeManifestRequestCandidateV3,
+        >,
     ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         let Some(ledger) = &mut self.physical else { return Ok(()) };
         use PalwOrderedPhysicalKindV3::{OmittedBatch, OmittedOrdinary, Tokenizer};
@@ -134,6 +554,9 @@ impl NativeAcceptedObjectOrderV1 {
             ),
             AcceptedNativeCourtItemV1::Batch(handoff) => (Some(handoff.accepted_ordinal_v1()), OmittedBatch, None),
             AcceptedNativeCourtItemV1::Tokenizer(handoff) => (Some(handoff.accepted_ordinal_v1()), Tokenizer, None),
+            AcceptedNativeCourtItemV1::Manifest(candidate) => {
+                (Some(candidate.accepted_ordinal_v3()), PalwOrderedPhysicalKindV3::Manifest, None)
+            }
         };
         ledger.record_v3(PalwOrderedPhysicalEventV3 { accepted_ordinal, kind }, ordinary)
     }
@@ -1326,25 +1749,84 @@ impl VirtualStateProcessor {
         tokenizer: &mut TokenizerRegistrationAcceptanceV1,
         record_physical: bool,
     ) -> Result<(PalwAcceptedObjectsAndOriginalsV2, NativeAssignmentRehearsalResultV2), PalwLocalTransitionFaultV1> {
+        self.palw_v2_accepted_objects_and_raw_assignments_v3(
+            state,
+            state_params,
+            point,
+            objects,
+            block,
+            own_attempt_class,
+            round_fee_incomes,
+            escrow_settlements,
+            native_original_context,
+            actions,
+            accepted_ids,
+            mode,
+            batch_candidates,
+            accepted_batch,
+            tokenizer,
+            record_physical,
+            None,
+        )
+        .map(|(accepted, raw, _)| (accepted, raw))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_and_raw_assignments_v3(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        native_original_context: Option<&kaspa_consensus_core::palw_state_v2::PalwNativeOriginalInputContextV19<'_>>,
+        actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+        accepted_ids: &[TransactionId],
+        mode: NativeAssignmentRehearsalModeV2,
+        batch_candidates: &[(usize, BatchHandoffV1)],
+        accepted_batch: &mut IndexedBatchHandoffsV1,
+        tokenizer: &mut TokenizerRegistrationAcceptanceV1,
+        record_physical: bool,
+        mut manifest: Option<NativeManifestRequestSelectionV3<'_>>,
+    ) -> Result<
+        (PalwAcceptedObjectsAndOriginalsV2, NativeAssignmentRehearsalResultV2, Option<NativeManifestSelectedRequestsV3>),
+        PalwLocalTransitionFaultV1,
+    > {
         use kaspa_consensus_core::{blockhash::ORIGIN, palw_native_resource_v1::NativeCoverageV1};
         if matches!(mode, NativeAssignmentRehearsalModeV2::TemplateFees(_)) != (point.block == ORIGIN) {
             return Err(NativeCoverageV1::unsupported::<Self>("relay rehearsal", "preview and accepted block contexts differ").into());
         }
+        let manifest_root = manifest.as_ref().map(|_| state.state_root());
+        let manifest_count = if let Some(selection) = manifest.as_mut() {
+            if !record_physical || !mode.observes_physical_v3() {
+                return Err(
+                    NativeAcceptedObjectOrderV1::inconsistent("Manifest selection requires actual observed physical order").into()
+                );
+            }
+            selection.index_v3(manifest_root.expect("Manifest selection has parent root"), point, accepted_ids, &objects)?;
+            selection.candidates.len()
+        } else {
+            0
+        };
         let mut order = if record_physical
-            || (matches!(mode, NativeAssignmentRehearsalModeV2::Observed)
+            || (mode.observes_physical_v3()
                 && !objects.is_empty()
                 && (!actions.is_empty() || !batch_candidates.is_empty() || !tokenizer.candidates.is_empty())
                 && self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(point.daa_score).is_some())
         {
             let mut order = NativeAcceptedObjectOrderV1::new(accepted_ids, objects.len())?;
             if record_physical {
-                if !matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
+                if !mode.observes_physical_v3() {
                     return Err(NativeAcceptedObjectOrderV1::inconsistent("physical ledger requires observed acceptance").into());
                 }
                 let count = objects
                     .len()
                     .checked_add(batch_candidates.len())
                     .and_then(|count| count.checked_add(tokenizer.candidates.len()))
+                    .and_then(|count| count.checked_add(manifest_count))
                     .ok_or_else(|| NativeAcceptedObjectOrderV1::inconsistent("physical candidate count overflow"))?;
                 order.physical = Some(NativeObservedPhysicalLedgerV3::new_v3(count)?);
             }
@@ -1352,7 +1834,7 @@ impl VirtualStateProcessor {
         } else {
             None
         };
-        if actions.is_empty() && matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
+        if actions.is_empty() && mode.observes_physical_v3() {
             let accepted = kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
                 self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
                     state,
@@ -1369,11 +1851,21 @@ impl VirtualStateProcessor {
                     accepted_batch,
                     tokenizer,
                     order.as_mut(),
+                    manifest.as_mut(),
                 )
             })?;
             return Ok((
                 accepted,
-                NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 { schedule: Vec::new(), order }),
+                NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 {
+                    schedule: Vec::new(),
+                    order,
+                    relay: if matches!(mode, NativeAssignmentRehearsalModeV2::ProjectJointFees) {
+                        Some(NativeRelayFeePlanV2::allocate_v3(0)?)
+                    } else {
+                        None
+                    },
+                }),
+                manifest.map(|selection| selection.finish_v3(manifest_root.expect("Manifest parent root"), *point)).transpose()?,
             ));
         }
         let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids, mode)?;
@@ -1393,12 +1885,15 @@ impl VirtualStateProcessor {
                 accepted_batch,
                 tokenizer,
                 order.as_mut(),
+                manifest.as_mut(),
             )
         })?;
         if let NativeAssignmentRehearsalResultV2::Observed(observed) = &mut raw.result {
             observed.order = order;
         }
-        Ok((legacy, raw.result))
+        let selected =
+            manifest.map(|selection| selection.finish_v3(manifest_root.expect("Manifest parent root"), *point)).transpose()?;
+        Ok((legacy, raw.result, selected))
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -1448,6 +1943,7 @@ impl VirtualStateProcessor {
                 &[],
                 &mut accepted_batch,
                 &mut TokenizerRegistrationAcceptanceV1::default(),
+                None,
                 None,
             )
         })
@@ -1507,6 +2003,7 @@ impl VirtualStateProcessor {
             accepted_batch,
             tokenizer,
             None,
+            None,
         )
     }
 
@@ -1530,6 +2027,7 @@ impl VirtualStateProcessor {
         accepted_batch: &mut IndexedBatchHandoffsV1,
         tokenizer: &mut TokenizerRegistrationAcceptanceV1,
         mut native_order: Option<&mut NativeAcceptedObjectOrderV1>,
+        mut manifest: Option<&mut NativeManifestRequestSelectionV3<'_>>,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -1552,7 +2050,9 @@ impl VirtualStateProcessor {
         // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
         // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
         // vertex — becomes evidence for the node to carry. A vertex already seen is not verified again.
-        let publish_observations = assignment_actions.as_ref().is_none_or(|raw| !raw.result.is_plan());
+        // Manifest selection is provisional until UTXO/whole-prefix convergence.
+        // Its watched vertices must not escape a subsequently discarded pass.
+        let publish_observations = manifest.is_none() && assignment_actions.as_ref().is_none_or(|raw| !raw.result.is_plan());
         if publish_observations && self.palw_vertex_at(point.daa_score) {
             let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                 self.network_id_bytes.as_slice(),
@@ -1726,12 +2226,27 @@ impl VirtualStateProcessor {
             rent_armed: self.palw_certification_rent_at(point.daa_score),
         };
         let tokenizer_parent_root = (!tokenizer.candidates.is_empty()).then(|| state.state_root());
-        let ordered = in_accepted_native_order_v1(
+        let manifest_parent_root = manifest.as_ref().map(|_| state.state_root());
+        let mut manifest_parts = manifest.as_deref_mut().map(|selection| {
+            (
+                selection.candidates.as_slice(),
+                &mut selection.accepted,
+                &mut selection.omitted,
+                &mut selection.fees,
+                selection.selected_parent,
+                selection.maximum_archive_heap,
+                selection.maximum_archive_work,
+                &mut selection.quote,
+            )
+        });
+        let ordered = in_accepted_public_native_order_v2(
             objects.into_iter(),
             batch_candidates,
             &tokenizer.candidates,
+            manifest_parts.as_ref().map_or(&[], |parts| parts.0),
             |handoff| handoff.accepted_ordinal_v1(),
             |handoff| handoff.accepted_ordinal_v1(),
+            |candidate| candidate.accepted_ordinal_v3(),
         )
         .ok_or_else(|| {
             kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
@@ -1767,6 +2282,17 @@ impl VirtualStateProcessor {
                             &fee_extras,
                         )?;
                     }
+                    AcceptedNativeCourtItemV1::Manifest(candidate) => {
+                        raw.through(
+                            self,
+                            state_params,
+                            point,
+                            candidate.accepted_ordinal_v3(),
+                            accepted.objects.len(),
+                            &mut folded,
+                            &fee_extras,
+                        )?;
+                    }
                     AcceptedNativeCourtItemV1::Batch(handoff) => {
                         raw.through(
                             self,
@@ -1787,6 +2313,76 @@ impl VirtualStateProcessor {
             );
             let carried = match item {
                 AcceptedNativeCourtItemV1::Ordinary(carried) => carried,
+                AcceptedNativeCourtItemV1::Manifest(candidate) => {
+                    let (_, selected, omitted, fees, selected_parent, maximum_heap, maximum_work, quote) =
+                        manifest_parts.as_mut().expect("Manifest item has its native selection owner");
+                    let root = manifest_parent_root.expect("Manifest selection has an actual parent root");
+                    let prepared = self
+                        .prepare_tfp1_manifest_request_v3(
+                            *selected_parent,
+                            state,
+                            root,
+                            &folded,
+                            point,
+                            candidate,
+                            *maximum_heap,
+                            *maximum_work,
+                            |cost, retained, work| quote(cost, retained, work),
+                        )
+                        .map_err(|error| match error {
+                            positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => {
+                                PalwLocalTransitionFaultV1::Resource(why)
+                            }
+                            _ => PalwLocalTransitionFaultV1::Context(
+                                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                            ),
+                        })?;
+                    let Some(prepared) = prepared else {
+                        if omitted.len() == omitted.capacity() {
+                            return Err(NativeAcceptedObjectOrderV1::inconsistent("Manifest omission exceeds its owner").into());
+                        }
+                        omitted.push((accepted.objects.len(), (*candidate).clone()));
+                        native_order
+                            .as_deref_mut()
+                            .ok_or_else(|| NativeAcceptedObjectOrderV1::inconsistent("Manifest omission has no physical ledger"))?
+                            .mark_physical_v3(PalwOrderedPhysicalKindV3::OmittedManifest);
+                        continue;
+                    };
+                    let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
+                    let (next, fee) = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_manifest_request_owned_v3(
+                        folded,
+                        state,
+                        root,
+                        state_params,
+                        point,
+                        &prepared,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_capability_bound_at(point.daa_score),
+                        self.palw_uncertified_weightless_at(point.daa_score),
+                        self.palw_da_court_at(point.daa_score),
+                        &extras,
+                    )
+                    .map_err(|error| match error {
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
+                            PalwLocalTransitionFaultV1::Resource(why)
+                        }
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
+                            PalwLocalTransitionFaultV1::Context(why)
+                        }
+                        _ => NativeAcceptedObjectOrderV1::inconsistent("Manifest paid selection differs from its executed prefix")
+                            .into(),
+                    })?;
+                    folded = next;
+                    if selected.len() == selected.capacity() || fees.contains_key(&prepared.carrier_v3()) {
+                        return Err(NativeAcceptedObjectOrderV1::inconsistent(
+                            "Manifest selection exceeds its owner or repeats a fee",
+                        )
+                        .into());
+                    }
+                    fees.insert(prepared.carrier_v3(), fee);
+                    selected.push((accepted.objects.len(), prepared));
+                    continue;
+                }
                 AcceptedNativeCourtItemV1::Tokenizer(handoff) => {
                     let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
                     let (next, fee, refused) = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_tokenizer_registration_owned_v1(
@@ -1935,6 +2531,77 @@ impl VirtualStateProcessor {
                         &original_extras,
                         context,
                     )
+                } else if candidate.tir_funded_originals.values().any(|pair| pair.public_companion_v3().is_some()) {
+                    let mut prefix_objects = accepted.objects.clone();
+                    prefix_objects.push(candidate.object.clone());
+                    let accepted_sidecars = accepted.prefixes.attach_v1(&accepted.answers, Default::default())?;
+                    let mut prefix_answers = accepted_sidecars.fp_claim_answers.clone();
+                    prefix_answers.extend(original_extras.fp_claim_answers.iter().map(|(k, v)| (*k, v.clone())));
+                    let mut prefix_winning = accepted_sidecars.fp_winning_carriers.clone();
+                    prefix_winning.extend(original_extras.fp_winning_carriers.iter().map(|(k, v)| (*k, *v)));
+                    let mut prefix_deps = accepted_sidecars.prefix_dependencies_v1.clone();
+                    prefix_deps.extend(original_extras.prefix_dependencies_v1.iter().map(|(k, v)| (*k, v.clone())));
+                    let mut prefix_tir_originals = accepted.tir_originals.clone();
+                    prefix_tir_originals.extend(candidate.tir_public_originals.clone());
+                    let mut prefix_funded_originals = accepted.funded_originals.clone();
+                    prefix_funded_originals.extend(candidate.tir_funded_originals.clone());
+                    let mut prefix_carrier_spends = accepted.carrier_spends.clone();
+                    for (claim, spends) in &candidate.carrier_input_spends {
+                        prefix_carrier_spends.entry(*claim).or_default().extend(spends.iter().copied());
+                    }
+                    let prefix_extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                        own_attempt_class,
+                        fp_claim_answers: prefix_answers,
+                        fp_winning_carriers: prefix_winning,
+                        prefix_dependencies_v1: prefix_deps,
+                        history_custody_pledges: candidate.history_custody_pledges.clone(),
+                        tir_public_originals: prefix_tir_originals,
+                        tir_funded_originals: prefix_funded_originals,
+                        carrier_input_spends: prefix_carrier_spends,
+                        public_original_bindings: candidate.public_original_bindings.clone(),
+                        producer_custody_delegations: candidate.producer_custody_delegations.clone(),
+                        model_classes_registered_in_block: accepted.model_classes_registered_in_block.clone(),
+                        batch_court_carriers_v1: accepted_batch.clone(),
+                        tokenizer_registration_carriers_v1: tokenizer.accepted.clone(),
+                        tokenizer_registration_expected_fees_v1: tokenizer.fees.clone(),
+                        ..self.palw_transition_extras_for_rehearsal_v1(point, &prefix_objects, &fee_extras)
+                    };
+                    let visits = u64::try_from(
+                        prefix_objects
+                            .len()
+                            .saturating_add(prefix_extras.batch_court_carriers_v1.len())
+                            .saturating_add(prefix_extras.tokenizer_registration_carriers_v1.len())
+                            .saturating_add(prefix_extras.manifest_request_carriers_v3.len())
+                            .saturating_add(prefix_extras.positive_assignment_actions.len()),
+                    )
+                    .unwrap_or(u64::MAX);
+                    kaspa_consensus_core::palw_state_v2::PalwOrderedReplayBudgetV1::new_v1(
+                        state,
+                        state_params,
+                        *point,
+                        kaspa_consensus_core::palw_state_v2::PalwOrderedReplayRulesV1 {
+                            unavailable_abstains: self.palw_unavailable_abstains_at(point.daa_score),
+                            capability_bound: self.palw_capability_bound_at(point.daa_score),
+                            uncertified_weightless: self.palw_uncertified_weightless_at(point.daa_score),
+                            da_court: self.palw_da_court_at(point.daa_score),
+                        },
+                        kaspa_consensus_core::palw_state_v2::PalwOrderedReplayLimitsV1 {
+                            passes: 1,
+                            candidate_visits: visits,
+                        },
+                    )
+                    .and_then(|mut budget| {
+                        kaspa_consensus_core::palw_state_v2::palw_v2_replay_accepted_prefix_v1(
+                            &mut budget,
+                            &prefix_objects,
+                            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+                            &[],
+                            Hash64::default(),
+                            &prefix_extras,
+                        )
+                        .map(|prefix| prefix.into_rehearsal_state_v2())
+                        .map_err(|failure| failure.error)
+                    })
                 } else {
                     kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_retained_v1(
                         &folded,
@@ -1991,7 +2658,7 @@ impl VirtualStateProcessor {
                         &mut gate,
                         &mut accepted,
                         native_order.as_deref_mut(),
-                        true,
+                        manifest_parent_root.is_none(),
                     )?;
                     folded = next;
                     if let Some(order) = native_order.as_deref_mut() {
@@ -2068,12 +2735,124 @@ impl VirtualStateProcessor {
         ledger: NativeObservedPhysicalLedgerV3,
         replay_carried: Vec<PalwCarriedObjectV1>,
         own_attempt_class: Option<Hash64>,
+        manifest: Option<NativeManifestReplayPreparationV3<'_>>,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwLocalTransitionFaultV1> {
+        self.palw_observed_prefix_v3(
+            budget,
+            parent,
+            params,
+            point,
+            objects,
+            work,
+            merged,
+            own_execution_key,
+            extras,
+            ledger,
+            replay_carried,
+            own_attempt_class,
+            NativeObservedPrefixModeV3::Strict,
+            manifest,
+        )
+        .map(|(state, _)| state)
+    }
+
+    /// Price through the same complete Node gates, physical ledger and
+    /// metadata/refund comparisons as strict acceptance. The returned fees
+    /// belong to a disposable candidate; actual UTXO replay and strict fold
+    /// remain mandatory. This does not arm the draft public request lane.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn palw_project_observed_manifest_fees_v3(
+        &self,
+        budget: &mut kaspa_consensus_core::palw_state_v2::PalwOrderedReplayBudgetV1<'_>,
+        parent: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3<'_>,
+        merged: &[kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>],
+        own_execution_key: Hash64,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        selected: &NativeManifestAttachedRequestsV3,
+        ledger: NativeObservedPhysicalLedgerV3,
+        replay_carried: Vec<PalwCarriedObjectV1>,
+        own_attempt_class: Option<Hash64>,
+        quote: &mut dyn FnMut(
+            kaspa_consensus_core::palw_court_service_v1::ServiceCost,
+            u64,
+            u64,
+        ) -> Result<u64, misaka_palw_positive_contract::ContractError>,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            kaspa_consensus_core::palw_state_v2::PalwJointFeeProjectionV3,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
+        selected.check_extras_v3(parent.state_root(), point, extras)?;
+        if selected.strict {
+            return Err(NativeAcceptedObjectOrderV1::inconsistent("projection cannot reuse strict Manifest input").into());
+        }
+        let manifest = selected.replay_preparation_v3(quote);
+        let (state, fees) = self.palw_observed_prefix_v3(
+            budget,
+            parent,
+            params,
+            point,
+            objects,
+            work,
+            merged,
+            own_execution_key,
+            extras,
+            ledger,
+            replay_carried,
+            own_attempt_class,
+            NativeObservedPrefixModeV3::ProjectJointFees,
+            Some(manifest),
+        )?;
+        let fees = fees.ok_or_else(|| {
+            PalwLocalTransitionFaultV1::from(NativeAcceptedObjectOrderV1::inconsistent(
+                "complete Node projection returned no fee owner",
+            ))
+        })?;
+        selected.owner.check_projection_v3(&fees.manifest)?;
+        Ok((state, fees))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn palw_observed_prefix_v3(
+        &self,
+        budget: &mut kaspa_consensus_core::palw_state_v2::PalwOrderedReplayBudgetV1<'_>,
+        parent: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3<'_>,
+        merged: &[kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>],
+        own_execution_key: Hash64,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        ledger: NativeObservedPhysicalLedgerV3,
+        replay_carried: Vec<PalwCarriedObjectV1>,
+        own_attempt_class: Option<Hash64>,
+        mode: NativeObservedPrefixModeV3,
+        mut manifest: Option<NativeManifestReplayPreparationV3<'_>>,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Option<kaspa_consensus_core::palw_state_v2::PalwJointFeeProjectionV3>,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
         use kaspa_consensus_core::palw_state_v2::{
             PalwOrderedCandidateFailureV2, PalwOrderedObjectStageV2, PalwStateV2Error,
-            palw_v2_replay_accepted_prefix_with_physical_checks_v3,
+            palw_v2_project_joint_fees_with_physical_checks_v3, palw_v2_replay_accepted_prefix_with_physical_checks_v3,
         };
         let inconsistent = |why| PalwLocalTransitionFaultV1::from(NativeAcceptedObjectOrderV1::inconsistent(why));
+        if !extras.manifest_request_carriers_v3.is_empty() && manifest.is_none() {
+            return Err(inconsistent("Manifest replay requires fresh native preparation"));
+        }
+        let parent_root = manifest.as_ref().map(|_| parent.state_root());
+        let mut omitted_cursor = 0usize;
+        let mut manifest_carriers = extras.manifest_request_carriers_v3.iter();
         let audit_active = self.palw_audit_2026_09_11_at(point.daa_score);
         let context = NativeNodeCandidateContextV2 {
             params,
@@ -2099,65 +2878,127 @@ impl VirtualStateProcessor {
         }
         let mut carried = replay_carried.into_iter();
         let pass = std::cell::RefCell::new((NativeOrdinaryGateV2::default(), accepted, None));
-        let prefix = palw_v2_replay_accepted_prefix_with_physical_checks_v3(
-            budget,
-            objects,
-            work,
-            merged,
-            own_execution_key,
-            extras,
-            &ledger.events,
-            &mut |event, index, state| {
-                let (gate, accepted, prepared) = &mut *pass.borrow_mut();
-                if prepared.is_some() || accepted.objects.len() != index {
-                    return Err(inconsistent("physical event ran outside its ordinary prefix"));
+        let mut observe = |event: Option<usize>, index: usize, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
+            let (gate, accepted, prepared) = &mut *pass.borrow_mut();
+            if prepared.is_some() || accepted.objects.len() != index {
+                return Err(inconsistent("physical event ran outside its ordinary prefix"));
+            }
+            gate.flush_refund_v2(
+                index,
+                state.pending_payouts_iter().count().saturating_add(gate.model_payout_rows_promised),
+                point.block,
+            );
+            let Some(event) = event else {
+                if carried.next().is_some() || manifest_carriers.next().is_some() {
+                    return Err(inconsistent("carrier remains outside physical ledger"));
                 }
-                gate.flush_refund_v2(
-                    index,
-                    state.pending_payouts_iter().count().saturating_add(gate.model_payout_rows_promised),
-                    point.block,
-                );
-                let Some(event) = event else {
-                    if carried.next().is_some() {
-                        return Err(inconsistent("ordinary carrier remains outside physical ledger"));
-                    }
-                    return Ok(());
+                return Ok(());
+            };
+            if matches!(ledger.events[event].kind, PalwOrderedPhysicalKindV3::Manifest | PalwOrderedPhysicalKindV3::OmittedManifest) {
+                let preparation = manifest.as_mut().ok_or_else(|| inconsistent("Manifest preparation owner missing"))?;
+                let is_omitted = ledger.events[event].kind == PalwOrderedPhysicalKindV3::OmittedManifest;
+                let (before, candidate, previous) = if is_omitted {
+                    let (before, candidate) =
+                        preparation.omitted.get(omitted_cursor).ok_or_else(|| inconsistent("Manifest omission input missing"))?;
+                    omitted_cursor += 1;
+                    (*before, candidate.clone(), None)
+                } else {
+                    let (before, previous) = manifest_carriers.next().ok_or_else(|| inconsistent("Manifest replay input missing"))?;
+                    (*before, previous.candidate_v3(), Some(previous))
                 };
-                let Some((id, native_refused)) = ledger.ordinary[event] else { return Ok(()) };
-                let carried = carried.next().ok_or_else(|| inconsistent("ordinary carrier missing from replay"))?;
-                if carried.native_carrier != id {
-                    return Err(inconsistent("literal ordinary carrier differs from observed ledger"));
+                if before != index || ledger.events[event].accepted_ordinal != Some(candidate.accepted_ordinal_v3()) {
+                    return Err(inconsistent("Manifest replay position differs from physical ledger"));
                 }
-                let candidate = self.prepare_node_candidate_v2(state, carried, gate, accepted, context)?;
-                match (ledger.events[event].kind, candidate, native_refused) {
-                    (PalwOrderedPhysicalKindV3::Ordinary, Some(mut candidate), false) => {
-                        // The early bought-registration probe is still required
-                        // before charging its Node slot. Its temporary state
-                        // never substitutes for the canonical ordered apply.
-                        drop(candidate.rehearsed_registration.take());
-                        *prepared = Some(candidate);
-                    }
-                    (PalwOrderedPhysicalKindV3::OmittedOrdinary, Some(candidate), true) => gate.refused_v2(candidate.charge, false),
-                    (PalwOrderedPhysicalKindV3::OmittedOrdinary, None, false) => {}
-                    _ => return Err(inconsistent("ordered prefix changed the observed Node gate verdict")),
+                let fresh = self
+                    .prepare_tfp1_manifest_request_v3(
+                        preparation.selected_parent,
+                        parent,
+                        parent_root.ok_or_else(|| inconsistent("Manifest replay has no parent scope"))?,
+                        state,
+                        point,
+                        &candidate,
+                        preparation.maximum_archive_heap,
+                        preparation.maximum_archive_work,
+                        |cost, retained, archive_work| (preparation.quote)(cost, retained, archive_work),
+                    )
+                    .map_err(|error| match error {
+                        positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => {
+                            PalwLocalTransitionFaultV1::Resource(why)
+                        }
+                        _ => PalwLocalTransitionFaultV1::Context(
+                            kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                        ),
+                    })?;
+                match (fresh.as_ref(), previous) {
+                    (None, None) => {}
+                    (Some(fresh), Some(previous)) if fresh.as_ref() == previous.as_ref() => {}
+                    _ => return Err(inconsistent("complete prefix changed Manifest admission, slot or price; reselection required")),
                 }
-                Ok(())
-            },
-            &mut |stage, _, state, object| {
-                let (gate, accepted, prepared) = &mut *pass.borrow_mut();
-                let candidate = prepared.as_ref().ok_or_else(|| inconsistent("canonical ordinary has no physical candidate"))?;
-                if &candidate.object != object {
-                    return Err(inconsistent("prepared ordinary object differs from the canonical survivor"));
+                return Ok(());
+            }
+            let Some((id, native_refused)) = ledger.ordinary[event] else { return Ok(()) };
+            let carried = carried.next().ok_or_else(|| inconsistent("ordinary carrier missing from replay"))?;
+            if carried.native_carrier != id {
+                return Err(inconsistent("literal ordinary carrier differs from observed ledger"));
+            }
+            let candidate = self.prepare_node_candidate_v2(state, carried, gate, accepted, context)?;
+            match (ledger.events[event].kind, candidate, native_refused) {
+                (PalwOrderedPhysicalKindV3::Ordinary, Some(mut candidate), false) => {
+                    // The early bought-registration probe is still required
+                    // before charging its Node slot. Its temporary state
+                    // never substitutes for the canonical ordered apply.
+                    drop(candidate.rehearsed_registration.take());
+                    *prepared = Some(candidate);
                 }
-                if stage == PalwOrderedObjectStageV2::After {
-                    prepared
-                        .take()
-                        .expect("checked prepared candidate")
-                        .accept_v2(self, parent, state, context, gate, accepted, None, false)?;
-                }
-                Ok(())
-            },
-        )
+                (PalwOrderedPhysicalKindV3::OmittedOrdinary, Some(candidate), true) => gate.refused_v2(candidate.charge, false),
+                (PalwOrderedPhysicalKindV3::OmittedOrdinary, None, false) => {}
+                _ => return Err(inconsistent("ordered prefix changed the observed Node gate verdict")),
+            }
+            Ok(())
+        };
+        let mut check = |stage: PalwOrderedObjectStageV2,
+                         _: usize,
+                         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+                         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2| {
+            let (gate, accepted, prepared) = &mut *pass.borrow_mut();
+            let candidate = prepared.as_ref().ok_or_else(|| inconsistent("canonical ordinary has no physical candidate"))?;
+            if &candidate.object != object {
+                return Err(inconsistent("prepared ordinary object differs from the canonical survivor"));
+            }
+            if stage == PalwOrderedObjectStageV2::After {
+                prepared
+                    .take()
+                    .expect("checked prepared candidate")
+                    .accept_v2(self, parent, state, context, gate, accepted, None, false)?;
+            }
+            Ok(())
+        };
+        let (prefix, fees) = match mode {
+            NativeObservedPrefixModeV3::Strict => palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+                budget,
+                objects,
+                work,
+                merged,
+                own_execution_key,
+                extras,
+                &ledger.events,
+                &mut observe,
+                &mut check,
+            )
+            .map(|prefix| (prefix, None)),
+            NativeObservedPrefixModeV3::ProjectJointFees => palw_v2_project_joint_fees_with_physical_checks_v3(
+                budget,
+                objects,
+                work,
+                merged,
+                own_execution_key,
+                extras,
+                &ledger.events,
+                &mut observe,
+                &mut check,
+            )
+            .map(|(prefix, fees)| (prefix, Some(fees))),
+        }
         .map_err(|failure| match failure {
             PalwOrderedCandidateFailureV2::Physical { error, .. } | PalwOrderedCandidateFailureV2::Candidate { error, .. } => error,
             PalwOrderedCandidateFailureV2::Native(failure) => match failure.error {
@@ -2166,6 +3007,9 @@ impl VirtualStateProcessor {
                 _ => inconsistent("whole native prefix differs from observed selection"),
             },
         })?;
+        if manifest_carriers.next().is_some() || manifest.as_ref().is_some_and(|input| omitted_cursor != input.omitted.len()) {
+            return Err(inconsistent("physical replay left Manifest dispositions unvisited"));
+        }
         let (gate, accepted, pending) = pass.into_inner();
         let sidecars = accepted.prefixes.attach_v1(&accepted.answers, Default::default())?;
         if pending.is_some()
@@ -2180,7 +3024,7 @@ impl VirtualStateProcessor {
         {
             return Err(inconsistent("ordered prefix changed observed accepted metadata or refunds"));
         }
-        Ok(prefix.into_rehearsal_state_v2())
+        Ok((prefix.into_rehearsal_state_v2(), fees))
     }
 
     /// Ordinary candidate entry at its supplied pre-object state. The same
@@ -3303,6 +4147,19 @@ impl VirtualStateProcessor {
         }
     }
 
+    pub(in crate::pipeline::virtual_processor) fn palw_material_schedule_v3(
+        &self,
+        daa: u64,
+    ) -> Result<
+        kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
+        kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialIntakeMissingV1,
+    > {
+        kaspa_consensus_core::palw_court_shared_material_intake_v1::material_intake_schedule_selected_v3(
+            true,
+            self.palw_protected_planning_v3.filter(|fence| fence.active_at(daa)).map(|fence| fence.declaration),
+        )
+    }
+
     /// Replay profile for this DAA. `None` below the Batch Court fence. The budget is the funded
     /// schedule's numerical verification budget, and the service id is the adopted profile's book id.
     fn palw_batch_replay_profile_v1(
@@ -3311,6 +4168,9 @@ impl VirtualStateProcessor {
     ) -> Option<kaspa_consensus_core::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1> {
         if !self.palw_lifecycle_kind_fences.batch_court_in_force_at(daa_score) {
             return None;
+        }
+        if let Some(fence) = self.palw_protected_planning_v3.filter(|fence| fence.active_at(daa_score)) {
+            return fence.declaration.numerical_replay_profile_v3().ok();
         }
         let service = kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1?;
         let service_profile = kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(service.id());
@@ -3337,6 +4197,8 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+            protected_planning_v3: self.palw_protected_planning_v3
+                .filter(|fence| fence.active_at(daa_score)).map(|fence| fence.declaration),
             // Base rule extras: transaction-local metadata is attached after accepted extraction.
             prefix_dependencies_v1: Default::default(),
             native_court_rules_v1: self.palw_court_params_v2.map(|court| {
@@ -3409,6 +4271,8 @@ impl VirtualStateProcessor {
                 .tokenizer_registration_open_cutoff_daa_v1_at(daa_score),
             tokenizer_registration_carriers_v1: Vec::new(),
             tokenizer_registration_expected_fees_v1: Default::default(),
+            manifest_request_carriers_v3: Default::default(),
+            manifest_request_expected_fees_v3: Default::default(),
             // Filled below only after every native dependency (including Panel and shard inputs)
             // has been resolved at this block. Neither field is a carrier-provided limit/domain.
             tir_public_allocation_rules_v1: None,
@@ -5270,6 +6134,51 @@ pub(in crate::pipeline::virtual_processor) struct NativeRelayFeePlanV2 {
     _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 impl NativeRelayFeePlanV2 {
+    pub(in crate::pipeline::virtual_processor) fn check_scope_v3(
+        &self,
+        parent: BlockHash,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        if self.entries.iter().any(|entry| {
+            entry.selected_parent != parent
+                || entry.origin.accepting_block.0 != point.block.as_bytes()
+                || entry.origin.accepted_daa != point.daa_score
+                || entry.origin.accepted_blue_score != point.blue_score
+        }) {
+            return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "joint relay replay",
+                "plan differs from immutable parent or accepting point",
+            ));
+        }
+        Ok(())
+    }
+    fn allocate_v3(count: usize) -> Result<Self, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+        let bytes = (count as u64)
+            .checked_mul(size_of::<NativeRelayFeePlanEntryV2>() as u64)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("relay fee plan storage"))?;
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("relay fee plan storage", why);
+        let lease =
+            if bytes == 0 { None } else { Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("plan owner is not armed"))?) };
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(count).map_err(|_| fault("plan allocation refused"))?;
+        if entries.capacity() > count {
+            return Err(fault("plan allocation exceeds the reserved capacity").into());
+        }
+        Ok(Self { entries, _lease: lease })
+    }
+
+    pub(super) fn matches_projection_v3(
+        &self,
+        fees: &std::collections::BTreeMap<
+            Hash64,
+            misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+        >,
+    ) -> bool {
+        self.entries.len() == fees.values().filter(|fee| fee.relay_charge() != 0).count()
+            && self.entries.iter().all(|entry| fees.get(&Hash64::from_bytes(entry.origin.carrier_transaction.0)) == Some(&entry.fees))
+    }
+
     pub(in crate::pipeline::virtual_processor) fn debit_count(&self) -> usize {
         self.entries.len()
     }
@@ -5432,6 +6341,13 @@ fn relay_fee_plan_matches_actual_carrier_position_and_all_prior_fees() {
     .unwrap();
     assert_eq!(plan.match_carrier(0, Some(point), parent, carrier, &tx, 20, 2, 17).unwrap(), None);
     assert_eq!(plan.match_carrier(1, Some(point), parent, carrier, &tx, 20, 2, 17).unwrap(), Some(fees));
+    plan.check_scope_v3(parent, point).unwrap();
+    assert!(plan.check_scope_v3(carrier, point).is_err());
+    assert!(plan.check_scope_v3(parent, PalwBlockContextV2 { daa_score: 7, ..point }).is_err());
+    let projected = std::collections::BTreeMap::from([(tx.id(), fees)]);
+    assert!(plan.matches_projection_v3(&projected));
+    let wrong = std::collections::BTreeMap::from([(tx.id(), fees.before_registration())]);
+    assert!(!plan.matches_projection_v3(&wrong), "the projected registration debit must also agree");
     assert!(plan.match_carrier(1, None, parent, carrier, &tx, 20, 2, 17).is_err());
     assert!(plan.match_carrier(1, Some(point), carrier, carrier, &tx, 20, 2, 17).is_err());
     assert!(plan.match_carrier(1, Some(point), parent, parent, &tx, 20, 2, 17).is_err());
@@ -5497,6 +6413,7 @@ impl NativeObservedPhysicalLedgerV3 {
 pub(super) struct NativeObservedAssignmentScheduleV2 {
     schedule: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
     order: Option<NativeAcceptedObjectOrderV1>,
+    relay: Option<NativeRelayFeePlanV2>,
 }
 
 impl NativeObservedAssignmentScheduleV2 {
@@ -5505,7 +6422,11 @@ impl NativeObservedAssignmentScheduleV2 {
         batch: &IndexedBatchHandoffsV1,
         tokenizer: &IndexedTokenizerHandoffsV1,
     ) -> Result<
-        (Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>, Option<NativeObservedPhysicalLedgerV3>),
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
+            Option<NativeObservedPhysicalLedgerV3>,
+            Option<NativeRelayFeePlanV2>,
+        ),
         PalwLocalTransitionFaultV1,
     > {
         let physical = if let Some(order) = self.order {
@@ -5514,7 +6435,7 @@ impl NativeObservedAssignmentScheduleV2 {
         } else {
             None
         };
-        Ok((self.schedule, physical))
+        Ok((self.schedule, physical, self.relay))
     }
 }
 
@@ -5524,15 +6445,22 @@ pub(super) enum NativeAssignmentRehearsalResultV2 {
 }
 impl NativeAssignmentRehearsalResultV2 {
     fn is_plan(&self) -> bool {
-        matches!(self, Self::Planned(_))
+        matches!(self, Self::Planned(_) | Self::Observed(NativeObservedAssignmentScheduleV2 { relay: Some(_), .. }))
     }
 }
 
 #[derive(Clone, Copy)]
 pub(super) enum NativeAssignmentRehearsalModeV2 {
     Observed,
+    ProjectJointFees,
     CandidateFees,
     TemplateFees(u32),
+}
+
+impl NativeAssignmentRehearsalModeV2 {
+    fn observes_physical_v3(self) -> bool {
+        matches!(self, Self::Observed | Self::ProjectJointFees)
+    }
 }
 
 /// Native-only cursor over accepted carrier ordinals. A rejected legacy
@@ -5564,24 +6492,10 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             }
             previous = Some(ordinal);
         }
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
-        let result = if !matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let result = if !mode.observes_physical_v3() {
             let count = actions.iter().filter(|action| action.relay_carrier_fees_v2().is_some()).count();
-            let bytes = (count as u64)
-                .checked_mul(size_of::<NativeRelayFeePlanEntryV2>() as u64)
-                .ok_or_else(|| NativeCoverageV1::overflow::<Self>("relay fee plan storage"))?;
-            let fault = |why| NativeCoverageV1::unsupported::<Self>("relay fee plan storage", why);
-            let lease = if bytes == 0 {
-                None
-            } else {
-                Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("plan owner is not armed"))?)
-            };
-            let mut entries = Vec::new();
-            entries.try_reserve_exact(count).map_err(|_| fault("plan allocation refused"))?;
-            if entries.capacity() > count {
-                return Err(fault("plan allocation exceeds the reserved capacity").into());
-            }
-            NativeAssignmentRehearsalResultV2::Planned(NativeRelayFeePlanV2 { entries, _lease: lease })
+            NativeAssignmentRehearsalResultV2::Planned(NativeRelayFeePlanV2::allocate_v3(count)?)
         } else {
             let mut schedule = Vec::new();
             // Each actual raw transport retained its schedule slot before
@@ -5589,7 +6503,17 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             schedule.try_reserve_exact(actions.len()).map_err(|_| {
                 NativeCoverageV1::unsupported::<Self>("Assignment accepted-prefix rehearsal", "schedule allocation refused")
             })?;
-            NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 { schedule, order: None })
+            NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 {
+                schedule,
+                order: None,
+                relay: if matches!(mode, NativeAssignmentRehearsalModeV2::ProjectJointFees) {
+                    Some(NativeRelayFeePlanV2::allocate_v3(
+                        actions.iter().filter(|action| action.relay_carrier_fees_v2().is_some()).count(),
+                    )?)
+                } else {
+                    None
+                },
+            })
         };
         Ok(Self { actions, cursor: 0, accepted_ids, result, mode })
     }
@@ -5655,7 +6579,8 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             }
             let planning = self.result.is_plan();
             let next = if let Some(observed) = action.relay_carrier_fees_v2().filter(|fees| planning || fees.relay_charge() != 0) {
-                if planning && observed.relay_charge() != 0 {
+                if planning && observed.relay_charge() != 0 && !matches!(self.mode, NativeAssignmentRehearsalModeV2::ProjectJointFees)
+                {
                     return Err(NativeCoverageV1::unsupported::<Self>("relay fee plan input", "carrier is already debited").into());
                 }
                 // Replay in the very same prefix as every other raw action.
@@ -5673,7 +6598,11 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
                     extras,
                 ) {
                     Ok((state, planned)) if planning || planned == observed => {
-                        if let NativeAssignmentRehearsalResultV2::Planned(plan) = &mut self.result {
+                        let plan = match &mut self.result {
+                            NativeAssignmentRehearsalResultV2::Planned(plan) => Some(plan),
+                            NativeAssignmentRehearsalResultV2::Observed(observed) => observed.relay.as_mut(),
+                        };
+                        if let Some(plan) = plan {
                             plan.record(NativeRelayFeePlanEntryV2 {
                                 origin: action.origin(),
                                 selected_parent: action.selected_parent(),
@@ -5741,6 +6670,133 @@ mod native_ordinary_gate_tests {
         palw_court_capacity_v1::PalwCourtCostV1,
         palw_state_v2::PalwOrderedObjectStageV2::{After, Before},
     };
+
+    #[test]
+    fn manifest_replay_scope_restores_retained_inputs_after_failure_and_unwind() {
+        use super::{
+            NativeAcceptedObjectOrderV1, NativeManifestSelectedRequestsV3, NativeObservedPrefixModeV3, PalwLocalTransitionFaultV1,
+        };
+        use kaspa_consensus_core::palw_native_resource_v1::reserve_native_pending_requests_v1;
+        use kaspa_consensus_core::{
+            Hash64,
+            palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3,
+            palw_state_v2::{PalwBlockContextV2, PalwTransitionExtrasV1},
+        };
+        let root = Hash64::from_u64_word(1);
+        let point = PalwBlockContextV2 { block: Hash64::from_u64_word(2), daa_score: 3, blue_score: 4, subsidy: 5 };
+        // Empty authority input, allocated storage only: this test exercises
+        // ownership on failed callbacks, not paid approval or admission.
+        let lease =
+            reserve_native_pending_requests_v1((5 * std::mem::size_of::<(usize, SharedPreparedNativeManifestRequestV3)>()) as u64)
+                .unwrap();
+        let carriers = Vec::with_capacity(2);
+        let mut selected = NativeManifestSelectedRequestsV3 {
+            selected_parent: Hash64::from_u64_word(7),
+            maximum_archive_heap: 100,
+            maximum_archive_work: 200,
+            parent_root: root,
+            point,
+            carriers,
+            omitted: Vec::new(),
+            fees: Default::default(),
+            _lease: lease,
+        };
+        let empty_fees = || {
+            kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&std::collections::BTreeMap::new())
+                .unwrap()
+        };
+        let mut actual = super::manifest_requests_v3::NativeManifestRequestPassV3::new_v3(root, point, 0, None).unwrap();
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        actual.install_projection_v3(empty_fees()).unwrap();
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        actual.reconcile_projection_v3(&empty_fees()).unwrap();
+        selected.require_actual_fees_v3(&actual).unwrap();
+        let original_root = selected.parent_root;
+        selected.parent_root = point.block;
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        selected.parent_root = original_root;
+        let original_point = selected.point;
+        selected.point.subsidy += 1;
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        selected.point = original_point;
+        actual.rewind_v3();
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        selected.check_actual_projection_v3(&actual).unwrap();
+        assert!(selected.require_actual_fees_v3(&actual).is_err());
+        selected.point.subsidy += 1;
+        assert!(selected.reconcile_actual_fees_v3(&mut actual).is_err());
+        assert!(actual.require_reconciled_v3().is_err());
+        selected.point = original_point;
+        selected.reconcile_actual_fees_v3(&mut actual).unwrap();
+        selected.require_actual_fees_v3(&actual).unwrap();
+        let mut extras = PalwTransitionExtrasV1::default();
+        extras.manifest_request_carriers_v3 = Vec::with_capacity(3);
+        extras.own_attempt_class = Some(Hash64::from_u64_word(6));
+        let own_pointer = selected.carriers.as_ptr();
+        let extras_pointer = extras.manifest_request_carriers_v3.as_ptr();
+        let failure: Result<(), PalwLocalTransitionFaultV1> =
+            selected.with_extras_v3(root, &point, &mut extras, NativeObservedPrefixModeV3::ProjectJointFees, |extras| {
+                assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), own_pointer);
+                assert!(extras.manifest_request_expected_fees_v3.is_empty());
+                Err(NativeAcceptedObjectOrderV1::inconsistent("test tail refusal").into())
+            });
+        assert!(failure.is_err());
+        assert_eq!(selected.carriers.as_ptr(), own_pointer);
+        assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), extras_pointer);
+        assert_eq!(extras.own_attempt_class, Some(Hash64::from_u64_word(6)));
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _: Result<(), PalwLocalTransitionFaultV1> = selected.with_strict_extras_v3(root, &point, &mut extras, |extras| {
+                assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), own_pointer);
+                panic!("test callback unwind");
+            });
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(selected.carriers.as_ptr(), own_pointer);
+        assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), extras_pointer);
+        let foreign = PalwBlockContextV2 { subsidy: point.subsidy + 1, ..point };
+        assert!(
+            selected
+                .with_strict_extras_v3(root, &foreign, &mut extras, |_| -> Result<(), PalwLocalTransitionFaultV1> {
+                    panic!("foreign accepting point must not invoke replay");
+                })
+                .is_err()
+        );
+        assert!(
+            selected
+                .with_strict_extras_v3(point.block, &point, &mut extras, |_| -> Result<(), PalwLocalTransitionFaultV1> {
+                    panic!("foreign parent must not invoke replay");
+                })
+                .is_err()
+        );
+        selected.with_strict_extras_v3(root, &point, &mut extras, |_| Ok(())).unwrap();
+        assert_eq!(selected.carriers.as_ptr(), own_pointer);
+        assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), extras_pointer);
+        // The production path installs inputs before making the FP/prefix
+        // overlay immutable. Its construction lease remains in `attached`.
+        let attached = selected.attach_inputs_v3(root, &point, &mut extras, true).unwrap();
+        assert_eq!(extras.manifest_request_carriers_v3.as_ptr(), own_pointer);
+        let mut answers = kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1::default();
+        let claim = Hash64::from_u64_word(8);
+        answers
+            .insert_v1(
+                claim,
+                kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&vec![1u32, 2]).unwrap(),
+            )
+            .unwrap();
+        let prefix = kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1::default();
+        let immutable = prefix.attach_v1(&answers, extras).unwrap();
+        attached.check_extras_v3(root, &point, &immutable).unwrap();
+        assert!(attached.check_extras_v3(root, &foreign, &immutable).is_err());
+        actual.rewind_v3();
+        attached.check_actual_projection_v3(&actual, &immutable).unwrap();
+        assert!(actual.require_reconciled_v3().is_err());
+        attached.reconcile_actual_fees_v3(&mut actual, &immutable).unwrap();
+        actual.require_reconciled_v3().unwrap();
+        assert_eq!(immutable.fp_claim_answers.get(&claim).unwrap(), &[1, 2]);
+        assert_eq!(immutable.manifest_request_carriers_v3.as_ptr(), own_pointer);
+        drop(immutable);
+        drop(attached);
+    }
 
     #[test]
     fn native_ordinary_gate_keeps_attempt_charges_and_pre_audit_slot_timing() {

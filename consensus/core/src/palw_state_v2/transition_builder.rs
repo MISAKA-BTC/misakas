@@ -101,6 +101,7 @@ impl<'a> TransitionBuilder<'a> {
             native_reservation,
             tfp1_history_journal_parent: None,
             tfp1_original_prefix: None,
+            queued_public_admissions: Vec::new(),
             paired_original_checkpoint_claim: None,
             plain_output_terminal_checkpoint_active_v2: false,
             claim_local_gc_undo_v3: BTreeMap::new(),
@@ -158,6 +159,33 @@ impl<'a> TransitionBuilder<'a> {
             court_family_charged_v2: None,
             court_one_move_spent: Default::default(),
         }
+    }
+
+    pub(super) fn queue_public_original_admission_v1(
+        &mut self,
+        record: crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1,
+    ) {
+        self.queued_public_admissions.push(record);
+    }
+
+    pub(super) fn write_queued_public_admissions_v1(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+        if self.queued_public_admissions.is_empty() {
+            return Ok(());
+        }
+        super::palw_kernel_route_fold_v1::ensure_route_header(self, ctx)?;
+        let queued = std::mem::take(&mut self.queued_public_admissions);
+        for record in &queued {
+            if let Some((key, row)) = record.storage_row(&self.state, ctx).map_err(|error| {
+                PalwStateV2Error::CarriageInconsistent(format!("inconsistent protected public admission: {error:?}"))
+            })? {
+                self.write_kernel_row_encoded_v1(
+                    crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1,
+                    &key,
+                    Some(row),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn registration_index_v1(&mut self) -> Result<&PalwBondRegistrationIndexV1, PalwStateV2Error> {
@@ -3817,14 +3845,18 @@ impl<'a> TransitionBuilder<'a> {
         let step = crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim);
         let lock_at = |basis_k: u8| {
             crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
-                crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
-                    self.params.model_panel_one_from_daa(),
-                    claim.accepted_daa,
-                    g_res,
-                    claim.escrowed_reward,
-                    buyback,
-                    basis_k,
-                ),
+                if super::claim_has_protected_frame_v1(&self.state, &claim_id) {
+                    crate::palw_model_panel_one_v1::single_approval_seat_lock_v1(g_res, claim.escrowed_reward, buyback)
+                } else {
+                    crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
+                        self.params.model_panel_one_from_daa(),
+                        claim.accepted_daa,
+                        g_res,
+                        claim.escrowed_reward,
+                        buyback,
+                        basis_k,
+                    )
+                },
                 step,
             )
         };
@@ -3855,8 +3887,11 @@ impl<'a> TransitionBuilder<'a> {
         carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
-        let model_one = self.params.model_panel_one_governs_v1(claim.accepted_daa);
-        let door = if model_one {
+        let protected = super::claim_has_protected_frame_v1(&self.state, &claim_id);
+        let model_one = self.params.model_panel_one_governs_v1(claim.accepted_daa) && !protected;
+        let door = if protected {
+            PalwLicenceDoorV1::ProtectedPanelReplay
+        } else if model_one {
             if !matches!(door, PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage)
                 || carried.iter().any(|(_, mask)| mask.is_some_and(|m| m != crate::palw_verification_v2::PalwSegmentMaskV2::full(1)))
             {
@@ -3867,7 +3902,8 @@ impl<'a> TransitionBuilder<'a> {
             door
         };
         let all: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = carried.iter().map(|(receipt, _)| receipt.clone()).collect();
-        if !model_one {
+        palw_tir_public_fold_v1::require_protected_panel_valid_v1(self, claim_id, &all)?;
+        if !model_one && !protected {
             palw_licence_names_its_outsider_v1(
                 &self.state,
                 &claim_id,
@@ -3889,6 +3925,7 @@ impl<'a> TransitionBuilder<'a> {
         let verdicts = palw_seat_verdicts_of_v2(&read_receipts);
         let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
         let door_holds = match door {
+            PalwLicenceDoorV1::ProtectedPanelReplay => !set.backed.is_empty() && set.basis_k >= 1,
             PalwLicenceDoorV1::G14PanelOne => {
                 self.state.panels.get(&claim_id).is_some_and(|p| p.seats.len() == 1) && set.backed.len() == 1 && set.basis_k == 1
             }
@@ -3903,6 +3940,7 @@ impl<'a> TransitionBuilder<'a> {
         };
         if !door_holds
             || (!model_one
+                && !protected
                 && palw_licence_names_its_outsider_v1(
                     &self.state,
                     &claim_id,
@@ -3914,8 +3952,10 @@ impl<'a> TransitionBuilder<'a> {
         {
             return Ok(());
         }
-        self.slash_dissenting_seats(&claim_id, claim, &verdicts, true)?;
-        self.slash_silent_seats(&claim_id, claim, &verdicts)?;
+        if !protected {
+            self.slash_dissenting_seats(&claim_id, claim, &verdicts, true)?;
+            self.slash_silent_seats(&claim_id, claim, &verdicts)?;
+        }
         self.credit_seat_receipts(claim_id, &read_receipts, now_daa)?;
         for (bond, mask) in &set.backed {
             self.lock_valid_seat_rcore(*bond, claim_id, claim, set.lock, *mask, set.segments, now_daa)?;
@@ -3930,6 +3970,33 @@ impl<'a> TransitionBuilder<'a> {
         // claim that already licensed keeps the value its first licence recorded.
         staged.rcore.g_res_sompi = if claim.rcore.licence_door.is_some() { claim.rcore.g_res_sompi } else { set.g_res };
         self.license_claim(claim_id, staged, now_daa)
+    }
+
+    /// Compatibility entry for the pre-R-core protected fallback. R-core
+    /// callers must persist the protected licence record through the common
+    /// backed-set writer; legacy state has no such staged record.
+    pub(super) fn license_protected_one_approval_v1(
+        &mut self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !super::claim_has_protected_frame_v1(&self.state, &claim_id) {
+            return Err(PalwStateV2Error::CarriageInconsistent("protected licence requires its frame".into()));
+        }
+        let door = PalwLicenceDoorV1::ProtectedPanelReplay;
+        if self.params.rcore_plus_active_at(now_daa) {
+            let carried: Vec<_> = receipts.iter().map(|receipt| (receipt.clone(), None)).collect();
+            return self.license_rcore_v1(claim_id, claim, door, &carried, now_daa);
+        }
+        palw_tir_public_fold_v1::require_protected_panel_valid_v1(self, claim_id, receipts)?;
+        if !self.receipt_set_is_backed(claim_id, claim, receipts, now_daa, door)? {
+            return Ok(());
+        }
+        self.credit_seat_receipts(claim_id, receipts, now_daa)?;
+        self.lock_valid_receipts(claim_id, claim, receipts, now_daa, door)?;
+        self.license_claim(claim_id, claim.clone(), now_daa)
     }
 
     /// **Lane g14-close-legacy (audit G-13): the life a `Valid` lock on `claim_id` dated at `now_daa` gets** —
@@ -9856,6 +9923,40 @@ impl<'a> TransitionBuilder<'a> {
         // Lane g14-fam-panelda (ADR-0206): a governed PanelDa claim settles only once its prompt is public; an undisclosed one is
         // voided here as a disclosure default (deposit burned, no conviction). No row (every shipped network): unchanged.
         if !super::palw_panel_da_disclosure_fold_v1::settle_panel_da_at_final_v1(self, id, claim, final_daa)? {
+            return Ok(());
+        }
+        // A protected frame stays open through its notice window. Final at or
+        // before that end would skip the bound panel's verification time.
+        if let Some(notice_end) = super::protected_frame_notice_floor_v1(&self.state, &id, claim.accepted_daa)? {
+            if final_daa <= notice_end {
+                // The sweep already took this deadline. Put back the deadline
+                // the index itself derives, so Final waits until after notice.
+                self.rearm_claim_deadline_dl1_v1(id, final_daa)?;
+                return Ok(());
+            }
+        }
+        if super::palw_protected_admission_reads_back_v1(&self.state, &id, claim).is_err() {
+            // The stored frame does not match this claim yet. Keep the sweeping
+            // block valid. Retry until the hard deadline, then end the claim
+            // without a spend.
+            let hard = claim.accepted_daa.saturating_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+            if final_daa > hard {
+                return self.void_claim(id, claim, final_daa, PalwVoidReasonV2::PanelUnavailable);
+            }
+            self.rearm_claim_deadline_dl1_v1(id, final_daa)?;
+            return Ok(());
+        }
+        // A protected claim requires one bound seat's stored full-replay
+        // approval. An unavailable storage route cannot substitute for that
+        // approval: absence retries until hard, then ends without a spend.
+        if super::claim_has_protected_frame_v1(&self.state, &id)
+            && !super::included_replay::protected_replay_approval_recorded_v1(&self.state, id)
+        {
+            let hard = claim.accepted_daa.saturating_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
+            if final_daa > hard {
+                return self.void_claim(id, claim, final_daa, PalwVoidReasonV2::PanelUnavailable);
+            }
+            self.rearm_claim_deadline_dl1_v1(id, final_daa)?;
             return Ok(());
         }
         // G14 lane r6-d1-release (user decision D1): a claim bound to the court service book goes Final on its normal schedule; the

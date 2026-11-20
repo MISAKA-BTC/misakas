@@ -141,6 +141,7 @@ fn ordered_visit_exhaustion_is_local_and_precedes_candidate_application() {
         PalwOrderedReplayLocationV1::Preparation,
         PalwOrderedReplayLocationV1::Order,
         PalwOrderedReplayLocationV1::Tokenizer { accepted_tx_ordinal: 3 },
+        PalwOrderedReplayLocationV1::Manifest { accepted_tx_ordinal: 3 },
     ] {
         assert_eq!(PalwOrderedReplayFailureV1 { location, error: unavailable.clone() }.ordinary_refusal_index_v1(), None);
     }
@@ -220,7 +221,7 @@ fn ordered_node_checks_observe_actual_before_and_after_states_and_discard_failed
         &mut |stage, index, state, _| {
             seen.push((stage, index));
             let applied = index + usize::from(stage == After);
-            assert_eq!(state.registration_exposure(&bond_key(1)), applied as u64 * 1_000);
+            assert_eq!(state.registration_exposure(&bond_key(1)), applied as u128 * 1_000);
             assert_eq!(state.class(&h64(2)).is_some(), applied >= 1);
             assert_eq!(state.class(&h64(3)).is_some(), applied >= 2);
             Ok::<(), &'static str>(())
@@ -303,9 +304,14 @@ fn ordered_retries_rebuild_pass_local_extras_without_resetting_budget() {
     .unwrap();
     // Each pass owns a distinct extras value. Its lifetime must not be tied
     // to the parent-bound budget or retained across a filtered-list rebuild.
-    for class in [h64(1), h64(2)] {
+    for artifact in [h64(41), h64(42)] {
         let extras = PalwTransitionExtrasV1::default();
-        let objects = [registration(class, 1000, None)];
+        // Each retry starts at genesis, so its first class must remain the
+        // configured base. Change the candidate data, not that invariant.
+        let mut object = registration(h64(1), 1000, None);
+        let PalwConsensusObjectV2::ClassRegistered { artifact_root, .. } = &mut object else { unreachable!() };
+        *artifact_root = artifact;
+        let objects = [object];
         let prefix = palw_v2_replay_accepted_prefix_with_checks_v2(
             &mut budget,
             &objects,
@@ -316,7 +322,7 @@ fn ordered_retries_rebuild_pass_local_extras_without_resetting_budget() {
             &mut |_, _, _, _| Ok::<(), std::convert::Infallible>(()),
         )
         .unwrap();
-        assert!(prefix.state_v1().class(&class).is_some());
+        assert_eq!(prefix.state_v1().class(&h64(1)).unwrap().artifact_root, artifact);
     }
     assert_eq!(budget.remaining_v1(), PalwOrderedReplayLimitsV1 { passes: 0, candidate_visits: 0 });
     assert!(parent.classes.is_empty());
@@ -381,4 +387,62 @@ fn physical_replay_visits_omitted_events_at_the_actual_prefix() {
     let mut missing = events;
     missing[2].kind = Batch;
     assert!(run(&missing, 4).1.is_err());
+}
+
+#[test]
+fn omitted_manifest_rechecks_its_physical_prefix_and_consumes_visit_budget() {
+    use PalwOrderedPhysicalKindV3::{OmittedManifest, Ordinary};
+    let p = params();
+    let parent = PalwChainStateV2::genesis();
+    let extras = PalwTransitionExtrasV1::default();
+    let objects = [registration(h64(1), 1000, None)];
+    let events = [
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(0), kind: OmittedManifest },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(1), kind: Ordinary },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(2), kind: OmittedManifest },
+    ];
+    let run = |visits, reject_late| {
+        let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+            &parent,
+            &p,
+            ctx(1, 10, 1),
+            replay_rules(),
+            PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: visits },
+        )
+        .unwrap();
+        let mut seen = Vec::new();
+        let result = palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+            &mut budget,
+            &objects,
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &extras,
+            &events,
+            &mut |event, index, state| {
+                seen.push((event, index, state.class(&h64(1)).is_some()));
+                if reject_late && event == Some(2) {
+                    return Err("late omission changed verdict");
+                }
+                Ok(())
+            },
+            &mut |_, _, _, _| Ok(()),
+        );
+        (seen, result)
+    };
+    let (seen, result) = run(3, false);
+    assert!(result.is_ok());
+    assert_eq!(seen, [(Some(0), 0, false), (Some(1), 0, false), (Some(2), 1, true), (None, 1, true)]);
+    let (_, late) = run(3, true);
+    assert!(matches!(late, Err(PalwOrderedCandidateFailureV2::Physical { event_index: Some(2), .. })));
+    let (seen, exhausted) = run(2, false);
+    assert!(seen.is_empty());
+    assert!(matches!(
+        exhausted,
+        Err(PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::Budget,
+            error: PalwStateV2Error::NativeResource(_),
+        }))
+    ));
+    assert!(parent.class(&h64(1)).is_none(), "neither success nor late refusal publishes a disposable prefix");
 }

@@ -195,7 +195,7 @@ impl PlainSelectionBranchV3 {
 }
 
 impl PlainSelectionBudgetV3 {
-    fn service_floors_v3(bounds: SelectionTerminalBoundsV2) -> Result<(u64, u64, u64), BatchCourtErrorV1> {
+    pub(crate) fn service_floors_v3(bounds: SelectionTerminalBoundsV2) -> Result<(u64, u64, u64), BatchCourtErrorV1> {
         use BatchCourtErrorV1::DeliveryCost;
         // Raw counts for one objective replay. Native pass count, signature
         // validation and settlement still need a complete production quote.

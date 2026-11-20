@@ -3,14 +3,14 @@ use crate::{
     Hash64,
     palw_batch_court_v1::{
         BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_RANGES_V1,
-        carriage::{SignedBatchDemandV1, quote_batch_open_v1},
+        carriage::{SignedBatchDemandV1, quote_batch_open_with_schedule_v1},
     },
     palw_court_shared_material_intake_v1::{
         MATERIAL_PIPELINED_MAX_BYTES, MaterialTargetV1, parameter_body_bound_v1, prompt_tile_bound,
     },
     palw_court_tir_requests_v1::TirSharedRequestSetV1,
     palw_native_resource_v1::{
-        NativeCoverageV1, NativeDecodeErrorV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+        NativeCoverageV1, NativeDecodeErrorV1, NativeHeapV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
         reserve_native_requests_v1,
     },
     palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1},
@@ -84,6 +84,7 @@ impl NumericalBatchRootDemandV1 {
         state: &PalwChainStateV2,
         notice: Hash64,
         lengths: &[(MaterialTargetV1, u64)],
+        schedule: super::super::MaterialIntakeScheduleV1,
     ) -> Result<NativeRetainedV1<SignedBatchDemandV1>, E> {
         let context = crate::palw_court_shared_tir_state_v1::context(state, self.claim).map_err(E::Decode)?;
         if context.scope_id != self.scope {
@@ -102,7 +103,7 @@ impl NumericalBatchRootDemandV1 {
                 authentication: BatchRangeAuthenticationV1::WholeRange,
             });
         }
-        let open = quote_batch_open_v1(state, self.claim, notice, self.ordinal, ranges).map_err(E::Decode)?;
+        let open = quote_batch_open_with_schedule_v1(state, self.claim, notice, self.ordinal, ranges, schedule).map_err(E::Decode)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(open, lease))
     }
 }
@@ -153,6 +154,22 @@ pub fn quote_numerical_batch_open_v1(
     maximum_ranges: usize,
     lengths: &[(MaterialTargetV1, u64)],
 ) -> Result<NativeRetainedV1<SignedBatchDemandV1>, NativeDecodeErrorV1<String>> {
+    let schedule =
+        super::super::material_intake_schedule_v1().map_err(|_| E::Decode("numerical Batch material schedule is absent".into()))?;
+    quote_numerical_batch_open_with_schedule_v1(state, claim, notice, leaf, demand_index, maximum_ranges, lengths, schedule)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn quote_numerical_batch_open_with_schedule_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice: Hash64,
+    leaf: u64,
+    demand_index: usize,
+    maximum_ranges: usize,
+    lengths: &[(MaterialTargetV1, u64)],
+    schedule: super::super::MaterialIntakeScheduleV1,
+) -> Result<NativeRetainedV1<SignedBatchDemandV1>, NativeDecodeErrorV1<String>> {
     use crate::palw_batch_court_v1::{
         carriage::batch_open_wire_bytes_v1,
         rooted::{checked_initial_notice_target_v1, reserved_open_slot_v1},
@@ -182,8 +199,9 @@ pub fn quote_numerical_batch_open_v1(
         return Err(E::Decode("numerical Batch opening slot has passed".into()));
     }
 
-    let demand = numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, demand_index, maximum_ranges)?;
-    demand.quote_open_v1(state, notice, lengths)
+    let demand =
+        numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, demand_index, maximum_ranges, schedule.cover)?;
+    demand.quote_open_v1(state, notice, lengths, schedule)
 }
 
 pub(crate) fn numerical_demand_from_source_v1(
@@ -193,9 +211,10 @@ pub(crate) fn numerical_demand_from_source_v1(
     leaf: u64,
     demand_index: usize,
     maximum_ranges: usize,
+    cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 ) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
     let claim = context.claim;
-    with_numerical_source_v1(state, claim, |frame, source, record, layout, program, streaming| {
+    with_numerical_source_v1(state, claim, cover, |frame, source, record, layout, program, streaming| {
         if context.batch_notice_only_v1() {
             let ranges = booked_root_ranges_v1(context, frame, source, record, layout, program, streaming, leaf, maximum_ranges)?;
             let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
@@ -223,6 +242,7 @@ pub(crate) fn numerical_demand_from_source_v1(
 fn with_numerical_source_v1<T>(
     state: &PalwChainStateV2,
     claim: Hash64,
+    budget: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
     use_source: impl FnOnce(
         &PalwTirPublicClaimV1,
         &NativeRetainedV1<PalwTirPublicSourceV1>,
@@ -245,9 +265,6 @@ fn with_numerical_source_v1<T>(
         frame.original_v1().trace_root,
         frame.descriptor_v1().maximum_leaves,
     )?;
-    let budget = super::super::material_intake_schedule_v1()
-        .map_err(|_| E::Decode("numerical Batch material schedule is absent".into()))?
-        .cover;
     // This estimate still supplies only aggregate limits. The funded
     // candidate can supply independently qualified per-root limits below.
     let streaming = StreamingParameterCoverBudgetV1 {
@@ -316,13 +333,14 @@ pub(crate) fn replay_numerical_batch_v1(
     claim: Hash64,
     rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
     budget: super::numerical_verification::NumericalBatchReplayBudgetV1,
+    cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 ) -> Result<NumericalBatchFindingV1, E> {
     use crate::palw_tir_court_v1::{PalwTirCourtRulesV1, replay_tir_cone_from_store_v1};
     rules.check().map_err(E::Decode)?;
     if !rules.tir_active || budget.workspace_bytes == 0 {
         return Err(E::Decode("numerical replay has no active TIR rules or admitted workspace".into()));
     }
-    let prepared = prepare_numerical_batch_material_v1(state, claim, rules.at.daa_score)?;
+    let prepared = prepare_numerical_batch_material_v1(state, claim, rules.at.daa_score, cover)?;
     let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
     let class = frame.original_v1().job.class_id;
     let record = state.tir_class_v1(&class).ok_or_else(|| E::Decode("numerical replay has no registered class".into()))?;
@@ -333,7 +351,21 @@ pub(crate) fn replay_numerical_batch_v1(
         return Err(E::Decode("numerical replay prompt form differs from the original".into()));
     }
     let mut q = TirNativeRequestsV1::new();
-    q.add_v1(PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?).map_err(E::Resource)?;
+    let source_requests = PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?;
+    q.add_v1(source_requests).map_err(E::Resource)?;
+    if budget.meter_checker_io {
+        // Store construction keeps its Source while the parameter verifier
+        // reconstructs another one. Its program and index have separate leases.
+        q.add_v1(source_requests).map_err(E::Resource)?;
+        // The caller's resolved binding is live through both constructions.
+        q.exact_v1::<u8>(u64::from(record.program_bytes)).map_err(E::Resource)?;
+        for bound in [
+            layout.native_heap_v1("numerical replay binding layout"),
+            frame.header_v1().native_heap_v1("numerical replay binding context"),
+        ] {
+            q.add_v1(bound.bytes().ok_or(E::Resource(bound))?).map_err(E::Resource)?;
+        }
+    }
     q.add_v1(budget.workspace_bytes).map_err(E::Resource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
     let binding = frame
@@ -351,8 +383,16 @@ pub(crate) fn replay_numerical_batch_v1(
         prompt_form,
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
     };
-    let finding = replay_tir_cone_from_store_v1(&binding, prepared.leaf, &store, &court, budget.work, rules.court.max_close_bytes())
-        .map_err(E::Decode)?;
+    let finding = replay_tir_cone_from_store_v1(
+        &binding,
+        prepared.leaf,
+        &store,
+        &court,
+        budget.work,
+        budget.meter_checker_io,
+        rules.court.max_close_bytes(),
+    )
+    .map_err(E::Decode)?;
     let fault = if let Some((fault, mut cone)) = finding {
         crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
         let len = borsh::object_length(&cone).map_err(|why| E::Decode(why.to_string()))?;
@@ -443,7 +483,8 @@ pub(crate) fn recheck_numerical_terminal_v1(
         prompt_form,
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
     };
-    let cone = recheck_retained_tir_cone_v1(cone, original, receipt.leaf, expected, &court, budget.work).map_err(E::Decode)?;
+    let cone = recheck_retained_tir_cone_v1(cone, original, receipt.leaf, expected, &court, budget.work, budget.meter_checker_io)
+        .map_err(E::Decode)?;
     Ok(Some((notice.opened_by, NativeRetainedV1::from_owner_reserved_v1(cone, lease))))
 }
 
@@ -451,6 +492,7 @@ pub(crate) fn prepare_numerical_batch_material_v1(
     state: &PalwChainStateV2,
     claim: Hash64,
     verify_daa: u64,
+    cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 ) -> Result<PreparedNumericalBatchMaterialV1, E> {
     use super::{BatchResponsePositionV1, Stage, admission::batch_numerical_service_ids_v1};
     use crate::palw_batch_court_v1::rooted::{batch_open_packet_v1, checked_initial_notice_target_v1};
@@ -487,7 +529,7 @@ pub(crate) fn prepare_numerical_batch_material_v1(
     {
         return Err(invalid("numerical verification differs from its reserved stage"));
     }
-    let ranges = with_numerical_source_v1(state, claim, |frame, source, record, layout, program, streaming| {
+    let ranges = with_numerical_source_v1(state, claim, cover, |frame, source, record, layout, program, streaming| {
         booked_root_ranges_v1(context, frame, source, record, layout, program, streaming, leaf, MAX_BOOKED_NUMERICAL_RANGES_V1)
     })?;
     let mut q = TirNativeRequestsV1::new();
@@ -761,6 +803,9 @@ pub(crate) fn numerical_batch_projection_v1(
         .map(|(projection, _)| projection)
 }
 
+type ProjectionCacheKeyV1 = (Hash64, Hash64, Hash64, PalwPromptIdsFormV1, StreamingParameterCoverBudgetV1, usize);
+static LAST_PROJECTION_CACHE: std::sync::Mutex<Option<(ProjectionCacheKeyV1, Vec<u64>)>> = std::sync::Mutex::new(None);
+
 #[allow(clippy::too_many_arguments)]
 fn project_numerical_batch_geometry_v1(
     claim: Hash64,
@@ -778,14 +823,31 @@ fn project_numerical_batch_geometry_v1(
     q.add_v1(std::mem::size_of::<NumericalBatchProjectionV1>().max(std::mem::size_of::<NumericalBatchEnvelopeV1>()) as u64)
         .map_err(E::Resource)?;
     let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let cache_key = (claim, source.source_id_v1(), record.facts.class_id, prompt, streaming, maximum_ranges);
+    if !cfg!(test) && leaf.is_none() {
+        if let Ok(guard) = LAST_PROJECTION_CACHE.lock() {
+            if let Some((ref key, ref cached_max)) = *guard {
+                if *key == cache_key {
+                    let projection = NumericalBatchProjectionV1 {
+                        claim,
+                        source_id: source.source_id_v1(),
+                        prompt,
+                        maximums: cached_max.clone(),
+                    };
+                    return Ok((NativeRetainedV1::from_owner_reserved_v1(projection, lease), None));
+                }
+            }
+        }
+    }
     let mut maximums = Vec::with_capacity(maximum_ranges);
     let mut selected = None;
     let mut callback_error = None;
     let mut ids_bytes = None;
+    let mut inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program);
     let summary =
         PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(source, record, layout, streaming, |root, params, inputs| {
             let ranges =
-                root_ranges_v1(claim, prompt, source, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes)
+                root_ranges_with_index_v1(claim, prompt, source, root, inputs.iter().copied(), params, program, inventory.as_ref(), maximum_ranges, &mut ids_bytes)
                     .map_err(|error| {
                     callback_error = Some(error);
                     "numerical Batch range projection failed".to_string()
@@ -796,6 +858,7 @@ fn project_numerical_batch_geometry_v1(
             }
             Ok(0)
         });
+    let _ = &mut inventory;
     if let Some(error) = callback_error {
         return Err(error);
     }
@@ -805,6 +868,11 @@ fn project_numerical_batch_geometry_v1(
     }
     if summary.source_id != source.source_id_v1() {
         return Err(E::Decode("streamed Batch cover differs from the original".into()));
+    }
+    if !cfg!(test) && leaf.is_none() {
+        if let Ok(mut guard) = LAST_PROJECTION_CACHE.lock() {
+            *guard = Some((cache_key, maximums.clone()));
+        }
     }
     let projection = NumericalBatchProjectionV1 { claim, source_id: summary.source_id, prompt, maximums };
     Ok((NativeRetainedV1::from_owner_reserved_v1(projection, lease), selected))
@@ -877,9 +945,10 @@ pub(crate) fn numerical_batch_envelope_v1(
     let lease = reserve_native_requests_v1(retained.bytes_v1()).map_err(E::Resource)?;
     let mut maximums = Vec::with_capacity(maximum_ranges);
     let mut ids_bytes = None;
+    let inventory = crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program);
 
     for (root, params) in roots.iter().zip(&parameters.roots) {
-        let ranges = root_ranges_v1(
+        let ranges = root_ranges_with_index_v1(
             frame.plan_v1().original_claim,
             frame.plan_v1().owner_work.rules.prompt_form,
             source,
@@ -887,6 +956,7 @@ pub(crate) fn numerical_batch_envelope_v1(
             root.inputs.iter().copied(),
             &params.parameters,
             program,
+            inventory.as_ref(),
             maximum_ranges,
             &mut ids_bytes,
         )?;
@@ -1005,6 +1075,23 @@ fn root_ranges_v1(
     maximum_ranges: usize,
     ids_bytes: &mut Option<u64>,
 ) -> Result<NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>, E> {
+    let inventory = (!parameters.is_empty()).then(|| crate::palw_tir_court_v1::PalwTirInventoryIndexV1::new(program)).flatten();
+    root_ranges_with_index_v1(claim, prompt, source, leaf, inputs, parameters, program, inventory.as_ref(), maximum_ranges, ids_bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn root_ranges_with_index_v1(
+    claim: Hash64,
+    prompt: PalwPromptIdsFormV1,
+    source: &PalwTirPublicSourceV1,
+    leaf: u64,
+    inputs: impl ExactSizeIterator<Item = RootInputBoundaryV1>,
+    parameters: &[u32],
+    program: &TirProgramV1,
+    inventory: Option<&crate::palw_tir_court_v1::PalwTirInventoryIndexV1>,
+    maximum_ranges: usize,
+    ids_bytes: &mut Option<u64>,
+) -> Result<NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>, E> {
     let count = source.header_v1().job_context.declared_prefill_tokens;
     let full_ids = |source| {
         crate::palw_tir_public_owned_v1::request_body_bound_v1(source, PalwTirPublicRequestV1::Ids { offset: 0 })
@@ -1049,7 +1136,11 @@ fn root_ranges_v1(
     )
     .map_err(E::Decode)?;
     for &leaf in parameters {
-        let bytes = parameter_body_bound_v1(program, leaf).map_err(E::Decode)?;
+        let bytes = match inventory {
+            Some(index) => crate::palw_court_shared_material_intake_v1::parameter_body_bound_with_index_v1(program, index, leaf)
+                .map_err(E::Decode)?,
+            None => parameter_body_bound_v1(program, leaf).map_err(E::Decode)?,
+        };
         add(MaterialTargetV1::Parameter { leaf }, bytes).map_err(E::Decode)?;
     }
     for boundary in &boundaries {

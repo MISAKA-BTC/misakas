@@ -4326,13 +4326,44 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let binding: kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1 =
             borsh::from_slice(&binding_bytes).map_err(|e| RpcError::General(format!("binding header does not decode: {e}")))?;
         let kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = binding else {
+            if request.protected_material_hex.is_some() {
+                return Err(RpcError::General("protected quote requires a TIR header".into()));
+            }
             // A legacy header has no TIR frame: the caller keeps its other route.
             return Ok(GetPalwTirOriginalQuoteResponse::default());
         };
         if palw_v2_bundle(&self.config.params).is_none() {
-            return Ok(GetPalwTirOriginalQuoteResponse::default());
+            return Ok(GetPalwTirOriginalQuoteResponse {
+                protected_quote_hex: request.protected_material_hex.as_ref().map(|_| String::new()),
+                ..Default::default()
+            });
         }
         let session = self.consensus_manager.consensus().unguarded_session();
+        if let Some(hex) = request.protected_material_hex.as_deref() {
+            use kaspa_consensus_core::palw_protected_original_quote_v1::{
+                PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1, ProtectedOriginalQuoteMaterialV1,
+            };
+            let bytes = decode("protected material", hex, PROTECTED_QUOTE_MATERIAL_MAX_BYTES_V1)?;
+            let material = ProtectedOriginalQuoteMaterialV1::decode_v1(&bytes).map_err(RpcError::General)?;
+            let answer = session.spawn_blocking(move |c| c.palw_protected_original_quote_v1(commitment, header, material)).await;
+            let mut response = GetPalwTirOriginalQuoteResponse { protected_quote_hex: Some(String::new()), ..Default::default() };
+            match answer {
+                Ok(Some(quote)) => {
+                    response.available = true;
+                    response.quoted = true;
+                    response.quote_daa = quote.quote_daa;
+                    response.protected_quote_hex =
+                        Some(faster_hex::hex_string(&borsh::to_vec(&quote).map_err(|e| RpcError::General(e.to_string()))?));
+                }
+                Ok(None) => {}
+                Err(refusal) => {
+                    response.available = true;
+                    response.refusal = refusal;
+                }
+            }
+            return Ok(response);
+        }
+
         let (answer, door_diagnostics) = session
             .spawn_blocking(move |c| {
                 let mut diagnostics = None;
@@ -4348,6 +4379,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 quote_daa,
                 plan_hex: faster_hex::hex_string(&borsh::to_vec(&plan).map_err(|e| RpcError::General(e.to_string()))?),
                 door_diagnostics: None,
+                protected_quote_hex: None,
             },
             // Below the fence (the node's quote is `None` there) or an original the frame route does not admit.
             Ok(None) => GetPalwTirOriginalQuoteResponse::default(),

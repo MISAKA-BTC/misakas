@@ -1177,6 +1177,23 @@ pub(super) fn apply_raw_before_object_v2(
     cursor: &mut usize,
     previous_ordinal: &mut Option<u32>,
 ) -> Result<(), PalwStateV2Error> {
+    apply_raw_before_object_with_v3(builder, ctx, index, before_ordinal, cursor, previous_ordinal, &mut |builder, ctx, action| {
+        builder.apply_positive_assignment_raw_v2(ctx, action)
+    })
+}
+
+/// The same physical cursor and refusal rules for strict execution and a
+/// disposable joint fee projection. The callback cannot change the schedule.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_raw_before_object_with_v3(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    index: usize,
+    before_ordinal: Option<usize>,
+    cursor: &mut usize,
+    previous_ordinal: &mut Option<u32>,
+    apply: &mut impl FnMut(&mut TransitionBuilder<'_>, &PalwBlockContextV2, &PositiveAssignmentRawActionV2) -> Result<(), PalwStateV2Error>,
+) -> Result<(), PalwStateV2Error> {
     while let Some(scheduled) = builder.extras.positive_assignment_actions.get(*cursor) {
         let slot = scheduled.before_object as usize;
         if slot > index {
@@ -1201,7 +1218,7 @@ pub(super) fn apply_raw_before_object_v2(
         // Arc clone retains the actual immutable transport allocation. It is
         // not a decoded/saved admission capability and cannot bypass this hook.
         let action = scheduled.action.clone();
-        match builder.apply_positive_assignment_raw_v2(ctx, &action) {
+        match apply(builder, ctx, &action) {
             Ok(()) => {}
             Err(local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => return Err(local),
             Err(why) if action.transaction().payload.get(7) == Some(&12) && action.case_backing().is_ok() => {

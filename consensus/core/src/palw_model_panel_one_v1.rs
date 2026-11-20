@@ -138,11 +138,18 @@ pub fn model_claim_seat_lock_v1(
     buyback_bound: u64,
     historical_basis: u8,
 ) -> u128 {
-    use crate::palw_economic_safety_v1::palw_seat_lock_required_v2;
-    use crate::palw_state_v2::{PALW_RCORE_ESCROW_LOCK_PERMILLE_V1, PALW_RCORE_VESTING_ROWS_LANDED_V1, palw_rcore_lock_v1};
+    use crate::palw_state_v2::palw_rcore_lock_v1;
     if model_claim_route_v1(from_daa, accepted_daa) == PalwModelClaimRouteV1::HistoricalPanel {
         return palw_rcore_lock_v1(g_res, escrowed_reward, buyback_bound, historical_basis);
     }
+    single_approval_seat_lock_v1(g_res, escrowed_reward, buyback_bound)
+}
+
+/// The same one-signer liability price can serve a protected claim without
+/// changing its panel size or the historical model-panel activation rule.
+pub fn single_approval_seat_lock_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64) -> u128 {
+    use crate::palw_economic_safety_v1::palw_seat_lock_required_v2;
+    use crate::palw_state_v2::{PALW_RCORE_ESCROW_LOCK_PERMILLE_V1, PALW_RCORE_VESTING_ROWS_LANDED_V1};
     if PALW_RCORE_VESTING_ROWS_LANDED_V1 {
         let cap = crate::palw_model_market_v1::palw_model_buyback_slice_v1(escrowed_reward);
         let gain = g_res.saturating_sub(u128::from(buyback_bound)).saturating_add(u128::from(cap));

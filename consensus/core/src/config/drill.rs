@@ -67,6 +67,7 @@ use kaspa_muhash::MuHash;
 /// The salt's width: 32 bytes, 64 hex characters (`openssl rand -hex 32`). One width, so a salt is
 /// one string an operator copies between hosts and never a prefix of another drill's.
 pub const PALW_DRILL_SALT_LEN_V1: usize = 32;
+const PROTECTED_LIFECYCLE_DRILL_TAG_V1: &[u8; 15] = b"MISAKA/P200/V1/";
 
 /// **A drill's genesis salt.** Not a secret — the keys derived from it are value-less by
 /// construction, like devnet's public-seed bonds — but a NAME: two drills with different salts are
@@ -96,6 +97,11 @@ pub enum PalwDrillSaltErrorV1 {
 const PALW_DRILL_SALT_ID_DOMAIN_V1: &[u8] = b"misaka-palw-drill-salt-id/v1";
 
 impl PalwDrillSaltV1 {
+    /// Explicit namespace for protected lifecycle drills and their signing tools.
+    pub fn is_protected_lifecycle_v1(&self) -> bool {
+        self.0.starts_with(PROTECTED_LIFECYCLE_DRILL_TAG_V1)
+    }
+
     pub fn from_bytes(bytes: [u8; PALW_DRILL_SALT_LEN_V1]) -> Result<Self, PalwDrillSaltErrorV1> {
         if bytes.iter().all(|b| *b == 0) {
             return Err(PalwDrillSaltErrorV1::AllZero);
@@ -435,7 +441,40 @@ pub fn palw_t12_drill_genesis_block_v1(salt: &PalwDrillSaltV1) -> GenesisBlock {
     }
     genesis.utxo_commitment = multiset.finalize();
     genesis.hash = Header::from(&genesis).hash;
+    if salt.is_protected_lifecycle_v1() {
+        let mut isolation = kaspa_hashes::blake2b_512_keyed(b"misaka-palw/protected-lifecycle-genesis/v1", salt.as_bytes()).as_bytes();
+        isolation[..PROTECTED_LIFECYCLE_DRILL_TAG_V1.len()].copy_from_slice(PROTECTED_LIFECYCLE_DRILL_TAG_V1);
+        return crate::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(&genesis, Hash64::from_bytes(isolation))
+            .expect("protected lifecycle salt yields a nonzero isolation digest");
+    }
     genesis
+}
+
+impl crate::config::params::Params {
+    /// Early protected lifecycle genesis, used by isolated rules and signing tools.
+    pub fn has_protected_lifecycle_drill_genesis_v1(&self) -> bool {
+        self.net == palw_drill_network_v1()
+            && self.has_isolated_g14_genesis_v1()
+            && self.genesis.coinbase_payload.starts_with(PALW_T12_DRILL_GENESIS_COINBASE_PAYLOAD)
+            && self.genesis.coinbase_payload[self.genesis.coinbase_payload.len() - 64..].starts_with(PROTECTED_LIFECYCLE_DRILL_TAG_V1)
+    }
+
+    /// Keep the receipt lane's reorg and maturity parameters consistent on the
+    /// explicitly marked integration chain. The normal bundle validator still
+    /// checks the resulting configuration.
+    #[cfg(feature = "private-integration-config")]
+    pub fn configure_protected_lifecycle_receipt_maturity_v1(&mut self) -> Result<(), &'static str> {
+        if !self.has_protected_lifecycle_drill_genesis_v1() {
+            return Err("short receipt maturity requires the protected lifecycle drill genesis");
+        }
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode else {
+            return Err("short receipt maturity requires ConsensusV2");
+        };
+        bundle.reorg_margin_daa = 24;
+        bundle.freeprompt = bundle.freeprompt.clone().with_private_receipt_maturity_daa(40);
+        self.sync_palw_rfc0018_v1();
+        Ok(())
+    }
 }
 
 /// **Whether `txid` names public testnet-12's genesis** (its premine or community txid). A drill

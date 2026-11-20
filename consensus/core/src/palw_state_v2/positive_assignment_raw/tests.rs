@@ -261,41 +261,84 @@ fn missing_native_history_aborts_without_advancing_the_raw_schedule() {
     assert!(builder.entries.is_empty());
 }
 
-#[test]
-fn source_response_for_unknown_case_does_not_stall_other_accepted_transactions() {
+fn source_response_payload(case: misaka_palw_positive_contract::identity::CaseId) -> Vec<u8> {
     use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, PositiveNativeOperationV2};
-    use misaka_palw_positive_contract::identity::{CaseId, RequestId};
-
+    use misaka_palw_positive_contract::identity::RequestId;
     let mut payload = vec![1, 0, 176];
     payload.extend_from_slice(
         &borsh::to_vec(&PositiveNativeBodyV2 {
             version: 2,
             revision: 1,
-            operation: PositiveNativeOperationV2::SourceResponse {
-                case: CaseId(d(42)),
-                request: RequestId(d(43)),
-                response: vec![44],
-            },
+            operation: PositiveNativeOperationV2::SourceResponse { case, request: RequestId(d(43)), response: vec![44] },
         })
         .unwrap(),
     );
-    let state = PalwChainStateV2::genesis();
-    let params = state_params();
-    let extras = PalwTransitionExtrasV1 {
-        positive_assignment_actions: vec![
-            PositiveAssignmentScheduledActionV2 { before_object: 0, action: action_payload(1, payload) },
-            PositiveAssignmentScheduledActionV2 { before_object: 0, action: action(2) },
-        ],
-        ..Default::default()
+    payload
+}
+
+#[test]
+fn source_response_for_unknown_case_does_not_stall_other_accepted_transactions() {
+    use misaka_palw_positive_contract::identity::CaseId;
+    for route in [None, Some(crate::palw_positive_rows_v2::tests::empty_route())] {
+        let mut state = PalwChainStateV2::genesis();
+        state.kernel_route = route;
+        let params = state_params();
+        let extras = PalwTransitionExtrasV1 {
+            positive_assignment_actions: vec![
+                PositiveAssignmentScheduledActionV2 {
+                    before_object: 0,
+                    action: action_payload(1, source_response_payload(CaseId(d(42)))),
+                },
+                PositiveAssignmentScheduledActionV2 { before_object: 0, action: action(2) },
+            ],
+            ..Default::default()
+        };
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut cursor = 0;
+        let mut previous = None;
+        super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous)
+            .unwrap();
+        assert_eq!((cursor, previous), (2, Some(2)));
+        assert_eq!(builder.state.state_root_preimage(), state.state_root_preimage());
+        assert!(builder.entries.is_empty());
+    }
+}
+
+#[test]
+fn source_response_for_existing_case_keeps_missing_or_corrupt_history_fatal() {
+    use crate::palw_positive_rows_v2::tests::{empty_route, signed_bundle};
+    use misaka_palw_positive_contract::{
+        native::{KERNEL_AUX_TABLE, NativeRowKey},
+        rows::{NativeRowBody, NativeRowValue},
     };
-    let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-    let mut cursor = 0;
-    let mut previous = None;
-    super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous)
-        .unwrap();
-    assert_eq!((cursor, previous), (2, Some(2)));
-    assert_eq!(builder.state.state_root_preimage(), state.state_root_preimage());
-    assert!(builder.entries.is_empty());
+    let (_, _, case, ..) = signed_bundle();
+    let subject = case.case;
+    let valid = NativeRowValue::new(NativeRowBody::Case(case)).unwrap().encode().unwrap();
+    for bytes in [valid, vec![255]] {
+        let mut state = PalwChainStateV2::genesis();
+        let mut route = empty_route();
+        route.aux.insert((KERNEL_AUX_TABLE, NativeRowKey::Case(subject).encode()), bytes);
+        state.kernel_route = Some(route);
+        let params = state_params();
+        let extras = PalwTransitionExtrasV1 {
+            positive_assignment_actions: vec![PositiveAssignmentScheduledActionV2 {
+                before_object: 0,
+                action: action_payload(1, source_response_payload(subject)),
+            }],
+            ..Default::default()
+        };
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let before = builder.state.state_root_preimage();
+        let mut cursor = 0;
+        let mut previous = None;
+        let error =
+            super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous)
+                .unwrap_err();
+        assert!(matches!(error, PalwStateV2Error::NativeContextUnavailable(_)));
+        assert_eq!((cursor, previous), (0, None));
+        assert_eq!(builder.state.state_root_preimage(), before);
+        assert!(builder.entries.is_empty());
+    }
 }
 
 #[test]
@@ -402,4 +445,79 @@ fn physical_replay_runs_raw_between_omitted_events_and_before_tail_observer() {
     )
     .unwrap();
     assert_eq!(seen, [Some(0), Some(1), Some(2), None]);
+}
+
+#[test]
+fn joint_fee_projection_keeps_observed_debits_and_discards_refused_relay_trials() {
+    // Structural transport fixture: the relay fence is dormant, so no
+    // signature/registration authority or paid relay success is claimed.
+    let state = PalwChainStateV2::genesis();
+    let params = state_params();
+    let observed = FundingRelayCarrierFeesV2::new(1, 0, 1, 0).unwrap();
+    let raw = action_payload(2, vec![1, 0, 176, 2, 0, 1, 0, 14]).with_relay_carrier_fees_v2(observed).unwrap();
+    let extras = PalwTransitionExtrasV1 {
+        positive_assignment_actions: vec![PositiveAssignmentScheduledActionV2 { before_object: 0, action: raw.clone() }],
+        ..Default::default()
+    };
+    let events = [PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(3), kind: PalwOrderedPhysicalKindV3::OmittedOrdinary }];
+    let rules = PalwOrderedReplayRulesV1 {
+        unavailable_abstains: false,
+        capability_bound: false,
+        uncertified_weightless: false,
+        da_court: false,
+    };
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &state,
+        &params,
+        point(),
+        rules,
+        PalwOrderedReplayLimitsV1 { passes: 2, candidate_visits: 4 },
+    )
+    .unwrap();
+    let failed = palw_v2_project_joint_fees_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &events,
+        &mut |event, _, _| if event.is_none() { Err("discard at tail") } else { Ok(()) },
+        &mut |_, _, _, _| Ok(()),
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(failed, PalwOrderedCandidateFailureV2::Physical { event_index: None, error: "discard at tail" }));
+    assert_eq!(raw.relay_carrier_fees_v2(), Some(observed));
+    let (prefix, fees) = palw_v2_project_joint_fees_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &events,
+        &mut |_, _, _| Ok::<(), &'static str>(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert!(fees.manifest.is_empty());
+    assert!(fees.relay.is_empty(), "a dormant relay cannot acquire a proposed charge");
+    assert_eq!(raw.relay_carrier_fees_v2(), Some(observed), "projection must not rewrite actual UTXO evidence");
+    assert_eq!(prefix.state_v1().last_point(), state.last_point());
+    assert_eq!(budget.remaining_v1().passes, 0, "failed trials consume the same finite allowance");
+    assert!(
+        palw_v2_project_joint_fees_with_physical_checks_v3(
+            &mut budget,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &extras,
+            &events,
+            &mut |_, _, _| Ok::<(), &'static str>(()),
+            &mut |_, _, _, _| Ok(()),
+        )
+        .is_err()
+    );
 }

@@ -7,8 +7,9 @@ use crate::{
         MaterialIntakeScheduleV1,
         batch::{
             admission::{
-                BatchAdmissionQuoteV1, BatchDeliveryV1, CompiledBatchAdmissionV1, NativeBatchDeliveryCostsV1,
-                NativeBatchDeliveryShapeV1, compile_native_batch_plain_selection_v3, compile_native_batch_plain_tokenizer_v2,
+                BatchAdmissionAccountingV1, BatchAdmissionQuoteV1, BatchDeliveryV1, CompiledBatchAdmissionV1,
+                NativeBatchDeliveryCostsV1, NativeBatchDeliveryShapeV1, compile_native_batch_plain_selection_v3,
+                compile_native_batch_plain_tokenizer_v2,
                 plain_selection::{PlainSelectionBranchV3, PlainSelectionBudgetV3},
                 plain_tokenizer::PlainTokenizerBatchBudgetV2,
             },
@@ -56,10 +57,22 @@ pub(crate) struct PlainBatchProspectiveOriginalTermsV2 {
     costs: NativeBatchDeliveryCostsV1,
     tokenizer_budget: PlainTokenizerBatchBudgetV2,
     storage: MaterialIntakeScheduleV1,
+    accounting: BatchAdmissionAccountingV1,
 }
 
 #[allow(dead_code)]
 impl PlainBatchProspectiveOriginalTermsV2 {
+    /// Include every reserved request opportunity, not just one successful
+    /// request. This is the same accounting applied by protected reservation.
+    pub(crate) fn accounting_with_requests_v2(
+        &self,
+        request: ServiceCost,
+        retained: u64,
+        count: usize,
+    ) -> Result<BatchAdmissionAccountingV1, BatchCourtErrorV1> {
+        self.accounting.with_requests_v1(request, retained, count, self.storage)
+    }
+
     pub(crate) fn accepted_daa_v2(&self) -> u64 {
         self.acceptance_clocks.0
     }
@@ -94,6 +107,10 @@ impl PlainBatchOriginalProjectionV2 {
     /// native allocation lease.
     pub(crate) fn source_v1(&self) -> &PalwTirPublicSourceV1 {
         &self.source
+    }
+
+    pub(crate) fn tokenizer_bounds_v2(&self) -> super::super::plain_tokenizer::PlainBatchTokenizerBoundsV2 {
+        self.tokenizer.bounds_v2()
     }
 
     /// Claim-specific Trace payload, excluding transport/opening overhead.
@@ -202,6 +219,24 @@ impl PlainBatchOriginalProjectionV2 {
             output,
             selection: None,
         })
+    }
+
+    /// Refine the output cost after deriving tokenizer bounds from this same
+    /// leased Source. Do not rebuild the Source or substitute a different job.
+    pub(crate) fn with_output_verification_v2(
+        mut self,
+        original: &PalwFreePromptCommitmentV3,
+        service: ServiceCost,
+        daa: u64,
+    ) -> Result<Self, NativeDecodeErrorV1<String>> {
+        let _scratch = reserve_original_hash_writers_v2(original, &self.source.header_v1().job_context)?;
+        let output = PlainBatchOutputV2::derive_v2(original, &self.source, service, daa)
+            .map_err(|why| NativeDecodeErrorV1::Decode(format!("output service: {why:?}")))?;
+        if output.claim != self.claim || output.full_ids_range != self.output.full_ids_range {
+            return Err(NativeDecodeErrorV1::Decode("output service substitutes original".into()));
+        }
+        self.output = output;
+        Ok(self)
     }
 
     /// Extend this exact prospective original using the current native
@@ -396,6 +431,7 @@ impl PlainBatchOriginalProjectionV2 {
             costs,
             tokenizer_budget,
             storage,
+            accounting: compiled.accounting_v1()?,
         })
     }
 
@@ -424,7 +460,7 @@ impl PlainBatchOriginalProjectionV2 {
             terms.storage,
             price,
         )?;
-        if compiled.relative_graph_id_v1() != terms.relative_graph {
+        if compiled.relative_graph_id_v1() != terms.relative_graph || compiled.accounting_v1()? != terms.accounting {
             return Err(BatchCourtErrorV1::CaseGraph);
         }
         Ok(compiled)
@@ -571,9 +607,11 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
             fixture.rules.maximum_leaves,
             StreamingParameterCoverBudgetV1 {
                 total: cover,
-                per_root_edges: cover.max_total_edges,
-                per_root_coordinates: cover.max_total_coordinates,
-                per_root_memberships: cover.max_root_memberships,
+                // This small fixture explores at most 4096 items per root.
+                // The cumulative million-item allowance is not a peak allocation.
+                per_root_edges: 4096,
+                per_root_coordinates: 4096,
+                per_root_memberships: 4096,
                 max_workspace_bytes: 128 << 20,
             },
             512,

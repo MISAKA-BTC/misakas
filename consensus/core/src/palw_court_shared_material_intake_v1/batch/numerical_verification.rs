@@ -24,6 +24,8 @@ pub(crate) const fn verification_carrier_bytes_v1() -> u64 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NumericalBatchReplayBudgetV1 {
     pub work: PalwTirBuilderWorkLimitsV1,
+    /// Explicit private planning meters target and source calls in both passes.
+    pub(crate) meter_checker_io: bool,
     pub workspace_bytes: u64,
     /// Maximum bytes the verification can write as its retained TIR finding.
     pub max_fault_bytes: u64,
@@ -54,14 +56,14 @@ impl NumericalBatchReplayBudgetV1 {
         }
         // Both the construction pass and the independent adjudicator can
         // reach the supplied evaluation ceilings.
+        let requests = self.work.max_target_requests.checked_add(self.work.max_source_reads)?;
         let work = self
             .work
             .evaluation
             .max_elements
             .checked_add(self.work.evaluation.max_terms)?
             .checked_mul(2)?
-            .checked_add(self.work.max_target_requests)?
-            .checked_add(self.work.max_source_reads)?
+            .checked_add(requests.checked_mul(if self.meter_checker_io { 2 } else { 1 })?)?
             .checked_add(self.base_work)?;
         let bytes = VERIFICATION_CARRIER_BYTES.checked_add(self.max_fault_bytes)?;
         Some(ServiceCost { bytes, work, io: self.io, controls: 1 })
@@ -86,6 +88,7 @@ impl NumericalBatchReplayBudgetV1 {
                 max_target_requests: 3,
                 max_source_reads: 4,
             },
+            meter_checker_io: true,
             workspace_bytes: 4096,
             max_fault_bytes: 2048,
             base_work: 5,
@@ -183,7 +186,13 @@ pub(crate) fn quote_numerical_verification_v1(
     params: &crate::palw_state_v2::PalwStateParamsV2,
     claim: Hash64,
     now: u64,
-    rules_at: impl FnOnce(u64) -> Option<(crate::palw_court_close_receipt_v1::NativeCourtRulesV1, NumericalBatchReplayProfileV1)>,
+    rules_at: impl FnOnce(
+        u64,
+    ) -> Option<(
+        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        NumericalBatchReplayProfileV1,
+        super::super::MaterialIntakeScheduleV1,
+    )>,
 ) -> Result<serde_json::Value, String> {
     use crate::palw_court_shared_tir_state_v1::context;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
@@ -198,7 +207,7 @@ pub(crate) fn quote_numerical_verification_v1(
     if slot < now {
         return Err("numerical Batch verification DAA has passed".into());
     }
-    let (rules, profile) = rules_at(slot).ok_or("numerical Batch has no native replay profile at the booked DAA")?;
+    let (rules, profile, schedule) = rules_at(slot).ok_or("numerical Batch has no native replay profile at the booked DAA")?;
     if rules.at.daa_score != slot || profile.service_profile != service.profile_id {
         return Err("numerical Batch native replay profile differs from the original service book".into());
     }
@@ -207,7 +216,8 @@ pub(crate) fn quote_numerical_verification_v1(
     if !service.book.packet(&verification).is_some_and(|packet| packet.cost == cost) {
         return Err("numerical Batch verification exceeds its reserved slot".into());
     }
-    let prepared = super::native_ranges::prepare_numerical_batch_material_v1(state, claim, slot).map_err(|err| err.to_string())?;
+    let prepared = super::native_ranges::prepare_numerical_batch_material_v1(state, claim, slot, schedule.cover)
+        .map_err(|err| err.to_string())?;
     let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(prepared.notice)) else {
         return Err("numerical Batch has no accepted notice".into());
     };
@@ -245,6 +255,7 @@ pub(crate) fn verify_rooted_numerical_batch_v1(
     rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
     signed: &SignedNumericalBatchVerificationV1,
     budget: NumericalBatchReplayBudgetV1,
+    cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 ) -> Result<super::native_ranges::NumericalBatchFindingV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     use crate::palw_court_shared_tir_state_v1::{self as shared, BatchNoticeTargetV1};
     use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
@@ -279,7 +290,7 @@ pub(crate) fn verify_rooted_numerical_batch_v1(
     if target != Some(BatchNoticeTargetV1::Numerical { leaf: signed.leaf }) {
         return Err(invalid("numerical Batch verification differs from its accepted notice"));
     }
-    super::native_ranges::replay_numerical_batch_v1(state, signed.claim, rules, budget)
+    super::native_ranges::replay_numerical_batch_v1(state, signed.claim, rules, budget, cover)
 }
 
 #[cfg(test)]
@@ -340,9 +351,10 @@ mod tests {
         let utxo = UtxoEntry::new(4, ScriptPublicKey::default(), 1, false);
         let tx = ValidatedTransaction::new(PopulatedTransaction::new(&tx, vec![utxo]), 3);
         let at = PalwBlockContextV2 { block: h(11), daa_score: 8, blue_score: 9, subsidy: 0 };
-        let handoff = ValidatedBatchCarrierV1::prepare_v1(&tx, 1, at).unwrap().unwrap();
-        assert_eq!(handoff.wire_at_v1(&at).unwrap(), &wire);
-        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { daa_score: 9, ..at }).is_err());
+        let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1().unwrap();
+        let handoff = ValidatedBatchCarrierV1::prepare_with_schedule_v3(&tx, 1, at, 0, None, schedule).unwrap().unwrap();
+        assert_eq!(handoff.wire_at_v1(&at, &schedule).unwrap(), &wire);
+        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { daa_score: 9, ..at }, &schedule).is_err());
         assert!(handoff.storage_debit_v1(None).unwrap().is_none());
         assert_eq!((handoff.fee_v1().withheld_storage_rent, handoff.fee_v1().collectible_fee), (0, 2));
         payload.pop();
@@ -381,7 +393,7 @@ mod tests {
     fn numerical_replay_quotes_both_passes_and_rejects_unfunded_work() {
         let mut budget = NumericalBatchReplayBudgetV1::test_only_v1();
         let cost = budget.service_cost_v1().unwrap();
-        assert_eq!(cost, ServiceCost { bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 18, io: 6, controls: 1 });
+        assert_eq!(cost, ServiceCost { bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 25, io: 6, controls: 1 });
         assert!(budget.covers_terminal_recheck_v1(cost));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { work: cost.work - 1, ..cost }));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { io: cost.io - 1, ..cost }));

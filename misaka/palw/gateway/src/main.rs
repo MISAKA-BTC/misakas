@@ -278,6 +278,7 @@ struct Config {
     /// default; `--no-answer-fast-path` turns it off). A worker that does not serve the path says
     /// so once and the gateway stops asking.
     answer_fast_path: bool,
+    protected_original: bool,
     /// Per-source open connections and in-flight jobs (RFC-0001 §2.7: connection limits).
     max_connections_per_source: u32,
     max_jobs_per_source: u32,
@@ -1597,7 +1598,7 @@ fn handle_chat(
     // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
     // outage, and what makes an uncertified class an answer rather than a refusal.
     let mut price = ExposurePrice::resolve(config, facts);
-    let mut commit_refusal = facts.commit_refusal();
+    let mut commit_refusal = facts.commit_refusal_for_protected(config.protected_original);
     if commit_refusal.is_none() {
         commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
     }
@@ -1766,6 +1767,15 @@ fn handle_chat(
     let artifact_stem = format!("fp-job-{}", &hex(job_id)[..16]);
     let artifact_borsh = config.outbox.join(format!("{artifact_stem}.result.borsh"));
     let artifact_json = config.outbox.join(format!("{artifact_stem}.json"));
+    // Keep the exact worker input, including Text/Special boundaries. A later
+    // protected-material publisher must not reconstruct it from display text.
+    // These stay in the local outbox; no prompt is added to logs or HTTP metadata.
+    let artifact_request = config.outbox.join(format!("{artifact_stem}.request.borsh"));
+    let artifact_prompt = config.outbox.join(format!("{artifact_stem}.prompt.utf8"));
+    let request_bytes = borsh::to_vec(&request).map_err(|e| format!("cannot serialize the original request: {e}"))?;
+    std::fs::write(&artifact_request, &request_bytes).map_err(|e| format!("cannot write {}: {e}", artifact_request.display()))?;
+    std::fs::write(&artifact_prompt, plan.displayed.as_bytes())
+        .map_err(|e| format!("cannot write {}: {e}", artifact_prompt.display()))?;
     let result_bytes = borsh::to_vec(&result).map_err(|e| format!("cannot serialize the artifact: {e}"))?;
     std::fs::write(&artifact_borsh, &result_bytes).map_err(|e| format!("cannot write {}: {e}", artifact_borsh.display()))?;
     // **The commitment is written only when the chain and the operator's exposure both allow it**
@@ -1867,7 +1877,7 @@ fn handle_chat(
         )
         .to_json()
     });
-    let summary = serde_json::json!({
+    let mut summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
         "template_id": plan.template_id,
@@ -1925,6 +1935,10 @@ fn handle_chat(
             "misaka-palw-fp-rail --watch <outbox> (every job), or --artifact <stem> ... --submit --rpc <host:port> (this one)",
         ],
     });
+    // Keep the retained-input fields outside the already large summary macro.
+    summary["request_file"] = serde_json::json!(artifact_request.file_name().and_then(|name| name.to_str()));
+    summary["request_hash"] = serde_json::json!(hex(fp_worker_request_hash_v3(&request_bytes)));
+    summary["prompt_display_file"] = serde_json::json!(artifact_prompt.file_name().and_then(|name| name.to_str()));
     std::fs::write(&artifact_json, serde_json::to_vec_pretty(&summary).unwrap())
         .map_err(|e| format!("cannot write {}: {e}", artifact_json.display()))?;
     // **One line per job, in the log an operator already watches.** The gateway printed nothing
@@ -2339,7 +2353,7 @@ fn handle_chat_candidates(
     // **RFC-0001 §2.7 stage 2: when the refusal to commit is static** (the chain's facts, or
     // `--answer-never-commit` — not the budget, which moves per job) every candidate is an answer
     // and none a claim, so the worker decodes them TOGETHER, each in its own sequence.
-    let static_refusal = facts.commit_refusal().or_else(|| {
+    let static_refusal = facts.commit_refusal_for_protected(config.protected_original).or_else(|| {
         config.answer_never_commit.then(|| "this gateway runs in `answer, never commit` mode (ADR-0077 SA-1c)".to_string())
     });
     let bodies_from_batch = match static_refusal {
@@ -2497,6 +2511,7 @@ fn main() {
     let mut worker_processes: usize = 1;
     let mut worker_args: Vec<String> = Vec::new();
     let mut answer_fast_path = true;
+    let mut protected_original = false;
     let mut max_connections_per_source = DEFAULT_MAX_CONNECTIONS_PER_SOURCE;
     let mut max_jobs_per_source = DEFAULT_MAX_JOBS_PER_SOURCE;
     let mut sidecar_path: Option<PathBuf> = None;
@@ -2561,6 +2576,7 @@ fn main() {
                 worker_args.extend(["--kv-cache-verify-every".to_string(), n.to_string()]);
             }
             "--no-answer-fast-path" => answer_fast_path = false,
+            "--protected-original" => protected_original = true,
             "--no-cancel-on-disconnect" => cancel_on_disconnect = false,
             // Repeat it, or comma-separate: every provider named gets a copy. `testnet12` names the public testnet-12 providers
             // (`misaka_endpoints::testnet12_evidence_providers_v1`, one or more).
@@ -2630,6 +2646,7 @@ fn main() {
         worker_processes: worker_processes.clamp(1, MAX_WORKER_PROCESSES),
         worker_args,
         answer_fast_path,
+        protected_original,
         max_connections_per_source: max_connections_per_source.max(1),
         max_jobs_per_source: max_jobs_per_source.max(1),
         sidecar: sidecar_path.as_deref().map(|p| SidecarRuntime::load(p).unwrap_or_else(|e| die(e))),
@@ -3052,7 +3069,7 @@ fn serve_connection(
                     },
                     "bond_present": !identity.bond_txid_hex.is_empty(),
                     "chain": facts.health_json(),
-                    "commit_refusal": facts.commit_refusal(),
+                    "commit_refusal": facts.commit_refusal_for_protected(config.protected_original),
                     "can_submit": chain_source.can_submit(),
                     "posture": {
                         "listen": config.listen,
@@ -3548,6 +3565,7 @@ mod tests {
             worker_processes: 1,
             worker_args: Vec::new(),
             answer_fast_path: true,
+            protected_original: false,
             max_connections_per_source: DEFAULT_MAX_CONNECTIONS_PER_SOURCE,
             max_jobs_per_source: DEFAULT_MAX_JOBS_PER_SOURCE,
             sidecar: None,

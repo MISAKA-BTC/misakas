@@ -296,6 +296,7 @@ mod tests {
         let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire);
         let duty = PalwSeatDutyV2 {
             model_panel_one: false,
+            protected_replay: None,
             accepted_block: h(1),
             claim_id: payload.claim_id(),
             class_id: job.class_id,

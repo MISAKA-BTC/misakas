@@ -238,6 +238,9 @@ pub fn palw_seat_lock_required_v2(max_fraud_gain: u128, colluding_quorum: u64) -
 /// [`palw_door_colluding_signers_v1`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwLicenceDoorV1 {
+    /// Protected original: a backed whole-claim receipt, with a separately
+    /// included full-replay approval still required before Final.
+    ProtectedPanelReplay,
     /// G14 all-model route: one authenticated whole-claim approval.
     G14PanelOne,
     /// V1 `ReceiptLicensed`, and the supplementary receipts that ride it: a quorum of `Valid`s.
@@ -271,11 +274,14 @@ pub enum PalwLicenceDoorTagV1 {
     ShardPart { quorum_per_shard: u16 } = 3,
     /// Distinct stored route identity; never an optimistic or partial receipt.
     G14PanelOne = 4,
+    /// Protected-original route; does not prescribe the selected panel size.
+    ProtectedPanelReplay = 5,
 }
 
 impl From<PalwLicenceDoorV1> for PalwLicenceDoorTagV1 {
     fn from(door: PalwLicenceDoorV1) -> Self {
         match door {
+            PalwLicenceDoorV1::ProtectedPanelReplay => Self::ProtectedPanelReplay,
             PalwLicenceDoorV1::Quorum => Self::Quorum,
             PalwLicenceDoorV1::G14PanelOne => Self::G14PanelOne,
             PalwLicenceDoorV1::Coverage => Self::Coverage,
@@ -301,7 +307,7 @@ pub fn palw_door_colluding_signers_v1(door: PalwLicenceDoorV1) -> u64 {
     let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
     match door {
         PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage => quorum,
-        PalwLicenceDoorV1::Optimistic | PalwLicenceDoorV1::G14PanelOne => 1,
+        PalwLicenceDoorV1::Optimistic | PalwLicenceDoorV1::G14PanelOne | PalwLicenceDoorV1::ProtectedPanelReplay => 1,
         PalwLicenceDoorV1::ShardPart { quorum_per_shard } => u64::from(quorum_per_shard).clamp(1, quorum),
     }
 }
@@ -461,11 +467,14 @@ mod tests {
         let tag = |d: PalwLicenceDoorTagV1| borsh::to_vec(&d).unwrap();
         assert_eq!(tag(PalwLicenceDoorTagV1::Quorum), vec![0]);
         assert_eq!(tag(PalwLicenceDoorTagV1::G14PanelOne), vec![4]);
+        assert_eq!(tag(PalwLicenceDoorTagV1::ProtectedPanelReplay), vec![5]);
+        assert_eq!(palw_door_colluding_signers_v1(PalwLicenceDoorV1::ProtectedPanelReplay), 1);
         assert_eq!(palw_door_colluding_signers_v1(PalwLicenceDoorV1::G14PanelOne), 1);
         assert_eq!(tag(PalwLicenceDoorTagV1::Coverage), vec![1]);
         assert_eq!(tag(PalwLicenceDoorTagV1::Optimistic), vec![2]);
         assert_eq!(tag(PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 0x0302 }), vec![3, 0x02, 0x03]);
         for (door, stored) in [
+            (PalwLicenceDoorV1::ProtectedPanelReplay, PalwLicenceDoorTagV1::ProtectedPanelReplay),
             (PalwLicenceDoorV1::G14PanelOne, PalwLicenceDoorTagV1::G14PanelOne),
             (PalwLicenceDoorV1::Quorum, PalwLicenceDoorTagV1::Quorum),
             (PalwLicenceDoorV1::Coverage, PalwLicenceDoorTagV1::Coverage),
@@ -476,6 +485,6 @@ mod tests {
             let bytes = tag(stored);
             assert_eq!(borsh::from_slice::<PalwLicenceDoorTagV1>(&bytes).unwrap(), stored);
         }
-        assert!(borsh::from_slice::<PalwLicenceDoorTagV1>(&[5]).is_err(), "no sixth door");
+        assert!(borsh::from_slice::<PalwLicenceDoorTagV1>(&[6]).is_err(), "no seventh door");
     }
 }

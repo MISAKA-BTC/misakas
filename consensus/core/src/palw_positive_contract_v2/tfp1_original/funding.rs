@@ -108,7 +108,7 @@ impl<'booking> Tfp1FundingRequirementsV1<'booking> {
         if facts != *obligation.facts_v1() {
             return Err(Scope.into());
         }
-        obligation.check_companion_v1(companion, budget).map_err(|_| Scope)?;
+        obligation.check_companion_at_v2(companion, budget, Some(booking.accepted_daa_v2())).map_err(|_| Scope)?;
         let original = companion.id();
         if booking.original_v1() != original || booking.obligation_v1() != obligation {
             return Err(Scope.into());

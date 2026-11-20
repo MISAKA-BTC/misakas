@@ -189,7 +189,9 @@ impl PaidManifestRequestRowV1 {
             return Err(ContractError::Scope);
         }
         if self.version == SERIES_VERSION {
-            if !link.uses_public_frame_v1() { return Err(ContractError::Scope); }
+            if !link.uses_public_frame_v1() {
+                return Err(ContractError::Scope);
+            }
             let service = state.court_service_row_v3_v1().ok_or(ContractError::Scope)?;
             let binding = service.state.claims.get(&self.claim).ok_or(ContractError::Scope)?;
             let packet = service.state.book.packet(&self.packet_id).ok_or(ContractError::Scope)?;
@@ -199,7 +201,9 @@ impl PaidManifestRequestRowV1 {
                 || service.causal.contains_key(&self.packet_id)
                 || service.state.book.assigned_daa(&self.packet_id) != Some(self.origin.accepted_daa)
                 || !(packet.release_daa..packet.service_before).contains(&self.origin.accepted_daa)
-            { return Err(ContractError::Scope); }
+            {
+                return Err(ContractError::Scope);
+            }
         }
         let key = PendingManifestCaseRecordV1::key(self.original, self.case);
         let bytes = route.aux.get(&(PUBLIC_PENDING_MANIFEST_TABLE_V1, key.to_vec())).ok_or(ContractError::Scope)?;
@@ -236,7 +240,8 @@ impl PaidManifestRequestRowV1 {
 impl NativeWireScanV1 for PaidManifestRequestRowV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         let row = Self::read_wire_v1(reader)?;
-        let stable = manifest_request_packet_id_v1(row.claim, row.reservation_scope).map_err(|_| wire_bad("invalid paid ManifestRequest scope"))?;
+        let stable = manifest_request_packet_id_v1(row.claim, row.reservation_scope)
+            .map_err(|_| wire_bad("invalid paid ManifestRequest scope"))?;
         row.check_shape_v1(&stable).map_err(|_| wire_bad("invalid paid ManifestRequest row"))?;
         Ok(NativeWireShapeV1::default())
     }
@@ -302,9 +307,14 @@ mod tests {
         assert_eq!(row.check_insert_at_v1(&at), Ok(()));
         assert!(row.check_insert_at_v1(&PalwBlockContextV2 { blue_score: 9, ..at }).is_err());
         let late_packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v2(
-            scope.claim, scope.reservation_scope, 1,
-        ).unwrap();
-        let late = PaidManifestRequestRowV1::new_for_slot_v2(scope, row.original, row.case, origin, row.request_digest, late_packet, 13).unwrap();
+            scope.claim,
+            scope.reservation_scope,
+            1,
+        )
+        .unwrap();
+        let late =
+            PaidManifestRequestRowV1::new_for_slot_v2(scope, row.original, row.case, origin, row.request_digest, late_packet, 13)
+                .unwrap();
         let late_bytes = borsh::to_vec(&late).unwrap();
         assert_eq!(late_bytes.len(), PaidManifestRequestRowV1::WIRE_BYTES);
         assert_eq!(late.key_v1(), row.key_v1(), "another slot must not create a second rank key");
@@ -312,7 +322,10 @@ mod tests {
         assert_eq!(PaidManifestRequestRowV1::decode_row(&key, &late_bytes), Ok(late));
         assert!(PaidManifestRequestRowV1::decode_row(&late_packet, &late_bytes).is_err());
         assert!(preflight(&key, &late_bytes).is_ok());
-        assert!(PaidManifestRequestRowV1::scan_native_wire_v1(&mut NativeWireReaderV1::new(&late_bytes[..], late_bytes.len() as u64)).is_ok());
+        assert!(
+            PaidManifestRequestRowV1::scan_native_wire_v1(&mut NativeWireReaderV1::new(&late_bytes[..], late_bytes.len() as u64))
+                .is_ok()
+        );
         let forged_legacy = PaidManifestRequestRowV1 { version: VERSION, ..late };
         assert!(PaidManifestRequestRowV1::decode_row(&key, &borsh::to_vec(&forged_legacy).unwrap()).is_err());
     }

@@ -3876,7 +3876,13 @@ pub fn palw_receipt_set_basis_k_v1(masks: &[crate::palw_verification_v2::PalwSeg
 /// The stored licence route fixes its basis across reload and reorg. A G14
 /// whole-claim approval is distinct from the historical optimistic S2 door.
 pub fn palw_rcore_required_basis_of_claim_v1(claim: &PalwClaimStateV2) -> u8 {
-    if claim.rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne) {
+    if matches!(
+        claim.rcore.licence_door,
+        Some(
+            crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne
+                | crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::ProtectedPanelReplay
+        )
+    ) {
         1
     } else {
         PALW_RCORE_FINAL_BASIS_K_V1
@@ -4073,6 +4079,13 @@ pub fn palw_claim_final_floor_v1(
         Some(frame) => floor.max(frame.plan_v1().terms.collect_until_daa),
         None => floor,
     };
+    // A protected TFP1 frame is not a legacy TirClaim. Final stays after its
+    // notice window so a panel can still open a case. The hard deadline is
+    // unchanged. Claims without that frame keep the floor above.
+    let floor = match protected_frame_notice_floor_v1(state, claim_id, claim.accepted_daa)? {
+        Some(notice_end) => floor.max(notice_end),
+        None => floor,
+    };
     // **Lane g14-fam-panelda (ADR-0206): a governed PanelDa claim reaches `Final` only past its disclosure deadline**, so no reward,
     // weight or settlement credit moves before its prompt is public (or it defaults). The row exists only past the fence.
     let floor = match palw_panel_da_disclosure_fold_v1::palw_panel_da_final_floor_v1(state, claim_id) {
@@ -4088,6 +4101,269 @@ pub fn palw_claim_final_floor_v1(
         Some(horizon) => floor.max(horizon),
         None => floor,
     })
+}
+
+/// Whether this claim has a stored protected TFP1 frame naming it.
+pub fn claim_has_protected_frame_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
+    matches!(
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id)),
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == *claim_id
+    )
+}
+
+/// Notice end for a stored protected TFP1 frame, if this claim has one.
+/// `Ok(None)` when the claim has no such frame, so every other claim's floor is unchanged.
+fn protected_frame_notice_floor_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    accepted_daa: u64,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    match state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id)) {
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == *claim_id => {
+            Ok(Some(
+                accepted_daa
+                    .checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA)
+                    .ok_or(PalwStateV2Error::Overflow("protected notice floor"))?,
+            ))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Last DAA a protected frame's winning quantum may be spent. `Ok(None)` when
+/// the claim has no such frame, so the receipt use window stays as it is.
+/// The end is the earlier of the hard deadline and the retained material horizon.
+pub fn palw_protected_receipt_spend_deadline_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    accepted_daa: u64,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    if protected_frame_notice_floor_v1(state, claim_id, accepted_daa)?.is_none() {
+        return Ok(None);
+    }
+    let hard = accepted_daa
+        .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        .ok_or(PalwStateV2Error::Overflow("protected receipt hard"))?;
+    let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) =
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id))
+    else {
+        return Ok(None);
+    };
+    if frame.claim_v1() != *claim_id {
+        return Ok(None);
+    }
+    Ok(Some(hard.min(frame.material_until_daa_v1())))
+}
+
+/// A protected frame's receipt quantum may be spent only after its notice window
+/// and no later than its hard deadline or retained material horizon. A claim
+/// without that frame is unchanged.
+pub fn palw_protected_receipt_window_open_v1(state: &PalwChainStateV2, claim_id: &Hash64, accepted_daa: u64, now: u64) -> bool {
+    let notice_end = match protected_frame_notice_floor_v1(state, claim_id, accepted_daa) {
+        Ok(Some(notice_end)) => notice_end,
+        Ok(None) => return true,
+        Err(_) => return false,
+    };
+    let Some(end) = palw_protected_receipt_spend_deadline_v1(state, claim_id, accepted_daa).ok().flatten() else {
+        return false;
+    };
+    now > notice_end && now <= end
+}
+
+/// A protected frame binds its panel only inside the notice window, and only
+/// when that panel names a seat. A claim without the frame is unchanged.
+pub fn palw_protected_panel_bind_admits_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    seat_count: usize,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) =
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id))
+    else {
+        return Ok(());
+    };
+    if frame.claim_v1() != *claim_id {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected frame names another claim".into()));
+    }
+    if seat_count == 0 {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected panel is empty".into()));
+    }
+    let notice_end = frame
+        .origin_v1()
+        .accepted_daa
+        .checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA)
+        .ok_or(PalwStateV2Error::Overflow("protected panel notice"))?;
+    if now > notice_end {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected panel bound after its notice window".into()));
+    }
+    Ok(())
+}
+
+/// Count a protected frame's bound-seat `Valid` only inside its notice window.
+/// One timely approval is required; the caller still applies its own door.
+/// A claim without the frame is unchanged.
+pub fn palw_protected_licence_receipts_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    seats: &[PalwPanelSeatV2],
+    receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+) -> Result<(), PalwStateV2Error> {
+    let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) =
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id))
+    else {
+        return Ok(());
+    };
+    if frame.claim_v1() != *claim_id {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected frame names another claim".into()));
+    }
+    let claim = state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+    palw_protected_admission_reads_back_v1(state, claim_id, claim)?;
+    let accepted = frame.origin_v1().accepted_daa;
+    let notice_end = accepted
+        .checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA)
+        .ok_or(PalwStateV2Error::Overflow("protected licence notice"))?;
+    let mut timely = false;
+    for receipt in receipts {
+        if receipt.claim != *claim_id || receipt.verdict != crate::palw_panel_v2::PalwReceiptVerdictV2::Valid {
+            continue;
+        }
+        if !seats.iter().any(|seat| seat.bond == receipt.seat_bond) {
+            continue;
+        }
+        if !(accepted..=notice_end).contains(&receipt.signed_daa) {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "protected licence carries a Valid receipt outside the notice window".into(),
+            ));
+        }
+        timely = true;
+    }
+    if !timely {
+        return Err(PalwStateV2Error::CarriageInconsistent(
+            "protected licence has no bound seat's Valid receipt inside the notice window".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The same notice rule for one TIR shard part, using that part's own seats.
+pub fn palw_protected_tir_shard_part_timely_v1(
+    state: &PalwChainStateV2,
+    part: &crate::palw_tir_shard_v1::PalwTirShardPartV1,
+) -> Result<(), PalwStateV2Error> {
+    if !matches!(
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(part.claim)),
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == part.claim
+    ) {
+        return Ok(());
+    }
+    let record = state.tir_shard_claims.get(&part.claim).ok_or(PalwStateV2Error::NotLicensedByParts(part.claim))?;
+    let panel = state.panels.get(&part.claim).ok_or(PalwStateV2Error::EmptyPanel)?;
+    let slice = crate::palw_tir_shard_v1::palw_tir_panel_shard_slice_v1(&panel.seats, record.s_l, record.outsider, part.shard)
+        .ok_or(PalwStateV2Error::NotLicensedByParts(part.claim))?;
+    let receipts: Vec<_> = part.receipts.iter().map(|receipt| receipt.receipt.clone()).collect();
+    palw_protected_licence_receipts_v1(state, &part.claim, slice, &receipts)
+}
+
+/// The same notice rule for one stratified shard part, using that part's own seats.
+pub fn palw_protected_shard_part_timely_v1(
+    state: &PalwChainStateV2,
+    part: &crate::palw_shard_licensing_v1::PalwShardReceiptPartV1,
+    seats_per_shard: u16,
+) -> Result<(), PalwStateV2Error> {
+    if !matches!(
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(part.claim)),
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == part.claim
+    ) {
+        return Ok(());
+    }
+    let plan = crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, &part.claim, seats_per_shard)
+        .ok_or(PalwStateV2Error::NotLicensedByParts(part.claim))?;
+    let panel = state.panels.get(&part.claim).ok_or(PalwStateV2Error::EmptyPanel)?;
+    let slice =
+        crate::palw_shard_licensing_v1::palw_panel_shard_slice_v1(&panel.seats, plan.shard_count, seats_per_shard, part.shard_index)
+            .ok_or(PalwStateV2Error::NotLicensedByParts(part.claim))?;
+    palw_protected_licence_receipts_v1(state, &part.claim, slice, &part.receipts)
+}
+
+/// The stored protected frame, its admission link, and this claim row name one
+/// inclusion. `Ok(())` when the claim has no protected frame.
+pub fn palw_protected_admission_reads_back_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
+    let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) =
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id))
+    else {
+        return Ok(());
+    };
+    if frame.claim_v1() != *claim_id {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected frame names another claim".into()));
+    }
+    let origin = frame.origin_v1();
+    let fp = frame.original_v1();
+    if origin.accepting_block.0 != claim.accepted_block.as_bytes()
+        || origin.accepted_daa != claim.accepted_daa
+        || origin.accepted_blue_score != claim.accepted_blue_score
+        || frame.producer_v1() != claim.bond
+        || !matches!(&claim.source, PalwClaimSourceV2::FreePrompt { .. })
+        || fp.job.class_id != claim.class_id
+        || fp.execution_root != claim.execution_root
+        || fp.trace_root != claim.trace_root
+        || fp.output_root != claim.output_root
+        || fp.work_leaves != claim.work_leaves
+        || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&frame.header_v1().job_context) != claim.job_identity
+    {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected frame does not match the admitted claim".into()));
+    }
+    // The parent point is still behind this block while the admission is folding.
+    // A later tip is the stronger check. The accepting point itself is enough
+    // when the parent has not reached it yet.
+    let point = match state.last_point() {
+        Some(last) if last.daa_score >= origin.accepted_daa && last.blue_score >= origin.accepted_blue_score => *last,
+        _ => PalwBlockContextV2 {
+            block: Hash64::from_bytes(origin.accepting_block.0),
+            daa_score: origin.accepted_daa,
+            blue_score: origin.accepted_blue_score,
+            subsidy: 0,
+        },
+    };
+    let link = state
+        .public_tfp1_original_link_at_v1(*claim_id, &point)
+        .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("protected admission link does not read back: {error:?}")))?;
+    let Some(link) = link else {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected claim has no admission link".into()));
+    };
+    if link.claim_v1() != *claim_id || link.original_v1() != frame.original_id_v1() || link.carrier_v1().origin != origin {
+        return Err(PalwStateV2Error::CarriageInconsistent("protected admission link names another original".into()));
+    }
+    link.check_public_frame_record_v1(frame).map_err(|error| {
+        PalwStateV2Error::CarriageInconsistent(format!("protected admission link does not match its frame: {error:?}"))
+    })?;
+    Ok(())
+}
+
+/// A stored public court record for this protected frame's original. Claims
+/// without that frame are unchanged.
+pub fn palw_protected_refutation_recorded_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> bool {
+    let Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) =
+        state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(*claim_id))
+    else {
+        return false;
+    };
+    if frame.claim_v1() != *claim_id {
+        return false;
+    }
+    let Some(route) = state.kernel_route_state_v1() else { return false };
+    let original = frame.original_id_v1().0.0;
+    let start = (crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1, original.to_vec());
+    match route.aux.range(start..).next() {
+        Some(((table, key), _)) => {
+            *table == crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1 && key.starts_with(&original)
+        }
+        None => false,
+    }
 }
 
 /// **What a node reads to date a claim's verification duties** (§4-quater N-1, N-8, N-9): one
@@ -4256,6 +4532,11 @@ pub fn palw_rcore_upgraded_door_v1(
     claim_id: &Hash64,
 ) -> crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 {
     use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+    // More receipts never turn the protected route into a historical quorum.
+    // Its separate included full-replay approval remains mandatory at Final.
+    if claim_has_protected_frame_v1(state, claim_id) {
+        return PalwLicenceDoorTagV1::ProtectedPanelReplay;
+    }
     let (masks, segments) = palw_rcore_counted_masks_v1(state, claim_id);
     if masks.iter().any(|mask| !mask.is_full(segments)) { PalwLicenceDoorTagV1::Coverage } else { PalwLicenceDoorTagV1::Quorum }
 }
@@ -11712,6 +11993,7 @@ pub struct PalwChainStateV2 {
 mod chain_state;
 mod evm_replay_settlements_owned_v2;
 mod evm_view_owned_v2;
+pub mod included_replay;
 pub use evm_view_owned_v2::{NativeEvmMarketGateInputsV2, NativeEvmViewQuoteV2};
 #[path = "palw_court_archive_verify_v1.rs"]
 mod palw_court_archive_verify_v1;
@@ -13695,6 +13977,9 @@ impl PalwBondRegistrationIndexV1 {
 struct TransitionBuilder<'a> {
     tfp1_history_journal_parent: Option<Hash64>,
     tfp1_original_prefix: Option<objects::Tfp1OriginalPrefixV1>,
+    /// Admission rows captured while installing a protected original. Written
+    /// after the kernel route tick, with the other public admission rows.
+    queued_public_admissions: Vec<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
     /// Only the object dispatcher sets this while owning the paired rollback.
     paired_original_checkpoint_claim: Option<Hash64>,
     plain_output_terminal_checkpoint_active_v2: bool,
@@ -14278,6 +14563,7 @@ mod court_archive_inverse_v1;
 mod input_views;
 mod native_mutation;
 mod native_writers;
+mod paid_manifest_inverse_v1;
 mod row_writer;
 mod row_writers;
 mod tfp1_original_inverse_v1;
@@ -15078,6 +15364,52 @@ pub fn palw_v2_apply_one_tokenizer_registration_owned_v1(
     Ok((next, fee, refusal))
 }
 
+/// Apply one natively prepared Manifest request to the disposable Node
+/// selection prefix using the same paid writer as the complete ordered fold.
+/// This consumes the prefix owner, never exports a partial result on failure,
+/// and does not finalize the block. The full prefix must later reproduce the
+/// returned fee from a fresh immutable UTXO seed.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_manifest_request_owned_v3(
+    base: crate::palw_native_resource_v1::NativeChainStateV1,
+    accepted_parent: &PalwChainStateV2,
+    accepted_parent_root: Hash64,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_positive_contract_v2::PreparedNativeManifestRequestV3,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (crate::palw_native_resource_v1::NativeChainStateV1, crate::palw_positive_contract_v2::ManifestRequestFeeV1),
+    PalwStateV2Error,
+> {
+    let (state, reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::take_state_v1(base)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let previous_requests = reservation.requests_v1();
+    let mut builder = TransitionBuilder::from_native_parts_v1(
+        state,
+        reservation,
+        params,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .with_native_original_parent_v19(accepted_parent);
+    prepare_rehearsal_builder_v1(&mut builder, ctx)?;
+    let fee = builder.install_shared_paid_manifest_request_v1(accepted_parent_root, ctx, &carrier.prepared, &carrier.seed)?;
+    settle_rehearsal_builder_v1(&mut builder, ctx)?;
+    if builder.entries.is_empty() {
+        builder.entries = Vec::new();
+        builder.native_reservation.restore_requests_v1(previous_requests).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    Ok((builder.native_reservation.finish_state_envelope_v1(builder.state), fee))
+}
+
 /// BCT2 slot selection hint. Actual accepted processing checks funding,
 /// notice, signature, evidence and the original at the exact accepting point.
 pub fn palw_batch_plain_output_template_slot_v2(
@@ -15117,6 +15449,19 @@ pub fn palw_batch_template_slot_v1(
     state: &PalwChainStateV2,
     tx: &crate::tx::Transaction,
     at: &PalwBlockContextV2,
+) -> Result<(), String> {
+    let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1()
+        .map_err(|_| "Batch template material schedule is absent")?;
+    palw_batch_template_slot_with_schedule_v1(state, tx, at, schedule)
+}
+
+/// Template construction selects this preimage once for the candidate. The
+/// hint neither changes a retained draft nor supplies UTXO/fold authority.
+pub fn palw_batch_template_slot_with_schedule_v1(
+    state: &PalwChainStateV2,
+    tx: &crate::tx::Transaction,
+    at: &PalwBlockContextV2,
+    schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
 ) -> Result<(), String> {
     use crate::palw_batch_court_v1::{
         BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
@@ -15179,6 +15524,7 @@ pub fn palw_batch_template_slot_v1(
                 at.daa_score,
                 intake,
                 control.demand_ordinal,
+                schedule,
             )
             .map(|_| ())
             .map_err(|why| why.to_string())
@@ -16347,6 +16693,7 @@ fn apply_palw_transition_v7_inner(
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
     builder.state.last_point = Some(*ctx);
+    builder.write_queued_public_admissions_v1(ctx)?;
     for original in &extras.public_original_admissions {
         if let Some((key, row)) = original
             .storage_row(&builder.state, ctx)
@@ -19629,6 +19976,7 @@ fn apply_receipt_licensed_v2(
         return builder.license_rcore_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
     }
     let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+    palw_tir_public_fold_v1::require_protected_panel_valid_v1(builder, *claim_id, &inner)?;
     if builder.extras.audit_2026_09_23_active
         && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?
     {
@@ -20489,10 +20837,12 @@ pub fn palw_fp_lane_available_v1(
 
 mod ordered_prefix;
 pub use ordered_prefix::{
-    PalwOrderedCandidateFailureV2, PalwOrderedObjectStageV2, PalwOrderedPhysicalEventV3, PalwOrderedPhysicalKindV3,
-    PalwOrderedPrefixV1, PalwOrderedReplayBudgetV1, PalwOrderedReplayFailureV1, PalwOrderedReplayLimitsV1,
-    PalwOrderedReplayLocationV1, PalwOrderedReplayRulesV1, palw_v2_replay_accepted_prefix_v1,
-    palw_v2_replay_accepted_prefix_with_checks_v2, palw_v2_replay_accepted_prefix_with_physical_checks_v3,
+    PalwJointFeeProjectionV3, PalwManifestRequestFeeProjectionV3, PalwOrderedCandidateFailureV2, PalwOrderedObjectStageV2,
+    PalwOrderedPhysicalEventV3, PalwOrderedPhysicalKindV3, PalwOrderedPrefixV1, PalwOrderedReplayBudgetV1, PalwOrderedReplayFailureV1,
+    PalwOrderedReplayLimitsV1, PalwOrderedReplayLocationV1, PalwOrderedReplayRulesV1, PalwRelayFeeProjectionV3,
+    palw_v2_project_joint_fees_with_physical_checks_v3, palw_v2_project_manifest_fees_with_physical_checks_v3,
+    palw_v2_replay_accepted_prefix_v1, palw_v2_replay_accepted_prefix_with_checks_v2,
+    palw_v2_replay_accepted_prefix_with_physical_checks_v3,
 };
 
 mod objects;
@@ -21051,6 +21401,13 @@ fn apply_receipt_spend(
     if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
         return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ReceiptSpend" });
     }
+    if !palw_protected_receipt_window_open_v1(&builder.state, &claim_id, claim.accepted_daa, ctx.daa_score) {
+        return Err(PalwStateV2Error::ExecV2Refused("protected receipt window is closed".into()));
+    }
+    palw_protected_admission_reads_back_v1(&builder.state, &claim_id, &claim)?;
+    if palw_protected_refutation_recorded_v1(&builder.state, &claim_id) {
+        return Err(PalwStateV2Error::ExecV2Refused("protected claim has a recorded refutation".into()));
+    }
     // **2026-09-24 DoS audit #5, the forfeiture half.** A free-prompt `Final` licenses receipt
     // blocks, each paid the unescrowed worker base at the coinbase — the audit measured one W₀ of
     // fabricated compute at ~3,200 MSK of such blocks against a seat lock of ~7 MSK. ADR-0151
@@ -21299,6 +21656,9 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// Node-owned planning declaration selected at this block's inclusion DAA.
+    /// Archive replay resolves it at the original point, never today's tip.
+    pub protected_planning_v3: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,
     /// Historical fixture chooses the existing pre-scoped F1 retention writer
     /// before actual admission. No claim/source/snapshot is transplanted.
     #[cfg(test)]
@@ -21687,6 +22047,12 @@ pub struct PalwTransitionExtrasV1 {
     /// Exact native prefix fee effects, independently checked by actual replay.
     pub tokenizer_registration_expected_fees_v1:
         BTreeMap<Hash64, crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1>,
+
+    /// Native-authenticated Manifest requests in accepted transaction order.
+    /// Empty by default. A transport decode alone cannot construct this input.
+    pub manifest_request_carriers_v3: Vec<(usize, crate::palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3)>,
+    /// Candidate-local fee projection; actual ordered replay must match exactly.
+    pub manifest_request_expected_fees_v3: BTreeMap<Hash64, crate::palw_positive_contract_v2::ManifestRequestFeeV1>,
 
     /// Native-resolved original TIR rules, never limits deserialized from a carrier.
     /// None keeps the new original-allocation route dormant.

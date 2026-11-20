@@ -1201,7 +1201,7 @@ pub struct PalwRootedTokenizerOpeningBoundsV1 {
 }
 
 impl PalwRootedTokenizerOpeningBoundsV1 {
-    fn from_facts(registration_id: Hash64, facts: &PalwDerivedTokenizerRenderingV2) -> Self {
+    pub(crate) fn from_facts(registration_id: Hash64, facts: &PalwDerivedTokenizerRenderingV2) -> Self {
         let vocab = u64::from(facts.statement.vocab);
         let leaves = vocab + 1;
         let rendering_siblings = crate::palw_step_leg::step_leg_max_opening_siblings_v1(leaves) as u64;

@@ -242,6 +242,67 @@ impl PalwPanelService {
                     self.config.fee_outpoint.as_deref().unwrap_or("unset")
                 );
             }
+            // Keep completed replay work until hard, even after inclusion: a
+            // reorg can remove its approval. Never hold the queue lock across
+            // chain reads, a mempool query, signing, or transaction submission.
+            let full_replay_candidates = {
+                let mut pending = self.pending_full_replay.lock().unwrap();
+                pending.retain(|entry| current_daa <= entry.hard);
+                if funding.is_some() { pending.iter().copied().collect::<Vec<_>>() } else { Vec::new() }
+            };
+            let mut full_replay_payload = None;
+            for item in full_replay_candidates {
+                if let Some(txid) = item.submitted
+                    && self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .has_transaction(txid, kaspa_mining::model::tx_query::TransactionQuery::All)
+                        .await
+                {
+                    continue;
+                }
+                // This signs only if the current branch has no approval for
+                // this claim and seat. Eviction permits a new funded carrier.
+                if let Some(payload) = self.full_replay_payload_v1(session, item) {
+                    full_replay_payload = Some((item, payload));
+                    break;
+                }
+            }
+            if let Some((item, payload)) = full_replay_payload
+                && let Some((funding_outpoint, funding_entry)) = funding.clone()
+            {
+                match self.prepare_native_payload_carrier_v1(&payload, funding_outpoint, &funding_entry) {
+                    Ok(prepared) => match self.submit_prepared_carrier_v1(session, prepared).await {
+                        Ok(sent) => {
+                            let next = sent.record_change(
+                                &mut carrier_chain.book_with_funding(&mut funding),
+                                CarrierInFlightUpdateV1::Increment,
+                                |next| self.persist_fee_outpoint(next),
+                            );
+                            info!(
+                                "[{PALW_PANEL}] submitted a full-replay approval claim={} original={} accepting_block={} txid={}",
+                                item.claim, item.binding.original, item.binding.accepting_block, next.transaction_id
+                            );
+                            if let Some(queued) = self
+                                .pending_full_replay
+                                .lock()
+                                .unwrap()
+                                .iter_mut()
+                                .find(|queued| queued.binding == item.binding && queued.bond == item.bond)
+                            {
+                                queued.submitted = Some(next.transaction_id);
+                            }
+                        }
+                        Err(error) => {
+                            warn!("[{PALW_PANEL}] the mempool refused the full-replay approval: {error}");
+                        }
+                    },
+                    Err(error) => {
+                        warn!("[{PALW_PANEL}] a full-replay approval was not funded: {error}");
+                    }
+                }
+            }
             // **V04: a waiting proof holds the receipts for ITS tick, never longer** (the pre-t12
             // drill of 2026-09-25). `readiness_waiting` was set where a proof found no slot and
             // cleared only where one was carried, so a proof that stopped being due while it

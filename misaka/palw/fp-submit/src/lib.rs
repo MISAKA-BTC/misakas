@@ -1042,6 +1042,124 @@ mod tests {
         dir
     }
 
+    #[test]
+    fn protected_tfo3_submission_stages_the_same_claim_before_and_after_broadcast() {
+        use kaspa_consensus_core::{
+            mldsa87_primitives::{MLDSA87_PUBKEY_LEN, MLDSA87_SIGNATURE_LEN, mldsa87_key_id},
+            palw_court_original_escrow_v1::{FundingConsentV1, FundingTermsV1},
+            palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_job_pin_v1},
+            palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+            palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1,
+            palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3,
+            palw_tir_protected_fp_envelope_v2::PalwTirProtectedFpEnvelopeV2,
+            palw_tir_public_source_v1::public_source_header_id_v1,
+            palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, palw_tir_execution_root_v1},
+        };
+        let h = Hash64::from_u64_word;
+        let (mut payload, _) = sample_payload();
+        // This tests material handoff only: signature widths are real, but
+        // these bytes authorize no native admission or replay verdict.
+        payload.signature = vec![7; MLDSA87_SIGNATURE_LEN];
+        let fp = &mut payload.commitment;
+        let context = palw_fp_job_context_v3(
+            &fp.job,
+            &PalwFpClassFactsV3 {
+                model_profile_id: h(1),
+                runtime_manifest_hash: h(2),
+                runtime_class_id: h(3),
+                shape_profile_id: fp.job.class_id,
+                cu_ruleset_id: h(4),
+            },
+            &PalwFpRunFactsV3 {
+                decode_tokens_executed: fp.decode_tokens_executed,
+                stop_reason: fp.stop_reason,
+                full_logits_trace_root: fp.trace_root,
+                activation_leg_root: Hash64::default(),
+                checkpoint_leg_root: Hash64::default(),
+                step_leg_root: h(5),
+                step_leaf_count: fp.work_leaves,
+            },
+            b"devnet",
+        )
+        .unwrap();
+        fp.execution_root =
+            palw_tir_execution_root_v1(&context.context_hash(), &fp.trace_root, &fp.job.class_id, fp.work_leaves, &h(5));
+        let header = PalwPublicTirBindingHeaderV1 {
+            version: PALW_TIR_STEP_BINDING_VERSION_V1,
+            job_context: context,
+            artifact_root: h(6),
+            full_logits_trace_root: fp.trace_root,
+            step_leaf_count: fp.work_leaves,
+            step_merkle_root: h(5),
+            committed_execution_root: fp.execution_root,
+        };
+        let claim = fp_claim_id_v3(fp);
+        let payer = vec![9; MLDSA87_PUBKEY_LEN];
+        let consent = FundingConsentV1 {
+            signature: vec![8; MLDSA87_SIGNATURE_LEN],
+            terms: FundingTermsV1 {
+                version: 1,
+                network_domain: fp.job.network_domain,
+                claim,
+                job_identity: palw_fp_job_pin_v1(fp),
+                execution_root: fp.execution_root,
+                source_id: public_source_header_id_v1(&header).unwrap(),
+                relative_graph_id: h(7),
+                fee_profile_id: h(8),
+                capital_profile_id: h(9),
+                retention_profile_id: h(10),
+                settlement_policy_id: h(11),
+                accept_from_daa: 100_000,
+                accept_until_daa: 100_100,
+                material_until_daa: 200_000,
+                funding_output_index: 0,
+                funding_amount_sompi: 100_000,
+                payer_key_id: mldsa87_key_id(&payer),
+                refund_payload: kaspa_hashes::blake2b_512_address_payload(&payer),
+                nonce: h(12),
+            },
+        };
+        let literal = borsh::to_vec(&payload).unwrap();
+        let base = PalwTirFundedOriginalEnvelopeV1::new_protected_v2(
+            PalwTirProtectedFpEnvelopeV2::new_v1(literal.clone(), header).unwrap(),
+            consent,
+            payer,
+        )
+        .unwrap()
+        .encode_protected_inner_v2()
+        .unwrap();
+        let companion = std::array::from_fn(|_| 0);
+        let manifest = std::array::from_fn(|_| 0);
+        for relative in [false, true] {
+            let make = if relative {
+                PalwTirFundedOriginalEnvelopeV3::from_parts_relative_v4
+            } else {
+                PalwTirFundedOriginalEnvelopeV3::from_parts_protected_v3
+            };
+            let wire = make(&base, b"fixture prompt", &companion, &manifest, &[1]).unwrap().encode_v3().unwrap();
+            let tx = commitment_tx(wire, SUBNETWORK_ID_PALW_FP_COMMITMENT);
+            let decoded = decode_commitment_payload(&tx).unwrap();
+            assert_eq!(decoded.1, claim);
+            assert_eq!(borsh::to_vec(&*decoded.0).unwrap(), literal);
+            let dir = tempdir(if relative { "protected-v4" } else { "protected-v3" });
+            let staging = FpStaging { retention_dir: Some(&dir), ..Default::default() };
+            let plan = plan_submission(&tx, &staging, 100_000).unwrap();
+            assert_eq!(plan.claim_id, claim);
+            assert_eq!(plan.txid, tx.id().to_string());
+            let expected = palw_fp_material_encode_v1(&payload.commitment.job, &payload.prompt_token_ids);
+            assert_eq!(plan.material.as_ref().unwrap().1, expected);
+            assert!(futures::executor::block_on(execute_handoff(&plan, &tx, Some(&dir), Refuse("fixture refusal"))).is_err());
+            assert!(!dir.join(format!("{claim}.material")).exists());
+            let sent = futures::executor::block_on(execute_handoff(&plan, &tx, Some(&dir), Accept)).unwrap();
+            assert_eq!(sent.claim_id, claim);
+            assert_eq!(std::fs::read(sent.material_path.unwrap()).unwrap(), expected);
+            let mut broken = tx.clone();
+            broken.payload.pop();
+            assert!(plan_submission(&broken, &staging, 100_000).is_err());
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
     /// The staging discipline, both endings. A reader must never see a whole file for a claim the
     /// chain refused, and must never see a half one at all.
     #[test]

@@ -499,6 +499,13 @@ impl PalwFoldReadV1<'_> {
     /// [`Self::rcore_lock`] before ADR-0160's AS-2 — today's L-1 price, which AS-2 re-prices (and
     /// AS-1's duty reads through AS-2, `palw_seat_duty_v2`).
     pub(super) fn rcore_lock_unreduced(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
+        if super::claim_has_protected_frame_v1(self.state, claim_id) {
+            return crate::palw_model_panel_one_v1::single_approval_seat_lock_v1(
+                self.rcore_g_res(claim_id, claim),
+                claim.escrowed_reward,
+                self.rcore_buyback_bound(claim_id, claim),
+            );
+        }
         crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
             self.params.model_panel_one_from_daa(),
             claim.accepted_daa,
@@ -590,7 +597,7 @@ impl PalwFoldReadV1<'_> {
         }
         let colluding = crate::palw_economic_safety_v1::palw_door_colluding_signers_v1(door);
         match door {
-            PalwLicenceDoorV1::G14PanelOne => {
+            PalwLicenceDoorV1::G14PanelOne | PalwLicenceDoorV1::ProtectedPanelReplay => {
                 PalwDoorLockPricesV1 { every: self.panel_valid_lock_required_for(claim, 1), load_bearing: None }
             }
             PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage => PalwDoorLockPricesV1 { every, load_bearing: None },
@@ -637,7 +644,9 @@ impl PalwFoldReadV1<'_> {
         }
         let g_res = crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts).saturating_sub(u128::from(claim.escrowed_reward));
         // ADR-0160 AS-2 (lane liab): the supplementary set's price, re-priced as the licence's is.
-        crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
+        let price = if claim.rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::ProtectedPanelReplay) {
+            crate::palw_model_panel_one_v1::single_approval_seat_lock_v1(g_res, claim.escrowed_reward, 0)
+        } else {
             crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
                 self.params.model_panel_one_from_daa(),
                 claim.accepted_daa,
@@ -645,7 +654,10 @@ impl PalwFoldReadV1<'_> {
                 claim.escrowed_reward,
                 0,
                 basis_k,
-            ),
+            )
+        };
+        crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
+            price,
             crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim),
         )
     }

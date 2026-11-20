@@ -41,6 +41,9 @@
 //! with them. Each minted beat says how many it carries, and the relay spares a carrier-bearing beat
 //! its H2 limits (`FlowContext::palw_heartbeat_h1_exempt`).
 
+#[cfg(feature = "private-integration-clock")]
+mod private_heartbeat;
+
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::network::NetworkId;
 use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_NOMINAL_INTERVAL_MS, HeartbeatYieldHintV1};
@@ -52,6 +55,26 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use std::sync::Arc;
 
 pub const PALW_HEARTBEAT: &str = "palw-heartbeat-miner";
+
+#[cfg(feature = "private-integration-clock")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct HistoricalHeartbeatPermit {
+    sink: kaspa_consensus_core::BlockHash,
+    daa: u64,
+    transaction_id: Option<kaspa_consensus_core::TransactionId>,
+}
+
+#[cfg(feature = "private-integration-clock")]
+fn read_historical_heartbeat_permit(path: &std::path::Path) -> Result<HistoricalHeartbeatPermit, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path).and_then(|file| file.take(1025).read_to_end(&mut bytes)).map_err(|err| err.to_string())?;
+    if bytes.len() > 1024 {
+        return Err("oversized historical heartbeat permit".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|err| err.to_string())
+}
 
 /// Nonces per adapted template before rebuilding. The lane's floor is 2²⁴ expected hashes; two
 /// floors' worth makes a give-up rare while a long grind against a moving median time stays
@@ -202,13 +225,23 @@ pub(crate) fn grind_nonces_v1(
     check_every: u64,
     solves: impl Fn(u64) -> bool,
     shutting_down: impl Fn() -> bool,
+    superseded: impl FnMut() -> bool,
+) -> GrindOutcomeV1 {
+    grind_nonce_windows_v1(max_nonces, check_every, |range| range.into_iter().find(|&nonce| solves(nonce)), shutting_down, superseded)
+}
+
+fn grind_nonce_windows_v1(
+    max_nonces: u64,
+    check_every: u64,
+    mut search: impl FnMut(std::ops::Range<u64>) -> Option<u64>,
+    shutting_down: impl Fn() -> bool,
     mut superseded: impl FnMut() -> bool,
 ) -> GrindOutcomeV1 {
     let check_every = check_every.max(1);
     let mut start = 0u64;
     while start < max_nonces {
         let end = start.saturating_add(check_every).min(max_nonces);
-        if let Some(nonce) = (start..end).find(|&nonce| solves(nonce)) {
+        if let Some(nonce) = search(start..end) {
             return GrindOutcomeV1::Found(nonce);
         }
         start = end;
@@ -256,6 +289,10 @@ pub struct PalwHeartbeatMinerService {
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
     miner_data: Option<MinerData>,
+    #[cfg(feature = "private-integration-clock")]
+    historical_grind: Option<Arc<rayon::ThreadPool>>,
+    #[cfg(feature = "private-integration-clock")]
+    historical_permit_path: Option<std::path::PathBuf>,
     /// Fired by `signal_exit` so `start` can finish — the panel's fix, copied here for the same
     /// reason it went into the producer: the ADR-0068 drill's H node hung in `pthread_join` on
     /// SIGTERM with every server already stopped (finding F1).
@@ -301,12 +338,31 @@ impl PalwHeartbeatMinerService {
                 None
             }
         };
+        #[cfg(feature = "private-integration-clock")]
+        let historical_grind = if miner_data.is_some() && kaspa_core::time::test_clock::active() {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
+                .thread_name(|index| format!("historical-heartbeat-{index}"))
+                .build()
+                .map(Arc::new)
+                .map_err(|err| warn!("[{PALW_HEARTBEAT}] historical PoW pool unavailable: {err}"))
+                .ok()
+        } else {
+            None
+        };
         Self {
             config,
             consensus_manager,
             mining_manager,
             flow_context,
             miner_data,
+            #[cfg(feature = "private-integration-clock")]
+            historical_grind,
+            #[cfg(feature = "private-integration-clock")]
+            historical_permit_path: kaspa_core::time::test_clock::active()
+                .then(|| std::env::var_os("MISAKA_PRIVATE_HEARTBEAT_PERMIT"))
+                .flatten()
+                .map(std::path::PathBuf::from),
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
             yield_budget: std::sync::Mutex::new(HeartbeatYieldBudget::new()),
             last_hold: std::sync::Mutex::new(None),
@@ -341,6 +397,15 @@ impl PalwHeartbeatMinerService {
             _ = tokio::time::sleep(period) => true,
             _ = self.shutdown.listener.clone() => false,
         }
+    }
+
+    /// A historical clock command can open a slot while the worker is asleep.
+    /// Re-read the consensus hint promptly in that isolated process. Real-time
+    /// miners keep their ordinary wait and shutdown behavior.
+    async fn wait_for_slot(&self, wait_ms: u64) {
+        #[cfg(feature = "private-integration-clock")]
+        let wait_ms = if kaspa_core::time::test_clock::active() { wait_ms.min(250) } else { wait_ms };
+        self.tick(std::time::Duration::from_millis(wait_ms)).await;
     }
 
     pub async fn worker(self: &Arc<Self>) {
@@ -484,15 +549,46 @@ impl PalwHeartbeatMinerService {
             } else {
                 trace!("[{PALW_HEARTBEAT}] the slot is taken; the next opens in {} ms", away);
             }
-            self.tick(std::time::Duration::from_millis(away.clamp(MIN_WAIT_MS, MAX_WAIT_MS))).await;
+            self.wait_for_slot(away.clamp(MIN_WAIT_MS, MAX_WAIT_MS)).await;
             return Ok(PassOutcomeV1::Waited);
         }
-        let template = self
-            .mining_manager
-            .clone()
-            .get_block_template(session, miner_data)
-            .await
-            .map_err(|e| format!("no block template: {e}"))?;
+        #[cfg(feature = "private-integration-clock")]
+        let permit = if let Some(path) = &self.historical_permit_path {
+            match read_historical_heartbeat_permit(path) {
+                Ok(permit) if session.async_get_sink().await == permit.sink && session.get_virtual_daa_score() == permit.daa => {
+                    Some(permit)
+                }
+                Ok(_) => {
+                    self.wait_for_slot(MIN_WAIT_MS).await;
+                    return Ok(PassOutcomeV1::Waited);
+                }
+                Err(err) => return Err(format!("private heartbeat permit unavailable: {err}")),
+            }
+        } else {
+            None
+        };
+        let mining = self.mining_manager.clone();
+        #[cfg(feature = "private-integration-clock")]
+        if permit.is_some_and(|permit| permit.transaction_id.is_some()) {
+            mining.clear_cached_template();
+        }
+        let template = mining.get_block_template(session, miner_data).await.map_err(|e| format!("no block template: {e}"))?;
+        #[cfg(feature = "private-integration-clock")]
+        if let Some(permit) = permit {
+            if template.selected_parent_hash != permit.sink || template.block.header.daa_score != permit.daa {
+                return Ok(PassOutcomeV1::Superseded);
+            }
+            if let Some(txid) = permit.transaction_id {
+                if !template.block.transactions.iter().any(|tx| tx.id() == txid) {
+                    self.say_hold(Some(format!(
+                        "private heartbeat waiting for transaction {txid} in its DAA {} template",
+                        permit.daa
+                    )));
+                    self.wait_for_slot(MIN_WAIT_MS).await;
+                    return Ok(PassOutcomeV1::Waited);
+                }
+            }
+        }
         let (mut template, earliest) =
             session.heartbeat_adapt_block_template(template).map_err(|e| format!("the lane refused the template: {e}"))?;
         let cursor_governs =
@@ -535,7 +631,7 @@ impl PalwHeartbeatMinerService {
             // A slot wait can be a full minute — long enough to be the wait a SIGTERM lands in
             // (finding F1), so it is a tick like every other: on shutdown, hand back to the
             // worker loop, which checks the trigger.
-            self.tick(std::time::Duration::from_millis(wait)).await;
+            self.wait_for_slot(wait).await;
             return Ok(PassOutcomeV1::Waited);
         }
         // **ADR-0105 Decision 2: the slot is open — stand aside if a bonded block is waiting.**
@@ -574,15 +670,27 @@ impl PalwHeartbeatMinerService {
         let parents: kaspa_consensus_core::BlockHashSet = header0.direct_parents().iter().copied().collect();
         let watcher = session.clone();
         let shutdown = self.shutdown.listener.clone();
+        #[cfg(feature = "private-integration-clock")]
+        let historical_grind = self.historical_grind.clone();
         let outcome = tokio::task::spawn_blocking(move || {
-            let state = kaspa_pow::StateLayer0::new(&header0, network_id.to_string().as_bytes());
-            grind_nonces_v1(
-                NONCES_PER_TEMPLATE,
-                NONCES_PER_CHECK,
-                |nonce| state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false),
-                || shutdown.is_triggered(),
-                || watcher.get_virtual_parents() != parents,
-            )
+            let network_id = network_id.to_string();
+            let state = kaspa_pow::StateLayer0::new(&header0, network_id.as_bytes());
+            let solves = |nonce| state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false);
+            let shutting_down = || shutdown.is_triggered();
+            let superseded = || watcher.get_virtual_parents() != parents;
+            #[cfg(feature = "private-integration-clock")]
+            if let Some(pool) = historical_grind {
+                use rayon::prelude::*;
+                let prepared = private_heartbeat::PreparedHeartbeat::new(&header0, network_id.as_bytes());
+                return grind_nonce_windows_v1(
+                    NONCES_PER_TEMPLATE,
+                    NONCES_PER_CHECK,
+                    |range| pool.install(|| range.into_par_iter().find_any(|&nonce| prepared.solves(nonce) && solves(nonce))),
+                    shutting_down,
+                    superseded,
+                );
+            }
+            grind_nonces_v1(NONCES_PER_TEMPLATE, NONCES_PER_CHECK, solves, shutting_down, superseded)
         })
         .await
         .map_err(|e| format!("the nonce search task did not finish: {e}"))?;
@@ -598,6 +706,12 @@ impl PalwHeartbeatMinerService {
             }
             GrindOutcomeV1::Shutdown => return Ok(PassOutcomeV1::Idle),
         };
+        #[cfg(feature = "private-integration-clock")]
+        if let (Some(path), Some(permit)) = (&self.historical_permit_path, permit) {
+            if read_historical_heartbeat_permit(path).ok() != Some(permit) {
+                return Ok(PassOutcomeV1::Superseded);
+            }
+        }
         template.block.header.nonce = nonce;
         template.block.header.finalize();
         let role = HeartbeatRoleV1::of(

@@ -373,6 +373,9 @@ pub type EvmPipelineResultV2 = Result<EvmStaged, String>;
 
 pub struct EvmPipeline {
     rx: std::sync::mpsc::Receiver<(kaspa_consensus_core::BlockHash, EvmPipelineResultV2)>,
+    // A disposable native fee replay can request the same block again. The
+    // worker emits one result per forward chain position, never per retry.
+    last_requested: std::cell::Cell<Option<kaspa_consensus_core::BlockHash>>,
     _handle: std::thread::JoinHandle<()>,
 }
 
@@ -382,6 +385,12 @@ impl EvmPipeline {
     /// pipeline ended (worker error already delivered, or channel closed) — the
     /// caller falls back to inline validation.
     pub fn recv(&self, expected: kaspa_consensus_core::BlockHash) -> Option<EvmPipelineResultV2> {
+        // A repeated request must execute inline. Searching the stream again
+        // would discard later blocks' results while waiting for a second
+        // result the worker cannot produce. The walk otherwise moves forward.
+        if self.last_requested.replace(Some(expected)) == Some(expected) {
+            return None;
+        }
         while let Ok((block, res)) = self.rx.recv() {
             if block == expected {
                 return Some(res);
@@ -2768,7 +2777,7 @@ impl EvmPipeline {
                 }
             })
             .expect("spawn evm-pipeline thread");
-        EvmPipeline { rx, _handle: handle }
+        EvmPipeline { rx, last_requested: std::cell::Cell::new(None), _handle: handle }
     }
 }
 
@@ -2947,6 +2956,26 @@ mod tests {
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
     use kaspa_hashes::Hash64;
     use rocksdb::WriteBatch;
+
+    #[test]
+    fn pipeline_retry_preserves_the_next_blocks_result() {
+        let skipped = Hash64::from_u64_word(701);
+        let first = Hash64::from_u64_word(702);
+        let next = Hash64::from_u64_word(703);
+        let (tx, rx) = std::sync::mpsc::sync_channel(3);
+        let handle = std::thread::spawn(move || {
+            for block in [skipped, first, next] {
+                tx.send((block, Err(EvmValidateError::CommitmentMismatch { block }))).unwrap();
+            }
+        });
+        let pipeline = EvmPipeline { rx, last_requested: std::cell::Cell::new(None), _handle: handle };
+        assert!(matches!(pipeline.recv(first), Some(Err(EvmValidateError::CommitmentMismatch { block })) if block == first));
+        assert!(pipeline.recv(first).is_none(), "retry must fall back inline without consuming the next block");
+        assert!(matches!(pipeline.recv(next), Some(Err(EvmValidateError::CommitmentMismatch { block })) if block == next));
+        assert!(pipeline.recv(next).is_none());
+        assert!(pipeline.recv(Hash64::from_u64_word(704)).is_none());
+        pipeline._handle.join().unwrap();
+    }
 
     fn header(timestamp: u64, daa: u64) -> Header {
         Header::new_finalized(

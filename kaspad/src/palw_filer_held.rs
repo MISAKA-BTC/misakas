@@ -1072,6 +1072,7 @@ mod tests {
     fn seat_duty(claim: Hash64, executor: u64) -> PalwSeatDutyV2 {
         PalwSeatDutyV2 {
             model_panel_one: false,
+            protected_replay: None,
             accepted_block: h(0xB0),
             claim_id: claim,
             class_id: h(0xC1A55),

@@ -97,6 +97,9 @@ USAGE:
     palw-class tir-fp-setup --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
                          --container <index.palwart> --semantics <declaration.borsh>
                          --key-file <registrant seed> --out <fresh-dir>
+    palw-class tir-fp-pins --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
+                        --container <index.palwart> --semantics <declaration.borsh> --semantics-bound-daa <DAA>
+                        --eof-offer <offer.borsh> --policy <tokenizer-policy.borsh> --out <fresh-json>
     palw-class tir-container-binding --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
                          --container <index.palwart> --expect-class <128hex> --expect-root <128hex>
                          --expect-container-root <128hex> [--key-file <registrant seed>] --out <fresh-file>
@@ -367,6 +370,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
         "tir-fp-setup" => tir_fp_setup(&mut args, network.as_deref()),
+        "tir-fp-pins" => palw_class_tir_pins::run(&mut args, network.as_deref()),
         "tir-container-binding" => tir_container_binding(&mut args, network.as_deref()),
         "kernel-params" => {
             let limit = |value: Option<String>, name: &str| -> Result<u64, String> {
@@ -2505,6 +2509,10 @@ fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), Str
     )?;
     let files = [
         (
+            "class-layout.object",
+            PalwConsensusObjectV2::TirClassLayoutPublishedV1 { class_id, layout: Box::new(entry.class.layout.clone()) },
+        ),
+        (
             "class-semantics.object",
             PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration: Box::new(declaration), signature: semantics_signature },
         ),
@@ -2516,9 +2524,11 @@ fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), Str
         let path = out.join(name);
         std::fs::write(&path, bytes).map_err(|why| format!("{}: {why}", path.display()))?;
     }
-    println!("Prepared signed setup objects for {class_id} on {network} in {}", out.display());
+    println!("Prepared class layout and signed setup objects for {class_id} on {network} in {}", out.display());
     Ok(())
 }
+
+mod palw_class_tir_pins;
 
 /// **`improve <kind>`** (RFC-0004, A10): build and sign one of the Model Improvement Protocol's objects.
 fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {

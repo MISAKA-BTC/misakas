@@ -350,10 +350,9 @@ pub(super) fn require_original_frame_v1(
     class_id: Hash64,
 ) -> Result<(), PalwStateV2Error> {
     if extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.envelope().is_protected_v2()) {
-        // This explicit wire version does not carry a legacy TFP1 pledge.
-        // Dispatch to the protected-profile gate rather than requesting a
-        // synthetic legacy frame. An unconfigured planner still refuses it.
-        return check_paired_original_profile_v1(extras, claim);
+        // This wire does not carry a legacy TFP1 pledge. The protected planner
+        // at acceptance owns the refusal. Do not ask for a synthetic legacy frame.
+        return Ok(());
     }
     if !extras.tir_public_conviction_active
         || base.tir_class_v1(&class_id).is_none()
@@ -408,7 +407,10 @@ pub(super) fn check_original_public_entry_v1(
     // Actual FP intake also gates non-TIR classes. The TIR quote preserves its
     // non-TIR no-plan behavior; it does not advertise their other routes.
     if paired_claim.is_some() || tir {
-        let framed = paired_claim.is_none_or(|claim| extras.tir_public_originals.contains_key(&claim));
+        let framed = paired_claim.is_none_or(|claim| {
+            extras.tir_public_originals.contains_key(&claim)
+                || extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.envelope().is_protected_v2())
+        });
         let tokenizer_material =
             base.class_semantics_v1(&class).is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some());
         if let Some((code, why)) =
@@ -1413,7 +1415,42 @@ pub(super) fn keep_disclosed_prompt_ids_v1(
     b.write_fp_claim_prompt((class_id, producer, claim), Some(row))
 }
 
+/// A protected frame counts a bound seat's `Valid` only inside its notice
+/// window. One timely approval is required here; the existing licence door
+/// still decides whether that set is enough. Silence does not, by itself,
+/// block the claim. Claims without that frame are unchanged.
+pub(super) fn require_protected_panel_valid_v1(
+    b: &TransitionBuilder<'_>,
+    claim: Hash64,
+    receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+) -> Result<(), PalwStateV2Error> {
+    if !matches!(
+        b.state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim)),
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == claim
+    ) {
+        return crate::palw_state_v2::palw_protected_licence_receipts_v1(&b.state, &claim, &[], receipts);
+    }
+    let panel = b.state.panels.get(&claim).ok_or_else(|| refused("protected licence has no bound panel"))?;
+    require_protected_seats_valid_v1(b, claim, &panel.seats, receipts)
+}
+
+pub(super) fn require_protected_seats_valid_v1(
+    b: &TransitionBuilder<'_>,
+    claim: Hash64,
+    seats: &[crate::palw_state_v2::PalwPanelSeatV2],
+    receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+) -> Result<(), PalwStateV2Error> {
+    crate::palw_state_v2::palw_protected_licence_receipts_v1(&b.state, &claim, seats, receipts)
+}
+
 pub(super) fn bind_panel_v1(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, claim: Hash64) -> Result<(), PalwStateV2Error> {
+    if matches!(
+        b.state.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim)),
+        Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == claim
+    ) {
+        let panel = b.state.panels.get(&claim).ok_or_else(|| refused("protected frame has no bound panel"))?;
+        crate::palw_state_v2::palw_protected_panel_bind_admits_v1(&b.state, &claim, panel.seats.len(), ctx.daa_score)?;
+    }
     let Some(mut frame) = palw_tir_public_claim_v1(&b.state, claim).cloned() else { return Ok(()) };
     frame.bind_original_panel_native_v1(&b.state, ctx.daa_score).map_err(refused)?;
     let Some(Row::TirPreparation(old)) = b.state.staged_court_row_v1(&frame.preparation_key_v1()) else {

@@ -229,6 +229,7 @@ pub fn palw_licence_door_name_v1(door: &PalwLicenceDoorTagV1) -> &'static str {
     match door {
         PalwLicenceDoorTagV1::Quorum => "quorum",
         PalwLicenceDoorTagV1::G14PanelOne => "g14_panel_one",
+        PalwLicenceDoorTagV1::ProtectedPanelReplay => "protected_panel_replay",
         PalwLicenceDoorTagV1::Coverage => "coverage",
         PalwLicenceDoorTagV1::Optimistic => "optimistic",
         PalwLicenceDoorTagV1::ShardPart { .. } => "shard_part",

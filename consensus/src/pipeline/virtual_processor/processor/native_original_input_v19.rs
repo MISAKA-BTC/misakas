@@ -142,13 +142,14 @@ impl VirtualStateProcessor {
         params: &PalwStateParamsV2,
         point: &PalwBlockContextV2,
         header: &Header,
+        selected_parent: BlockHash,
         candidates: &[PalwCarriedObjectV1],
         merged: &[PalwMergedOwnedWorkV1],
     ) -> Result<
         (Option<NativeRetainedV1<PalwNativeOriginalInputContextV19<'a>>>, Result<Option<PalwReceiptSpendEnvelopeV3>, String>),
         PalwLocalTransitionFaultV1,
     > {
-        let receipt = self.palw_v2_check_receipt_spend(header, parent, params, point);
+        let receipt = self.palw_v2_check_receipt_spend_with_parent_v3(header, parent, params, point, || Ok(selected_parent));
         let raw = if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
             match RawAttemptV19::decode(&header.palw_commitment) {
                 Ok(work) => Some(work),

@@ -97,6 +97,53 @@ pub(crate) fn build_lifecycle_carrier_v2(
     let length = borsh::object_length(&fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
     let mut payload = Vec::with_capacity(length);
     borsh::to_writer(&mut payload, &fields).map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
+    let rent = palw_lifecycle_carrier_rent_v2(&config.params, object, daa);
+    finish_signed_carrier_v1(
+        config,
+        kp,
+        payload,
+        SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
+        rent,
+        extra_outputs,
+        funding_outpoint,
+        funding,
+        replaces_feerate,
+    )
+}
+
+/// A native transaction whose whole payload is caller bytes. Lifecycle admission does not decode it.
+pub(crate) fn build_native_payload_carrier_v1(
+    config: &Config,
+    kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    payload: Vec<u8>,
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    replaces_feerate: Option<f64>,
+) -> Result<Transaction, String> {
+    finish_signed_carrier_v1(
+        config,
+        kp,
+        payload,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE.clone(),
+        0,
+        &[],
+        funding_outpoint,
+        funding,
+        replaces_feerate,
+    )
+}
+
+fn finish_signed_carrier_v1(
+    config: &Config,
+    kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    payload: Vec<u8>,
+    subnetwork: kaspa_consensus_core::subnets::SubnetworkId,
+    rent: u64,
+    extra_outputs: &[TransactionOutput],
+    funding_outpoint: TransactionOutpoint,
+    funding: &UtxoEntry,
+    replaces_feerate: Option<f64>,
+) -> Result<Transaction, String> {
     let params = &config.params;
     let mass_calculator = MassCalculator::new(
         params.mass_per_tx_byte,
@@ -123,7 +170,7 @@ pub(crate) fn build_lifecycle_carrier_v2(
         input.signature_script = signature_script;
         let mut outputs = extra_outputs.to_vec();
         outputs.push(TransactionOutput::new(funding.amount - needed, funding.script_public_key.clone()));
-        Ok(Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone()))
+        Ok(Transaction::new(TX_VERSION, vec![input], outputs, 0, subnetwork.clone(), 0, payload.clone()))
     };
 
     let dummy_sig_script = {
@@ -137,7 +184,6 @@ pub(crate) fn build_lifecycle_carrier_v2(
     let priced = build(1, dummy_sig_script)?;
     let masses = mass_calculator.calc_non_contextual_masses(&priced);
     // Rent is burned; leave the full relay carriage fee for the miner as well.
-    let rent = palw_lifecycle_carrier_rent_v2(params, object, daa);
     let fee = relay_fee_for_compute_mass(masses.compute_mass).checked_add(rent).ok_or("carrier fee overflows")?;
     // V01's panel side: a carrier on the input of our own stuck tip carrier replaces it, so it
     // pays above it (`PalwCarrierReplacementV1::floor_for`: that input only, while the tick's

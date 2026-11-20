@@ -332,27 +332,37 @@ pub fn reserve_native_requests_v1(memory: u64) -> Result<Option<NativeDemandLeas
 pub fn reserve_native_pending_requests_v1(memory: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
     reserve_native_requests_phase_v1(memory, true)
 }
-fn reserve_native_requests_phase_v1(memory: u64, pending: bool) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+/// The local ceiling used by the same checker that owns native request
+/// reservations. This is neither available headroom nor a lease: callers must
+/// still reserve every allocation against the outstanding process/host bank.
+/// It must not enter a service tariff, resource commitment or consensus row.
+pub(crate) fn native_request_memory_limit_v1() -> Result<u64, NativeCoverageV1> {
+    Ok(native_request_checker_v1()?.limits.memory_bytes.min(global_memory_budget().snapshot().limit_bytes))
+}
+
+fn native_request_checker_v1() -> Result<&'static Arc<NativeDemandCheckerV1>, NativeCoverageV1> {
     if !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
         // Audited typed requests also participate in the process budget on the
         // ordinary node. This is not the optional strict schema/DB capability.
-        // A legacy caller with no bound (zero) stays explicitly untracked.
-        if memory == 0 {
-            return Ok(None);
-        }
         static DEFAULT: OnceLock<Arc<NativeDemandCheckerV1>> = OnceLock::new();
-        let checker = DEFAULT.get_or_init(|| {
+        return Ok(DEFAULT.get_or_init(|| {
             NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
                 memory_bytes: global_memory_budget().snapshot().limit_bytes,
                 database_bytes: u64::MAX,
             })
-        });
-        return checker.reserve_requests_phase_v1(memory, 0, pending).map(Some);
+        }));
     }
-    let checker = LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
+    LOGICAL.get().and_then(Option::as_ref).ok_or_else(|| {
         NativeCoverageV1::unsupported::<NativeDemandCheckerV1>("native consumer reservation", "capacity checker is not armed")
-    })?;
-    checker.reserve_requests_phase_v1(memory, 0, pending).map(Some)
+    })
+}
+
+fn reserve_native_requests_phase_v1(memory: u64, pending: bool) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    if memory == 0 && !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
+        // Preserve the legacy zero-bound caller's explicitly untracked state.
+        return Ok(None);
+    }
+    native_request_checker_v1()?.reserve_requests_phase_v1(memory, 0, pending).map(Some)
 }
 
 #[cfg(test)]

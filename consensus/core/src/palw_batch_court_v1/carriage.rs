@@ -36,7 +36,22 @@ pub fn quote_batch_open_v1(
     ordinal: u64,
     ranges: Vec<super::BatchRangeV1>,
 ) -> Result<SignedBatchDemandV1, String> {
-    super::rooted::quote_open_v1(state, claim, notice_id, ordinal, ranges)
+    let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1()
+        .map_err(|_| "Batch material storage schedule missing")?;
+    quote_batch_open_with_schedule_v1(state, claim, notice_id, ordinal, ranges, schedule)
+}
+
+/// Use the same selected preimage for geometry and response deadlines. This
+/// remains an unsigned quote; the accepted carrier must independently match it.
+pub(crate) fn quote_batch_open_with_schedule_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+    notice_id: Hash64,
+    ordinal: u64,
+    ranges: Vec<super::BatchRangeV1>,
+    schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
+) -> Result<SignedBatchDemandV1, String> {
+    super::rooted::quote_open_v1(state, claim, notice_id, ordinal, ranges, schedule)
 }
 
 impl SignedBatchDemandV1 {

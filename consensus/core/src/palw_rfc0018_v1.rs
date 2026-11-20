@@ -928,15 +928,20 @@ impl Params {
 
     /// The mirror the bundle should carry (`None`: no fence of the four is armed).
     pub fn palw_rfc0018_expected_mirror_v1(&self) -> Option<PalwRfc0018MirrorV1> {
+        let day_daa = (86_400_000u64 / self.target_time_per_block().max(1)).max(1);
+        let mut certification =
+            crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(day_daa);
+        if self.has_protected_lifecycle_drill_genesis_v1() {
+            certification.verifier_maturity_daa = 80;
+            certification.prosecution_window_daa = 70;
+        }
         let mirror = PalwRfc0018MirrorV1 {
             sibling_attribution_from_daa: Self::rfc0018_from(self.palw_dag_sibling_attribution_v1),
             panel_anchor_permissionless_from_daa: Self::rfc0018_from(self.palw_panel_anchor_permissionless_v1),
             rule_e_participation_v2_from_daa: Self::rfc0018_from(self.palw_rule_e_participation_v2),
             gate_c_from_daa: Self::rfc0018_from(self.palw_independently_work_certified_v1),
             gate_c_rule: PalwGateCRuleV1::SecurityCertifiedV1,
-            certification: crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1::design_unapproved_v1(
-                (86_400_000u64 / self.target_time_per_block().max(1)).max(1),
-            ),
+            certification,
             fp_receipt_tail_daa: match &self.palw_consensus_mode {
                 PalwConsensusMode::ConsensusV2(bundle) => {
                     bundle.freeprompt.receipt_maturity_daa().saturating_add(bundle.freeprompt.receipt_use_window_daa())

@@ -16,6 +16,9 @@ pub struct OriginalParameterCoverBudgetV1 {
     /// limit alone cannot bound the retained root-to-parameter relation.
     pub max_root_memberships: u64,
 }
+crate::palw_native_resource_v1::native_struct!(OriginalParameterCoverBudgetV1;
+    max_original_leaves, max_total_edges, max_total_coordinates, max_root_memberships
+);
 /// Separate bounds on one root's live walk and the complete traversal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamingParameterCoverBudgetV1 {
@@ -26,6 +29,35 @@ pub struct StreamingParameterCoverBudgetV1 {
     /// Additional construction and walk memory; the supplied Source keeps
     /// its own lease. The sizing callback must separately admit its scratch.
     pub max_workspace_bytes: u64,
+}
+
+impl StreamingParameterCoverBudgetV1 {
+    fn per_root_v1(self) -> OriginalParameterCoverBudgetV1 {
+        OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 1,
+            max_total_edges: self.per_root_edges.min(self.total.max_total_edges),
+            max_total_coordinates: self.per_root_coordinates.min(self.total.max_total_coordinates),
+            max_root_memberships: self.per_root_memberships.min(self.total.max_root_memberships),
+        }
+    }
+
+    fn walk_requests_v1(
+        self,
+        program: &misaka_palw_tir::TirProgramV1,
+        canonical_program: &[u8],
+        include_inputs: bool,
+    ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E};
+        let per_root = self.per_root_v1();
+        // One retained root, including the conservative one-row union allowance.
+        let walk = PreparedParameterCoverV1::native_all_roots_requests_v1(program, canonical_program, 1, per_root)?;
+        let inputs = if include_inputs { native_input_requests_v1(1, per_root.max_total_edges).map_err(E::Resource)? } else { 0 };
+        walk.checked_add(inputs).ok_or_else(|| {
+            E::Resource(NativeCoverageV1::overflow::<crate::palw_tir_court_v1::parameter_cover::PotentialParameterCoverV1>(
+                "streaming parameter cover workspace",
+            ))
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +144,42 @@ fn add(a: u64, b: u64) -> Result<u64, CoverErrorV1> {
     a.checked_add(b).ok_or(CoverErrorV1::Local("original parameter cover counter overflow"))
 }
 impl PalwTirPublicSourceV1 {
+    /// Read-only native allocation envelope for one streaming root including
+    /// dynamic input boundaries. Uses the same sizing as the actual walk.
+    /// The declared workspace is deliberately not applied to this quote; the
+    /// caller can compare it to the returned requirement before selecting a
+    /// draft. Construction still requires its own local reservation.
+    /// This does not traverse roots, validate the exploration limits against
+    /// the whole claim, reserve service, or authenticate registration/credit.
+    pub fn root_input_cover_workspace_bytes_v1(
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget: StreamingParameterCoverBudgetV1,
+    ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1 as E, reserve_native_pending_requests_v1};
+        if source.header.step_leaf_count > budget.total.max_original_leaves {
+            return Err(CoverErrorV1::Local("original parameter cover leaf budget exhausted").native());
+        }
+        let initial = Self::native_construction_requests_v1(registered, layout, &source.header)?;
+        let _lease = reserve_native_pending_requests_v1(initial).map_err(E::Resource)?;
+        let binding = source
+            .header
+            .resolve_registered_layout_v1(registered, layout, source.header.committed_execution_root, source.maximum_leaves)
+            .map_err(E::Decode)?;
+        let verified =
+            crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, source.maximum_leaves).map_err(|e| E::Decode(e.to_string()))?;
+        if verified.class_id != source.class_id || verified.context_hash != source.context_hash {
+            return Err(E::Decode("original parameter cover substitutes source geometry".into()));
+        }
+        let additional = budget.walk_requests_v1(&verified.space.program, &registered.program, true)?;
+        initial.checked_add(additional).ok_or_else(|| {
+            E::Resource(NativeCoverageV1::overflow::<crate::palw_tir_court_v1::parameter_cover::PotentialParameterCoverV1>(
+                "streaming parameter cover workspace total",
+            ))
+        })
+    }
+
     /// Reconstruct the actual native original from its retained header and the
     /// registered class/layout. No producer root or model bytes are inputs.
     /// Decode/verification/index/range-analysis allocation occurs once, outside
@@ -365,9 +433,19 @@ impl PalwTirPublicSourceV1 {
             return Err(CoverErrorV1::Local("original parameter cover leaf budget exhausted").native());
         }
         let initial = Self::native_construction_requests_v1(registered, layout, &source.header)?;
-        let workspace_refusal = || CoverErrorV1::Local("streaming parameter cover workspace budget exhausted").native();
+        let workspace_refusal = |additional: u64| {
+            E::Resource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                crate::palw_tir_court_v1::parameter_cover::PotentialParameterCoverV1,
+            >(
+                "local parameter exploration",
+                &format!(
+                    "streaming parameter cover workspace budget exhausted (construction_bytes={initial}, additional_bytes={additional}, limit_bytes={})",
+                    budget.max_workspace_bytes,
+                ),
+            ))
+        };
         if initial > budget.max_workspace_bytes {
-            return Err(workspace_refusal());
+            return Err(workspace_refusal(0));
         }
         let mut lease = reserve_native_pending_requests_v1(initial).map_err(E::Resource)?;
         let binding = source
@@ -379,23 +457,13 @@ impl PalwTirPublicSourceV1 {
         if verified.class_id != source.class_id || verified.context_hash != source.context_hash {
             return Err(E::Decode("original parameter cover substitutes source geometry".into()));
         }
-        let per_root = OriginalParameterCoverBudgetV1 {
-            max_original_leaves: 1,
-            max_total_edges: budget.per_root_edges.min(budget.total.max_total_edges),
-            max_total_coordinates: budget.per_root_coordinates.min(budget.total.max_total_coordinates),
-            max_root_memberships: budget.per_root_memberships.min(budget.total.max_root_memberships),
-        };
+        let per_root = budget.per_root_v1();
         // The materializer's quote for ONE retained row (including its
         // conservative one-row union allowance) covers our peak. Cumulative
         // exploration never sizes simultaneously owned coordinates here.
-        let mut additional =
-            PreparedParameterCoverV1::native_all_roots_requests_v1(&verified.space.program, &registered.program, 1, per_root)?;
-        if include_inputs {
-            let boundaries = native_input_requests_v1(1, per_root.max_total_edges).map_err(E::Resource)?;
-            additional = additional.checked_add(boundaries).ok_or_else(workspace_refusal)?;
-        }
+        let additional = budget.walk_requests_v1(&verified.space.program, &registered.program, include_inputs)?;
         if additional > budget.max_workspace_bytes - initial {
-            return Err(workspace_refusal());
+            return Err(workspace_refusal(additional));
         }
         if let Some(ticket) = lease.as_mut() {
             grow_cover_memory_v1(ticket, additional).map_err(E::Resource)?;
@@ -577,6 +645,78 @@ mod native_owner_tests {
         assert_eq!(got.total_coordinates, expected.total_coordinates);
         assert_eq!(got.root_memberships, expected.root_memberships);
         assert_eq!(got.largest_root, Some((expected.roots[0].leaf, 100)));
+
+        // Exercise both refusal stages and the exact admitted boundary. A
+        // reported byte count is the native request envelope, not measured RSS.
+        let binding = source
+            .header
+            .resolve_registered_layout_v1(&f.record, &f.layout, source.header.committed_execution_root, source.maximum_leaves)
+            .unwrap();
+        let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, source.maximum_leaves).unwrap();
+        let construction = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, &source.header).unwrap();
+        let per_root = OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 1,
+            max_total_edges: budget.per_root_edges.min(budget.total.max_total_edges),
+            max_total_coordinates: budget.per_root_coordinates.min(budget.total.max_total_coordinates),
+            max_root_memberships: budget.per_root_memberships.min(budget.total.max_root_memberships),
+        };
+        let walk =
+            PreparedParameterCoverV1::native_all_roots_requests_v1(&verified.space.program, &f.record.program, 1, per_root).unwrap();
+        let exact = construction.checked_add(walk).unwrap();
+        let input_exact = exact.checked_add(native_input_requests_v1(1, per_root.max_total_edges).unwrap()).unwrap();
+        // Quoting does not borrow a caller's arbitrary workspace ceiling.
+        // The real walk must reject one byte less before invoking a callback.
+        let input_quote = PalwTirPublicSourceV1::root_input_cover_workspace_bytes_v1(
+            &source,
+            &f.record,
+            &f.layout,
+            StreamingParameterCoverBudgetV1 { max_workspace_bytes: 0, ..budget },
+        )
+        .unwrap();
+        assert_eq!(input_quote, input_exact);
+        for limit in [input_quote - 1, input_quote] {
+            let mut callbacks = 0;
+            let result = PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
+                &source,
+                &f.record,
+                &f.layout,
+                StreamingParameterCoverBudgetV1 { max_workspace_bytes: limit, ..budget },
+                |_, _, _| {
+                    callbacks += 1;
+                    Ok(0)
+                },
+            );
+            if limit == input_quote {
+                assert_eq!(result.unwrap().numerical_roots, expected.roots.len() as u64);
+                assert_eq!(callbacks, expected.roots.len());
+            } else {
+                assert!(matches!(result, Err(NativeDecodeErrorV1::Resource(_))));
+                assert_eq!(callbacks, 0);
+            }
+        }
+        for (limit, additional) in [(construction - 1, 0), (exact - 1, walk), (exact, walk)] {
+            let mut callbacks = 0;
+            let result = PalwTirPublicSourceV1::parameter_cover_streaming_size_v1(
+                &source,
+                &f.record,
+                &f.layout,
+                StreamingParameterCoverBudgetV1 { max_workspace_bytes: limit, ..budget },
+                |_, _| {
+                    callbacks += 1;
+                    Ok(100)
+                },
+            );
+            if limit == exact {
+                assert_eq!(result.unwrap(), got);
+                assert_eq!(callbacks, expected.roots.len());
+            } else {
+                assert_eq!(callbacks, 0);
+                assert!(matches!(result,
+                    Err(NativeDecodeErrorV1::Resource(crate::palw_native_resource_v1::NativeCoverageV1::Unsupported { reason, .. }))
+                    if reason.contains(&format!("construction_bytes={construction}, additional_bytes={additional}, limit_bytes={limit}"))
+                ));
+            }
+        }
 
         let total = OriginalParameterCoverBudgetV1 { max_total_edges: expected.total_edges - 1, ..budget.total };
         for too_small in [

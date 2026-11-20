@@ -1338,6 +1338,9 @@ pub struct PalwSeatDutyV2 {
     /// Claim-local G14 full-scope route, derived from original acceptance.
     /// A duty on this route signs receipts and never publishes a legacy tally leaf.
     pub model_panel_one: bool,
+    /// Exact admission whose full scope every selected seat replays.
+    /// A receipt does not complete this work; its own stored approval does.
+    pub protected_replay: Option<crate::palw_protected_original_readback_v1::ProtectedReplayBindingV1>,
     /// **The block this claim was accepted on** — the anchor's only unforgeable input.
     ///
     /// A party judging somebody else's material derives the job anchor from this block's pre-PoW
@@ -2865,13 +2868,25 @@ pub fn palw_bond_claims_with_locks_v1(
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {
-        // A bound panel owes receipts, and so does an S2 licence awaiting its upgrade (above); every
-        // other phase is somebody else's edge.
+        // A bound panel owes receipts. Protected seats also owe a separate full
+        // replay through hard, even after another seat licenses or approves it.
         let awaits = crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1(claim);
+        let protected = match crate::palw_protected_original_readback_v1::protected_original_readback_v1(state, *claim_id) {
+            Ok(Some(read)) => {
+                let Some(hard) = read.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) else { continue };
+                if read.public_refutation_recorded || read.observed_tip_daa > hard {
+                    continue;
+                }
+                Some(read.replay_binding_v1())
+            }
+            Ok(None) => None,
+            Err(_) => continue,
+        };
         let Some(panel) = state.panel(claim_id) else { continue };
         let bound_daa = match claim.phase {
             crate::palw_state_v2::PalwClaimPhaseV2::PanelBound { bound_daa } => bound_daa,
-            crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. } if awaits => panel.bound_daa,
+            crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. } if awaits || protected.is_some() => panel.bound_daa,
+            crate::palw_state_v2::PalwClaimPhaseV2::Final { .. } if protected.is_some() => panel.bound_daa,
             _ => continue,
         };
         // The class's registered root, read where the claim is read. A claim whose class is gone
@@ -2884,13 +2899,21 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             if !mine.contains(&seat.bond) {
                 continue;
             }
-            if awaits && !crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &seat.bond) {
+            if protected.is_some()
+                && !matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::PanelBound { .. })
+                && crate::palw_state_v2::included_replay::protected_seat_replay_recorded_v1(state, *claim_id, seat.bond)
+            {
+                continue;
+            }
+            if protected.is_none() && awaits && !crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &seat.bond) {
                 continue;
             }
             // RFC-0006: a seat of a layer-sharded panel answers for its shard's slice only, and a shard whose part has landed
             // owes nothing more.
             let mut tir_shard_duty = None;
-            if let Some(record) = state.tir_shard_claim(claim_id) {
+            if protected.is_none()
+                && let Some(record) = state.tir_shard_claim(claim_id)
+            {
                 let stride = usize::from(crate::palw_tir_shard_v1::palw_tir_panel_stride_v1(record.outsider));
                 let (shard, index) = ((seat_index / stride) as u16, seat_index % stride);
                 if record.progress.is_licensed(u32::from(shard)) {
@@ -2917,6 +2940,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             }
             out.push(PalwSeatDutyV2 {
                 model_panel_one: state_params.model_panel_one_governs_v1(claim.accepted_daa),
+                protected_replay: protected,
                 panel_anchor: panel.anchor,
                 seat_index: seat_index as u8,
                 panel_seat_count: panel.seats.len() as u16,

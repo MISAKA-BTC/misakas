@@ -398,6 +398,7 @@ impl RootedBatchDemandV1 {
         state: &PalwChainStateV2,
         at: &PalwBlockContextV2,
         signed_bytes: u64,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1;
         use crate::palw_state_v2::PalwStateV2Error::{CarriageInconsistent as Invalid, NativeResource};
@@ -412,19 +413,24 @@ impl RootedBatchDemandV1 {
             return Err(Invalid("Batch demand opening differs from its reserved DAA".into()));
         }
         use crate::palw_court_shared_material_intake_v1 as material;
-        let schedule =
-            material::material_intake_schedule_v1().map_err(|_| Invalid("Batch material storage schedule missing".into()))?;
         material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule, target.is_some()).map_err(Invalid)?;
         if let Some(shared::BatchNoticeTargetV1::Numerical { leaf }) = target {
             use material::batch::native_ranges::{MAX_BOOKED_NUMERICAL_RANGES_V1, numerical_demand_from_source_v1};
             let ordinal = usize::try_from(self.ordinal).map_err(|_| Invalid("numerical Batch demand ordinal overflows".into()))?;
             let context = shared::context(state, self.claim).map_err(Invalid)?;
-            let expected =
-                numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, ordinal, MAX_BOOKED_NUMERICAL_RANGES_V1)
-                    .map_err(|why| match why {
-                        NativeDecodeErrorV1::Decode(why) => Invalid(why),
-                        NativeDecodeErrorV1::Resource(why) => NativeResource(why),
-                    })?;
+            let expected = numerical_demand_from_source_v1(
+                state,
+                context,
+                &binding.packet_ids,
+                leaf,
+                ordinal,
+                MAX_BOOKED_NUMERICAL_RANGES_V1,
+                schedule.cover,
+            )
+            .map_err(|why| match why {
+                NativeDecodeErrorV1::Decode(why) => Invalid(why),
+                NativeDecodeErrorV1::Resource(why) => NativeResource(why),
+            })?;
             expected.check_signed_ranges_v1(&self.demand.ranges).map_err(Invalid)?;
         }
         Ok(())
@@ -502,6 +508,7 @@ pub(super) fn quote_open_v1(
     notice_id: Hash64,
     ordinal: u64,
     mut ranges: Vec<BatchRangeV1>,
+    schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
 ) -> Result<super::carriage::SignedBatchDemandV1, String> {
     use crate::palw_court_shared_material_intake_v1 as material;
     let context = shared::context(state, claim)?;
@@ -539,7 +546,6 @@ pub(super) fn quote_open_v1(
         part_bytes: MAX_BATCH_PART_BYTES_V1,
         ranges,
     };
-    let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
     demand.response_deadline_daa = material::batch::batch_open_response_deadline_v1(
         claim,
         scope,

@@ -60,7 +60,17 @@ pub(crate) fn check_literal_material_v2(
     total_limit: u64,
 ) -> Result<(), ContractError> {
     let manifest = original.authenticate_manifest(manifest, max_manifest_bytes)?.decode(original, scope_limits, total_limit)?;
-    manifest.open_prompt_text(prompt)?;
+    let encoding = misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::from_codec_v1(
+        scope_limits[MaterialScope::Prompt as usize].codec,
+    )?;
+    match encoding {
+        misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::LiteralUtf8 => {
+            manifest.open_prompt_text(prompt)?;
+        }
+        misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::SegmentsV1 => {
+            manifest.open_prompt_segments_v1(prompt, u32::MAX)?;
+        }
+    }
     let descriptor = HfArtifactDescriptorV1::decode_v1(descriptor)?;
     let pins = descriptor.native_pins_v1();
     if pins.class != original.registered_class

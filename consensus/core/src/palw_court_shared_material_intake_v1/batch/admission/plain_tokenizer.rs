@@ -18,8 +18,19 @@ pub(crate) struct PlainTokenizerBatchBudgetV2 {
     pub verification_daa: u64,
 }
 
-impl PlainTokenizerBatchBudgetV2 {
-    pub(crate) fn check_v2(self, bounds: PlainBatchTokenizerBoundsV2) -> Result<(), BatchCourtErrorV1> {
+/// Required native operands, independent of a profile's capacity and tariff.
+/// Work counts byte/ID/hash visits; IO counts bytes; workspace is resident bytes.
+/// These are deterministic floors, not wall-clock measurements. Control framing,
+/// signatures, archive work and transaction overhead still require profile terms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PlainTokenizerResourceFloorV2 {
+    pub work: u64,
+    pub io: u64,
+    pub workspace_bytes: u64,
+}
+
+impl PlainTokenizerResourceFloorV2 {
+    pub(crate) fn derive_v2(bounds: PlainBatchTokenizerBoundsV2) -> Result<Self, BatchCourtErrorV1> {
         let work = bounds
             .opening_material_bytes
             .checked_add(bounds.input_ids_body_bytes)
@@ -58,11 +69,39 @@ impl PlainTokenizerBatchBudgetV2 {
             .and_then(|n| n.checked_add(std::mem::size_of::<Vec<crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1>>() as u64))
             .ok_or(BatchCourtErrorV1::DeliveryCost)?;
         let scratch = input_workspace.checked_add(opening_workspace).ok_or(BatchCourtErrorV1::DeliveryCost)?;
+        Ok(Self { work, io, workspace_bytes: scratch })
+    }
+
+    /// Compose the existing conservative control allowance without treating it
+    /// as measured capacity. Keep wire allowance separate from work/IO in callers
+    /// even while the draft reserves their maximum as an additional byte floor.
+    pub(crate) fn budget_v2(
+        self,
+        control_floor: ServiceCost,
+        workspace_floor: u64,
+        verification_daa: u64,
+    ) -> PlainTokenizerBatchBudgetV2 {
+        PlainTokenizerBatchBudgetV2 {
+            verification: ServiceCost {
+                bytes: control_floor.bytes.max(self.work).max(self.io),
+                work: control_floor.work.max(self.work),
+                io: control_floor.io.max(self.io),
+                controls: 1,
+            },
+            workspace_bytes: workspace_floor.max(self.workspace_bytes),
+            verification_daa,
+        }
+    }
+}
+
+impl PlainTokenizerBatchBudgetV2 {
+    pub(crate) fn check_v2(self, bounds: PlainBatchTokenizerBoundsV2) -> Result<(), BatchCourtErrorV1> {
+        let required = PlainTokenizerResourceFloorV2::derive_v2(bounds)?;
         if self.verification_daa == 0
             || self.verification.controls != 1
-            || self.verification.work < work
-            || self.verification.io < io
-            || self.workspace_bytes < scratch
+            || self.verification.work < required.work
+            || self.verification.io < required.io
+            || self.workspace_bytes < required.workspace_bytes
             || self.workspace_bytes == 0
         {
             return Err(BatchCourtErrorV1::DeliveryCost);
@@ -126,6 +165,37 @@ pub(crate) fn check_compiled_tokenizer_fixture_v2(
     };
     let bounds = branch.bounds_v2();
     budget.check_v2(bounds).unwrap();
+    // The protected quote and the native admission checker share these floors.
+    // Use the fixture's authenticated registration and real operand geometry.
+    let required = PlainTokenizerResourceFloorV2::derive_v2(bounds).unwrap();
+    let exact = required.budget_v2(ServiceCost { bytes: 1, work: 0, io: 0, controls: 1 }, 0, 1);
+    exact.check_v2(bounds).unwrap();
+    assert!(
+        PlainTokenizerBatchBudgetV2 { verification: ServiceCost { work: required.work - 1, ..exact.verification }, ..exact }
+            .check_v2(bounds)
+            .is_err()
+    );
+    assert!(
+        PlainTokenizerBatchBudgetV2 { verification: ServiceCost { io: required.io - 1, ..exact.verification }, ..exact }
+            .check_v2(bounds)
+            .is_err()
+    );
+    assert!(PlainTokenizerBatchBudgetV2 { workspace_bytes: required.workspace_bytes - 1, ..exact }.check_v2(bounds).is_err());
+    // More FullIds grows IO, not the tokenizer opening work. A profile must not
+    // silently convert either counter to the legacy G14 work-unit denominator.
+    let more_ids = PlainBatchTokenizerBoundsV2 { full_ids_body_bytes: bounds.full_ids_body_bytes + 4, ..bounds };
+    let more = PlainTokenizerResourceFloorV2::derive_v2(more_ids).unwrap();
+    assert_eq!(more.work, required.work);
+    assert_eq!(more.io, required.io + 4);
+    assert!(exact.check_v2(more_ids).is_err());
+    for overflowing in [
+        PlainBatchTokenizerBoundsV2 { opening_material_bytes: u64::MAX, ..bounds },
+        PlainBatchTokenizerBoundsV2 { full_ids_body_bytes: u64::MAX, ..bounds },
+        PlainBatchTokenizerBoundsV2 { input_ids_scratch_bytes: u64::MAX, ..bounds },
+    ] {
+        assert!(PlainTokenizerResourceFloorV2::derive_v2(overflowing).is_err());
+        assert!(budget.check_v2(overflowing).is_err());
+    }
     let output = PlainBatchOutputV2::derive_v2(original, source, budget.verification, 1).unwrap();
     let costs = NativeBatchDeliveryCostsV1 {
         numerical_verification: base,

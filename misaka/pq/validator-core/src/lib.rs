@@ -11,7 +11,7 @@
 
 mod palw_fp_answer_accounting;
 mod protected_original_v3;
-pub use protected_original_v3::build_protected_original_carrier_v3_with;
+pub use protected_original_v3::{build_protected_original_carrier_v3_with, build_quoted_protected_original_carrier_v1_with};
 /// ADR-0079 Decision 8 / SA-2: the ONE message shape a free-prompt signature may cover, and the
 /// only place a `PalwFpCommitmentV3` claim id is allowed to come from. Both signing forms — the
 /// rail's local seed and the signer sidecar's `--print-claim` digest — pass through it.

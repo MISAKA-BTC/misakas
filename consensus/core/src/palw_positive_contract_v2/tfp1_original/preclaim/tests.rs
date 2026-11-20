@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    palw_positive_contract_v2::PublicOriginalReservationV1, palw_state_v2::PalwBlockContextV2,
+    palw_freeprompt_v3::fp_claim_id_v3, palw_positive_contract_v2::PublicOriginalReservationV1, palw_state_v2::PalwBlockContextV2,
     palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1,
 };
 use misaka_palw_positive_contract::{
@@ -32,12 +32,17 @@ pub(crate) fn exercise_preclaim_booking_v1(
     };
     let terms = DrawnBatchPreclaimTermsV1::new_v1(projected, rescue).unwrap();
     let notice = FirstNoticeDemand {
-        draw_ready_by: at.daa_score + 1,
+        // The end-to-end fold binds the panel at A+1, then stores its draw
+        // from that accepted parent at A+2. Both events fit this local plan.
+        draw_ready_by: at.daa_score + 2,
         material_ready_by: at.daa_score + 1,
         cold_acquisition_daa: 1,
         full_inspection_daa: 1,
         notice_inclusion_daa: 1,
-        missing_material_detected_by: at.daa_score + 1,
+        // Detection starts when the drawn seat is available. This also keeps
+        // the later same-deadline/different-readiness comparison above the
+        // draw floor rather than changing its request deadline accidentally.
+        missing_material_detected_by: at.daa_score + 2,
         material_request_inclusion_daa: 1,
     };
     let case = MaterialCaseDemand {
@@ -305,7 +310,9 @@ fn check_companion_booking_parity(
     let initial_state = tir_cold_initial_state_for_execution_v1(program, execution, initial_rules).unwrap().0.subject;
     let dependencies = tir_cold_dependencies_for_execution_v1(execution, dependency_rules).unwrap().0.subject;
     let prompt = prompt_text_material_v1(scope.ruleset, "fixture prompt", prompt_rules).unwrap().subject;
-    let initial_supply = terms.rescue.per_drawn_bond;
+    // The fixture's protected supply is 1 MiB. Leave separate capacity in
+    // each role for its booked graph and notice rather than reusing it.
+    let initial_supply = RemainingCapacity { transmitted_bytes: 1 << 20, additional_work: 1 << 20, retained_bytes: 1 << 20 };
     let capacity = initial_supply.checked_add(terms.rescue.total().unwrap()).unwrap();
     // Derive the signed storage floor from the native graph, not a fee
     // fixture. All other profile duties still need additional funding.
@@ -464,11 +471,21 @@ fn check_companion_booking_parity(
         let duties = ProtectedOriginalDutiesV1::reservation_fixture_v1(terms, at.blue_score, schedule);
         let combined =
             ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(terms.projected, terms.rescue, initial, duties).unwrap();
-        let last_notice = FirstNoticeDemand { missing_material_detected_by: at.daa_score + 3119, material_request_inclusion_daa: 1, ..notice };
+        assert_eq!(combined.manifest_supply_v3(), Err(ContractError::Scope), "reservation fixture is not native supply");
+        let last_notice =
+            FirstNoticeDemand { missing_material_detected_by: at.daa_score + 3119, material_request_inclusion_daa: 1, ..notice };
         let first_packet = initial.request_v1(fp_claim_id_v3(fp), Hash64::from_u64_word(1), at.daa_score).unwrap();
-        let last = InitialMaterialRequestPlanV1::new_v1(at.daa_score, last_notice, first_packet.packet.cost, first_packet.retained_bytes).unwrap();
+        let last =
+            InitialMaterialRequestPlanV1::new_v1(at.daa_score, last_notice, first_packet.packet.cost, first_packet.retained_bytes)
+                .unwrap();
         let single = ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(terms.projected, terms.rescue, last, duties).unwrap();
-        let series = ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(terms.projected, terms.rescue, MaterialRequestSeriesV2::new_v2(last, 256).unwrap(), duties).unwrap();
+        let series = ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(
+            terms.projected,
+            terms.rescue,
+            MaterialRequestSeriesV2::new_v2(last, 256).unwrap(),
+            duties,
+        )
+        .unwrap();
         assert_eq!(single.relative_graph_id_v1(), series.relative_graph_id_v1());
         assert_ne!(single.obligation_v1(), series.obligation_v1(), "series receipt semantics must be signed even with one slot");
         let obligation = combined.obligation_v1();
@@ -519,6 +536,25 @@ fn check_companion_booking_parity(
         assert_eq!(booking.graph_v1().len(), cap);
         assert_eq!(unsigned, signed);
         assert!(booking.check_book_v1(&signed).is_ok());
+        // A role cannot reuse its entire allowance for both the initial
+        // material opportunity and the separately booked case graph.
+        let mut reused = protected_empty.clone();
+        assert!(matches!(
+            reserve_batch_v1(
+                combined_companion.id(),
+                projection,
+                &combined.batch,
+                BookingScopeV1::Protected,
+                schedule,
+                u64::MAX,
+                Some((&duties, terms.rescue.per_drawn_bond)),
+                &mut reused,
+                cap,
+                price,
+            ),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(reused, protected_empty, "insufficient combined capacity must leave the book unchanged");
         for node in duties.graph_v1(combined_companion.id()).unwrap().iter() {
             assert_eq!(signed.packet(&node.packet.id), Some(&node.packet));
             assert!(signed.assigned_daa(&node.packet.id).unwrap() <= schedule.first_notice_by());
@@ -654,6 +690,17 @@ fn check_companion_booking_parity(
         &protected_empty,
         protected_packet_cap,
         &sign_companion,
+        |original| {
+            libcrux_ml_dsa::ml_dsa_87::sign(
+                &signer.signing_key,
+                fp_claim_id_v3(original).as_byte_slice(),
+                crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+                [89; 32],
+            )
+            .unwrap()
+            .as_ref()
+            .to_vec()
+        },
     );
 
     // An exact budget succeeds above; one missing unit or one already spent

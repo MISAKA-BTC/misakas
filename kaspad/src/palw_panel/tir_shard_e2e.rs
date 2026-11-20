@@ -116,6 +116,7 @@ fn bond(v: u64) -> PalwBondKeyV2 {
 fn duty(ir: &Ir, shard: u16, s_l: u16, s_p: u16, segments: PalwSegmentMaskV2, outsider: bool) -> PalwSeatDutyV2 {
     PalwSeatDutyV2 {
         model_panel_one: false,
+        protected_replay: None,
         accepted_block: Hash64::from_u64_word(0xB10C),
         claim_id: Hash64::from_u64_word(0xC1A1),
         class_id: ir.class_id,

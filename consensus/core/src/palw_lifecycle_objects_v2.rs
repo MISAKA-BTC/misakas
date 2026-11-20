@@ -1981,13 +1981,24 @@ impl PalwLifecycleKindFencesV1 {
     /// Fee projection after all preceding allocations. None retains the
     /// legacy amount, including malformed historical carriers in a mergeset.
     pub fn batch_court_collectible_fee_v1(&self, tx: &Transaction, remaining: u64, daa: u64) -> Option<u64> {
+        let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1().ok()?;
+        self.batch_court_collectible_fee_with_schedule_v3(tx, remaining, daa, schedule)
+    }
+
+    fn batch_court_collectible_fee_with_schedule_v3(
+        &self,
+        tx: &Transaction,
+        remaining: u64,
+        daa: u64,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
+    ) -> Option<u64> {
         if !self.batch_court_in_force_at(daa)
             || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE
             || !tx.payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1)
         {
             return None;
         }
-        crate::palw_court_shared_material_intake_v1::material_batch_carrier_fee_v1(tx, remaining)
+        crate::palw_court_shared_material_intake_v1::material_batch_carrier_fee_with_schedule_v3(tx, remaining, schedule)
             .ok()
             .map(|split| split.collectible_fee)
     }
@@ -2006,17 +2017,31 @@ impl PalwLifecycleKindFencesV1 {
         accepting_daa: u64,
         source_daa: u64,
     ) -> Option<u64> {
+        let schedule = crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1().ok()?;
+        self.batch_collectible_fee_with_schedule_v3(tx, remaining, accepting_daa, source_daa, schedule)
+    }
+
+    /// Use the accepting owner's complete selected material schedule for both
+    /// Batch wire versions; source-clock routing remains independently required.
+    pub fn batch_collectible_fee_with_schedule_v3(
+        &self,
+        tx: &Transaction,
+        remaining: u64,
+        accepting_daa: u64,
+        source_daa: u64,
+        schedule: crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1,
+    ) -> Option<u64> {
         if self.batch_plain_output_v2_at(accepting_daa).is_some()
             && self.batch_plain_output_v2_at(source_daa).is_some()
             && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
             && tx.payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2)
         {
-            return crate::palw_court_shared_material_intake_v1::material_batch_plain_output_carrier_fee_v2(tx, remaining)
+            return crate::palw_court_shared_material_intake_v1::material_batch_plain_output_carrier_fee_with_schedule_v3(tx, remaining, schedule)
                 .ok()
                 .flatten()
                 .map(|split| split.collectible_fee);
         }
-        self.batch_court_collectible_fee_v1(tx, remaining, accepting_daa)
+        self.batch_court_collectible_fee_with_schedule_v3(tx, remaining, accepting_daa, schedule)
     }
 
     pub fn tokenizer_registration_v1_at(
@@ -2575,7 +2600,7 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_economic_safety_v1.rs::PalwLicenceDoorTagV1",
         PalwInt12WireChangeV1::NotCarried(
-            "stored only in claim, liability and vesting rows; tags 0..3 retain their exact Borsh bytes, and G14PanelOne=4 is appended only for claims governed by palw_model_panel_one_v1 from acceptance DAA 18,640; no lifecycle payload carries this stored route tag",
+            "stored only in claim, liability and vesting rows; tags 0..3 retain their exact Borsh bytes, and G14PanelOne=4 is appended only for claims governed by palw_model_panel_one_v1 from acceptance DAA 18,640; ProtectedPanelReplay=5 is appended for a stored protected original and keeps the panel size independent; no lifecycle payload carries this stored route tag",
         ),
     ),
     (
@@ -6143,6 +6168,20 @@ mod batch_lifecycle_gate_tests {
             assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent - 1, daa), Some(0));
             assert_eq!(gates.batch_court_collectible_fee_v1(&malformed, rent + 1, daa), None);
         }
+        use crate::palw_court_shared_material_intake_v1::{material_intake_schedule_v1, set_material_intake_test_schedule_v1};
+        let schedule = material_intake_schedule_v1().unwrap();
+        let mut changed = schedule;
+        changed.sompi_per_byte += 1;
+        set_material_intake_test_schedule_v1(Some(changed));
+        let selected = gates.batch_collectible_fee_with_schedule_v3(&good, rent + 1, 20, 20, schedule);
+        let before = gates.batch_collectible_fee_with_schedule_v3(&good, rent + 1, 19, 20, schedule);
+        let malformed_selected = gates.batch_collectible_fee_with_schedule_v3(&malformed, rent + 1, 20, 20, schedule);
+        let reselected = gates.batch_collectible_fee_with_source_v2(&good, rent + 1, 20, 20);
+        set_material_intake_test_schedule_v1(Some(schedule));
+        assert_eq!(selected, Some(1));
+        assert_eq!(before, None);
+        assert_eq!(malformed_selected, None);
+        assert_eq!(reselected, Some(0), "the control path observes the changed storage rate");
     }
 
     #[test]

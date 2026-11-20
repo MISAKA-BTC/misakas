@@ -579,6 +579,22 @@ pub async fn submit_objects_v2_capped(
     }
     let sender = &nv.client;
     let output = ctx.output;
+    if output == OutputFormat::Json && nv.params.has_protected_lifecycle_drill_genesis_v1() {
+        // Preserve the exact transaction IDs before sending a chained batch.
+        // A transport failure can leave an accepted prefix and no final stdout.
+        eprintln!(
+            "{}",
+            serde_json::json!({
+                "kind": "palwCarrierBatchIntent",
+                "funding": first_outpoint,
+                "carriers": carriers.iter().map(|(path, _, tx, _, fee)| serde_json::json!({
+                    "object": path,
+                    "txid": tx.id().to_string(),
+                    "feeSompi": fee,
+                })).collect::<Vec<_>>(),
+            })
+        );
+    }
     let submitted = broadcast_carrier_batch_v1(&carriers, maximum_total_fee_sompi, |(path, summary, tx, _, fee)| async move {
         // A funding UTXO the mempool already holds a spend of (an earlier burst's change not yet
         // in a block) is not a failure of the object: say what to do instead of a bare reject.

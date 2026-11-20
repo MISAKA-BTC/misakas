@@ -1798,14 +1798,16 @@ impl PalwProducerService {
         else {
             return Ok(None);
         };
-        // A win licenses a block only inside its use window (invariant F14), and the spendable
-        // list does not filter on it — a quantum whose window closed stays in the list, unspent,
-        // forever. Picking one built a template, signed it and had the chain refuse it on every
-        // pass, and this lane now runs on every pass the attempt lane holds, too. So a win is
-        // taken only while the next block could still carry it: a template carries the virtual's
-        // DAA score, which is the one the window is checked against.
+        // A win licenses a block only inside its use window (invariant F14). A protected
+        // claim's shorter deadline is already applied in the spendable list. This check still
+        // drops a row whose use window closed between that read and the template. Among the
+        // rows the next block can still carry, the soonest deadline is spent first.
         let next_daa = session.get_virtual_daa_score();
-        let Some(win) = spendable.into_iter().find(|q| q.wins && next_daa <= q.spend_deadline_daa) else {
+        let Some(win) = spendable
+            .into_iter()
+            .filter(|quantum| quantum.wins && next_daa <= quantum.spend_deadline_daa)
+            .min_by_key(|quantum| quantum.spend_deadline_daa)
+        else {
             return Ok(None);
         };
 
@@ -1824,20 +1826,34 @@ impl PalwProducerService {
         // The header the spend binds is THIS one — its pre-pow hash, timestamp and nonce — so the
         // envelope is built after the template exists and re-bound if the template's fields change.
         template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
-        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-        let envelope = key.build_fp_receipt_spend_envelope(
-            network_domain,
-            pre_pow,
-            template.block.header.timestamp,
-            template.block.header.nonce,
-            win.claim_id,
-            win.quantum_index,
-            bond,
-            win.beacon.beacon_block,
-        );
-        template.block.header.palw_commitment = envelope.encode();
-        template.block.header.finalize();
+        let claim_id = win.claim_id;
+        let quantum_index = win.quantum_index;
+        let beacon_block = win.beacon.beacon_block;
+        let template = session
+            .clone()
+            .spawn_blocking(move |consensus| {
+                let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+                consensus.finalize_palw_receipt_template_v3(template, &mut |header| {
+                    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+                    header.palw_commitment = key
+                        .build_fp_receipt_spend_envelope(
+                            network_domain,
+                            pre_pow,
+                            header.timestamp,
+                            header.nonce,
+                            claim_id,
+                            quantum_index,
+                            bond,
+                            beacon_block,
+                        )
+                        .encode();
+                })
+            })
+            .await
+            .map_err(|why| format!("receipt template could not converge: {why}"))?;
+        if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+            return Ok(None);
+        }
         let block: kaspa_consensus_core::block::Block =
             template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
@@ -1845,6 +1861,9 @@ impl PalwProducerService {
             .await
             .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
             .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
+        info!(
+            "[{PALW_PRODUCER}] PFS3 submitted block={hash} claim={claim_id} quantum={quantum_index} parent={quoted_parent} daa={next_daa}"
+        );
         Ok(Some(hash))
     }
 
@@ -1919,23 +1938,39 @@ impl PalwProducerService {
                 return Ok(None);
             }
             template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
-            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-            let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-            let envelope = key.build_fp_receipt_spend_envelope_v4(
-                network_domain,
-                pre_pow,
-                template.block.header.timestamp,
-                template.block.header.nonce,
-                auth.claim_id,
-                win.quantum_index,
-                win.beacon.beacon_block,
-                builder_bond,
-                auth.clone(),
-                bundle.executor_pubkey.clone(),
-                bundle.signature.clone(),
-            );
-            template.block.header.palw_commitment = envelope.encode();
-            template.block.header.finalize();
+            let authorization = auth.clone();
+            let executor_pubkey = bundle.executor_pubkey.clone();
+            let executor_signature = bundle.signature.clone();
+            let quantum_index = win.quantum_index;
+            let beacon_block = win.beacon.beacon_block;
+            let template = session
+                .clone()
+                .spawn_blocking(move |consensus| {
+                    let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+                    consensus.finalize_palw_receipt_template_v3(template, &mut |header| {
+                        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+                        header.palw_commitment = key
+                            .build_fp_receipt_spend_envelope_v4(
+                                network_domain,
+                                pre_pow,
+                                header.timestamp,
+                                header.nonce,
+                                authorization.claim_id,
+                                quantum_index,
+                                beacon_block,
+                                builder_bond,
+                                authorization.clone(),
+                                executor_pubkey.clone(),
+                                executor_signature.clone(),
+                            )
+                            .encode();
+                    })
+                })
+                .await
+                .map_err(|why| format!("redemption template could not converge: {why}"))?;
+            if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+                return Ok(None);
+            }
             let block: kaspa_consensus_core::block::Block =
                 template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();

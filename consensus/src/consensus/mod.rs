@@ -1179,6 +1179,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
+    fn finalize_palw_receipt_template_v3(
+        &self,
+        template: BlockTemplate,
+        sign: &mut dyn FnMut(&mut kaspa_consensus_core::header::Header),
+    ) -> Result<BlockTemplate, RuleError> {
+        self.virtual_processor.finalize_palw_receipt_template_v3(template, sign)
+    }
+
     fn heartbeat_adapt_block_template(&self, template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
         self.virtual_processor.heartbeat_adapt_block_template(template)
     }
@@ -4184,6 +4192,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.tokenizer_registration_status_read_v1(open_id)
     }
 
+    fn palw_protected_original_quote_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        material: kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteV1>, String> {
+        self.virtual_processor.palw_protected_original_quote_v1_impl(original, header, material)
+    }
+
     fn palw_tir_public_original_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
@@ -4447,7 +4464,9 @@ impl ConsensusApi for Consensus {
             return self.virtual_processor.palw_batch_plain_output_quote_v2_impl(target);
         }
         self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
-            kaspa_consensus_core::palw_user_views_v1::palw_court_state_json_v1(state, params, target, clock).map(|doc| doc.to_string())
+            let declaration = self.config.params.palw_protected_planning_v3_at(clock.next_daa).map(|fence| fence.declaration);
+            kaspa_consensus_core::palw_user_views_v1::palw_court_state_json_with_planning_v3(state, params, target, clock, declaration)
+                .map(|doc| doc.to_string())
         })
     }
 
@@ -4696,6 +4715,36 @@ impl ConsensusApi for Consensus {
         claim: kaspa_consensus_core::Hash64,
     ) -> Option<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64, u64)> {
         self.virtual_processor.palw_claim_roots_v2_impl(claim)
+    }
+
+    fn palw_protected_original_readback_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>, String> {
+        self.virtual_processor.palw_protected_original_readback_v1_impl(claim)
+    }
+
+    fn palw_protected_full_replay_deadline_v1(&self, claim: kaspa_consensus_core::Hash64) -> Option<u64> {
+        self.virtual_processor.palw_protected_full_replay_deadline_v1_impl(claim)
+    }
+
+    fn palw_protected_full_replay_digest_v1(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+    ) -> Option<[u8; 64]> {
+        self.virtual_processor.palw_protected_full_replay_digest_v1_impl(expected, bond, key)
+    }
+
+    fn palw_protected_full_replay_payload_v1(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+        signature: &[u8],
+    ) -> Option<Vec<u8>> {
+        self.virtual_processor.palw_protected_full_replay_payload_v1_impl(expected, bond, key, signature)
     }
 
     fn palw_tir_shard_plans_v1(

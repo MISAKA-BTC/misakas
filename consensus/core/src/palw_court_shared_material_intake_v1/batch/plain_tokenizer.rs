@@ -60,6 +60,68 @@ pub(crate) struct PlainBatchTokenizerBoundsV2 {
     pub input_ids_scratch_bytes: u64,
 }
 
+impl PlainBatchTokenizerBoundsV2 {
+    /// Pure operand sizing shared by authenticated admission and offline
+    /// measurements. This creates no registration, branch, reservation or row.
+    pub(crate) fn from_operands_v2(
+        original: &PalwFreePromptCommitmentV3,
+        prompt_form: PalwPromptIdsFormV1,
+        full_ids_body_bytes: u64,
+        facts: &crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2,
+        openings: crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerOpeningBoundsV1,
+    ) -> Result<Self, String> {
+        let vocab = facts.statement.vocab;
+        let leaves = u64::from(vocab) + 1;
+        let rendering_count = u64::from(original.decode_tokens_executed);
+        let maximum_rendering_siblings = crate::palw_step_leg::step_leg_max_opening_siblings_v1(leaves) as u64;
+        let eog_siblings = crate::palw_step_leg::step_range_sibling_count_v1(leaves, u64::from(vocab), 1);
+        let overflow = || "ordinary tokenizer branch resource bound overflows".to_string();
+        let opening_material_bytes = rendering_count
+            .checked_mul(openings.maximum_rendering_opening_bytes)
+            .and_then(|bytes| bytes.checked_add(4 + openings.eog_opening_bytes))
+            .ok_or_else(overflow)?;
+        let maximum_opening_hashes = rendering_count
+            .checked_mul(2 + maximum_rendering_siblings)
+            .and_then(|hashes| hashes.checked_add(2 + eog_siblings))
+            .ok_or_else(overflow)?;
+        let input_ids_body_bytes = 4 + 4 * u64::from(original.job.prompt_tokens);
+        let mut input = TirNativeRequestsV1::new();
+        match prompt_form {
+            // The native canonical writer appends each ID to a growing buffer.
+            PalwPromptIdsFormV1::Flat => input.vec_v1::<u8>(input_ids_body_bytes).map_err(|why| why.to_string())?,
+            PalwPromptIdsFormV1::MerkleV1 => {
+                let tiles = prompt_ids_tile_count_v1(u64::from(original.job.prompt_tokens))
+                    .ok_or("ordinary tokenizer input exceeds the native prompt tree")?;
+                // Raw tile leaves, hashed tree level and its next level can coexist.
+                input.vec_v1::<Hash64>(tiles).map_err(|why| why.to_string())?;
+                input.exact_v1::<Hash64>(tiles + tiles.div_ceil(2)).map_err(|why| why.to_string())?;
+                input
+                    .exact_v1::<u32>(u64::from(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN))
+                    .map_err(|why| why.to_string())?;
+            }
+        }
+        Ok(Self {
+            full_ids_body_bytes,
+            input_ids_count: original.job.prompt_tokens,
+            // Canonical Borsh Vec<u32>, without a carrier, proof or transport header.
+            input_ids_body_bytes,
+            rendering_openings: original.decode_tokens_executed,
+            maximum_rendering_opening_bytes: openings.maximum_rendering_opening_bytes,
+            maximum_rendering_bytes: facts.maximum_rendering_bytes,
+            maximum_rendering_siblings,
+            eog_opening_bytes: openings.eog_opening_bytes,
+            eog_ids: facts.eog_count,
+            eog_siblings,
+            eog_replay_calls: openings.eog_replay_calls,
+            opening_material_bytes,
+            maximum_opening_hashes,
+            // The EOG leaf primitive clones its ids before sorting them.
+            eog_scratch_bytes: u64::from(facts.eog_count) * 4,
+            input_ids_scratch_bytes: input.bytes_v1(),
+        })
+    }
+}
+
 /// Versioned branch identity derives only from immutable native inputs.
 /// Candidate clocks are checked on each derivation and can rebase between
 /// unsigned quote and acceptance without changing the relative graph ID.
@@ -134,54 +196,7 @@ impl PlainBatchTokenizerV2 {
         }
         let facts = row.facts_v1();
         let vocab = facts.statement.vocab;
-        let leaves = u64::from(vocab) + 1;
-        let rendering_count = u64::from(original.decode_tokens_executed);
-        let maximum_rendering_siblings = crate::palw_step_leg::step_leg_max_opening_siblings_v1(leaves) as u64;
-        let eog_siblings = crate::palw_step_leg::step_range_sibling_count_v1(leaves, u64::from(vocab), 1);
-        let overflow = || "ordinary tokenizer branch resource bound overflows".to_string();
-        let opening_material_bytes = rendering_count
-            .checked_mul(openings.maximum_rendering_opening_bytes)
-            .and_then(|bytes| bytes.checked_add(4 + openings.eog_opening_bytes))
-            .ok_or_else(overflow)?;
-        let maximum_opening_hashes = rendering_count
-            .checked_mul(2 + maximum_rendering_siblings)
-            .and_then(|hashes| hashes.checked_add(2 + eog_siblings))
-            .ok_or_else(overflow)?;
-        let input_ids_body_bytes = 4 + 4 * u64::from(original.job.prompt_tokens);
-        let mut input = TirNativeRequestsV1::new();
-        match prompt_form {
-            // The native canonical writer appends each ID to a growing buffer.
-            PalwPromptIdsFormV1::Flat => input.vec_v1::<u8>(input_ids_body_bytes).map_err(|why| why.to_string())?,
-            PalwPromptIdsFormV1::MerkleV1 => {
-                let tiles = prompt_ids_tile_count_v1(u64::from(original.job.prompt_tokens))
-                    .ok_or("ordinary tokenizer input exceeds the native prompt tree")?;
-                // Raw tile leaves, hashed tree level and its next level can coexist.
-                input.vec_v1::<Hash64>(tiles).map_err(|why| why.to_string())?;
-                input.exact_v1::<Hash64>(tiles + tiles.div_ceil(2)).map_err(|why| why.to_string())?;
-                input
-                    .exact_v1::<u32>(u64::from(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN))
-                    .map_err(|why| why.to_string())?;
-            }
-        }
-        let bounds = PlainBatchTokenizerBoundsV2 {
-            full_ids_body_bytes,
-            input_ids_count: original.job.prompt_tokens,
-            // Canonical Borsh Vec<u32>, without a carrier, proof or transport header.
-            input_ids_body_bytes,
-            rendering_openings: original.decode_tokens_executed,
-            maximum_rendering_opening_bytes: openings.maximum_rendering_opening_bytes,
-            maximum_rendering_bytes: facts.maximum_rendering_bytes,
-            maximum_rendering_siblings,
-            eog_opening_bytes: openings.eog_opening_bytes,
-            eog_ids: facts.eog_count,
-            eog_siblings,
-            eog_replay_calls: openings.eog_replay_calls,
-            opening_material_bytes,
-            maximum_opening_hashes,
-            // The EOG leaf primitive clones its ids before sorting them.
-            eog_scratch_bytes: u64::from(facts.eog_count) * 4,
-            input_ids_scratch_bytes: input.bytes_v1(),
-        };
+        let bounds = PlainBatchTokenizerBoundsV2::from_operands_v2(original, prompt_form, full_ids_body_bytes, facts, openings)?;
         let claim = fp_claim_id_v3(original);
         let source = source.source_id_v1();
         let registration = openings.registration_id;

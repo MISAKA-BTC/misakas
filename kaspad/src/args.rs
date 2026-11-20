@@ -359,6 +359,13 @@ pub struct Args {
     /// never salt one by accident.
     #[serde(skip)]
     pub palw_drill_genesis_salt: Option<String>,
+    /// Explicit, unadopted Manifest ingress prices and bounds, parsed once from a versioned file.
+    /// Command line only; requires salted T12 and already active native prerequisites.
+    #[serde(skip)]
+    pub palw_drill_manifest_ingress: Option<kaspa_consensus_core::config::params::ManifestIngressFenceV3>,
+    /// Complete unadopted planning terms; command line only, read once from JSON.
+    #[serde(skip)]
+    pub palw_drill_protected_planning: Option<kaspa_consensus_core::config::params::ProtectedPlanningFenceV3>,
     /// With the salt: write the drill's keyring (seeds, addresses, seat outpoints, the drill genesis)
     /// into this directory and exit. What the drill script reads, so it never re-derives a key.
     #[serde(skip)]
@@ -1036,6 +1043,8 @@ impl Default for Args {
             palw_producer_class: None,
             palw_challenge: false,
             palw_drill_genesis_salt: None,
+            palw_drill_manifest_ingress: None,
+            palw_drill_protected_planning: None,
             palw_drill_write_keyring: None,
             palw_drill_fence_at: None,
             palw_drill_fence2_at: None,
@@ -2292,6 +2301,22 @@ pub fn cli() -> Command {
                      genesis, every seat's bond and fee-float outpoint, and the drill-only heartbeat, payout, validator and EVM keys \
                      — into this directory, and exit.",
                 ),
+        )
+        .arg(
+            Arg::new("palw-drill-protected-planning")
+                .long("palw-drill-protected-planning")
+                .require_equals(true)
+                .value_name("JSON_FILE")
+                .value_parser(crate::palw_drill::protected_planning_v3::parse_file_v3)
+                .help("Unadopted complete protected-planning declaration. Requires salted T12 and native prerequisites; no default capacities, prices or automatic activation."),
+        )
+        .arg(
+            Arg::new("palw-drill-manifest-ingress")
+                .long("palw-drill-manifest-ingress")
+                .require_equals(true)
+                .value_name("JSON_FILE")
+                .value_parser(crate::palw_drill::manifest_ingress_v3::parse_file_v3)
+                .help("Unadopted private Manifest ingress policy: version 3 JSON with explicit prices and bounds. Requires --palw-drill-genesis-salt and native prerequisites; never changes public presets or selects default prices."),
         )
         .arg(
             // No `.env(...)` on purpose, like the salt: a flag day is moved on a drill's command line only.
@@ -4285,6 +4310,12 @@ impl Args {
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_genesis_salt: m.get_one::<String>("palw-drill-genesis-salt").cloned(),
+            palw_drill_manifest_ingress: m
+                .get_one::<kaspa_consensus_core::config::params::ManifestIngressFenceV3>("palw-drill-manifest-ingress")
+                .copied(),
+            palw_drill_protected_planning: m
+                .get_one::<kaspa_consensus_core::config::params::ProtectedPlanningFenceV3>("palw-drill-protected-planning")
+                .copied(),
             palw_drill_write_keyring: m.get_one::<String>("palw-drill-write-keyring").cloned(),
             palw_drill_fence_at: m.get_one::<u64>("palw-drill-fence-at").copied(),
             palw_drill_fence2_at: m.get_one::<u64>("palw-drill-fence2-at").copied(),

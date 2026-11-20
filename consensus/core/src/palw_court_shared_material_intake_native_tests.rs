@@ -252,7 +252,8 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let before_unfunded = builder.state.state_root();
     use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1};
     let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: 0, intake: begin.clone() });
-    assert!(builder.apply_batch_court_wire_v1(&at(frame, 1), &wire, None).is_err());
+    assert!(builder.apply_batch_court_wire_v1(&at(frame, 1), &wire, None,
+        crate::palw_court_shared_material_intake_v1::material_intake_schedule_v1().unwrap()).is_err());
     assert_eq!(builder.state.state_root(), before_unfunded);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin, request_root).unwrap(), E::Begun);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Part);
@@ -1107,6 +1108,19 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
     let operator_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths).unwrap();
     assert_eq!(*operator_quote, open);
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        draft_ttl_daa: 0,
+        cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 0, ..storage.cover
+        }, ..storage
+    }));
+    let selected_quote = batch::native_ranges::quote_numerical_batch_open_with_schedule_v1(
+        &b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths, storage,
+    );
+    let invalid_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths);
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert_eq!(*selected_quote.unwrap(), open, "geometry and deadlines share the selected quote schedule");
+    assert!(invalid_quote.is_err());
     assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
     let request_root = open.demand.checked_request_root_v1().unwrap();
     open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
@@ -1118,7 +1132,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
     use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction};
-    let apply = |b: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
+    let prepare = |point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
         let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         payload.extend(borsh::to_vec(wire).unwrap());
         let tx = Transaction::new(
@@ -1132,6 +1146,11 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         let accepted = ValidatedBatchCarrierV1::prepare_v1(&native, preceding, *point).unwrap().unwrap();
         let split = accepted.fee_v1();
         assert_eq!(split, material_batch_carrier_fee_v1(&tx, fee - preceding).unwrap());
+        accepted
+    };
+    let apply = |b: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
+        let accepted = prepare(point, wire, fee, preceding);
+        let split = accepted.fee_v1();
         let rehearsal = crate::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
             &b.state, &params, point, &accepted, false, false, false, false, b.extras,
         );
@@ -1155,16 +1174,32 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(late_open), 0, 0).is_err());
     assert_eq!(b.state.state_root(), before_open);
     let opening = BatchCourtWireV1::Open(open);
-    let template_ready = |state: &PalwChainStateV2, point: &PalwBlockContextV2, wire: &BatchCourtWireV1| {
+    let template_tx = |wire: &BatchCourtWireV1| {
         let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         payload.extend(borsh::to_vec(wire).unwrap());
-        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
-        crate::palw_state_v2::palw_batch_template_slot_v1(state, &tx, point)
+        Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+    };
+    let template_ready = |state: &PalwChainStateV2, point: &PalwBlockContextV2, wire: &BatchCourtWireV1| {
+        crate::palw_state_v2::palw_batch_template_slot_v1(state, &template_tx(wire), point)
     };
     assert!(template_ready(&b.state, &open_at, &opening).is_ok());
     assert!(template_ready(&b.state, &notice_at, &opening).is_err());
     assert!(template_ready(&b.state, &begin_at, &begin).is_err());
+    // Once dispatch selects a schedule, downstream Open reconstruction must
+    // use that cover, rather than independently re-reading a global estimate.
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 0, ..storage.cover
+        }, ..storage
+    }));
+    let selected_open = {
+        let mut branch = TransitionBuilder::new(&b.state, &params, false, false, false, false, b.extras);
+        branch.apply_batch_court_wire_v1(&open_at, &opening, None, storage)
+            .map(|()| branch.state.state_root())
+    };
+    set_material_intake_test_schedule_v1(Some(storage));
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    assert_eq!(selected_open.unwrap(), b.state.state_root());
     assert!(template_ready(&b.state, &open_at, &opening).is_err());
     assert!(template_ready(&b.state, &begin_at, &begin).is_ok());
     let service = b.state.court_service_row_v3_v1().unwrap();
@@ -1175,8 +1210,19 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let repair_at = at(frame, NOTICE_WINDOW_DAA + 10);
     missed.observe_block(repair_at.daa_score, repair_at.block.as_bytes(), ServiceCost::default()).unwrap();
     let ids = &service.state.claims[&claim].packet_ids;
+    let short_schedule = MaterialIntakeScheduleV1 { draft_ttl_daa: 0, ..storage };
+    let mut short_repair = missed.clone();
+    assert_eq!(batch::repair_rooted_batch_slots_v1(
+        &b.state, claim, ids, context.hard_daa, &service.causal, &mut short_repair, short_schedule,
+    ), Err(crate::palw_court_service_v1::ServiceRefusal::DeadlineExhausted));
+    assert_eq!(short_repair, missed, "new drafts must fit the selected TTL without a partial repair");
     let mut repaired = missed.clone();
-    assert_eq!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired), Ok(range_count));
+    set_material_intake_test_schedule_v1(Some(short_schedule));
+    let repair = batch::repair_rooted_batch_slots_v1(
+        &b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired, storage,
+    );
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert_eq!(repair, Ok(range_count), "recovery uses the selected schedule rather than re-reading the global");
     let finish_packet = ids.iter().find(|id| service.state.book.assigned_daa(id) == Some(finish_at.daa_score)).unwrap();
     assert_eq!(repaired.assigned_daa(finish_packet), Some(response_deadline - 1));
     let Some(Row::CourtBatchDemand(accepted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
@@ -1186,10 +1232,18 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(batch::check_open_response_slots_v1(accepted, &repaired, ids, storage, true).is_ok());
     missed.observe_block(response_deadline, [7; 64], ServiceCost::default()).unwrap();
     let before = missed.clone();
-    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut missed).is_err());
+    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut missed, storage).is_err());
     assert_eq!(missed, before);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
     let quote = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert_eq!(batch::quote_batch_response_with_schedule_v1(&b.state, claim, ordinal, target, storage).unwrap(), quote);
+    assert!(batch::quote_batch_response_with_schedule_v1(&b.state, claim, ordinal, target, short_schedule).is_err());
+    assert!(crate::palw_state_v2::palw_batch_template_slot_with_schedule_v1(
+        &b.state, &template_tx(&begin), &begin_at, storage,
+    ).is_ok());
+    assert!(crate::palw_state_v2::palw_batch_template_slot_with_schedule_v1(
+        &b.state, &template_tx(&begin), &begin_at, short_schedule,
+    ).is_err());
     assert_eq!(quote.request_root, request_root);
     assert_eq!((quote.begin_daa, quote.finish_daa, quote.retained_submitter), (begin_at.daa_score, finish_at.daa_score, None));
     assert_eq!(quote.total_bytes, body.len() as u64);
@@ -1198,6 +1252,31 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     }]);
     assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::PromptTile { tile: u32::MAX }).is_err());
     let after_open = b.state.state_root();
+    // A different TTL charges the same amount, but may not authorize this
+    // UTXO handoff. Rehearsal and the canonical dispatcher must both refuse
+    // before creating a draft, debiting a ledger or appending journal entries.
+    let retained = prepare(&begin_at, &begin, body.len() as u64 * storage.sompi_per_byte + 2, 1);
+    let entries_before = b.entries.len();
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        draft_ttl_daa: storage.draft_ttl_daa + 1, ..storage
+    }));
+    let rehearsal = crate::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
+        &b.state, &params, &begin_at, &retained, false, false, false, false, b.extras,
+    );
+    let folded = b.apply_batch_court_carrier_v1(&begin_at, &retained);
+    let selected_begin = {
+        let debit = retained.storage_debit_v1(Some(request_root)).unwrap().unwrap();
+        let mut branch = TransitionBuilder::new(&b.state, &params, false, false, false, false, b.extras);
+        branch.apply_batch_court_wire_v1(&begin_at, &begin, Some(&debit), storage)
+            .map(|()| branch.state.state_root())
+    };
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert!(matches!(rehearsal, Err(PalwStateV2Error::CarriageInconsistent(why))
+        if why == "Batch carrier material schedule differs from its UTXO handoff"));
+    assert!(matches!(folded, Err(PalwStateV2Error::CarriageInconsistent(why))
+        if why == "Batch carrier material schedule differs from its UTXO handoff"));
+    assert_eq!(b.state.state_root(), after_open);
+    assert_eq!(b.entries.len(), entries_before);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);
     // The accepted Open already checked this root. Its responses must not
@@ -1214,14 +1293,53 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let fee = apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
     assert_eq!((fee.withheld_storage_rent, fee.collectible_fee), (rent, 1));
     let after_begin = b.state.state_root();
+    assert_eq!(selected_begin.unwrap(), after_begin, "slot TTL, debit and draft must use the same selected schedule");
     apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
     let conflicting = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: Hash64::from_u64_word(999) });
     assert!(apply(&mut b, &begin_at, &conflicting, rent + 2, 1).is_err());
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
     assert_eq!(draft_id, quote.draft_id);
+    {
+        // Retain Begin for every declared response in this fixture, then miss
+        // Finish supply. A later zero TTL must not cancel the accepted windows.
+        let mut begun = TransitionBuilder::new(&b.state, &params, false, false, false, false, b.extras);
+        for (index, &(planned, total_bytes)) in lengths.iter().enumerate() {
+            if planned == target { continue; }
+            let mut intake = SignedMaterialIntakeV1 {
+                version: MATERIAL_BATCH_VERSION, claim, scope_id, target: planned, submitter: who,
+                action: MaterialActionV1::Begin { total_bytes, body_hash: Hash64::from_u64_word(300 + index as u64) },
+                signature: vec![],
+            };
+            intake.signature = sign(intake.batch_signing_message_v1(network, request_root).unwrap(), MATERIAL_BATCH_CONTEXT_V1);
+            let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake });
+            apply(&mut begun, &begin_at, &wire, total_bytes * storage.sompi_per_byte + 2, 1).unwrap();
+        }
+        let service = begun.state.court_service_row_v3_v1().unwrap();
+        let ids = &service.state.claims[&claim].packet_ids;
+        let mut missed = service.state.book.clone();
+        for point in [open_at, begin_at, part_at, repair_at] {
+            missed.observe_block(point.daa_score, point.block.as_bytes(), ServiceCost::default()).unwrap();
+        }
+        let mut original_schedule = missed.clone();
+        assert_eq!(batch::repair_rooted_batch_slots_v1(
+            &begun.state, claim, ids, context.hard_daa, &service.causal, &mut original_schedule, storage,
+        ), Ok(range_count));
+        let mut swept = service.state.clone();
+        swept.book = missed.clone();
+        let report = swept.repair_missing_supply_with_v1(&service.causal, Some((&begun.state, short_schedule))).unwrap();
+        assert_eq!(report.iter().find(|entry| entry.claim == claim).unwrap().result, Ok(range_count));
+        assert_eq!(swept.book, original_schedule, "the canonical claim sweep carries its selected schedule");
+        assert_eq!(batch::repair_rooted_batch_slots_v1(
+            &begun.state, claim, ids, context.hard_daa, &service.causal, &mut missed, short_schedule,
+        ), Ok(range_count));
+        assert_eq!(missed, original_schedule, "accepted expiries govern every retained draft's repair");
+        assert_eq!(b.state.state_root(), after_begin, "the recovery branch leaves the original fixture untouched");
+    }
     apply(&mut b, &part_at, &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
     let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert_eq!(batch::quote_batch_response_with_schedule_v1(&b.state, claim, ordinal, target, short_schedule).unwrap(), resumed,
+        "a retained draft keeps its accepted expiry even when the selected TTL changes");
     assert!(!resumed.material_available);
     assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
     assert_eq!(resumed.parts[0].accepted_daa, Some(quote.parts[0].assigned_daa));
@@ -1268,7 +1386,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(store.param_opening(leaf).unwrap(), fx.execution.param_opening(leaf).unwrap());
     set_material_intake_test_schedule_v1(Some(storage));
     assert!(matches!(
-        batch::native_ranges::prepare_numerical_batch_material_v1(&b.state, claim, verify_daa),
+        batch::native_ranges::prepare_numerical_batch_material_v1(&b.state, claim, verify_daa, storage.cover),
         Err(NativeDecodeErrorV1::Decode(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing",
     ));
     let completed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
@@ -1312,10 +1430,23 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(quote["error"], "numerical Batch has no native replay profile at the booked DAA");
     let quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(&b.state, &params, claim, booked, |daa| {
         assert_eq!(daa, booked);
-        Some((rules, extras.batch_numerical_profile_v1.unwrap()))
+        Some((rules, extras.batch_numerical_profile_v1.unwrap(), storage))
     });
     assert!(quote["verify"].is_null());
     assert!(matches!(quote["error"].as_str(), Some("selected Batch material is missing" | "selected Batch FullIds are missing")));
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 0, ..storage.cover
+        }, ..storage
+    }));
+    let selected_verify_quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(
+        &b.state, &params, claim, booked, |daa| {
+            assert_eq!(daa, booked);
+            Some((rules, extras.batch_numerical_profile_v1.unwrap(), storage))
+        },
+    );
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert_eq!(selected_verify_quote, quote, "Verify material uses the schedule selected at its reserved DAA");
     let mut incomplete = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
     let mut forged = verify.clone();
     let BatchCourtWireV1::VerifyNumerical(control) = &mut forged else { unreachable!() };

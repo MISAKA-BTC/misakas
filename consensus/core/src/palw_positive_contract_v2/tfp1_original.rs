@@ -11,7 +11,9 @@ pub(crate) mod manifest_request;
 pub(crate) mod native_frame;
 pub(crate) mod native_link;
 pub(crate) mod native_plan;
+pub(crate) mod native_restore;
 pub(crate) mod preclaim;
+pub(crate) mod public_policy;
 pub(crate) mod service_booking;
 pub(crate) mod service_graph;
 pub(crate) mod service_invariants;
@@ -31,7 +33,7 @@ use misaka_palw_positive_contract::{
     ContractError,
     identity::{Digest, PrincipalId, principal},
     messages::AggregateBudget,
-    public_one_honest::{MaterialScope, OriginalCommit, SignedPublicOriginalV1, prompt_text_material_v1},
+    public_one_honest::{MaterialScope, OriginalCommit, PromptMaterialEncodingV1, SignedPublicOriginalV1},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,9 +182,9 @@ impl<'a> PublicOriginalAdmissionV1<'a> {
             return Err(ContractError::Budget);
         }
         let prompt = std::str::from_utf8(prompt_bytes).map_err(|_| ContractError::NonCanonical)?;
-        let prompt =
-            prompt_text_material_v1(policy.scope.ruleset, prompt, policy.manifest_scope_limits[MaterialScope::Prompt as usize])?
-                .subject;
+        let prompt = PromptMaterialEncodingV1::from_codec_v1(policy.manifest_scope_limits[MaterialScope::Prompt as usize].codec)?
+            .material_v1(policy.scope.ruleset, prompt, policy.manifest_scope_limits[MaterialScope::Prompt as usize])?
+            .subject;
         let cold = super::public_tfp1_cold_material_v1(
             original,
             source,
@@ -246,7 +248,27 @@ impl Tfp1PublicOriginalObligationV1 {
     }
 
     pub(crate) fn check_companion_v1(self, companion: &OriginalCommit, budget: &AggregateBudget) -> Result<(), ContractError> {
+        self.check_companion_at_v2(companion, budget, None)
+    }
+
+    pub(crate) fn check_companion_at_v2(
+        self,
+        companion: &OriginalCommit,
+        budget: &AggregateBudget,
+        accepted_daa: Option<u64>,
+    ) -> Result<(), ContractError> {
         let facts = self.facts;
+        let service_matches = accepted_daa.map_or_else(
+            || companion.service_contract == self.service_contract_v1(budget),
+            |daa| {
+                misaka_palw_positive_contract::public_one_honest::public_original_service_contract_matches_v2(
+                    companion.service_contract,
+                    self.obligation,
+                    budget,
+                    daa,
+                )
+            },
+        );
         if companion.execution != Digest(facts.job_context.as_bytes())
             || companion.scope.network != Digest(facts.network.as_bytes())
             || companion.output != Digest(facts.output.as_bytes())
@@ -255,7 +277,7 @@ impl Tfp1PublicOriginalObligationV1 {
             || companion.trace_root != Digest(facts.execution_root.as_bytes())
             || companion.artifact != Digest(facts.artifact.as_bytes())
             || companion.miner != facts.miner
-            || companion.service_contract != self.service_contract_v1(budget)
+            || !service_matches
         {
             return Err(ContractError::Scope);
         }
@@ -328,7 +350,7 @@ impl PublicOriginalAdmissionV1<'_> {
         obligation: Tfp1PublicOriginalObligationV1,
         reservation: &PublicOriginalProspectiveReservationV2<'_>,
     ) -> Result<(), ContractError> {
-        obligation.check_companion_v1(companion, reservation.budget)?;
+        obligation.check_companion_at_v2(companion, reservation.budget, Some(reservation.accepted_daa))?;
         // The current TFO3 bridge implements a fresh V3/V4 execution. Derive
         // these roots from native metadata rather than accepting matching
         // caller/candidate placeholders. Other dependency forms need their
@@ -370,7 +392,8 @@ impl PublicOriginalAdmissionV1<'_> {
     /// reserved work using the registered raw tokenizer.
     pub(crate) fn check_tfp1_prompt_bytes_v1(&self, bytes: &[u8]) -> Result<(), ContractError> {
         let text = std::str::from_utf8(bytes).map_err(|_| ContractError::NonCanonical)?;
-        let entry = prompt_text_material_v1(self.scope.ruleset, text, self.manifest_scope_limits[MaterialScope::Prompt as usize])?;
+        let entry = PromptMaterialEncodingV1::from_codec_v1(self.manifest_scope_limits[MaterialScope::Prompt as usize].codec)?
+            .material_v1(self.scope.ruleset, text, self.manifest_scope_limits[MaterialScope::Prompt as usize])?;
         if entry.subject != self.prompt {
             return Err(ContractError::Scope);
         }
@@ -527,6 +550,10 @@ impl PublicOriginalAdmissionV1<'_> {
             prompt_form,
             prompt,
             Some(&hf),
+        )?
+        .with_prompt_encoding_v5(
+            PromptMaterialEncodingV1::from_codec_v1(self.manifest_scope_limits[MaterialScope::Prompt as usize].codec)?,
+            prompt,
         )?;
         supply.check_limits_v1(
             self.max_manifest_bytes,
@@ -567,7 +594,7 @@ mod tests {
         identity::ChainScope,
         public_one_honest::{
             FirstNoticeDemand, ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialScope, ORIGINAL_SIGN_CONTEXT,
-            ProtectedRescueDemand,
+            ProtectedRescueDemand, prompt_text_material_v1,
         },
         reservations::RemainingCapacity,
         rows::{AcceptedOrigin, AggregateUsage, NativeHash64},
@@ -580,6 +607,8 @@ mod tests {
         let fixture = palw_tir_public_signed_material_frame_fixture_v1(&key);
         let frame = &fixture.frame;
         let original = frame.original_v1();
+        assert_eq!(original.job.max_context_tokens, fixture.record.facts.max_context);
+        assert_eq!(frame.header_v1().job_context.max_context_tokens, fixture.record.facts.max_context);
         let source = PalwTirPublicSourceV1::new_native_v1(
             &fixture.record,
             &fixture.layout,
@@ -1151,6 +1180,15 @@ mod tests {
             },
         );
         assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
+        native_restore::exercise_archive_scope_rejections_v3(
+            &linked,
+            &link_state,
+            &pairing,
+            &link_point,
+            &link_params,
+            &history_inputs,
+            history_fee,
+        );
         assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
         let companion_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
         use crate::palw_state_v2::{
@@ -1190,6 +1228,24 @@ mod tests {
         )
         .unwrap();
         let request_point = PalwBlockContextV2 { block: Hash64::from_u64_word(807), daa_score: 102, blue_score: 103, subsidy: 0 };
+        native_restore::exercise_request_context_v3(
+            paired.companion_v1(),
+            &companion,
+            member,
+            draw_point,
+            request_point,
+            &key,
+            |request| {
+                *libcrux_ml_dsa::ml_dsa_87::sign(
+                    &pair.signing_key,
+                    &request.signing_digest().0,
+                    MANIFEST_REQUEST_SIGN_CONTEXT,
+                    [36; 32],
+                )
+                .unwrap()
+                .as_ref()
+            },
+        );
         let mut request_context = ManifestRequestContext {
             original: &companion,
             claimant: Claimant::DrawnBond(bond),
@@ -1220,37 +1276,11 @@ mod tests {
                 .unwrap();
         let request_case_id = request.case_id(&companion, request_context.claimant).unwrap();
         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
-        // Run the same signed request against the dedicated frame as well.
-        // The service tariff/book remain fixtures: this verifies the native
-        // reader/writer bridge, not a complete protected-profile admission.
-        let (protected_drawn, _) = apply_palw_transition_v2_with_extras(
-            &protected_state,
-            &link_params,
-            &draw_point,
-            &[],
-            None,
-            false,
-            false,
-            false,
-            false,
-            &PalwTransitionExtrasV1 {
-                kernel_route: Some(kernel.clone()),
-                public_draws: vec![draw.prepare_storage_record()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let (protected_case, _) = manifest_request::exercise_paid_request_v1(
-            &paired,
-            &companion_only,
-            &protected_drawn,
-            &draw,
-            &request_context,
-            &request_wire,
-            request_point,
-            &link_params,
-        );
-        assert!(protected_case.public_tfp1_original_link_v1(facts.claim).unwrap().unwrap().uses_public_frame_v1());
+        // The dedicated frame writer above now tests an intermediate result
+        // that cannot be published without its paired service booking. It does
+        // not return a protected state on which to run a paid request. That
+        // bridge needs the complete admission fixture; keep this request test
+        // on the independently valid legacy linked state.
         let (with_case, paid_origin) = manifest_request::exercise_paid_request_v1(
             &paired,
             &companion_only,

@@ -85,6 +85,13 @@ manual.update({
     'crate::tx::TransactionOutput',
     'crate::tx::UtxoEntry',
 })
+# Process-local declarations and fee projections have no carrier wire format.
+manual.update({
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierScopeV1',
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierContextV1',
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::replay::ManifestRequestFeeV1',
+    'crate::palw_positive_contract_v2::tfp1_original::public_policy::declaration::ProtectedPlanningDeclarationV3',
+})
 manual.update({'crate::palw_positive_assignment_resources_v2::' + name for name in ('AssignmentCancellationRuleV2', 'AssignmentSourceResponsibilityV2', 'AssignmentSourceReleaseV2')})
 REVIEW=runpy.run_path(str(Path(__file__).with_name('rfc06_native_manual_wire_review_v1.py')))['PINNED']
 for _path in sorted(G['wire_visited']):
@@ -273,6 +280,7 @@ print(f'Wrote structural scanners: {len(public)} public, {sum(len(v) for v in pr
 # length. Nested member bounds are needed for payees/refuted/staged hold vectors.
 index_sources={
  'claims_by_job':('claims',False),
+ 'aggregate_live_claims_by_bond':('claims',False),
  'funded_escrows_by_claim':('funded_escrows',False),
  'exec_v2_source_roots':('exec_v2',True),
  'exec_v2_job_use_deadlines':('exec_v2_job_uses',False),
@@ -285,6 +293,8 @@ index_sources={
  'improvement_opt_in_expiries':('improvement_opt_ins',False),'improvement_licence_expiries':('improvement_licences',False),
  'deadlines':('claims',False),'unresolved':('claims',False),'work_ids':('claims',False),
  'open_courts_by_claim':('court_sessions',False),'court_deadlines':('court_sessions',False),
+ 'deadlines_by_claim':('claims',False),'court_sessions_by_claim':('court_sessions',False),
+ 'court_deadline_by_session':('court_sessions',False),
  'court_close_deadlines':('court_close_groups',False),'courts_by_challenger':('court_sessions',False),
  'commitments_by_reporter':('reporter_commitments',False),'commitments_by_daa':('reporter_commitments',False),
  'vesting_order':('vesting',False),'vesting_unlatched':('vesting',False),'vesting_unlatched_by_settled':('vesting',False),'vesting_payees':('vesting',True),
@@ -514,6 +524,12 @@ public_one_honest_arms = '''        crate::palw_positive_contract_v2::PUBLIC_ORI
                 return Err(wire::wire_bad("unallocated public TFP1 link key"));
             }
             crate::palw_positive_contract_v2::tfp1_original::native_link::Tfp1PublicOriginalLinkV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1 => {
+            crate::palw_positive_contract_v2::tfp1_original::manifest_paid::PaidManifestRequestRowV1::scan_row_v1(k, frame)?
+        }
+        crate::palw_tfp1_original_history_v1::PUBLIC_TFP1_HISTORY_TABLE_V1 => {
+            crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::scan_row_v1(k, frame)?
         }
         crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1 => {
             use crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1;

@@ -553,7 +553,8 @@ pub(crate) fn reopen_prepared_v1(
     let metadata_bytes = borsh::object_length(&binding).map_err(|e| e.to_string())? as u64;
     let steps = DiskTree::slice(&steps_file, 0, n, Some(binding.step_merkle_root))?;
     let rows = rows_file.map(|f| DiskTree::slice(&f, 0, d, m.rows_root)).transpose()?;
-    let spool = spool_file.map(|f| Arc::new(Spool(Mutex::new((f, m.files[5].length)))));
+    // A reopened spool is sealed; retain its exact file length as its write limit.
+    let spool = spool_file.map(|f| Arc::new(Spool(Mutex::new((f, m.files[5].length)), m.files[5].length)));
     Ok(CaptureReader {
         source,
         binding,

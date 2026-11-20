@@ -84,13 +84,26 @@ pub(crate) fn check_protected_service_insert_v1(
     before: Option<&Row>,
     after: &Row,
 ) -> Result<(), PalwStateV2Error> {
-    let (old, old_v3) = match before {
-        Some(Row::CourtService(row)) => (row.as_ref(), None),
-        Some(Row::CourtServiceV3(row)) => (&row.state, Some(row.as_ref())),
-        _ => return Err(bad("protected service insertion has no prior native book")),
-    };
     let Row::CourtServiceV3(next) = after else {
         return Err(bad("protected service insertion requires a V3 row"));
+    };
+    let fresh = if before.is_none() {
+        Some(crate::palw_court_service_state_v2::CourtServiceStateV2 {
+            version: 2,
+            profile_id: next.state.profile_id,
+            source_profile_id: next.state.source_profile_id,
+            book: crate::palw_court_service_v1::ServiceReservations::new(next.state.book.budget)
+                .map_err(|_| bad("protected service insertion has invalid bootstrap budget"))?,
+            claims: std::collections::BTreeMap::new(),
+        })
+    } else {
+        None
+    };
+    let (old, old_v3) = match (before, fresh.as_ref()) {
+        (Some(Row::CourtService(row)), None) => (row.as_ref(), None),
+        (Some(Row::CourtServiceV3(row)), None) => (&row.state, Some(row.as_ref())),
+        (None, Some(fresh)) => (fresh, None),
+        _ => return Err(bad("protected service insertion has no prior native book")),
     };
     let scratch =
         validation_requests_v1(old.book.packets.len().max(next.state.book.packets.len())).map_err(PalwStateV2Error::NativeResource)?;

@@ -31,6 +31,12 @@ use std::{
 mod bootstrap;
 /// The G14 collusion drill's private rulesets (`g14-v1`).
 pub mod g14_drill_factory;
+mod protected_claim_factory_v3;
+pub use protected_claim_factory_v3::{PrivateProtectedClaimProfileV3, export_private_protected_bootstrap_v3};
+#[cfg(feature = "private-integration-clock")]
+mod historical_clock;
+#[cfg(feature = "private-integration-clock")]
+pub use historical_clock::PrivateHistoricalClockV1;
 pub use bootstrap::export_private_complete_bootstrap_v1;
 mod claim_paid_bootstrap;
 mod paid_request;
@@ -328,6 +334,9 @@ pub fn private_g14_drill_params_v1(
 fn private_g14_drill_of_config_v1(config: &Config) -> Result<Option<self::g14_drill_factory::PrivateG14DrillV1>, String> {
     use self::g14_drill_factory::{PrivateG14DrillModeV1, PrivateG14DrillSetV1, private_g14_drill_v1};
     use kaspa_consensus_core::config::params::ForkActivation;
+    if config.params.palw_protected_planning_v3.is_some() {
+        return Ok(None);
+    }
     let Some(at) = config.params.palw_g14_route_required_v1.filter(|f| *f != ForkActivation::never()) else { return Ok(None) };
     let salt = config.palw_drill_genesis_salt.as_ref().ok_or("the G14 drill needs its salted genesis")?;
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {
@@ -405,6 +414,15 @@ pub fn private_probe_manifest(config: &Config) -> serde_json::Value {
         "releaseApproval": false,
         "securitySoundnessMeasured": false,
     });
+    if let Some(fence) = config.params.palw_protected_planning_v3 {
+        manifest["protectedClaimPrivatePolicyV3"] = serde_json::json!({
+            "activationDaa": fence.activation.daa_score(),
+            "planningId": fence.declaration.fingerprint_v3().to_string(),
+            "scheduleId": config.params.consensus_schedule_id().to_string(),
+            "releaseApproval": false,
+            "actualClaimCompletion": "UNKNOWN",
+        });
+    }
     if let Some(fence) = config.params.palw_selected_source_bootstrap_v1 {
         manifest["sourceBootstrapPrivatePolicy"] = serde_json::json!({
             "activationDaa": fence.at.daa_score(), "policyId": fence.policy.id().to_string(),
@@ -536,13 +554,20 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
             return Err("a private probe must never name a public genesis monetary outpoint".into());
         }
     }
+    let protected_profile = PrivateProtectedClaimProfileV3::of_params(&config.params)?;
     let g14_drill = private_g14_drill_of_config_v1(config)?;
     // The kernel-slice G14 drill arms the kernel route too: it is the G14 drill, not the complete-only bootstrap profile.
     let private_complete = g14_drill.is_none()
         && (config.params.palw_probabilistic_constraints_v1.is_some()
             || config.params.palw_signed_registration_v1.is_some()
             || config.params.palw_panel_free_v1.is_some());
-    if let Some(drill) = g14_drill {
+    // Exactly one profile owns consensus validation. A record-validated G14
+    // factory must not fall through to the ordinary validator, which correctly
+    // refuses those private arming records. Common Args/genesis/network and
+    // directory guards still run for every profile below.
+    if let Some(profile) = protected_profile {
+        profile.check_config_v3(config)?;
+    } else if let Some(drill) = g14_drill {
         // The G14 collusion drill (`g14-v1`): the exact salted factory ruleset, validated through the test arming-record path with
         // its own drill records. The shipped validation still refuses it (`private_g14_drill_v1` asserts that).
         if config.private_population.is_some() {
@@ -556,8 +581,7 @@ fn validate_private_probe(args: &Args, config: &Config) -> Result<(), String> {
             .params
             .validate_palw_v2_with_g14_and_kernel_route_records_v1(&drill.records, &drill.kernel_records)
             .map_err(|error| format!("{error:?}"))?;
-    }
-    if config.params.palw_selected_source_bootstrap_v1.is_some() {
+    } else if config.params.palw_selected_source_bootstrap_v1.is_some() {
         if config.private_population.is_some() {
             return Err("private source profile refuses population overrides".into());
         }
@@ -1103,6 +1127,65 @@ pub fn prepare_private_integration_probe(args: &Args, config: &Config) -> Result
 mod tests {
     use super::*;
     use kaspa_consensus_core::config::drill::{PalwDrillSaltV1, palw_chain_params_v1};
+
+    #[test]
+    fn g14_private_startup_keeps_factory_and_common_guards() {
+        let worker = std::thread::Builder::new()
+            .name("private-g14-startup".into())
+            .stack_size(64 << 20)
+            .spawn(|| {
+                use g14_drill_factory::PrivateG14DrillSetV1;
+                let salt = PalwDrillSaltV1::from_bytes([0x37; 32]).unwrap();
+                for set in [PrivateG14DrillSetV1::Full, PrivateG14DrillSetV1::RouteRequiredOnly] {
+                    let dir = tempfile::tempdir().unwrap();
+                    let mut config = Config::new(private_g14_drill_params_v1(&salt, 40, set, 3).unwrap());
+                    config.palw_drill_genesis_salt = Some(salt);
+                    let args = Args {
+                        testnet: true,
+                        testnet_suffix: 12,
+                        disable_dns_seeding: true,
+                        outbound_target: 0,
+                        disable_upnp: true,
+                        listen: Some("127.0.0.1:53001".parse().unwrap()),
+                        rpclisten: Some("127.0.0.1:53002".parse().unwrap()),
+                        appdir: Some(dir.path().display().to_string()),
+                        ..Args::default()
+                    };
+                    assert!(config.params.validate_palw_v2().is_err(), "public validator must still refuse private records");
+                    // Exercise the actual pre-service entry, including the
+                    // owned-directory marker, rather than only the factory.
+                    prepare_private_integration_probe(&args, &config).unwrap();
+                    let marker = dir.path().join(PRIVATE_PROBE_MARKER_V1);
+                    let before = fs::read(&marker).unwrap();
+                    prepare_private_integration_probe(&args, &config).unwrap();
+                    assert_eq!(private_probe_manifest(&config)["releaseApproval"], false);
+
+                    let mut changed = config.clone();
+                    changed.params.blockrate.target_time_per_block += 1;
+                    assert!(
+                        prepare_private_integration_probe(&args, &changed).unwrap_err().contains("exact salted factory"),
+                        "private records do not authorize unrelated parameter changes"
+                    );
+                    let mut changed = config.clone();
+                    changed.params.skip_proof_of_work = true;
+                    assert!(prepare_private_integration_probe(&args, &changed).unwrap_err().contains("skip_proof_of_work"));
+                    let mut public = config.clone();
+                    public.params.genesis = kaspa_consensus_core::config::genesis::PALW_T12_GENESIS;
+                    assert!(prepare_private_integration_probe(&args, &public).unwrap_err().contains("salt"));
+                    let mut discovery = args.clone();
+                    discovery.disable_dns_seeding = false;
+                    assert!(prepare_private_integration_probe(&discovery, &config).unwrap_err().contains("controlled"));
+                    let mut external = args.clone();
+                    external.listen = Some("0.0.0.0:53001".parse().unwrap());
+                    assert!(prepare_private_integration_probe(&external, &config).unwrap_err().contains("loopback"));
+                    assert_eq!(fs::read(&marker).unwrap(), before, "refusals cannot rewrite the running profile's marker");
+                }
+            })
+            .unwrap();
+        if let Err(panic) = worker.join() {
+            std::panic::resume_unwind(panic);
+        }
+    }
 
     #[test]
     fn private_complete_policy_is_exact_value_valid_and_still_publicly_refused() {

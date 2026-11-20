@@ -4175,7 +4175,20 @@ impl PalwChainStateV2 {
         if params.rcore_plus_from_daa().is_some() {
             for (id, claim) in &self.claims {
                 let rcore = &claim.rcore;
-                let one = params.model_panel_one_governs_v1(claim.accepted_daa);
+                let protected = super::claim_has_protected_frame_v1(self, id);
+                let one = params.model_panel_one_governs_v1(claim.accepted_daa) && !protected;
+                let tagged_protected =
+                    rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::ProtectedPanelReplay);
+                if tagged_protected && (!protected || rcore.basis_k == 0 || rcore.served_mask == 0 || rcore.escrow_released)
+                    || protected && rcore.licence_door.is_some() && !tagged_protected
+                    || protected
+                        && matches!(claim.phase, PalwClaimPhaseV2::Final { .. })
+                        && (!tagged_protected || !super::included_replay::protected_replay_approval_recorded_v1(self, *id))
+                {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "claim {id} has inconsistent protected scope, licence or Final approval"
+                    )));
+                }
                 let tagged_one = rcore.licence_door == Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::G14PanelOne);
                 let missing_required_tag = one
                     && !tagged_one

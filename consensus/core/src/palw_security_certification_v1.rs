@@ -758,10 +758,14 @@ pub fn palw_certification_duties_v1(
                 .then(|| {
                     let claim = state.claim(&claim_id)?;
                     let artifact_root = state.class(&claim.class_id)?.artifact_root;
+                    let protected_replay = crate::palw_protected_original_readback_v1::protected_original_readback_v1(state, claim_id)
+                        .ok()?
+                        .map(|read| read.replay_binding_v1());
                     let panel = state.panel(&claim_id);
                     let bound_daa = panel.map(|p| p.bound_daa).unwrap_or(row.final_daa);
                     Some(crate::palw_producer_v2::PalwSeatDutyV2 {
                         model_panel_one: params.model_panel_one_governs_v1(claim.accepted_daa),
+                        protected_replay,
                         accepted_block: claim.accepted_block,
                         claim_id,
                         class_id: claim.class_id,

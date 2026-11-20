@@ -37,14 +37,15 @@ pub(crate) mod batch;
 pub use batch::constraint_stop::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
 pub use batch::native_ranges::quote_numerical_batch_open_v1;
 pub use batch::numerical_verification::{NumericalBatchReplayBudgetV1, NumericalBatchReplayProfileV1};
+pub use batch::operand_floors_v1::{ProtectedOperandFloorsV1, measure_protected_operand_floors_v1};
 pub use batch::plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
 pub use batch::{BatchResponsePartSlotV1, BatchResponseQuoteV1, quote_batch_response_v1};
 mod storage_rent;
-pub use storage_rent::material_batch_plain_output_carrier_fee_v2;
 pub use storage_rent::{
     MaterialBatchCarrierFeeV1, MaterialBatchStorageDebitV1, SharedValidatedBatchCarrierV1, ValidatedBatchCarrierV1,
-    material_batch_carrier_fee_v1, material_batch_storage_rent_v1,
+    material_batch_carrier_fee_v1, material_batch_carrier_fee_with_schedule_v3, material_batch_storage_rent_v1,
 };
+pub use storage_rent::{material_batch_plain_output_carrier_fee_v2, material_batch_plain_output_carrier_fee_with_schedule_v3};
 
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
 pub(crate) const MATERIAL_INTAKE_CONTEXT_V2: &[u8] = b"misaka-palw/material-intake/v2/mldsa87";
@@ -144,6 +145,7 @@ pub struct MaterialIntakeScheduleV1 {
     pub draft_ttl_daa: u64,
     pub cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 }
+crate::palw_native_resource_v1::native_struct!(MaterialIntakeScheduleV1; sompi_per_byte, draft_ttl_daa, cover);
 impl MaterialIntakeScheduleV1 {
     fn rent_for_bytes_v1(self, bytes: u64) -> Result<u64, String> {
         self.sompi_per_byte.checked_mul(bytes).ok_or_else(|| "Batch storage rent overflow".into())
@@ -183,6 +185,21 @@ pub(crate) fn set_material_intake_test_schedule_v1(schedule: Option<MaterialInta
 /// refuses without debiting. Injection does not arm the fence.
 pub fn material_intake_schedule_v1() -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
     material_intake_schedule_at_fence_v1(true)
+}
+
+/// Choose material terms once for the accepting or historical point. Invalid
+/// active declarations stay missing rather than falling back to pinned prices.
+pub fn material_intake_schedule_selected_v3(
+    fence_active: bool,
+    declaration: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,
+) -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
+    if !fence_active {
+        return Err(MaterialIntakeMissingV1::Schedule);
+    }
+    match declaration {
+        Some(declaration) => declaration.material_schedule_v3().map_err(|_| MaterialIntakeMissingV1::Schedule),
+        None => material_intake_schedule_at_fence_v1(true),
+    }
 }
 
 /// [`material_intake_schedule_v1`] gated by the material-intake fence.
@@ -700,6 +717,16 @@ pub(crate) fn required_parameter_leaves_v1(
 fn parameter_body_bound_v1(program: &misaka_palw_tir::program::TirProgramV1, leaf: u32) -> Result<u64, String> {
     use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, &[leaf])
+        .and_then(|n| n.checked_sub(4))
+        .ok_or_else(|| "material parameter width not derivable".into())
+}
+pub(crate) fn parameter_body_bound_with_index_v1(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    inventory: &crate::palw_tir_court_v1::PalwTirInventoryIndexV1,
+    leaf: u32,
+) -> Result<u64, String> {
+    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_with_index_v1};
+    palw_tir_param_carriage_bytes_with_index_v1(program, inventory, PalwTirParamCarriageV1::PerLeafOpenings, &[leaf])
         .and_then(|n| n.checked_sub(4))
         .ok_or_else(|| "material parameter width not derivable".into())
 }

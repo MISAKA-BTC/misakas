@@ -1763,6 +1763,62 @@ impl VirtualStateProcessor {
         Ok(true)
     }
 
+    pub fn palw_protected_original_quote_v1_impl(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        material: kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteMaterialV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_quote_v1::ProtectedOriginalQuoteV1>, String> {
+        use kaspa_consensus_core::palw_protected_original_quote_v1::quote_protected_original_v1;
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()).check_wire_v1()?;
+        if borsh::object_length(&original).map_err(|e| e.to_string())?
+            > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
+        {
+            return Err("protected quote exceeds the bounded FP descriptor".into());
+        }
+        let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
+        let captured = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?;
+        let prepared = self.prepare_template_parent_v1(&captured).map_err(|e| format!("protected quote parent unavailable: {e:?}"))?;
+        prepared.checked.map_err(|e| format!("protected quote parent is not authenticated: {e:?}"))?;
+        let (target, state) = prepared.state.as_ref().ok_or("protected quote parent unavailable")?;
+        let accepted = state.last_point().ok_or("protected quote parent has no accepted clock")?;
+        if *target != captured.ghostdag_data.selected_parent || accepted.block != *target {
+            return Err("protected quote parent differs from selected parent".into());
+        }
+        // This context resolves prospective rule extras against the captured
+        // parent, just as other read-only template queries do. It is never
+        // exported or installed as a claim's accepted origin.
+        let prospective = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: *target,
+            daa_score: captured.daa_score,
+            blue_score: captured.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        let result = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(prospective.daa_score)) {
+            let extras = self.palw_transition_extras_for(&prospective);
+            quote_protected_original_v1(
+                state,
+                params,
+                &extras,
+                prospective.daa_score,
+                prospective.blue_score,
+                &original,
+                &header,
+                &material,
+            )
+            .map(Some)
+        } else {
+            Ok(None)
+        };
+        let current = self.virtual_stores.read();
+        let after = current.state.get().map_err(|e| e.to_string())?;
+        if !Arc::ptr_eq(&captured, &after) {
+            return Err("protected quote selected view changed; retry".into());
+        }
+        self.check_prepared_template_parent_v1(&prepared).map_err(|e| format!("protected quote import/state changed: {e:?}"))?;
+        result
+    }
+
     /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame (`None` below `palw_tir_public_conviction_v1`).
     pub fn palw_tir_public_original_quote_v1_impl(
         &self,
@@ -2509,7 +2565,8 @@ impl VirtualStateProcessor {
                     let rules = extras.native_court_rules_v1.filter(|rules| {
                         extras.batch_court_active_v1 && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
                     })?;
-                    Some((rules, extras.batch_numerical_profile_v1?))
+                    let schedule = self.palw_material_schedule_v3(daa_score).ok()?;
+                    Some((rules, extras.batch_numerical_profile_v1?, schedule))
                 },
             );
             Some(doc.to_string())
@@ -3431,6 +3488,47 @@ impl VirtualStateProcessor {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
         state.claim(&claim).map(|c| (c.execution_root, c.trace_root, c.work_leaves))
+    }
+
+    pub fn palw_protected_original_readback_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>, String> {
+        let params = self.palw_state_params_v2.as_ref().ok_or("protected original state parameters unavailable")?;
+        let (_, state) =
+            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("protected original state unavailable")?;
+        kaspa_consensus_core::palw_protected_original_readback_v1::protected_original_readback_v1(&state, claim)
+    }
+
+    pub fn palw_protected_full_replay_deadline_v1_impl(&self, claim: kaspa_consensus_core::Hash64) -> Option<u64> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_state_v2::included_replay::protected_full_replay_deadline_v1(&state, claim)
+    }
+
+    pub fn palw_protected_full_replay_digest_v1_impl(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+    ) -> Option<[u8; 64]> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_state_v2::included_replay::protected_full_replay_digest_bound_v2(&state, expected, bond, key)
+    }
+
+    pub fn palw_protected_full_replay_payload_v1_impl(
+        &self,
+        expected: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: &[u8],
+        signature: &[u8],
+    ) -> Option<Vec<u8>> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_state_v2::included_replay::protected_full_replay_payload_bound_v2(
+            &state, expected, bond, key, signature,
+        )
     }
 
     /// **RFC-0006: the layer-shard plans at the tip** (`palw_tir_shard_plans_v1`).
@@ -4595,6 +4693,15 @@ impl VirtualStateProcessor {
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
                 continue;
             };
+            let now = state.last_point().map(|point| point.daa_score).unwrap_or(final_daa);
+            if !kaspa_consensus_core::palw_state_v2::palw_protected_receipt_window_open_v1(&state, claim_id, claim.accepted_daa, now) {
+                continue;
+            }
+            if kaspa_consensus_core::palw_state_v2::palw_protected_admission_reads_back_v1(&state, claim_id, claim).is_err()
+                || kaspa_consensus_core::palw_state_v2::palw_protected_refutation_recorded_v1(&state, claim_id)
+            {
+                continue;
+            }
             let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else {
                 continue;
             };
@@ -4629,6 +4736,16 @@ impl VirtualStateProcessor {
             let Ok(beacon) = self.palw_beacon_fact_of_candidate(chain_point, slot) else {
                 continue;
             };
+            let mut spend_deadline_daa = beacon.beacon_daa.saturating_add(freeprompt.receipt_use_window_daa());
+            match kaspa_consensus_core::palw_state_v2::palw_protected_receipt_spend_deadline_v1(&state, claim_id, claim.accepted_daa) {
+                Ok(Some(protected_end)) => spend_deadline_daa = spend_deadline_daa.min(protected_end),
+                Ok(None) => {}
+                Err(_) => continue,
+            }
+            // A deadline already behind the tip cannot be carried by the next block.
+            if spend_deadline_daa < now {
+                continue;
+            }
             for quantum_index in 0..*quanta {
                 if spent.contains(&quantum_index) {
                     continue;
@@ -4646,10 +4763,17 @@ impl VirtualStateProcessor {
                     receipt_target: target,
                     ticket,
                     wins,
-                    spend_deadline_daa: beacon.beacon_daa.saturating_add(freeprompt.receipt_use_window_daa()),
+                    spend_deadline_daa,
                 });
             }
         }
+        out.sort_by(|left, right| {
+            (left.spend_deadline_daa, left.claim_id, left.quantum_index).cmp(&(
+                right.spend_deadline_daa,
+                right.claim_id,
+                right.quantum_index,
+            ))
+        });
         Some((chain_point, out))
     }
 
@@ -6324,7 +6448,8 @@ impl VirtualStateProcessor {
         // **ADR-0100 Decision 4: a claim drawn per shard gets its next ready PART**, one shard a
         // call, by the same greedy rule as the whole licence below and checked by the same
         // function the chain will check it with, at the same point.
-        if !state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa))
+        if !kaspa_consensus_core::palw_state_v2::claim_has_protected_frame_v1(state, &claim)
+            && !state.claim(&claim).is_some_and(|c| state_params.model_panel_one_governs_v1(c.accepted_daa))
             && self.palw_shard_licensing_at(point.daa_score)
             && let Some(plan) = kaspa_consensus_core::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(
                 state,
@@ -11248,6 +11373,26 @@ impl VirtualStateProcessor {
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>, String> {
+        self.palw_v2_check_receipt_spend_with_parent_v3(header, state, state_params, point, || {
+            self.ghostdag_store
+                .get_selected_parent(header.hash)
+                .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))
+        })
+    }
+
+    /// The candidate owner supplies its computed selected parent. In chain
+    /// validation this is the stored GHOSTDAG answer; an unsubmitted template
+    /// uses the captured virtual GHOSTDAG answer, never header parent ordering.
+    /// All signature, beacon, Final, protected-origin and one-use checks stay
+    /// shared. The resolver is invoked at the old beacon-check position.
+    pub(super) fn palw_v2_check_receipt_spend_with_parent_v3(
+        &self,
+        header: &Header,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        selected_parent: impl FnOnce() -> Result<BlockHash, String>,
+    ) -> Result<Option<kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3>, String> {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwReceiptSpendEnvelopeV3, fp_draw_slot_v3};
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
             return Ok(None);
@@ -11317,6 +11462,24 @@ impl VirtualStateProcessor {
         let kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
         };
+        // The fold refuses a protected frame's quantum outside its notice/hard/material
+        // window. Ask that here so an own receipt block is disqualified for the same reason.
+        if !kaspa_consensus_core::palw_state_v2::palw_protected_receipt_window_open_v1(
+            state,
+            &envelope.spend.claim_id,
+            claim.accepted_daa,
+            point.daa_score,
+        ) {
+            return Err(format!("claim {}'s protected receipt window is closed at DAA {}", envelope.spend.claim_id, point.daa_score));
+        }
+        if let Err(error) =
+            kaspa_consensus_core::palw_state_v2::palw_protected_admission_reads_back_v1(state, &envelope.spend.claim_id, claim)
+        {
+            return Err(format!("claim {}'s protected admission does not read back: {error}", envelope.spend.claim_id));
+        }
+        if kaspa_consensus_core::palw_state_v2::palw_protected_refutation_recorded_v1(state, &envelope.spend.claim_id) {
+            return Err(format!("claim {} has a recorded refutation", envelope.spend.claim_id));
+        }
         // **RFC-0018 18-A (Gate C)**: a governed free-prompt claim licenses no receipt block until `SecurityCertified`, and its lane's
         // clock starts at certification — the ONE predicate the fold, the admission items and the spendable RPC read, asked here against
         // the PARENT state so an own block is disqualified and a merged one unentitled (no coinbase worker share) for the reason the
@@ -11361,10 +11524,7 @@ impl VirtualStateProcessor {
         // property the code did not have: a producer could list whichever parent it liked first and
         // walk the beacon down that branch instead, re-rolling the draw it was about to be judged
         // by. GHOSTDAG's answer is the one nobody chooses.
-        let selected_parent = self
-            .ghostdag_store
-            .get_selected_parent(header.hash)
-            .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))?;
+        let selected_parent = selected_parent()?;
         let beacon = self.palw_beacon_fact_of_candidate(selected_parent, slot).map_err(|e| e.to_string())?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),

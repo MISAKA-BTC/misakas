@@ -1388,9 +1388,14 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     // G14 op 248 (lane FPSEL): malformed hex or an undecodable commitment is an error before any state is read.
-                    let odd = GetPalwTirOriginalQuoteRequest { commitment_hex: "0".into(), binding_hex: String::new() };
+                    let odd = GetPalwTirOriginalQuoteRequest {
+                        commitment_hex: "0".into(),
+                        binding_hex: String::new(),
+                        ..Default::default()
+                    };
                     assert!(rpc_client.get_palw_tir_original_quote_call(None, odd).await.is_err());
-                    let garbage = GetPalwTirOriginalQuoteRequest { commitment_hex: "00".into(), binding_hex: "00".into() };
+                    let garbage =
+                        GetPalwTirOriginalQuoteRequest { commitment_hex: "00".into(), binding_hex: "00".into(), ..Default::default() };
                     assert!(rpc_client.get_palw_tir_original_quote_call(None, garbage).await.is_err());
                 })
             }

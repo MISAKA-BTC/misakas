@@ -72,6 +72,7 @@ async fn native_context_control(capacity: bool) {
         let native = chain.tc.palw_fraud_filer_target_v1(claim).unwrap();
         let duty = kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2 {
             model_panel_one: false,
+            protected_replay: None,
             accepted_block,
             claim_id: claim,
             class_id: native.class_id,

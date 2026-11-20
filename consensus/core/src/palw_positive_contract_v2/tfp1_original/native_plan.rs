@@ -55,12 +55,17 @@ type Error = NativeDecodeErrorV1<String>;
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod retained_input;
 
 /// Native resolver inputs, deliberately without a Default, wire decoder,
 /// active flag or shipped values. A complete public resolver must also own
 /// late requests/repair/settlement and derive funding.other_relative_graph.
 /// This partial assembly must never advertise that omitted duties are booked.
+#[derive(Clone)]
 pub(crate) struct Tfp1NativePlanningPolicyV3<'a> {
+    /// Explicitly selected by TFO3 v4; legacy carriers keep absolute v1 IDs.
+    pub relative_service_v2: bool,
     pub admission: Tfp1PublicAdmissionPolicyV1<'a>,
     pub maximum_leaves: u64,
     pub cover: StreamingParameterCoverBudgetV1,
@@ -68,6 +73,8 @@ pub(crate) struct Tfp1NativePlanningPolicyV3<'a> {
     pub output_verification: ServiceCost,
     pub output_verification_daa: u64,
     pub selection: PlainSelectionBudgetV3,
+    /// Capacity preimage selected by the same resolver as the planning terms.
+    pub service_book_profile: crate::palw_court_service_binding_v1::CourtServiceProfileV1,
     pub service_profile: Hash64,
     pub delivery: NativeBatchDeliveryCostsV1,
     pub tokenizer: PlainTokenizerBatchBudgetV2,
@@ -97,6 +104,7 @@ pub(crate) struct NativeTfp1OriginalPlanV3<'a> {
     supply: PublicTfp1InitialSupplyV1,
     parent: &'a PalwChainStateV2,
     extras: &'a PalwTransitionExtrasV1,
+    params: &'a PalwStateParamsV2,
     prompt_form: PalwPromptIdsFormV1,
 }
 
@@ -118,7 +126,7 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
     pub(crate) fn derive_v3(
         parent: &'a PalwChainStateV2,
         extras: &'a PalwTransitionExtrasV1,
-        params: &PalwStateParamsV2,
+        params: &'a PalwStateParamsV2,
         daa: u64,
         blue: u64,
         original: &PalwFreePromptCommitmentV3,
@@ -135,6 +143,7 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         if policy.admission.scope.network.0 != original.job.network_domain.as_bytes()
             || policy.maximum_packets == 0
             || policy.maximum_ranges == 0
+            || (policy.relative_service_v2 && original.trace_retention_daa < policy.budget.retention_until)
             || prompt.len() > crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1
             || std::str::from_utf8(prompt).is_err()
         {
@@ -146,7 +155,10 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
             VerificationSchedule::new(OriginalClock::new(daa).map_err(contract)?, policy.notice, policy.case).map_err(contract)?;
         let request = InitialMaterialRequestPlanV1::new_v1(daa, policy.notice, policy.request_service, policy.request_retained_bytes)
             .map_err(batch_error)?;
-        let requests = MaterialRequestSeriesV2::new_v2(request, policy.request_max_gap_daa).map_err(batch_error)?;
+        // Keep this name distinct from the source-construction budget below.
+        // That later binding used to shadow this series, so notice-window
+        // slots never reached the reservation terms.
+        let request_series = MaterialRequestSeriesV2::new_v2(request, policy.request_max_gap_daa).map_err(batch_error)?;
         let projection = PlainBatchOriginalProjectionV2::derive_at_clocks_v2(
             parent,
             extras,
@@ -197,6 +209,12 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
             prompt,
             Some(&hf),
         )
+        .and_then(|supply| {
+            let encoding = misaka_palw_positive_contract::public_one_honest::PromptMaterialEncodingV1::from_codec_v1(
+                policy.admission.manifest_scope_limits[MaterialScope::Prompt as usize].codec,
+            )?;
+            supply.with_prompt_encoding_v5(encoding, prompt)
+        })
         .map_err(supply_error)?;
         supply
             .check_limits_v1(
@@ -219,9 +237,9 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         let early =
             ProtectedOriginalDutiesV1::derive_v1(projected, &supply, blue, policy.notice, schedule, policy.rescue, policy.early)
                 .map_err(batch_error)?;
-        let terms =
-            ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(projected, policy.rescue, requests, early).map_err(contract)?;
-        Ok(Self { projection, class, terms, policy, clocks: (daa, blue), supply, parent, extras, prompt_form })
+        let terms = ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(projected, policy.rescue, request_series, early)
+            .map_err(contract)?;
+        Ok(Self { projection, class, terms, policy, clocks: (daa, blue), supply, parent, extras, params, prompt_form })
     }
 
     pub(crate) fn source_v3(&self) -> &PalwTirPublicSourceV1 {
@@ -240,7 +258,7 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         prompt: &[u8],
     ) -> Result<PublicOriginalAdmissionV1<'_>, Error> {
         let _hash_scratch = reserve_identity_writers_v3(original, self.source_v3(), &self.class).map_err(supply_error)?;
-        PublicOriginalAdmissionV1::from_native_tfp1_v1(
+        let mut admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
             original,
             self.source_v3(),
             &self.class,
@@ -249,7 +267,16 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
             self.terms.obligation_v1(),
             &self.policy.budget,
         )
-        .map_err(|error| Error::Decode(format!("native original admission: {error:?}")))
+        .map_err(|error| Error::Decode(format!("native original admission: {error:?}")))?;
+        if self.policy.relative_service_v2 {
+            admission.service_contract = misaka_palw_positive_contract::public_one_honest::public_original_service_contract_id_v2(
+                self.terms.obligation_v1().obligation_v1(),
+                &self.policy.budget,
+                self.clocks.0,
+            )
+            .map_err(|error| Error::Decode(format!("relative service contract: {error:?}")))?;
+        }
+        Ok(admission)
     }
 
     /// Relative obligations and the fee ceiling are fixed before manifest
@@ -262,7 +289,6 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         prompt: &[u8],
         entries: [ManifestEntryV1; MaterialScope::COUNT],
     ) -> Result<NativeTfp1UnsignedMaterialV3, Error> {
-        let contract = |error| Error::Decode(format!("native original unsigned material: {error:?}"));
         let admission = self.admission_v3(original, prompt)?;
         let mut companion = {
             let _hash_scratch = reserve_identity_writers_v3(original, self.source_v3(), &self.class).map_err(supply_error)?;
@@ -296,16 +322,18 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         let lease = reserve_native_pending_requests_v1(bytes).map_err(Error::Resource)?;
         let literal = companion
             .bind_manifest(&manifest, admission.manifest_scope_limits, admission.manifest_total_limit, admission.max_manifest_bytes)
-            .map_err(contract)?;
+            .map_err(|error| Error::Decode(format!("native original manifest binding: {error:?}")))?;
         let literal = NativeRetainedV1::from_owner_reserved_v1(literal, lease);
         let checked = companion
             .authenticate_manifest(&literal, admission.max_manifest_bytes)
             .and_then(|manifest| manifest.decode(&companion, admission.manifest_scope_limits, admission.manifest_total_limit))
-            .map_err(contract)?;
+            .map_err(|error| Error::Decode(format!("native original manifest validation: {error:?}")))?;
         self.supply.check_manifest_v1(companion.id(), &checked, prompt).map_err(supply_error)?;
         {
             let _hash_scratch = reserve_identity_writers_v3(original, self.source_v3(), &self.class).map_err(supply_error)?;
-            admission.check_tfp1_candidate_v1(&companion, self.terms.obligation_v1(), &self.prospective_v3()).map_err(contract)?;
+            admission
+                .check_tfp1_candidate_v1(&companion, self.terms.obligation_v1(), &self.prospective_v3())
+                .map_err(|error| Error::Decode(format!("native original candidate reservation: {error:?}")))?;
         }
         Ok(NativeTfp1UnsignedMaterialV3 { companion, manifest: literal })
     }
@@ -336,12 +364,14 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
         entries: [ManifestEntryV1; MaterialScope::COUNT],
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<NativeTfp1UnsignedQuoteV3, Error> {
-        let book = &self
-            .parent
-            .court_service_state_v1()
-            .ok_or_else(|| Error::Decode("native original quote parent has no service book".into()))?
-            .book;
-        self.quote_with_book_v3(original, prompt, descriptor, entries, book, price)
+        let base = super::service_booking::ProtectedServiceBaseV1::resolve_v1(
+            self.parent,
+            self.params,
+            self.extras,
+            self.clocks.0,
+            &self.policy.service_book_profile,
+        )?;
+        self.quote_with_book_v3(original, prompt, descriptor, entries, base.book_v1(), price)
     }
 
     // The production entry above owns the parent/book relationship. Local

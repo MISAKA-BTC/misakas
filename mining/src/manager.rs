@@ -1684,6 +1684,11 @@ impl MiningManagerProxy {
         consensus.clone().spawn_blocking(move |c| self.inner.get_block_template(c, &miner_data)).await
     }
 
+    /// Refresh a template after out-of-band submission to a controlled miner.
+    pub fn clear_cached_template(&self) {
+        self.inner.block_template_cache.clear();
+    }
+
     /// Returns realtime feerate estimations based on internal mempool state
     /// kaspa-pq EVM Lane v0.4 (§16): admit a raw EIP-2718 EVM tx into the EVM
     /// mempool (sync + cheap: decode + k256 recovery + pool insert).

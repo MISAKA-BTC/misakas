@@ -548,6 +548,12 @@ impl Params {
         if self.palw_native_mining_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_mining_v39 = None;
         }
+        if self.palw_manifest_ingress_v3.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_manifest_ingress_v3 = None;
+        }
+        if self.palw_protected_planning_v3.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_protected_planning_v3 = None;
+        }
         if self.palw_tokenizer_registration_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_tokenizer_registration_v1 = None;
         }
@@ -1261,6 +1267,8 @@ impl Params {
             palw_native_mining_v39,
             palw_positive_court_v2,
             palw_tokenizer_registration_v1,
+            palw_manifest_ingress_v3,
+            palw_protected_planning_v3,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -1616,9 +1624,14 @@ impl Params {
             ("palw_native_mining_v39", palw_native_mining_v39.as_ref().map(|f| f.activation)),
             ("palw_positive_court_v2", palw_positive_court_v2.as_ref().map(|f| f.activation)),
             ("palw_tokenizer_registration_v1", palw_tokenizer_registration_v1.as_ref().map(|f| f.activation)),
+            ("palw_manifest_ingress_v3", palw_manifest_ingress_v3.as_ref().map(|f| f.activation)),
+            ("palw_protected_planning_v3", palw_protected_planning_v3.as_ref().map(|f| f.activation)),
             (
                 "palw_tokenizer_registration_open_cutoff_v1",
-                palw_tokenizer_registration_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).and_then(|f| f.open_cutoff_v1()),
+                palw_tokenizer_registration_v1
+                    .as_ref()
+                    .filter(|f| f.activation != ForkActivation::never())
+                    .and_then(|f| f.open_cutoff_v1()),
             ),
             ("palw_positive_assignment_v2", palw_positive_assignment_v2.as_ref().map(|f| f.activation)),
             ("palw_positive_funding_relay_v2", palw_positive_funding_relay_v2.as_ref().map(|f| f.activation)),
@@ -1995,6 +2008,18 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = self.palw_manifest_ingress_v3.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_manifest_ingress_v3");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            for dimension in fence.dimensions_v3() {
+                h.write(dimension.to_le_bytes());
+            }
+        }
+        if let Some(fence) = self.palw_protected_planning_v3.filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_protected_planning_v3");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.declaration.fingerprint_v3().as_bytes());
         }
         if let Some(fence) = self.palw_tokenizer_registration_v1_fence() {
             h.write(b"palw_tokenizer_registration_v1");
@@ -3143,6 +3168,8 @@ impl Params {
             palw_native_mining_v39,
             palw_positive_court_v2,
             palw_tokenizer_registration_v1,
+            palw_manifest_ingress_v3,
+            palw_protected_planning_v3,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -4016,6 +4043,12 @@ impl Params {
         if let Some(fence) = palw_native_mining_v39.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_manifest_ingress_v3.as_mut().filter(|f| f.activation != ForkActivation::never()) {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_protected_planning_v3.as_mut().filter(|f| f.activation != ForkActivation::never()) {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_tokenizer_registration_v1.as_mut().filter(|f| f.activation != ForkActivation::never()) {
             fork(&mut fence.activation, visit);
             if let Some(cutoff) = fence.open_cutoff.as_mut().filter(|f| **f != ForkActivation::never()) {
@@ -4791,6 +4824,8 @@ impl Params {
             palw_native_mining_v39,
             palw_positive_court_v2,
             palw_tokenizer_registration_v1,
+            palw_manifest_ingress_v3,
+            palw_protected_planning_v3,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -5783,6 +5818,18 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = palw_manifest_ingress_v3.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_manifest_ingress_v3");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            for dimension in fence.dimensions_v3() {
+                h.write(dimension.to_le_bytes());
+            }
+        }
+        if let Some(fence) = palw_protected_planning_v3.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_protected_planning_v3");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.declaration.fingerprint_v3().as_bytes());
         }
         if let Some(fence) = palw_tokenizer_registration_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
             h.write(b"palw_tokenizer_registration_v1");

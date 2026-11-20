@@ -846,6 +846,8 @@ fn tir_err<T>(kind: TirErrorKind, msg: impl Into<String>) -> TirResult<T> {
     Err(TirError::new(kind, msg))
 }
 
+const SOURCE_READ_LIMIT_REACHED: &str = "source read budget is full";
+
 impl TirSource<'_, '_> {
     fn source_read(&self) -> TirResult<()> {
         if let Some((reads, limit)) = &self.read_budget {
@@ -854,7 +856,7 @@ impl TirSource<'_, '_> {
                 .checked_add(1)
                 .ok_or_else(|| TirError::new(TirErrorKind::Missing, "builder source read count overflows"))?;
             if next > *limit {
-                return tir_err(TirErrorKind::Missing, "builder source read budget is full");
+                return tir_err(TirErrorKind::Missing, SOURCE_READ_LIMIT_REACHED);
             }
             // Charged before any value lookup, store fetch or allocation, including cache hits.
             reads.set(next);
@@ -1313,6 +1315,18 @@ pub fn palw_tir_param_carriage_bytes_v1(program: &TirProgramV1, format: PalwTirP
         return None;
     }
     let inventory = PalwTirInventoryIndexV1::new(program)?;
+    palw_tir_param_carriage_bytes_with_index_v1(program, &inventory, format, leaves)
+}
+
+pub(crate) fn palw_tir_param_carriage_bytes_with_index_v1(
+    program: &TirProgramV1,
+    inventory: &PalwTirInventoryIndexV1,
+    format: PalwTirParamCarriageV1,
+    leaves: &[u32],
+) -> Option<u64> {
+    if leaves.windows(2).any(|w| w[0] >= w[1]) {
+        return None;
+    }
     let mut operand_lens = Vec::with_capacity(leaves.len());
     for leaf in leaves {
         let (param, layer, _, len) = inventory.piece_of(*leaf)?;
@@ -1470,14 +1484,32 @@ pub fn check_tir_cone_refutation_v1(
     refutation: &PalwTirConeRefutationV1,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_tir_cone_v1(refutation, rules, None)
+}
+
+fn check_tir_cone_v1(
+    refutation: &PalwTirConeRefutationV1,
+    rules: &PalwTirCourtRulesV1,
+    work: Option<PalwTirBuilderWorkLimitsV1>,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     // 1–6.
     let c = match check_carriage(refutation, rules)? {
         CarriageStage::Convicted(verdict) => return Ok(verdict),
         CarriageStage::Checked(c) => c,
     };
     // 7.
+    if work.is_some_and(|limit| u64::from(c.leaf.value_count) > limit.max_target_requests) {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
     let mut source = c.source(rules);
-    let values = evaluate_leaf(&c.v.space, &c.leaf, &mut source, &rules.limits).map_err(|e| evaluation_refusal(&e))?;
+    source.read_budget = work.map(|limit| (Rc::new(Cell::new(0)), limit.max_source_reads));
+    let values = evaluate_leaf(&c.v.space, &c.leaf, &mut source, &rules.limits).map_err(|e| {
+        if matches!(&e, DemandError::Tir(t) if t.kind == TirErrorKind::Missing && t.msg == SOURCE_READ_LIMIT_REACHED) {
+            PalwStepRefuteError::Unadjudicable
+        } else {
+            evaluation_refusal(&e)
+        }
+    })?;
     // 8.
     c.check_canonical(&source.used, rules)?;
     // 9.
@@ -1685,6 +1717,7 @@ pub(crate) fn replay_tir_cone_from_store_v1(
     store: &dyn PalwTirEvidenceStoreV1,
     rules: &PalwTirCourtRulesV1,
     work: PalwTirBuilderWorkLimitsV1,
+    meter_checker_io: bool,
     close_bytes: u64,
 ) -> Result<Option<(PalwStepRefutationVerdictV1, PalwTirConeRefutationV1)>, String> {
     let (carriage, _) = build_tir_cone_refutation_bounded_v1(binding, leaf, store, rules, work).map_err(|err| err.to_string())?;
@@ -1692,7 +1725,7 @@ pub(crate) fn replay_tir_cone_from_store_v1(
     if bytes >= close_bytes {
         return Err("numerical replay exceeds the native close byte limit".into());
     }
-    match check_tir_cone_with_replay_budget_v1(&carriage, rules, work) {
+    match check_tir_cone_with_replay_budget_v1(&carriage, rules, work, meter_checker_io) {
         Ok(fault) => Ok(Some((fault, carriage))),
         Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
         Err(err) => Err(err.to_string()),
@@ -1703,6 +1736,7 @@ fn check_tir_cone_with_replay_budget_v1(
     carriage: &PalwTirConeRefutationV1,
     rules: &PalwTirCourtRulesV1,
     work: PalwTirBuilderWorkLimitsV1,
+    meter_checker_io: bool,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let checked_rules = PalwTirCourtRulesV1 {
         limits: DemandLimits {
@@ -1711,7 +1745,7 @@ fn check_tir_cone_with_replay_budget_v1(
         },
         ..*rules
     };
-    check_tir_cone_refutation_v1(carriage, &checked_rules)
+    check_tir_cone_v1(carriage, &checked_rules, meter_checker_io.then_some(work))
 }
 
 /// Recheck a stored, program-free cone using the exact original binding.
@@ -1722,13 +1756,14 @@ pub(crate) fn recheck_retained_tir_cone_v1(
     expected_evidence_id: Hash64,
     rules: &PalwTirCourtRulesV1,
     work: PalwTirBuilderWorkLimitsV1,
+    meter_checker_io: bool,
 ) -> Result<PalwTirConeRefutationV1, String> {
     let program = std::mem::take(&mut original.class.program);
     if cone.binding != original || cone.output_opening.leaf_index != leaf {
         return Err("retained numerical fault changes the original binding or leaf".into());
     }
     cone.binding.class.program = program;
-    let actual = check_tir_cone_with_replay_budget_v1(&cone, rules, work).map_err(|err| err.to_string())?;
+    let actual = check_tir_cone_with_replay_budget_v1(&cone, rules, work, meter_checker_io).map_err(|err| err.to_string())?;
     if actual.evidence_id != expected_evidence_id {
         return Err("retained numerical fault changes the verified evidence ID".into());
     }
@@ -4550,12 +4585,16 @@ pub(crate) mod test_support {
         let forged = tiny_execution(Some((7, 1)));
         let leaf = 7;
         let cone = build_tir_cone_refutation_v1(&honest.binding, leaf, &honest, &rules).unwrap();
+        assert_eq!(
+            check_tir_cone_with_replay_budget_v1(&cone, &rules, PalwTirBuilderWorkLimitsV1 { max_target_requests: 0, ..work }, true),
+            Err(PalwStepRefuteError::Unadjudicable)
+        );
         let bytes = borsh::object_length(&cone).unwrap() as u64;
-        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, work, bytes + 1).unwrap().is_none());
-        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, work, bytes).is_err());
+        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, work, true, bytes + 1).unwrap().is_none());
+        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, work, true, bytes).is_err());
         let old = build_tir_cone_refutation_v1(&forged.binding, leaf, &forged, &rules).unwrap();
         let expected = check_tir_cone_refutation_v1(&old, &rules).unwrap();
-        let got = replay_tir_cone_from_store_v1(&forged.binding, leaf, &forged, &rules, work, bytes + 1).unwrap();
+        let got = replay_tir_cone_from_store_v1(&forged.binding, leaf, &forged, &rules, work, true, bytes + 1).unwrap();
         let (fault, replayed) = got.unwrap();
         assert_eq!(fault, expected);
         assert_eq!(replayed, old);
@@ -4564,18 +4603,20 @@ pub(crate) mod test_support {
         let bytes_retained = borsh::to_vec(&retained).unwrap();
         let decoded = borsh::from_slice(&bytes_retained).unwrap();
         assert_eq!(
-            recheck_retained_tir_cone_v1(decoded, forged.binding.clone(), leaf, fault.evidence_id, &rules, work).unwrap(),
+            recheck_retained_tir_cone_v1(decoded, forged.binding.clone(), leaf, fault.evidence_id, &rules, work, true).unwrap(),
             retained,
         );
         assert!(
-            recheck_retained_tir_cone_v1(retained.clone(), honest.binding.clone(), leaf, fault.evidence_id, &rules, work).is_err()
+            recheck_retained_tir_cone_v1(retained.clone(), honest.binding.clone(), leaf, fault.evidence_id, &rules, work, true)
+                .is_err()
         );
         assert!(
-            recheck_retained_tir_cone_v1(retained.clone(), forged.binding.clone(), leaf + 1, fault.evidence_id, &rules, work).is_err()
+            recheck_retained_tir_cone_v1(retained.clone(), forged.binding.clone(), leaf + 1, fault.evidence_id, &rules, work, true)
+                .is_err()
         );
-        assert!(recheck_retained_tir_cone_v1(retained, forged.binding.clone(), leaf, Hash64::default(), &rules, work).is_err());
+        assert!(recheck_retained_tir_cone_v1(retained, forged.binding.clone(), leaf, Hash64::default(), &rules, work, true).is_err());
         let blocked = PalwTirBuilderWorkLimitsV1 { max_target_requests: 0, ..work };
-        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, blocked, bytes + 1).is_err());
+        assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, blocked, true, bytes + 1).is_err());
     }
 
     /// **The multiproof vectors on the tiny program** (design §2.12.1): its closes carry a single

@@ -30,6 +30,8 @@ impl<T: Display + Clone> Display for TwoDimVecDisplay<T> {
 
 #[derive(Error, Debug, Clone)]
 pub enum RuleError {
+    #[error("Manifest physical candidate service budget exceeded: {0}")]
+    PalwManifestIngressServiceExceeded(String),
     #[error("TKR1 physical candidate service budget exceeded: {0}")]
     PalwTokenizerRegistrationServiceExceeded(String),
     #[error("BCT2 physical service exceeded: {0}")]

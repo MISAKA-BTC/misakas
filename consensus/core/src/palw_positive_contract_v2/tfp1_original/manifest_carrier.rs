@@ -1,6 +1,7 @@
 //! Literal protected drawn ManifestRequest transport and local UTXO fee handoff.
 //! Consensus must separately authenticate the request, its slot and its lifetime.
 
+pub(crate) mod accepted;
 pub(crate) mod replay;
 
 use crate::{
@@ -12,13 +13,17 @@ use crate::{
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::ValidatedTransaction,
 };
-use misaka_palw_positive_contract::public_one_honest::{Claimant, SignedManifestRequestV1};
+use misaka_palw_positive_contract::public_one_honest::{
+    Claimant, ManifestRequest, RegisteredKeyManifestRequestV2, SignedManifestRequestV1,
+};
 
 pub(crate) const MANIFEST_REQUEST_CARRIER_MAGIC_V1: &[u8; 4] = b"PMR1";
 const DRAWN_TAG: u8 = 0;
 const HEADER_BYTES: usize = 5 + 3 * 64;
 const REQUEST_BYTES: usize = SignedManifestRequestV1::MAX_WIRE_BYTES;
 pub(crate) const MANIFEST_REQUEST_CARRIER_BYTES_V1: usize = HEADER_BYTES + REQUEST_BYTES;
+pub(crate) const MANIFEST_REQUEST_CARRIER_MAGIC_V2: &[u8; 4] = b"PMR2";
+pub(crate) const MANIFEST_REQUEST_CARRIER_BYTES_V2: usize = HEADER_BYTES + RegisteredKeyManifestRequestV2::WIRE_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub(crate) struct ManifestRequestCarrierScopeV1 {
@@ -74,7 +79,7 @@ pub(crate) fn decode_manifest_request_carrier_v1(
     let hash = |start| Hash64::from_bytes(payload[start..start + 64].try_into().expect("fixed carrier header"));
     let scope = ManifestRequestCarrierScopeV1 { claim: hash(5), source: hash(69), reservation_scope: hash(133) };
     scope.check_v1()?;
-    let request = payload[HEADER_BYTES..].try_into().expect("fixed carrier request");
+    let request: &[u8; REQUEST_BYTES] = payload[HEADER_BYTES..].try_into().expect("fixed carrier request");
     check_drawn_request_v1(request)?;
     Ok(Some((scope, request)))
 }
@@ -104,13 +109,51 @@ fn check_drawn_request_v1(bytes: &[u8]) -> Result<(), ManifestRequestCarrierErro
     Ok(())
 }
 
+/// New draft transport only. Old PMR1 parsing and signed-message semantics
+/// are unchanged; the registered key is resolved later from the native bond.
+pub(crate) fn encode_manifest_request_carrier_v2(
+    scope: ManifestRequestCarrierScopeV1,
+    request: &[u8; RegisteredKeyManifestRequestV2::WIRE_BYTES],
+) -> Result<[u8; MANIFEST_REQUEST_CARRIER_BYTES_V2], ManifestRequestCarrierErrorV1> {
+    scope.check_v1()?;
+    RegisteredKeyManifestRequestV2::decode(request)
+        .map_err(|_| ManifestRequestCarrierErrorV1::Decode("invalid registered-key ManifestRequest"))?;
+    let mut payload = [0; MANIFEST_REQUEST_CARRIER_BYTES_V2];
+    payload[..4].copy_from_slice(MANIFEST_REQUEST_CARRIER_MAGIC_V2);
+    payload[4] = DRAWN_TAG;
+    payload[5..69].copy_from_slice(&scope.claim.as_bytes());
+    payload[69..133].copy_from_slice(&scope.source.as_bytes());
+    payload[133..HEADER_BYTES].copy_from_slice(&scope.reservation_scope.as_bytes());
+    payload[HEADER_BYTES..].copy_from_slice(request);
+    Ok(payload)
+}
+
+fn decode_manifest_transport_v2(
+    payload: &[u8],
+) -> Result<Option<(ManifestRequestCarrierScopeV1, u8, &[u8])>, ManifestRequestCarrierErrorV1> {
+    use ManifestRequestCarrierErrorV1::Decode;
+    if !payload.starts_with(MANIFEST_REQUEST_CARRIER_MAGIC_V2) {
+        return decode_manifest_request_carrier_v1(payload).map(|value| value.map(|(scope, bytes)| (scope, 1, bytes.as_slice())));
+    }
+    if payload.len() != MANIFEST_REQUEST_CARRIER_BYTES_V2 || payload[4] != DRAWN_TAG {
+        return Err(Decode("invalid registered-key ManifestRequest tag or width"));
+    }
+    let hash = |start| Hash64::from_bytes(payload[start..start + 64].try_into().expect("fixed carrier header"));
+    let scope = ManifestRequestCarrierScopeV1 { claim: hash(5), source: hash(69), reservation_scope: hash(133) };
+    scope.check_v1()?;
+    let request = &payload[HEADER_BYTES..];
+    RegisteredKeyManifestRequestV2::decode(request).map_err(|_| Decode("invalid registered-key ManifestRequest"))?;
+    Ok(Some((scope, 2, request)))
+}
+
 /// A local, single-owner fee ledger. Its only dynamically sized field has a
 /// native lease. Neither this handoff nor a successful allocation is a
 /// consensus acceptance receipt.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ValidatedManifestRequestCarrierV1 {
     context: ManifestRequestCarrierContextV1,
     request: [u8; REQUEST_BYTES],
+    request_version: u8,
     budget: NativeRetainedV1<CarrierFeeBudgetV1>,
     charged: bool,
     charge_purpose: Option<Hash64>,
@@ -119,7 +162,7 @@ pub(crate) struct ValidatedManifestRequestCarrierV1 {
 
 crate::palw_native_resource_v1::native_struct!(ManifestRequestCarrierScopeV1; claim, source, reservation_scope);
 crate::palw_native_resource_v1::native_struct!(ManifestRequestCarrierContextV1; scope, at, carrier_block, accepted_ordinal, carrier);
-crate::palw_native_resource_v1::native_struct!(ValidatedManifestRequestCarrierV1; context, request, budget, charged, charge_purpose, replay_parent_root);
+crate::palw_native_resource_v1::native_struct!(ValidatedManifestRequestCarrierV1; context, request, request_version, budget, charged, charge_purpose, replay_parent_root);
 
 impl ValidatedManifestRequestCarrierV1 {
     pub(crate) fn prepare_v1(
@@ -131,7 +174,7 @@ impl ValidatedManifestRequestCarrierV1 {
     ) -> Result<Option<Self>, ManifestRequestCarrierErrorV1> {
         use ManifestRequestCarrierErrorV1::{Decode, Fee, Resource};
         let tx = validated.tx;
-        let Some((scope, request)) = decode_manifest_request_carrier_v1(&tx.payload)? else {
+        let Some((scope, request_version, literal)) = decode_manifest_transport_v2(&tx.payload)? else {
             return Ok(None);
         };
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
@@ -153,9 +196,12 @@ impl ValidatedManifestRequestCarrierV1 {
                 .map_err(|_| Decode("ManifestRequest preceding fee identity"))?;
             budget.allocate_v1(prior.as_bytes(), preceding_fee).map_err(Fee)?;
         }
+        let mut request = [0; REQUEST_BYTES];
+        request[..literal.len()].copy_from_slice(literal);
         Ok(Some(Self {
             context: ManifestRequestCarrierContextV1 { scope, at, carrier_block, accepted_ordinal, carrier },
-            request: *request,
+            request,
+            request_version,
             budget: NativeRetainedV1::from_owner_reserved_v1(budget, fee_owner),
             charged: false,
             charge_purpose: None,
@@ -167,14 +213,53 @@ impl ValidatedManifestRequestCarrierV1 {
         self.context
     }
 
-    pub(crate) fn request_at_v1(
-        &self,
-        expected: &ManifestRequestCarrierContextV1,
-    ) -> Result<&[u8; REQUEST_BYTES], ManifestRequestCarrierErrorV1> {
+    pub(super) fn uses_registered_key_v2(&self) -> bool {
+        self.request_version == 2
+    }
+
+    pub(crate) fn request_at_v1(&self, expected: &ManifestRequestCarrierContextV1) -> Result<&[u8], ManifestRequestCarrierErrorV1> {
         if self.context != *expected {
             return Err(ManifestRequestCarrierErrorV1::Context);
         }
-        Ok(&self.request)
+        match self.request_version {
+            1 => Ok(&self.request),
+            2 => Ok(&self.request[..RegisteredKeyManifestRequestV2::WIRE_BYTES]),
+            _ => Err(ManifestRequestCarrierErrorV1::Context),
+        }
+    }
+
+    /// Structural message read for fee identity or proposed claimant selection,
+    /// without authentication. No other message field supplies expected authority.
+    pub(super) fn request_message_v2(&self) -> Result<ManifestRequest, ManifestRequestCarrierErrorV1> {
+        let bytes = self.request_at_v1(&self.context)?;
+        match self.request_version {
+            1 => SignedManifestRequestV1::decode(bytes).map(|signed| signed.request),
+            2 => RegisteredKeyManifestRequestV2::decode(bytes).map(|signed| signed.request),
+            _ => return Err(ManifestRequestCarrierErrorV1::Context),
+        }
+        .map_err(|_| ManifestRequestCarrierErrorV1::Decode("invalid ManifestRequest body"))
+    }
+
+    /// Expand PMR2 using only the named bond's registered native key. The
+    /// caller still verifies draw membership and the unchanged signature.
+    pub(super) fn signed_request_at_v2(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        expected: &ManifestRequestCarrierContextV1,
+    ) -> Result<SignedManifestRequestV1, ManifestRequestCarrierErrorV1> {
+        use ManifestRequestCarrierErrorV1::{Context, Decode};
+        let bytes = self.request_at_v1(expected)?;
+        if self.request_version == 1 {
+            return SignedManifestRequestV1::decode(bytes).map_err(|_| Decode("invalid inline-key ManifestRequest"));
+        }
+        let signed = RegisteredKeyManifestRequestV2::decode(bytes).map_err(|_| Decode("invalid registered-key ManifestRequest"))?;
+        let Claimant::DrawnBond(bond) = signed.request.claimant else { return Err(Context) };
+        let native_bond = crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+            Hash64::from_bytes(bond.transaction.0),
+            bond.index,
+        ));
+        let key = state.bond(&native_bond).ok_or(Context)?.pubkey.as_slice().try_into().map_err(|_| Context)?;
+        signed.with_registered_key(key).map_err(|_| Context)
     }
 
     pub(crate) fn remaining_fee_v1(&self) -> u64 {
@@ -280,6 +365,70 @@ mod tests {
 
     pub(super) fn point() -> PalwBlockContextV2 {
         PalwBlockContextV2 { block: Hash64::from_u64_word(13), daa_score: 14, blue_score: 15, subsidy: 0 }
+    }
+
+    #[test]
+    fn pmr2_preserves_literal_scope_and_requires_the_native_registered_key() {
+        use crate::palw_state_v2::{
+            PalwBondKeyV2, PalwChainStateV2, PalwStateCarriageV2, PalwStateParamsV2, palw_bond_state_from_registration_v2,
+        };
+        use misaka_palw_positive_contract::{identity::principal, public_one_honest::MANIFEST_REQUEST_SIGN_CONTEXT};
+        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([58; 32]);
+        let key = *pair.verification_key.as_ref();
+        let mut message = SignedManifestRequestV1::decode(&request()).unwrap().request;
+        message.signer = principal(&key);
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &message.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [59; 32])
+                .unwrap();
+        let compact = RegisteredKeyManifestRequestV2 { request: message.clone(), signature: *signature.as_ref() };
+        let literal: [u8; RegisteredKeyManifestRequestV2::WIRE_BYTES] = borsh::to_vec(&compact).unwrap().try_into().unwrap();
+        let payload = encode_manifest_request_carrier_v2(scope(), &literal).unwrap();
+        assert_eq!(MANIFEST_REQUEST_CARRIER_BYTES_V1 - payload.len(), PUBKEY_BYTES);
+        assert_eq!(payload.len(), 5285);
+        assert_eq!(decode_manifest_transport_v2(&payload).unwrap(), Some((scope(), 2, literal.as_slice())));
+        assert!(decode_manifest_request_carrier_v1(&payload).is_err(), "PMR1 alone does not reinterpret PMR2");
+        assert!(decode_manifest_transport_v2(&payload[..payload.len() - 1]).is_err());
+        assert!(decode_manifest_transport_v2(&[payload.as_slice(), &[0]].concat()).is_err());
+        for index in [3, 4, HEADER_BYTES + 2 * 64] {
+            let mut wrong = payload;
+            wrong[index] ^= 0xff;
+            assert!(decode_manifest_transport_v2(&wrong).is_err());
+        }
+        let mut transaction = tx();
+        transaction.payload = payload.to_vec();
+        transaction.finalize();
+        let handoff = ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&transaction, 20), 8, point().block, point(), 0)
+            .unwrap()
+            .unwrap();
+        let expected = handoff.context_v1();
+        assert_eq!(handoff.request_at_v1(&expected).unwrap(), literal);
+        assert!(handoff.signed_request_at_v2(&PalwChainStateV2::genesis(), &expected).is_err());
+        let Claimant::DrawnBond(bond) = message.claimant else { unreachable!() };
+        let native_bond = PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(bond.transaction.0), bond.index));
+        let params = PalwStateParamsV2::new(100, 100, 10, 20, 50, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        // Native key lookup fixture only; this is not draw or claim admission.
+        let state_for = |registered: &[u8]| {
+            let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+            carriage.last_point = Some(point());
+            carriage.bonds.insert(
+                native_bond,
+                palw_bond_state_from_registration_v2(registered, registered, 1000, Hash64::from_u64_word(20), 1, Default::default()),
+            );
+            carriage.into_state(&params, None).unwrap()
+        };
+        let resolved = handoff.signed_request_at_v2(&state_for(&key), &expected).unwrap();
+        assert_eq!(resolved.request, message);
+        assert_eq!(resolved.signature, compact.signature);
+        resolved.request.authenticate(resolved.request.signer, &resolved.key, &resolved.signature).unwrap();
+        let other = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([60; 32]);
+        assert!(handoff.signed_request_at_v2(&state_for(other.verification_key.as_ref()), &expected).is_err());
+        let mut wrong_point = expected;
+        wrong_point.at.daa_score += 1;
+        assert!(handoff.signed_request_at_v2(&state_for(&key), &wrong_point).is_err());
+        let seed = handoff.into_replay_seed_v1(Hash64::from_u64_word(21)).unwrap();
+        let candidate = seed.candidate_at_v1(Hash64::from_u64_word(21), &point()).unwrap();
+        assert_eq!(candidate.request_at_v1(&expected).unwrap(), literal);
+        seed.project_after_candidate_v1(&candidate, 0).unwrap();
     }
 
     #[test]

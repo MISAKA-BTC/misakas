@@ -70,7 +70,9 @@ pub(super) fn material_intake(
     if shared::context(&b.state, s.claim).is_ok_and(|c| c.batch_notice_only_v1()) {
         return Err(refused("Batch original requires its reserved material route"));
     }
-    material_intake_atomic(b, ctx, s, None, None)
+    let schedule = m::material_intake_schedule_selected_v3(b.extras.staged_tir_route_active, b.extras.protected_planning_v3)
+        .map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
+    material_intake_atomic(b, ctx, s, None, None, schedule)
 }
 
 /// Candidate native adapter for a demand and response declaration authenticated
@@ -82,9 +84,10 @@ pub(super) fn material_intake_pipelined(
     s: &m::SignedMaterialIntakeV1,
     ordinal: u64,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
+    schedule: m::MaterialIntakeScheduleV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
-    let request_root = checked_batch_response_slot_v1(&b.state, ctx.daa_score, s, ordinal)?;
-    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit)
+    let request_root = checked_batch_response_slot_v1(&b.state, ctx.daa_score, s, ordinal, schedule)?;
+    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit, schedule)
 }
 
 pub(super) fn checked_batch_response_slot_v1(
@@ -92,6 +95,7 @@ pub(super) fn checked_batch_response_slot_v1(
     daa: u64,
     s: &m::SignedMaterialIntakeV1,
     ordinal: u64,
+    schedule: m::MaterialIntakeScheduleV1,
 ) -> Result<Hash64, PalwStateV2Error> {
     let key = Key::CourtBatchDemand(s.claim, ordinal);
     let Some(Row::CourtBatchDemand(demand)) = state.staged_court_row_v1(&key) else {
@@ -137,7 +141,6 @@ pub(super) fn checked_batch_response_slot_v1(
         return Err(refused("Batch material slot is not funded by this original"));
     }
     if matches!(s.action, m::MaterialActionV1::Begin { .. }) {
-        let schedule = m::material_intake_schedule_v1().map_err(|_| refused("Batch material storage schedule missing"))?;
         delivery
             .check_draft_schedule_v1(&service.book, schedule)
             .map_err(|err| refused(format!("Batch material draft schedule: {err:?}")))?;
@@ -153,7 +156,9 @@ pub(super) fn material_intake_pipelined_codec_test(
     request_root: Hash64,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     assert_eq!(s.version, m::MATERIAL_BATCH_VERSION);
-    material_intake_atomic(b, ctx, s, Some((request_root, 0)), None)
+    let schedule = m::material_intake_schedule_selected_v3(b.extras.staged_tir_route_active, b.extras.protected_planning_v3)
+        .map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
+    material_intake_atomic(b, ctx, s, Some((request_root, 0)), None, schedule)
 }
 
 fn material_intake_atomic(
@@ -162,9 +167,10 @@ fn material_intake_atomic(
     s: &m::SignedMaterialIntakeV1,
     batch_request: Option<(Hash64, u64)>,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
+    schedule: m::MaterialIntakeScheduleV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
-    let result = material_intake_inner(b, ctx, s, batch_request, storage_debit);
+    let result = material_intake_inner(b, ctx, s, batch_request, storage_debit, schedule);
     if result.is_err() {
         b.restore(saved);
     }
@@ -177,13 +183,12 @@ fn material_intake_inner(
     s: &m::SignedMaterialIntakeV1,
     batch_request: Option<(Hash64, u64)>,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
+    schedule: m::MaterialIntakeScheduleV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let request_root = batch_request.map(|(root, _)| root);
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
     }
-    let schedule = m::material_intake_schedule_at_fence_v1(b.extras.staged_tir_route_active)
-        .map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
     let network = b.extras.tir_public_network_domain_v1.ok_or_else(|| refused("material intake native network domain missing"))?;
     let c = shared::context(&b.state, s.claim).map_err(refused)?.clone();
     if ctx.daa_score < c.original_accepted_daa || ctx.daa_score >= c.hard_daa {
@@ -295,7 +300,7 @@ fn material_intake_inner(
             };
             if let Some((root, ordinal)) = batch_request.filter(|_| fee > 0) {
                 let debit = storage_debit.ok_or_else(|| refused("Batch material storage fee has no accepted carrier debit"))?;
-                debit.check_v1(s, root, ordinal, ctx, fee).map_err(refused)?;
+                debit.check_v1(s, root, ordinal, ctx, fee, &schedule).map_err(refused)?;
             } else if batch_request.is_none() {
                 debit_submitter_storage_fee_v1(b, s.submitter, fee, ctx.daa_score)?;
             }

@@ -463,6 +463,18 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) },
         PublicDrawMemberV1 { bond: other_bond, principal: member, rescue_reservation: Digest([10; 64]) },
     ];
+    // An original accepted in this point cannot authorize a drawn request
+    // there. Advancing only one clock also cannot make that request timely.
+    for too_early in [
+        point,
+        PalwBlockContextV2 { daa_score: point.daa_score, ..draw_point },
+        PalwBlockContextV2 { blue_score: point.blue_score, ..draw_point },
+    ] {
+        assert!(matches!(
+            prepared.prepare_draw(Digest([5; 64]), too_early, &members, Digest([6; 64])),
+            Err(misaka_palw_positive_contract::ContractError::Range),
+        ));
+    }
     let draw = prepared.prepare_draw(Digest([5; 64]), draw_point, &members, Digest([6; 64])).unwrap();
     let draw_extras = PalwTransitionExtrasV1 {
         kernel_route: extras.kernel_route.clone(),
@@ -976,7 +988,7 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
     let encoded = borsh::to_vec(&Row::PublicTfp1FrameV1(Box::new((*frame).clone()).into())).unwrap();
     assert_eq!(borsh::to_vec(&key).unwrap()[0], 39);
     assert_eq!(encoded[0], 46);
-    crate::palw_native_resource_v1::preflight_native_value_v1::<Row>(&encoded, encoded.len() as u64).unwrap();
+    crate::palw_native_resource_v1::preflight_native_value_v1::<Row>(&encoded[..], encoded.len() as u64).unwrap();
     assert_eq!(borsh::to_vec(&Key::TirClaim(claim)).unwrap()[0], 9, "legacy key tag unchanged");
     assert_eq!(borsh::to_vec(&old).unwrap()[0], 15, "legacy row tag unchanged");
     let mut generic = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
@@ -1226,13 +1238,14 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     assert!(matches!(route_less.validate_public_verification_delta_v1(&reordered, true), Err(PalwStateV2Error::DeltaMismatch(_))));
 
     let mut wrong_cut = delta.entries.clone();
-    let PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_TFP1_HISTORY_TABLE_V1, new: Some(bytes), .. } = &mut wrong_cut[2] else {
+    let PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_TFP1_HISTORY_TABLE_V1, new: Some(history_bytes), .. } = &mut wrong_cut[2]
+    else {
         panic!("expected TFO3 history as the third entry");
     };
     let mut history = *prepared.boundary_v1();
     assert_eq!(history.before_delta_end, 0, "the admission is the first entry in this journal");
     history.before_delta_end = 1;
-    *bytes = borsh::to_vec(&history).unwrap();
+    *history_bytes = borsh::to_vec(&history).unwrap();
     assert!(matches!(route_less.validate_public_verification_delta_v1(&wrong_cut, true), Err(PalwStateV2Error::DeltaMismatch(_))));
 
     let reverted = revert_delta_v2(&replayed, &delta, &params).unwrap();
@@ -1430,6 +1443,236 @@ pub(crate) fn exercise_paid_manifest_writer_v1(
     assert_eq!(duplicate_fee.charge_v1(), 0);
     assert!(reconcile_manifest_request_fees_v1(&[expected_fee], &[duplicate_fee], parent_root, &at, 1).is_err());
     assert!(reconcile_manifest_request_fees_v1(&[actual_fee, actual_fee], &[actual_fee, actual_fee], parent_root, &at, 2).is_err());
+
+    // Exercise the real core ordered fold, not just the ordering iterator or
+    // direct writer. The production node's UTXO fee owner must still populate
+    // this opaque lane and its independently projected fees.
+    use crate::palw_positive_contract_v2::PreparedNativeManifestRequestV3;
+    use crate::palw_state_v2::ordered_prefix::apply_ordered_prefix_v1;
+    assert!(PreparedNativeManifestRequestV3::new_v3(prepared.clone(), seed.clone(), h64(0), &at).is_err());
+    let accepted = PreparedNativeManifestRequestV3::new_v3(prepared.clone(), seed.clone(), parent_root, &at).unwrap();
+    // Complete Node replay recovers this immutable UTXO input and prepares
+    // authority again. Recovery neither spends its fee nor changes its scope.
+    let replay_input = accepted.candidate_v3();
+    assert_eq!(replay_input.carrier_v3(), accepted.carrier_v3());
+    assert_eq!(replay_input.accepted_ordinal_v3(), accepted.accepted_ordinal_v3());
+    replay_input.check_context_v3(parent_root, &at).unwrap();
+    assert!(replay_input.check_context_v3(h64(0), &at).is_err());
+    assert!(replay_input.check_context_v3(parent_root, &PalwBlockContextV2 { subsidy: at.subsidy + 1, ..at }).is_err());
+    assert_eq!(replay_input.collectible_fee_v3(&expected_fee).unwrap(), before - charge);
+    assert_eq!(replay_input.matching_collectible_fee_v3(&expected_fee).unwrap(), Some(before - charge));
+    let other_root = h64(998);
+    assert_ne!(other_root, parent_root);
+    let foreign_seed = make_handoff().into_replay_seed_v1(other_root).unwrap();
+    let foreign = PreparedNativeManifestRequestV3::new_v3(prepared.clone(), foreign_seed, other_root, &at).unwrap();
+    assert!(foreign.candidate_v3().collectible_fee_v3(&expected_fee).is_err());
+    assert_eq!(foreign.candidate_v3().matching_collectible_fee_v3(&expected_fee).unwrap(), None);
+
+    assert_eq!(replay_input.collectible_fee_v3(&duplicate_fee).unwrap(), before);
+    assert_eq!(seed.candidate_at_v1(parent_root, &at).unwrap().remaining_fee_v1(), before);
+
+    // Node selection uses the same writer, but owns a disposable prefix. It
+    // must reproduce a fresh paid effect, then an idempotent zero charge, and
+    // must not consume the immutable seed used by the complete fold below.
+    let owned = || crate::palw_native_resource_v1::NativeRetainedV1::try_from_clone_v1(&parent).unwrap();
+    let (selected, selected_fee) = palw_v2_apply_one_manifest_request_owned_v3(
+        owned(),
+        &parent,
+        parent_root,
+        params,
+        &at,
+        &accepted,
+        false,
+        false,
+        false,
+        false,
+        &extras,
+    )
+    .unwrap();
+    assert_eq!(selected_fee, expected_fee);
+    assert_eq!(*selected, actual.state);
+    assert_eq!(selected.last_point(), parent.last_point());
+    let (selected_again, repeated_fee) = palw_v2_apply_one_manifest_request_owned_v3(
+        selected,
+        &parent,
+        parent_root,
+        params,
+        &at,
+        &accepted,
+        false,
+        false,
+        false,
+        false,
+        &extras,
+    )
+    .unwrap();
+    assert_eq!(repeated_fee.charge_v1(), 0);
+    assert_eq!(*selected_again, actual.state);
+    assert!(
+        palw_v2_apply_one_manifest_request_owned_v3(
+            owned(),
+            &parent,
+            h64(0),
+            params,
+            &at,
+            &accepted,
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .is_err()
+    );
+    assert_eq!(seed.candidate_at_v1(parent_root, &at).unwrap().remaining_fee_v1(), before);
+    drop(selected_again);
+    let mut native_extras = PalwTransitionExtrasV1::default();
+    native_extras.manifest_request_carriers_v3.push((0, accepted.clone()));
+    native_extras.manifest_request_expected_fees_v3.insert(accepted.carrier_v3(), expected_fee);
+
+    // The UTXO owner needs fees before reward calculation. Derive them from
+    // the complete public prefix entry, then compare against strict replay.
+    // A late observer failure must return no prefix or fee owner and cannot
+    // charge the next attempt's immutable seed.
+    let mut projecting_extras = native_extras.clone();
+    projecting_extras.manifest_request_expected_fees_v3.clear();
+    let events = [PalwOrderedPhysicalEventV3 {
+        accepted_ordinal: Some(accepted.accepted_ordinal_v3()),
+        kind: PalwOrderedPhysicalKindV3::Manifest,
+    }];
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &parent,
+        params,
+        at,
+        PalwOrderedReplayRulesV1 {
+            unavailable_abstains: false,
+            capability_bound: false,
+            uncertified_weightless: false,
+            da_court: false,
+        },
+        PalwOrderedReplayLimitsV1 { passes: 5, candidate_visits: 5 },
+    )
+    .unwrap();
+    assert!(
+        palw_v2_project_manifest_fees_with_physical_checks_v3(
+            &mut budget,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &native_extras,
+            &events,
+            &mut |_, _, _| Ok::<(), &'static str>(()),
+            &mut |_, _, _, _| Ok(()),
+        )
+        .is_err(),
+        "projection must not trust a supplied expected fee map"
+    );
+    let (projected_prefix, projected_fees) = palw_v2_project_manifest_fees_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &projecting_extras,
+        &events,
+        &mut |_, _, _| Ok::<(), &'static str>(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(projected_fees.get(&accepted.carrier_v3()), Some(&expected_fee));
+    let failed = palw_v2_project_manifest_fees_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &projecting_extras,
+        &events,
+        &mut |event, _, state| {
+            if event.is_none() {
+                assert!(prepared.storage_rows_at_v1(state, &at).unwrap().is_none());
+                Err("discard whole projected body")
+            } else {
+                Ok(())
+            }
+        },
+        &mut |_, _, _, _| Ok(()),
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(failed, PalwOrderedCandidateFailureV2::Physical { event_index: None, error: "discard whole projected body" }));
+    assert_eq!(seed.candidate_at_v1(parent_root, &at).unwrap().remaining_fee_v1(), before);
+    let (retried_prefix, joint_fees) = palw_v2_project_joint_fees_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &projecting_extras,
+        &events,
+        &mut |_, _, _| Ok::<(), &'static str>(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert!(joint_fees.relay.is_empty(), "Manifest-only projection must not invent a relay charge");
+    let retried_fees = joint_fees.manifest;
+    assert_eq!(projected_fees, retried_fees);
+    assert_eq!(projected_prefix.state_v1(), retried_prefix.state_v1());
+    assert_eq!(projected_prefix.builder.entries, retried_prefix.builder.entries);
+    let strict_prefix = palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &native_extras,
+        &events,
+        &mut |_, _, _| Ok::<(), &'static str>(()),
+        &mut |_, _, _, _| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(projected_prefix.state_v1(), strict_prefix.state_v1());
+    assert_eq!(projected_prefix.builder.entries, strict_prefix.builder.entries);
+    assert_eq!(budget.remaining_v1(), PalwOrderedReplayLimitsV1 { passes: 0, candidate_visits: 0 });
+    assert_eq!(projected_prefix.state_v1().last_point(), parent.last_point());
+    drop((projected_prefix, retried_prefix, strict_prefix));
+
+    let mut folded = TransitionBuilder::new(&parent, params, false, false, false, false, &native_extras);
+    apply_ordered_prefix_v1(&mut folded, &parent, &at, &[]).unwrap();
+    assert_eq!(folded.state, builder.state);
+    assert_eq!(folded.entries, builder.entries);
+    drop(folded);
+
+    let mut absent_fee = native_extras.clone();
+    absent_fee.manifest_request_expected_fees_v3.clear();
+    let mut refused = TransitionBuilder::new(&parent, params, false, false, false, false, &absent_fee);
+    assert!(matches!(apply_ordered_prefix_v1(&mut refused, &parent, &at, &[]), Err(PalwStateV2Error::CarriageInconsistent(_))));
+    assert_eq!(refused.state, parent);
+    assert!(refused.entries.is_empty());
+    drop(refused);
+
+    // A valid but zero-charge projection from another prefix must not be
+    // accepted for this initial installation. The failed whole candidate is
+    // discarded, and a fresh attempt retains the original uncharged seed.
+    let mut wrong_fee = native_extras.clone();
+    wrong_fee.manifest_request_expected_fees_v3.insert(accepted.carrier_v3(), duplicate_fee);
+    let mut refused = TransitionBuilder::new(&parent, params, false, false, false, false, &wrong_fee);
+    assert!(matches!(apply_ordered_prefix_v1(&mut refused, &parent, &at, &[]), Err(PalwStateV2Error::CarriageInconsistent(_))));
+    drop(refused);
+    assert_eq!(seed.candidate_at_v1(parent_root, &at).unwrap().remaining_fee_v1(), before);
+
+    let mut wrong_order = native_extras.clone();
+    wrong_order.manifest_request_carriers_v3[0].0 = 1; // no preceding ordinary object
+    let mut refused = TransitionBuilder::new(&parent, params, false, false, false, false, &wrong_order);
+    assert!(matches!(apply_ordered_prefix_v1(&mut refused, &parent, &at, &[]), Err(PalwStateV2Error::CarriageInconsistent(_))));
+    assert_eq!(refused.state, parent);
+    assert!(refused.entries.is_empty());
+    drop(refused);
+
+    let mut fresh = TransitionBuilder::new(&parent, params, false, false, false, false, &native_extras);
+    apply_ordered_prefix_v1(&mut fresh, &parent, &at, &[]).unwrap();
+    assert_eq!(fresh.state, builder.state);
 
     let previous = builder.state.last_point;
     assert_ne!(previous, Some(at), "the fixture must exercise an unadvanced prefix");

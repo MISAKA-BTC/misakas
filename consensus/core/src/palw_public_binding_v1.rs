@@ -200,9 +200,14 @@ impl PalwPublicTirBindingHeaderV1 {
         registered.check_program_v1().map_err(str::to_string)?;
         // Each declared node/state consumes bytes in the admitted canonical
         // program. This is a derived conservative bound, not a new class cap.
+        if self.step_leaf_count > maximum_leaves {
+            return Err(format!(
+                "public TIR trace has {} leaves, exceeding the protected bound {}",
+                self.step_leaf_count, maximum_leaves
+            ));
+        }
         if registered.version != crate::palw_tir_admission_v1::PALW_TIR_CLASS_RECORD_VERSION_V1
             || self.committed_execution_root != expected_root
-            || self.step_leaf_count > maximum_leaves
             || registered.facts.class_id != self.job_context.shape_profile_id
             || registered.tokenizer_id != self.job_context.tokenizer_id
             || layout.version != crate::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1

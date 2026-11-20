@@ -6581,10 +6581,10 @@ try_from!(item: &protowire::GetPalwAcceptanceReadsResponseMessage, RpcResult<kas
 });
 
 from!(item: &kaspa_rpc_core::GetPalwTirOriginalQuoteRequest, protowire::GetPalwTirOriginalQuoteRequestMessage, {
-    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone(), protected_material_hex: item.protected_material_hex.clone() }
 });
 try_from!(item: &protowire::GetPalwTirOriginalQuoteRequestMessage, kaspa_rpc_core::GetPalwTirOriginalQuoteRequest, {
-    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone() }
+    Self { commitment_hex: item.commitment_hex.clone(), binding_hex: item.binding_hex.clone(), protected_material_hex: item.protected_material_hex.clone() }
 });
 from!(item: RpcResult<&kaspa_rpc_core::GetPalwTirOriginalQuoteResponse>, protowire::GetPalwTirOriginalQuoteResponseMessage, {
     Self {
@@ -6593,6 +6593,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwTirOriginalQuoteResponse>, protowi
         refusal: item.refusal.clone(),
         quote_daa: item.quote_daa,
         plan_hex: item.plan_hex.clone(),
+        protected_quote_hex: item.protected_quote_hex.clone(),
         error: None,
     }
 });
@@ -6603,6 +6604,7 @@ try_from!(item: &protowire::GetPalwTirOriginalQuoteResponseMessage, RpcResult<ka
         refusal: item.refusal.clone(),
         quote_daa: item.quote_daa,
         plan_hex: item.plan_hex.clone(),
+        protected_quote_hex: item.protected_quote_hex.clone(),
         door_diagnostics: None,
     }
 });
@@ -6727,5 +6729,29 @@ mod tokenizer_registration_rpc_tests {
             error: None,
         };
         assert!(GetPalwTokenizerRegistrationStatusResponse::try_from(&oversized).is_err());
+    }
+}
+
+#[cfg(test)]
+mod protected_original_quote_tests {
+    use super::*;
+
+    #[test]
+    fn protected_original_quote_preserves_v2_presence_including_a_refusal() {
+        for field in [None, Some(String::new()), Some("abcd".to_string())] {
+            let request = kaspa_rpc_core::GetPalwTirOriginalQuoteRequest {
+                commitment_hex: "aa".into(),
+                binding_hex: "bb".into(),
+                protected_material_hex: field.clone(),
+            };
+            let wire = protowire::GetPalwTirOriginalQuoteRequestMessage::from(&request);
+            let back = kaspa_rpc_core::GetPalwTirOriginalQuoteRequest::try_from(&wire).unwrap();
+            assert_eq!(back.protected_material_hex, field);
+            let response =
+                kaspa_rpc_core::GetPalwTirOriginalQuoteResponse { protected_quote_hex: field.clone(), ..Default::default() };
+            let wire = protowire::GetPalwTirOriginalQuoteResponseMessage::from(Ok(&response));
+            let back: RpcResult<kaspa_rpc_core::GetPalwTirOriginalQuoteResponse> = (&wire).try_into();
+            assert_eq!(back.unwrap().protected_quote_hex, field);
+        }
     }
 }

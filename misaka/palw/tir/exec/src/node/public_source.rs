@@ -27,6 +27,15 @@ const READ: u32 = 16_384;
 const MAX_LEAF: u64 = PALW_STEP_MAX_TILE_LEN as u64 * 4;
 const LEAF_HEAD: u64 = 26;
 
+fn spool_limit_v1(public: &PalwTirPublicSourceV1) -> Result<u64, String> {
+    let count = public.leaf_count_v1();
+    let values = match public.trace_value_bytes_v1() {
+        Some(bytes) => bytes,
+        None => count.checked_mul(MAX_LEAF).ok_or("TIR capture spool quote overflow")?,
+    };
+    count.checked_mul(LEAF_HEAD).and_then(|heads| heads.checked_add(values)).ok_or("TIR capture spool quote overflow".into())
+}
+
 #[path = "prepared_source.rs"]
 mod prepared;
 pub(crate) use prepared::{prepared_need_v1, reopen_prepared_v1, retire_prepared_v1};
@@ -57,8 +66,9 @@ pub(crate) fn need_v1(
     };
     let disk_bytes = tree_disk_bytes_v1(n)?.checked_add(forest)
         .and_then(|b| b.checked_add(n.checked_mul(8)?))
-        // Reserved before opening even when a dense capture needs no replay spool.
-        .and_then(|b| b.checked_add(n.checked_mul(MAX_LEAF + LEAF_HEAD)?))
+        // The registered layout fixes the sum of replay leaf value bytes.
+        // The writer enforces this bound before writing any spool record.
+        .and_then(|b| b.checked_add(spool_limit_v1(public).ok()?))
         .ok_or("TIR capture disk quote overflow")?;
     let metadata = borsh::object_length(binding).map_err(|e| e.to_string())? as u64;
     let resident_ram_bytes = metadata
@@ -153,14 +163,18 @@ pub(crate) struct FoldReplayV1 {
     pub(crate) fused: bool,
     pub(crate) cap: u64,
 }
-struct Spool(Mutex<(File, u64)>);
+struct Spool(Mutex<(File, u64)>, u64);
 impl Spool {
     fn append(&self, leaf: &PalwStepTileLeafV1) -> Result<u64, String> {
         let mut held = self.0.lock().map_err(|_| "TIR spool poisoned")?;
         let at = held.1;
+        let end = at.checked_add(LEAF_HEAD).and_then(|v| v.checked_add(leaf.values_le.len() as u64)).ok_or("TIR spool overflow")?;
+        if end > self.1 {
+            return Err("TIR replay exceeds quoted spool capacity".into());
+        }
         held.0.seek(SeekFrom::Start(at)).map_err(|e| e.to_string())?;
         borsh::to_writer(&mut held.0, leaf).map_err(|e| e.to_string())?;
-        held.1 = at.checked_add(LEAF_HEAD + leaf.values_le.len() as u64).ok_or("TIR spool overflow")?;
+        held.1 = end;
         Ok(at)
     }
 }
@@ -634,8 +648,10 @@ impl CaptureReader {
                         &self.binding.job_context,
                         Hash64::from_bytes(replay.space.program.logits_scheme_id),
                     )?);
-                    self.spool =
-                        Some(Arc::new(Spool(Mutex::new((tempfile::tempfile_in(&self.directory).map_err(|e| e.to_string())?, 0)))));
+                    self.spool = Some(Arc::new(Spool(
+                        Mutex::new((tempfile::tempfile_in(&self.directory).map_err(|e| e.to_string())?, 0)),
+                        spool_limit_v1(&self.public)?,
+                    )));
                     self.phase = Phase::Replay;
                     return Ok(());
                 }
@@ -958,6 +974,21 @@ mod tests {
             leaves,
         };
         (binding, public, Arc::new(Original { bytes: Mutex::new(capture.encode()), largest: AtomicU32::new(0) }))
+    }
+    #[test]
+    fn spool_respects_layout_quote_before_writing() {
+        for tiled in [false, true] {
+            let (_, public, original) = fixture(tiled);
+            let capture = super::super::backend::TirCaptureV1::decode(&original.bytes.lock().unwrap()).unwrap();
+            let limit = spool_limit_v1(&public).unwrap();
+            let spool = Spool(Mutex::new((tempfile::tempfile().unwrap(), 0)), limit);
+            for leaf in &capture.leaves {
+                spool.append(leaf).unwrap();
+            }
+            assert_eq!(spool.len_v1(), limit);
+            assert!(spool.append(&capture.leaves[0]).is_err());
+            assert_eq!(spool.len_v1(), limit);
+        }
     }
     fn ready(reader: &mut CaptureReader, request: &Request) -> Response {
         for _ in 0..1_000_000 {

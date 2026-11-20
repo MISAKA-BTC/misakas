@@ -3,7 +3,10 @@ pub(super) mod positive_native_context_v2;
 
 use super::{
     VirtualStateProcessor,
-    processor::{palw_accept::NativeRelayFeePlanV2, tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1},
+    processor::{
+        manifest_requests_v3::NativeManifestRequestPassV3, palw_accept::NativeRelayFeePlanV2,
+        tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1,
+    },
 };
 use crate::{
     errors::{
@@ -71,6 +74,13 @@ use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use std::iter::once;
 
+pub(super) struct CandidateCoinbaseInputsV3 {
+    pub(super) validator_reward_outputs: Vec<TransactionOutput>,
+    pub(super) carve: Option<FeeSplitParams>,
+    pub(super) inclusion: (u128, u128),
+    pub(super) own_subsidy: u64,
+}
+
 pub(super) struct AcceptedTfp1HistorySeedV1 {
     pub(super) inputs: ValidatedTfp1OriginalInputsV1,
     pub(super) origin: AcceptedOrigin,
@@ -118,6 +128,10 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub ghostdag_data: Refs<'a, GhostdagData>,
     pub multiset_hash: MuHash,
     pub mergeset_diff: UtxoDiff,
+    /// Executed EVM result owned by this disposable UTXO acceptance. A native
+    /// fee restart drops it together with its bridge effects; PALW and commit
+    /// must read the current owner rather than an earlier local result.
+    pub evm_staged: Option<crate::processes::evm::EvmStaged>,
     pub accepted_tx_ids: Vec<TransactionId>,
     /// Actual accepting block only, set by the owning chain walk. No virtual,
     /// mempool or selected-parent snapshot may manufacture this provenance.
@@ -126,6 +140,9 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub positive_relay_preview_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
     pub relay_fee_plan: Option<NativeRelayFeePlanV2>,
+    /// Explicit draft owner only; no live policy currently arms this lane.
+    /// Owns actual UTXO candidates and an optional complete-prefix fee plan.
+    pub palw_manifest_requests_v3: Option<NativeManifestRequestPassV3>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
     pub pruning_sample_from_pov: Option<BlockHash>,
@@ -468,23 +485,63 @@ impl<'a> UtxoProcessingContext<'a> {
         selected_parent_multiset: MuHash,
         plan: NativeRelayFeePlanV2,
     ) -> kaspa_consensus_core::acceptance_data::AcceptanceData {
+        let original = self.restart_native_acceptance_v3(selected_parent_multiset);
+        self.relay_fee_plan = Some(plan);
+        original
+    }
+
+    pub(super) fn restart_with_manifest_projection_v3(
+        &mut self,
+        selected_parent_multiset: MuHash,
+        projection: kaspa_consensus_core::palw_state_v2::PalwManifestRequestFeeProjectionV3,
+        relay: Option<NativeRelayFeePlanV2>,
+    ) -> Result<
+        (kaspa_consensus_core::acceptance_data::AcceptanceData, Vec<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1>),
+        NativeCoverageV1,
+    > {
+        self.palw_manifest_requests_v3
+            .as_mut()
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>("Manifest UTXO replay", "original candidate pass is unavailable"))?
+            .install_projection_v3(projection)?;
+        let round_incomes = std::mem::take(&mut self.palw_round_fee_incomes);
+        let original = self.restart_native_acceptance_v3(selected_parent_multiset);
+        // Relay plans are also candidate-specific. The caller must supply the
+        // plan derived for the same whole prefix instead of retaining an old one.
+        self.relay_fee_plan = relay;
+        Ok((original, round_incomes))
+    }
+
+    fn restart_native_acceptance_v3(
+        &mut self,
+        selected_parent_multiset: MuHash,
+    ) -> kaspa_consensus_core::acceptance_data::AcceptanceData {
         self.multiset_hash = selected_parent_multiset;
         self.mergeset_diff = UtxoDiff::default();
+        self.evm_staged = None;
         self.accepted_tx_ids.clear();
         self.positive_native_carriers = Default::default();
         self.mergeset_rewards.clear();
         self.reserve_accrual = 0;
+        // A coupled Manifest/PALW retry can happen after a provisional header
+        // check. None of that check's commit outputs belong to the rebuilt
+        // acceptance, even when its transaction IDs eventually match again.
+        self.pruning_sample_from_pov = None;
+        self.validator_rewarded_keys.clear();
+        self.validator_quality_subpool = 0;
+        self.reserve_balance_after = 0;
         self.palw_v2_accepted_tx_fees.clear();
         self.palw_v2_rent_available_fees.clear();
         self.palw_tfp1_history_seeds_v1.clear();
         self.palw_batch_handoffs_v1.clear();
         self.palw_tokenizer_handoffs_v1.clear();
         self.palw_tokenizer_fees_v1.clear();
+        if let Some(manifest) = &mut self.palw_manifest_requests_v3 {
+            manifest.rewind_v3();
+        }
         self.palw_round_fee_incomes.clear();
         self.palw_escrow_locks.provisional.clear();
         self.palw_escrow_settlements.clear();
         self.palw_assignment_settlements = Vec::new();
-        self.relay_fee_plan = Some(plan);
         std::mem::take(&mut self.mergeset_acceptance_data)
     }
 
@@ -494,10 +551,12 @@ impl<'a> UtxoProcessingContext<'a> {
             ghostdag_data,
             multiset_hash: selected_parent_multiset_hash,
             mergeset_diff: UtxoDiff::default(),
+            evm_staged: None,
             positive_accepting_point: None,
             positive_relay_preview_point: None,
             positive_native_carriers: Default::default(),
             relay_fee_plan: None,
+            palw_manifest_requests_v3: None,
             accepted_tx_ids: Vec::with_capacity(1), // We expect at least the selected parent coinbase tx
             mergeset_rewards: BlockHashMap::with_capacity(mergeset_size),
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
@@ -527,6 +586,16 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_escrow_settlements: Vec::new(),
             palw_assignment_settlements: Vec::new(),
         }
+    }
+
+    pub(super) fn require_no_evm_stage_v3(&self) -> Result<(), NativeCoverageV1> {
+        if self.evm_staged.is_some() {
+            return Err(NativeCoverageV1::unsupported::<Self>(
+                "EVM candidate stage",
+                "reset actual UTXO acceptance before executing EVM again",
+            ));
+        }
+        Ok(())
     }
 
     pub fn selected_parent(&self) -> BlockHash {
@@ -1150,11 +1219,50 @@ impl VirtualStateProcessor {
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
         mut tokenizer_prefix: Option<&mut TokenizerRegistrationFeePrefixV1<'_>>,
     ) -> Result<(), NativeCoverageV1> {
+        // One material preimage for the complete UTXO candidate: tokenizer and
+        // Manifest lookahead, Round fees, accepted handoffs and miner rewards.
+        let batch_material_schedule = self.palw_material_schedule_v3(pov_daa_score).ok();
+        let collectible_fee = |tx: &Transaction, fee: u64, burned: u64, source_daa: u64| {
+            let remaining = self.palw_fee_before_batch_v1(tx, fee, burned, pov_daa_score);
+            batch_material_schedule
+                .and_then(|schedule| {
+                    self.palw_lifecycle_kind_fences.batch_collectible_fee_with_schedule_v3(
+                        tx, remaining, pov_daa_score, source_daa, schedule,
+                    )
+                })
+                .unwrap_or(remaining)
+        };
         let relay_plan = ctx.relay_fee_plan.take();
+        // Keep this attempt local until every accepted body and every planned
+        // effect has been reconciled. Any early error drops its candidate rows.
+        let mut manifest_pass = ctx.palw_manifest_requests_v3.take();
+        if let Some(pass) = &manifest_pass {
+            let parent = case_source_state
+                .ok_or_else(|| NativeCoverageV1::unsupported::<Self>("Manifest UTXO scope", "actual PALW parent is unavailable"))?;
+            pass.check_scope_v3(parent.state_root(), ctx.positive_accepting_point)?;
+        }
         let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
         let selected_parent = ctx.selected_parent();
+        let joint_replay = manifest_pass.is_some();
+        if joint_replay && let Some(plan) = &relay_plan {
+            plan.check_scope_v3(
+                selected_parent,
+                ctx.positive_accepting_point
+                    .ok_or_else(|| NativeCoverageV1::unsupported::<Self>("joint relay replay", "actual accepting point absent"))?,
+            )?;
+        }
         let match_relay = |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan {
-            Some(plan) => plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay),
+            Some(plan) => {
+                match plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay) {
+                    Err(_) if joint_replay => {
+                        // This can be only a lookahead for a subsequently refused
+                        // body. Do not debit its stale proposal; below, only the
+                        // final accepted debit count determines reselection.
+                        Ok(None)
+                    }
+                    result => result,
+                }
+            }
             None => Ok(None),
         };
         let mut applied_relay_debits = 0;
@@ -1322,19 +1430,40 @@ impl VirtualStateProcessor {
                                 filter.burn_owed(validated.tx).saturating_add(filter.escrow_burned(validated.tx, &validated.entries))
                             })
                             .unwrap_or(0);
-                        let remaining = self.palw_collectible_transaction_fee_with_source_v2(
-                            validated.tx,
-                            validated.calculated_fee,
-                            burned,
-                            pov_daa_score,
-                            source_daa,
-                        );
+                        let remaining = collectible_fee(validated.tx, validated.calculated_fee, burned, source_daa);
                         Ok(validated.calculated_fee - remaining)
                     })
                 })
                 .transpose()
                 .map_err(|why| NativeCoverageV1::unsupported::<Self>("tokenizer UTXO fee trial", &why.to_string()))?;
             let mut body_admitted = true;
+
+            // Decode only real validated inputs, at the positions they would
+            // occupy if this complete body is admitted. A refused body drops
+            // these rows and cannot mark any projected fee as consumed.
+            let manifest_trial = manifest_pass
+                .as_ref()
+                .filter(|pass| pass.accepts_source_v3(source_daa))
+                .map(|pass| {
+                    pass.trial_body_v3(&validated_transactions, ctx.accepted_tx_ids.len(), merged_block, |ordinal, tx| {
+                        let burned = bond_filter
+                            .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
+                            .unwrap_or(0);
+                        let before_relay = collectible_fee(tx.tx, tx.calculated_fee, burned, source_daa);
+                        let fees = match_relay(ordinal, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
+                        let ordinary_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
+                        Ok(tokenizer_trial
+                            .as_ref()
+                            .and_then(|trial| {
+                                let rows = trial.carriers_v1();
+                                rows.binary_search_by_key(&ordinal, |row| row.fee.context.accepted_ordinal)
+                                    .ok()
+                                    .map(|index| &rows[index])
+                            })
+                            .map_or(ordinary_tip, |row| row.fee.collectible_fee))
+                    })
+                })
+                .transpose()?;
 
             // A permit grants execution rights, but cannot mint monetary R.
             // Reserve the entire actual collectible native fee before any
@@ -1354,13 +1483,7 @@ impl VirtualStateProcessor {
                     let burned = bond_filter
                         .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
                         .unwrap_or(0);
-                    let before_relay = self.palw_collectible_transaction_fee_with_source_v2(
-                        tx.tx,
-                        tx.calculated_fee,
-                        burned,
-                        pov_daa_score,
-                        source_daa,
-                    );
+                    let before_relay = collectible_fee(tx.tx, tx.calculated_fee, burned, source_daa);
                     let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
                     let ordinary_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
                     let tip = tokenizer_trial
@@ -1372,6 +1495,8 @@ impl VirtualStateProcessor {
                                 .map(|index| &rows[index])
                         })
                         .map_or(ordinary_tip, |row| row.fee.collectible_fee);
+                    let tip =
+                        manifest_trial.as_ref().map_or(Ok(tip), |trial| trial.collectible_v3(first_ordinal + offset, tx.tx, tip))?;
                     Ok(sum.checked_add(tip))
                 })?;
                 let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
@@ -1396,6 +1521,7 @@ impl VirtualStateProcessor {
                 drop(tokenizer_trial);
                 None
             };
+            let manifest_body = if body_admitted { manifest_trial } else { None };
 
             ctx.multiset_hash.combine(&inner_multiset);
 
@@ -1646,9 +1772,16 @@ impl VirtualStateProcessor {
                 {
                     let fee = validated_tx.calculated_fee;
                     let remaining = self.palw_fee_before_batch_v1(validated_tx.tx, fee, owed, pov_daa_score);
-                    match kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1::prepare_at_ordinal_versioned_v2(
-                        validated_tx, fee - remaining, point, accepted_ordinal, plain_source,
-                    ) {
+                    let handoff = batch_material_schedule
+                        .ok_or_else(|| kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
+                            "Batch storage rent schedule absent".to_string(),
+                        ))
+                        .and_then(|schedule| {
+                            kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1::prepare_with_schedule_v3(
+                                validated_tx, fee - remaining, point, accepted_ordinal, plain_source, schedule,
+                            )
+                        });
+                    match handoff {
                         Ok(Some(handoff)) => {
                             batch_fee = Some(handoff.fee_v1().collectible_fee);
                             ctx.palw_batch_handoffs_v1.insert(validated_tx.id(), handoff);
@@ -1660,13 +1793,7 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                let before_relay = self.palw_collectible_transaction_fee_with_source_v2(
-                    validated_tx.tx,
-                    validated_tx.calculated_fee,
-                    owed,
-                    pov_daa_score,
-                    source_daa,
-                );
+                let before_relay = collectible_fee(validated_tx.tx, validated_tx.calculated_fee, owed, source_daa);
                 let fees =
                     match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
                 applied_relay_debits += usize::from(fees.is_some());
@@ -1690,6 +1817,16 @@ impl VirtualStateProcessor {
                     ctx.palw_tokenizer_handoffs_v1.insert(validated_tx.id(), row.handoff.clone());
                     credited_tip = fee.collectible_fee;
                 }
+                let manifest_burn = if let Some(body) = &manifest_body {
+                    let collectible = body.collectible_v3(accepted_ordinal, validated_tx.tx, credited_tip)?;
+                    let charge = credited_tip.checked_sub(collectible).ok_or_else(|| {
+                        NativeCoverageV1::unsupported::<Self>("Manifest fee collection", "projection increases collectible fee")
+                    })?;
+                    credited_tip = collectible;
+                    charge
+                } else {
+                    0
+                };
                 if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
                 {
@@ -1701,13 +1838,13 @@ impl VirtualStateProcessor {
                 let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
                     credited_tip
                 } else {
-                    validated_tx.calculated_fee - fees.map_or(0, |fees| fees.relay_charge())
+                    validated_tx.calculated_fee - fees.map_or(0, |fees| fees.relay_charge()) - manifest_burn
                 };
                 finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, finality_base, finality_fee_active);
             }
 
             if let Some(income) = round_income {
-                if (relay_plan.is_some() || tokenizer_body.is_some()) && income.actual_sompi != block_fee {
+                if (relay_plan.is_some() || tokenizer_body.is_some() || manifest_body.is_some()) && income.actual_sompi != block_fee {
                     return Err(NativeCoverageV1::unsupported::<Self>(
                         "relay fee plan input",
                         "Round reserve and final credited fees differ",
@@ -1715,6 +1852,9 @@ impl VirtualStateProcessor {
                 }
                 debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
                 ctx.palw_round_fee_incomes.push(income);
+            }
+            if let Some(body) = manifest_body {
+                manifest_pass.as_mut().expect("Manifest body has a pass owner").commit_body_v3(body)?;
             }
             ctx.palw_escrow_locks.provisional.extend(new_provisional_escrows);
 
@@ -1739,12 +1879,23 @@ impl VirtualStateProcessor {
             );
         }
 
-        if relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits) {
+        if relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits) && !joint_replay {
             return Err(NativeCoverageV1::unsupported::<Self>(
                 "relay fee plan input",
                 "planned debit is outside final UTXO acceptance",
             ));
         }
+
+        if let Some(pass) = manifest_pass.as_mut()
+            && relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits)
+        {
+            pass.mark_relay_reselection_v3();
+        }
+
+        if let Some(pass) = &manifest_pass {
+            pass.finish_v3()?;
+        }
+        ctx.palw_manifest_requests_v3 = manifest_pass;
 
         // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): apply the
         // slashing side-effect over the fully-applied mergeset. Gated on
@@ -2026,12 +2177,26 @@ impl VirtualStateProcessor {
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
+        selected_parent_bond_view: &ActiveBondView,
+        header: &Header,
+    ) -> BlockProcessResult<()> {
+        self.verify_expected_utxo_state_with_parent_v3(ctx, selected_parent_utxo_view, selected_parent_bond_view, header, None)
+    }
+
+    pub(super) fn verify_expected_utxo_state_with_parent_v3<V: UtxoView + Sync>(
+        &self,
+        ctx: &mut UtxoProcessingContext,
+        selected_parent_utxo_view: &V,
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B): the bond set as-of this
         // block's selected parent. Consumed by the Model-B reward-eligibility
         // rule (PR-10.5′-b2b); the coinbase reward fan-out reader lands in b3.
         selected_parent_bond_view: &ActiveBondView,
         header: &Header,
+        parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> BlockProcessResult<()> {
+        if let Some(pass) = &ctx.palw_manifest_requests_v3 {
+            pass.require_reconciled_v3().map_err(crate::errors::RuleError::LocalNativeCapacityUnavailable)?;
+        }
         // Verify header UTXO commitment
         let expected_commitment = ctx.multiset_hash.finalize();
         if expected_commitment != header.utxo_commitment {
@@ -2201,6 +2366,50 @@ impl VirtualStateProcessor {
             &ctx.ghostdag_data,
             header.daa_score,
         );
+        let CandidateCoinbaseInputsV3 { validator_reward_outputs, carve, inclusion, own_subsidy } =
+            self.coinbase_inputs_for_candidate_v3(ctx, selected_parent_bond_view, header, &txs, &mergeset_non_daa, parent_state)?;
+        self.verify_coinbase_transaction(
+            &txs[0],
+            header.daa_score,
+            own_subsidy,
+            &ctx.ghostdag_data,
+            &ctx.mergeset_rewards,
+            &mergeset_non_daa,
+            validator_reward_outputs.iter().chain(ctx.palw_v2_payout_outputs.iter()),
+            carve.as_ref(),
+            inclusion,
+            ctx.palw_v2_escrow_withheld,
+            &ctx.palw_v2_unentitled_blues,
+            &ctx.palw_v2_merged_escrow_withheld,
+            &self.palw_round_blocks_of(&ctx.ghostdag_data),
+            &ctx.palw_v2_receipt_v4_payouts,
+        )?;
+
+        // Verify the header pruning point
+        let reply = self.verify_header_pruning_point(header, ctx.ghostdag_data.to_compact())?;
+        ctx.pruning_sample_from_pov = Some(reply.pruning_sample);
+
+        // Verify all transactions are valid in context
+        let current_utxo_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
+        let validated_transactions =
+            self.validate_transactions_in_parallel(&txs, &current_utxo_view, header.daa_score, TxValidationFlags::Full);
+        if validated_transactions.len() < txs.len() - 1 {
+            // Some non-coinbase transactions are invalid
+            return Err(InvalidTransactionsInUtxoContext(txs.len() - 1 - validated_transactions.len(), txs.len() - 1));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn coinbase_inputs_for_candidate_v3(
+        &self,
+        ctx: &mut UtxoProcessingContext<'_>,
+        selected_parent_bond_view: &ActiveBondView,
+        header: &Header,
+        txs: &[Transaction],
+        mergeset_non_daa: &BlockHashSet,
+        parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    ) -> BlockProcessResult<CandidateCoinbaseInputsV3> {
         // ADR-0018 §F staged rollout: None (Stage 1) / bootstrap (Stage 2) / full
         // (Stage 3) selected by DAA, identically to the construction path — and past ADR-0126's
         // fence the full split lowered, through the one reader both paths call.
@@ -2223,17 +2432,21 @@ impl VirtualStateProcessor {
             validator_pool,
         );
         let (newly_included_stake, expected_stake) = if self.dns_retired_at(header.daa_score) {
-            self.native_inclusion_ratio(
-                &ctx.ghostdag_data,
-                &mergeset_non_daa,
-                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                    block: header.hash,
-                    daa_score: header.daa_score,
-                    blue_score: header.blue_score,
-                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
-                },
-                &ctx.palw_v2_unentitled_blues,
-            )
+            if let Some(parent) = parent_state {
+                self.native_inclusion_ratio_with_state_v1(&ctx.ghostdag_data, mergeset_non_daa, &ctx.palw_v2_unentitled_blues, parent)
+            } else {
+                self.native_inclusion_ratio(
+                    &ctx.ghostdag_data,
+                    &mergeset_non_daa,
+                    &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                        block: header.hash,
+                        daa_score: header.daa_score,
+                        blue_score: header.blue_score,
+                        subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                    },
+                    &ctx.palw_v2_unentitled_blues,
+                )
+            }
         } else {
             (newly_included_stake, expected_stake)
         };
@@ -2286,37 +2499,12 @@ impl VirtualStateProcessor {
         } else {
             self.coinbase_manager.calc_block_subsidy(header.daa_score)
         };
-        self.verify_coinbase_transaction(
-            &txs[0],
-            header.daa_score,
+        Ok(CandidateCoinbaseInputsV3 {
+            validator_reward_outputs,
+            carve,
+            inclusion: (newly_included_stake, expected_stake),
             own_subsidy,
-            &ctx.ghostdag_data,
-            &ctx.mergeset_rewards,
-            &mergeset_non_daa,
-            validator_reward_outputs.iter().chain(ctx.palw_v2_payout_outputs.iter()),
-            carve.as_ref(),
-            (newly_included_stake, expected_stake),
-            ctx.palw_v2_escrow_withheld,
-            &ctx.palw_v2_unentitled_blues,
-            &ctx.palw_v2_merged_escrow_withheld,
-            &self.palw_round_blocks_of(&ctx.ghostdag_data),
-            &ctx.palw_v2_receipt_v4_payouts,
-        )?;
-
-        // Verify the header pruning point
-        let reply = self.verify_header_pruning_point(header, ctx.ghostdag_data.to_compact())?;
-        ctx.pruning_sample_from_pov = Some(reply.pruning_sample);
-
-        // Verify all transactions are valid in context
-        let current_utxo_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
-        let validated_transactions =
-            self.validate_transactions_in_parallel(&txs, &current_utxo_view, header.daa_score, TxValidationFlags::Full);
-        if validated_transactions.len() < txs.len() - 1 {
-            // Some non-coinbase transactions are invalid
-            return Err(InvalidTransactionsInUtxoContext(txs.len() - 1 - validated_transactions.len(), txs.len() - 1));
-        }
-
-        Ok(())
+        })
     }
 
     fn verify_header_pruning_point(

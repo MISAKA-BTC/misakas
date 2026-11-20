@@ -243,6 +243,8 @@ while queue or wire_visited is None:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
  if path in {'crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15'}:continue
+ # The declaration macro emits exhaustive native visitors beside each type.
+ if path=='crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3' or path.startswith('crate::palw_positive_contract_v2::tfp1_original::public_policy::declaration::'):continue
  # Route fields still seed dependencies, but aux151 needs its manual typed-workspace visitor.
  if path=='crate::palw_kernel_route_v1::PalwKernelRouteStateV1':
     for _,typ,_ in fields(item):references(typ,item)
@@ -298,6 +300,9 @@ while queue or wire_visited is None:
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
 manual={
+    # Arc<NativeRetainedV1<PreparedNativeManifestRequestV3>> uses generic visitors.
+    'crate::palw_positive_contract_v2::SharedPreparedNativeManifestRequestV3',
+    'crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3',
     'crate::palw_claim_local_context_gc_v3::ContextGcV3',
     'crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15',
     'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1',
@@ -319,6 +324,10 @@ header='//! Generated explicit native field inventory. Regenerate with\n//! scri
 # traversal/visited intact so nested fields and structural wire coverage remain
 # discoverable; suppress only duplicate heap implementation emission.
 OWNER_NATIVE_HEAP = {
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierScopeV1',
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierContextV1',
+    'crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::replay::ManifestRequestFeeV1',
+
     'crate::palw_court_original_escrow_v1::FundingTermsV1',
     'crate::palw_court_original_escrow_v1::FundingConsentV1',
     'crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1',
@@ -351,6 +360,9 @@ OWNER_NATIVE_HEAP.update({
     'crate::config::params::positive_funding_relay_v2::FundingRelayPolicyV2',
     'crate::palw_batch_court_v1::rooted::RootedBatchDemandV1',
     'crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1',
+    'crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1',
+    'crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1',
+    'crate::palw_tir_public_parameter_cover_v1::OriginalParameterCoverBudgetV1',
     'crate::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1',
     'crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1',
     'crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1',
@@ -405,6 +417,10 @@ OWNER_NATIVE_HEAP.update({
     'crate::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1',
     'crate::palw_positive_contract_v2::PreparedPublicCourtRecordV1',
     'crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1',
+    'crate::palw_positive_contract_v2::tfp1_original::native_frame::PublicTfp1FrameV1',
+    'crate::palw_positive_contract_v2::tfp1_original::native_frame::FramePinsV1',
+    'crate::palw_positive_contract_v2::tfp1_original::native_frame::AcceptedOrigin',
+    'crate::palw_positive_contract_v2::tfp1_original::native_frame::OriginalId',
     'crate::palw_positive_contract_v2::tfp1_original::native_link::Tfp1PublicOriginalLinkV1',
     'crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1',
     'crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1',

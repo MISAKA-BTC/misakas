@@ -387,6 +387,39 @@ mod tests {
     }
 
     #[test]
+    fn protected_accounting_refuses_overflow_in_each_cost_dimension() {
+        let case = compiled(2);
+        let accounting = case.accounting_v1().unwrap();
+        let request = ServiceCost { bytes: 1, work: 2, io: 3, controls: 1 };
+        // Keep dimensions distinct, including numerical fault storage which
+        // is retained but does not add another transmitted carrier.
+        let original = BatchAdmissionAccountingV1 { retained_numerical_fault_bytes: 17, storage_rent_sompi: 41, ..accounting };
+        let actual = original.with_requests_v1(request, 5, 3, case.storage).unwrap();
+        assert_eq!(actual.service.bytes, original.service.bytes + 3);
+        assert_eq!(actual.service.work, original.service.work + 6);
+        assert_eq!(actual.service.io, original.service.io + 9);
+        assert_eq!(actual.service.controls, original.service.controls + 3);
+        assert_eq!(actual.retained_payload_bytes, original.retained_payload_bytes + 15);
+        assert_eq!(actual.retained_numerical_fault_bytes, 17);
+        assert_eq!(actual.storage_rent_sompi, 71);
+        for dimension in 0..6 {
+            let mut full = accounting;
+            match dimension {
+                0 => full.service.bytes = u64::MAX,
+                1 => full.service.work = u64::MAX,
+                2 => full.service.io = u64::MAX,
+                3 => full.service.controls = u64::MAX,
+                4 => full.retained_payload_bytes = u64::MAX,
+                _ => full.storage_rent_sompi = u64::MAX,
+            }
+            assert!(full.with_requests_v1(request, 1, 1, case.storage).is_err());
+            assert_eq!(full.with_requests_v1(request, 1, 0, case.storage).unwrap(), full);
+        }
+        assert!(accounting.with_requests_v1(ServiceCost { bytes: u64::MAX, ..request }, 1, 2, case.storage).is_err());
+        assert!(accounting.with_requests_v1(request, u64::MAX, 1, case.storage).is_err());
+    }
+
+    #[test]
     fn protected_compiled_cases_check_every_draft_and_fee_before_atomic_commit() {
         let h = Hash64::from_u64_word;
         let a = compiled(2);
@@ -402,6 +435,11 @@ mod tests {
             assert_eq!(quote.relative_graph_id, case.relative_graph_id);
             assert_eq!(quote.retained_payload_bytes, PART + 1);
             assert_eq!(quote.service.controls, 7);
+            let accounting = case.accounting_v1().unwrap();
+            assert_eq!(accounting.service, quote.service);
+            assert_eq!(accounting.retained_payload_bytes, quote.retained_payload_bytes);
+            assert_eq!(accounting.retained_numerical_fault_bytes, quote.retained_numerical_fault_bytes);
+            assert_eq!(accounting.storage_rent_sompi, quote.carrier_storage_rent_sompi + quote.numerical_fault_storage_rent_sompi);
             let (begin, _, bytes) = case.spans[0];
             assert_eq!(quote.retained_payload_byte_daa, bytes * (11000 - book.assigned_daa(&begin).unwrap()));
         }
@@ -558,6 +596,12 @@ mod tests {
             }
             let prior = &single[index];
             let quote = &quotes[index];
+            let accounting =
+                case.accounting_v1().unwrap().with_requests_v1(early.packet.cost, early.retained_bytes, 2, case.storage).unwrap();
+            assert_eq!(accounting.service, quote.service);
+            assert_eq!(accounting.retained_payload_bytes, quote.retained_payload_bytes);
+            assert_eq!(accounting.retained_numerical_fault_bytes, quote.retained_numerical_fault_bytes);
+            assert_eq!(accounting.storage_rent_sompi, quote.carrier_storage_rent_sompi + quote.numerical_fault_storage_rent_sompi);
             assert_eq!(
                 quote.service,
                 ServiceCost {

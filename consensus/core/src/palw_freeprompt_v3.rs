@@ -1522,6 +1522,13 @@ impl PalwFreePromptParamsV3 {
     pub fn receipt_maturity_daa(&self) -> u64 {
         self.receipt_maturity_daa
     }
+
+    #[cfg(feature = "private-integration-config")]
+    pub(crate) fn with_private_receipt_maturity_daa(mut self, daa: u64) -> Self {
+        self.receipt_maturity_daa = daa;
+        self
+    }
+
     pub fn receipt_use_window_daa(&self) -> u64 {
         self.receipt_use_window_daa
     }

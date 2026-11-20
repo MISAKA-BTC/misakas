@@ -164,6 +164,13 @@ impl ProtectedOriginalDutiesV1 {
         Ok(())
     }
 
+    /// The same supply identity committed by the original's early-duty plan.
+    /// Reservation-only fixtures cannot stand in for native material supply.
+    pub(super) fn manifest_supply_v3(&self) -> Result<(misaka_palw_positive_contract::identity::Digest, u64), ContractError> {
+        let supply = self.native_supply.as_ref().ok_or(ContractError::Scope)?;
+        Ok((misaka_palw_positive_contract::identity::Digest(self.supply_identity.as_bytes()), supply.manifest_body_bytes_v1()))
+    }
+
     pub(super) fn identity_v1(&self) -> Result<Hash64, ContractError> {
         crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/tfp1-early-duty-graph/v1",
