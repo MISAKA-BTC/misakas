@@ -297,11 +297,12 @@ def receipt_from_producer_log(path, claim, *, rpc=None, spent_indices=None):
         r'PFS3 submitted block=([0-9a-f]{128}) claim=' + claim + r' quantum=([0-9]+) parent='
     )
     candidates = set()
-    with path.open() as stream:
-        for line in stream:
-            match = pattern.search(line)
-            if match:
-                candidates.add((match[1], unsigned(int(match[2]), 32)))
+    for log in ([path] if isinstance(path, Path) else path):
+        with log.open() as stream:
+            for line in stream:
+                match = pattern.search(line)
+                if match:
+                    candidates.add((match[1], unsigned(int(match[2]), 32)))
     if rpc is not None:
         # A stale template may have been accepted into the DAG without
         # consuming a quantum on the selected chain. Keep only native spends.

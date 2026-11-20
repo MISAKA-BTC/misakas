@@ -244,18 +244,22 @@ def studio_peer_plan(config, bootstrap):
     return producer, bond['bondOutpoint'], artifact
 
 
-def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer=False, studio=False):
+def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer=False, studio=False, admitted=False):
     """Resume only native warmup from the original owned databases."""
     require(previous.is_absolute() and previous.is_dir(), 'warmup run must be an absolute existing directory')
     require(json.loads((previous / 'run.json').read_text()) == config,
             'warmup configuration differs from the original run')
-    if studio:
+    if studio or admitted:
         require((previous / 'registration-result.json').is_file() and not (previous / 'result.json').exists(),
                 'Studio resume requires a completed registration and an unfinished run')
         studio_dir = previous / 'studio'
-        require(not any((studio_dir / name).exists() for name in ('studio-run.json', 'studio-evidence.json', 'original.json'))
-                and not any(path.is_file() or path.is_symlink() for path in (studio_dir / 'fp-outbox').rglob('*')),
-                'the stopped Studio run may have submitted a claim')
+        if admitted:
+            require(all((studio_dir / name).is_file() for name in ('studio-run.json', 'studio-evidence.json', 'original.json')),
+                    'claim resume requires the Studio job, signed rail evidence and native admission')
+        else:
+            require(not any((studio_dir / name).exists() for name in ('studio-run.json', 'studio-evidence.json', 'original.json'))
+                    and not any(path.is_file() or path.is_symlink() for path in (studio_dir / 'fp-outbox').rglob('*')),
+                    'the stopped Studio run may have submitted a claim')
     else:
         require(not any((previous / name).exists() for name in ('registration-result.json', 'studio', 'result.json')),
                 'checkpoint already passed inventory registration')
@@ -291,11 +295,13 @@ def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer
 
 
 def run(config, output, after_registration=None, resume_warmup=None, *, resume_inventory=None,
-        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None):
-    require(sum(path is not None for path in (resume_warmup, resume_inventory, resume_tokenizer, resume_studio)) <= 1, 'choose one checkpoint')
+        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None, resume_claim=None):
+    require(sum(path is not None for path in (resume_warmup, resume_inventory, resume_tokenizer, resume_studio, resume_claim)) <= 1, 'choose one checkpoint')
     require(tokenizer_clock_checkpoint is None or resume_tokenizer is not None,
             'a separate clock checkpoint requires a tokenizer resume')
-    checkpoint = resume_studio or resume_tokenizer or resume_inventory or resume_warmup
+    require(resume_claim is None or ('studio' in config and after_registration is not None),
+            'claim resume requires the Studio lifecycle')
+    checkpoint = resume_claim or resume_studio or resume_tokenizer or resume_inventory or resume_warmup
     registration = config['registration']
     bootstrap = json.loads(Path(registration['bootstrap']).read_text())
     profile = bootstrap['profile']
@@ -339,7 +345,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         appdirs = [output / f'peer-{index}' for index in range(len(peers))]
         initial_timestamp = config['initialTimestampMs']
     else:
-        appdirs, initial_timestamp = warmup_checkpoint(config, checkpoint, bootstrap, inventory=resume_inventory is not None, tokenizer=resume_tokenizer is not None, studio=resume_studio is not None)
+        appdirs, initial_timestamp = warmup_checkpoint(config, checkpoint, bootstrap, inventory=resume_inventory is not None, tokenizer=resume_tokenizer is not None, studio=resume_studio is not None, admitted=resume_claim is not None)
     if tokenizer_clock_checkpoint is not None:
         clock_resume = json.loads((tokenizer_clock_checkpoint / 'warmup-resume.json').read_text())
         require(clock_resume['source'] == str(resume_tokenizer),
@@ -360,6 +366,11 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
     write_new(output / 'run.json', config)
     if checkpoint is not None:
         write_new(output / 'warmup-resume.json', dict(source=str(checkpoint), timestampMs=initial_timestamp))
+    if resume_claim is not None:
+        # The restarted provider continues serving the same retained inventory.
+        store = (resume_claim / 'evidence').resolve(strict=True)
+        require(store.is_dir(), 'checkpoint evidence store is unavailable')
+        (output / 'evidence').symlink_to(store, target_is_directory=True)
     with ExitStack() as stack:
         provider = start_provider(config['provider'], output, stack, step_timeout) if 'provider' in config else None
         clock = stack.enter_context(ProtectedHistoricalClock(
@@ -486,32 +497,42 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         if fund_from_genesis and checkpoint is None:
             fund_private_carriers(output, registration, bootstrap, expected, peers, clients, recipients, step)
             view = wait_until(time.monotonic() + step_timeout, agreement)
-        funding = {label: require_independent_funding(clients[owner], bond, minimum, require_reservation=False)
-                   for label, owner, bond, minimum in recipients}
-        write_new(output / 'carrier-funding.json', funding)
-        while view['virtualDaaScore'] < activation:
-            view = step()
-        require_independent_funding(clients[registrant], registration_bond, registration_budget)
-        if after_registration is not None:
-            require_independent_funding(clients[producer], studio_bond, 0)
-        if resume_studio is not None:
+        if resume_claim is None:
+            funding = {label: require_independent_funding(clients[owner], bond, minimum, require_reservation=False)
+                       for label, owner, bond, minimum in recipients}
+            write_new(output / 'carrier-funding.json', funding)
+            while view['virtualDaaScore'] < activation:
+                view = step()
+            require_independent_funding(clients[registrant], registration_bond, registration_budget)
+            if after_registration is not None:
+                require_independent_funding(clients[producer], studio_bond, 0)
+        if resume_studio is not None or resume_claim is not None:
             require(after_registration is not None, 'Studio resume requires its lifecycle callback')
-            result = json.loads((resume_studio / 'registration-result.json').read_text())
+            result = json.loads((checkpoint / 'registration-result.json').read_text())
             prior = result['registration']
             row = prior['registration']
             require(result['expected'] == dict(version=1, **expected) and result['nativeTokenizerRegistered'] is True
                     and row['status'] == 'complete', 'checkpoint belongs to another chain or registration')
-            def read_registration():
-                try:
-                    views = [registration_status(client, expected, prior['openId'], row['openBodyHex'], prior)
-                             for client in clients]
-                except ContextMoved:
-                    return None
-                require(all(view['registration'] == row for view in views),
-                        'peers did not recover the completed tokenizer registration')
-                return views
-            readback = wait_until(time.monotonic() + step_timeout, read_registration)
-            write_new(output / 'tokenizer-registration-three-peer-readback.json', readback)
+            if resume_claim is not None:
+                # Finished registration sessions can retire before the claim's notice deadline.
+                # Its terminal point and the exact later admission must still be on each peer's chain.
+                terminal = row['terminal']
+                for client in clients:
+                    block = block_read(client, hash64(terminal['block']))
+                    require(block['verboseData']['isChainBlock'] is True and block['header']['daaScore'] == terminal['daa'],
+                            'checkpoint registration Finish is no longer selected')
+            else:
+                def read_registration():
+                    try:
+                        views = [registration_status(client, expected, prior['openId'], row['openBodyHex'], prior)
+                                 for client in clients]
+                    except ContextMoved:
+                        return None
+                    require(all(view['registration'] == row for view in views),
+                            'peers did not recover the completed tokenizer registration')
+                    return views
+                readback = wait_until(time.monotonic() + step_timeout, read_registration)
+                write_new(output / 'tokenizer-registration-three-peer-readback.json', readback)
         else:
             workflow = RegistrationWorkflow(registration, output / 'registration', clients[registrant], progress=step)
             def relay_control(txid, slot):
@@ -716,30 +737,10 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
             failed_summary = stem.with_suffix('.json.submit-failed')
             expired_commitment = stem.with_suffix('.commitment-unsigned.borsh.expired')
 
-            def until(stage, read, *, admitted=False):
-                stage_deadline = time.monotonic() + timeout if admitted else deadline
-                highest_daa = None
-                retry_moved_snapshot = True
-                while time.monotonic() < stage_deadline:
-                    require(child.poll() is None, 'Studio exited during ' + stage)
-                    try:
-                        value = read()
-                    except ContextMoved:
-                        # Allow an in-flight block or earlier context sample to
-                        # settle before opening another heartbeat slot.
-                        if retry_moved_snapshot:
-                            retry_moved_snapshot = False
-                            time.sleep(0.1)
-                            continue
-                        value = None
-                    if value is not None:
-                        return value
-                    daa = step()['virtualDaaScore']
-                    retry_moved_snapshot = True
-                    if admitted and (highest_daa is None or daa > highest_daa):
-                        highest_daa = daa
-                        stage_deadline = time.monotonic() + timeout
-                raise TimeoutError(stage)
+            def check_studio(stage):
+                require(child.poll() is None, 'Studio exited during ' + stage)
+
+            until = partial(until_claim_observation, step=step, timeout=timeout, deadline=deadline, check_alive=check_studio)
 
             def submission():
                 require(child.poll() is None, 'Studio exited during protected rail submission')
@@ -764,104 +765,10 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
             # Publication and signing use the quoted parent. Open the next
             # heartbeat slot only after Studio reports its signed carrier.
             expected = wait_until(deadline, submission)
-            observe_lifecycle = partial(observe, rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
 
             original = until('protected original admission', partial(studio_admission, rpc, expected, scan_from, data))
             write_new(data / 'original.json', original)
-            producer_log = logs / f'peer-{producer}.log'
-            panel_logs = [logs / f'peer-{index}.log' for index, peer in enumerate(config['peers'])
-                          if index != producer and 'seat' in peer]
-
-            def progress_view(stage):
-                detail = observe_claim_progress(rpc, expected, original)
-                if stage != 'receipt' and receipt_window_elapsed(original, detail):
-                    write_new(data / 'claim-window-elapsed.json', dict(
-                        stage=stage, expected=expected, origin=original['origin'], detail=detail))
-                    raise ValueError(f'protected claim hard deadline passed while waiting for {stage}')
-                row = detail['claim']
-                require(row['phase'] != 'voided', f"Studio claim voided: {row.get('voidReason')}")
-                require(detail['protectedOriginal']['publicRefutationRecorded'] is False,
-                        'public refutation recorded for Studio claim')
-                return detail
-
-            def panel_approved():
-                detail = progress_view('Panel approval')
-                if not detail['protectedOriginal']['fullReplayApprovalRecorded']:
-                    return None
-                return observe_lifecycle(previous=original, panel_logs=panel_logs, excluded_panel_bond=executor_bond)
-
-            approved = until('same-claim included Panel approval', panel_approved, admitted=True)
-            write_new(data / 'panel-approval.json', approved)
-            approval = approved['panelApprovalAcceptance']['carrierTransaction']
-
-            def finalized():
-                if progress_view('Final')['claim']['phase'] != 'final':
-                    return None
-                current = observe_lifecycle(previous=original, panel_approval=approval)
-                if current['detail']['claim']['phase'] != 'final':
-                    raise ContextMoved('Final changed during full readback')
-                return current
-
-            final = until('same-claim Final with included Panel approval', finalized, admitted=True)
-            write_new(data / 'final.json', final)
-
-            def certified():
-                detail = progress_view('Gate C certification')
-                if not require_gate_c_status(detail):
-                    return None
-                current = observe_lifecycle(previous=original, panel_approval=approval)
-                if current['detail']['claim']['phase'] != 'final' or not require_gate_c_status(current['detail']):
-                    raise ContextMoved('Gate C certification changed during full readback')
-                return current
-
-            certification = until('same-claim Gate C certification', certified, admitted=True)
-            write_new(data / 'gate-c-certification.json', certification)
-
-            receipt_reads = 0
-
-            def receipt_read():
-                nonlocal receipt_reads
-                current = progress_view('receipt')
-                if current['receiptQuanta']['spentCount'] == 0:
-                    if receipt_window_elapsed(original, current):
-                        write_new(data / 'receipt-window-elapsed.json', dict(
-                            expected=expected, origin=original['origin'], detail=current))
-                        raise ValueError('protected receipt hard deadline passed with no consumed quantum for this claim')
-                    return None
-                candidate = receipt_from_producer_log(
-                    producer_log, expected['claim'], rpc=rpc,
-                    spent_indices=current['receiptQuanta']['spentIndices'])
-                if candidate is None:
-                    if receipt_window_elapsed(original, current):
-                        write_new(data / 'receipt-readback-unresolved.json', dict(
-                            expected=expected, origin=original['origin'], detail=current))
-                        raise ValueError('protected receipt spend is recorded but its selected block could not be matched')
-                    return None
-                receipt, quantum = candidate
-                observed = observe_lifecycle(previous=original, receipt=receipt, panel_approval=approval)
-                if not require_gate_c_status(observed['detail']):
-                    raise ContextMoved('Gate C certification changed before receipt readback')
-                receipt_reads += 1
-                record = data / f'receipt-observation-{receipt_reads:04d}.json'
-                write_new(record, observed)
-                audit = validate_receipt_observation(rpc, record, observed, expected, receipt, validator, quantum)
-                peers = {str(index): receipt_peer_view(client, expected, observed, receipt, quantum)
-                         for index, client in enumerate(clients) if index != producer}
-                for index, client in enumerate(clients):
-                    _, stamp = chain_identity(client, expected)
-                    prior = observed if index == producer else peers[str(index)]
-                    if list(stamp) != prior['context']:
-                        raise ContextMoved('peer advanced during the final receipt audit')
-                peer_record = record.with_suffix('.peers.json')
-                write_new(peer_record, peers)
-                return dict(version=1, registration=registration, expected=expected, original=observed['origin'],
-                            phase=observed['detail']['claim']['phase'], receiptAudit=audit,
-                            receiptObservation=record.name, receiptPeerObservations=peer_record.name,
-                            receiptReadbackPeers=[producer, *(int(index) for index in peers)],
-                            securityCertification=observed['detail']['claim']['securityCertification'],
-                            panelApproval=observed['panelApprovalAcceptance'])
-
-            return until('same-claim receipt block and validated spent quantum', receipt_read, admitted=True)
+            return observe_admitted_studio(config, registration, clients, until, [logs], data, original, executor_bond)
         finally:
             if started and child.poll() is None:
                 try:
@@ -870,6 +777,163 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
                 except (OSError, ValueError):
                     pass
             stop_child(child)
+
+
+def until_claim_observation(stage, read, *, step, timeout, deadline, check_alive, admitted=False):
+    stage_deadline = time.monotonic() + timeout if admitted else deadline
+    highest_daa = None
+    retry_moved_snapshot = True
+    while time.monotonic() < stage_deadline:
+        if check_alive is not None:
+            check_alive(stage)
+        try:
+            value = read()
+        except ContextMoved:
+            # Allow an in-flight block or earlier context sample to
+            # settle before opening another heartbeat slot.
+            if retry_moved_snapshot:
+                retry_moved_snapshot = False
+                time.sleep(0.1)
+                continue
+            value = None
+        if value is not None:
+            return value
+        daa = step()['virtualDaaScore']
+        retry_moved_snapshot = True
+        if admitted and (highest_daa is None or daa > highest_daa):
+            highest_daa = daa
+            stage_deadline = time.monotonic() + timeout
+    raise TimeoutError(stage)
+
+
+def observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond):
+    expected = original['expected']
+    producer = unsigned(config['studio']['producerPeer'])
+    rpc = clients[producer]
+    validator = Path(config['studio']['receiptValidator'])
+    producer_logs = [directory / f'peer-{producer}.log' for directory in log_dirs]
+    panel_logs = [directory / f'peer-{index}.log' for directory in log_dirs for index, peer in enumerate(config['peers'])
+                  if index != producer and 'seat' in peer]
+    observe_lifecycle = partial(observe, rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
+
+    def progress_view(stage):
+        detail = observe_claim_progress(rpc, expected, original)
+        if stage != 'receipt' and receipt_window_elapsed(original, detail):
+            write_new(data / 'claim-window-elapsed.json', dict(
+                stage=stage, expected=expected, origin=original['origin'], detail=detail))
+            raise ValueError(f'protected claim hard deadline passed while waiting for {stage}')
+        row = detail['claim']
+        require(row['phase'] != 'voided', f"Studio claim voided: {row.get('voidReason')}")
+        require(detail['protectedOriginal']['publicRefutationRecorded'] is False,
+                'public refutation recorded for Studio claim')
+        return detail
+
+    def panel_approved():
+        detail = progress_view('Panel approval')
+        if not detail['protectedOriginal']['fullReplayApprovalRecorded']:
+            return None
+        return observe_lifecycle(previous=original, panel_logs=panel_logs, excluded_panel_bond=executor_bond)
+
+    approved = until('same-claim included Panel approval', panel_approved, admitted=True)
+    write_new(data / 'panel-approval.json', approved)
+    approval = approved['panelApprovalAcceptance']['carrierTransaction']
+
+    def finalized():
+        if progress_view('Final')['claim']['phase'] != 'final':
+            return None
+        current = observe_lifecycle(previous=original, panel_approval=approval)
+        if current['detail']['claim']['phase'] != 'final':
+            raise ContextMoved('Final changed during full readback')
+        return current
+
+    final = until('same-claim Final with included Panel approval', finalized, admitted=True)
+    write_new(data / 'final.json', final)
+
+    def certified():
+        detail = progress_view('Gate C certification')
+        if not require_gate_c_status(detail):
+            return None
+        current = observe_lifecycle(previous=original, panel_approval=approval)
+        if current['detail']['claim']['phase'] != 'final' or not require_gate_c_status(current['detail']):
+            raise ContextMoved('Gate C certification changed during full readback')
+        return current
+
+    certification = until('same-claim Gate C certification', certified, admitted=True)
+    write_new(data / 'gate-c-certification.json', certification)
+
+    receipt_reads = 0
+
+    def receipt_read():
+        nonlocal receipt_reads
+        current = progress_view('receipt')
+        if current['receiptQuanta']['spentCount'] == 0:
+            if receipt_window_elapsed(original, current):
+                write_new(data / 'receipt-window-elapsed.json', dict(
+                    expected=expected, origin=original['origin'], detail=current))
+                raise ValueError('protected receipt hard deadline passed with no consumed quantum for this claim')
+            return None
+        candidate = receipt_from_producer_log(
+            producer_logs, expected['claim'], rpc=rpc,
+            spent_indices=current['receiptQuanta']['spentIndices'])
+        if candidate is None:
+            if receipt_window_elapsed(original, current):
+                write_new(data / 'receipt-readback-unresolved.json', dict(
+                    expected=expected, origin=original['origin'], detail=current))
+                raise ValueError('protected receipt spend is recorded but its selected block could not be matched')
+            return None
+        receipt, quantum = candidate
+        observed = observe_lifecycle(previous=original, receipt=receipt, panel_approval=approval)
+        if not require_gate_c_status(observed['detail']):
+            raise ContextMoved('Gate C certification changed before receipt readback')
+        receipt_reads += 1
+        record = data / f'receipt-observation-{receipt_reads:04d}.json'
+        write_new(record, observed)
+        audit = validate_receipt_observation(rpc, record, observed, expected, receipt, validator, quantum)
+        peers = {str(index): receipt_peer_view(client, expected, observed, receipt, quantum)
+                 for index, client in enumerate(clients) if index != producer}
+        for index, client in enumerate(clients):
+            _, stamp = chain_identity(client, expected)
+            prior = observed if index == producer else peers[str(index)]
+            if list(stamp) != prior['context']:
+                raise ContextMoved('peer advanced during the final receipt audit')
+        peer_record = record.with_suffix('.peers.json')
+        write_new(peer_record, peers)
+        return dict(version=1, registration=registration, expected=expected, original=observed['origin'],
+                    phase=observed['detail']['claim']['phase'], receiptAudit=audit,
+                    receiptObservation=record.name, receiptPeerObservations=peer_record.name,
+                    receiptReadbackPeers=[producer, *(int(index) for index in peers)],
+                    securityCertification=observed['detail']['claim']['securityCertification'],
+                    panelApproval=observed['panelApprovalAcceptance'])
+
+    return until('same-claim receipt block and validated spent quantum', receipt_read, admitted=True)
+
+
+def resume_admitted_studio(config, output, checkpoint, registration, clients, step, logs, executor_bond):
+    source = checkpoint / 'studio'
+    evidence = json.loads((source / 'studio-evidence.json').read_text())
+    job = json.loads((source / 'studio-run.json').read_text())
+    original = json.loads((source / 'original.json').read_text())
+    require(job == evidence['studioRun'] and evidence['chain'] == registration['chain'],
+            'checkpoint Studio job or chain changed')
+    expected = expectation_from_studio(job, evidence['studioJob'], evidence['rail'], registration['chain'])
+    require(expected == original['expected'], 'checkpoint Studio carrier differs from native admission')
+    timeout = unsigned(config['studio']['timeoutSeconds'])
+    until = partial(until_claim_observation, step=step, timeout=timeout, deadline=time.monotonic() + timeout, check_alive=None)
+    for client in clients:
+        until('same admission on resumed peer', partial(observe_claim_progress, client, expected, original), admitted=True)
+    data = output / 'studio'
+    data.mkdir(mode=0o700)
+    for name, value in [('studio-run', job), ('studio-evidence', evidence), ('original', original)]:
+        write_new(data / (name + '.json'), value)
+    log_dirs = [logs]
+    # warmup_checkpoint validated this lineage and its databases before starting peers.
+    while (checkpoint / 'studio/original.json').is_file():
+        log_dirs.append(checkpoint / 'clock')
+        marker = checkpoint / 'warmup-resume.json'
+        if not marker.is_file():
+            break
+        checkpoint = Path(json.loads(marker.read_text())['source'])
+    return observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond)
 
 
 def main():
@@ -885,16 +949,19 @@ def main():
     parser.add_argument('--isolated-node', type=Path,
                         help='private node executable with operator-controlled heartbeat templates')
     parser.add_argument('--resume-studio', type=Path, help='stopped run with registration complete and no Studio claim sent')
+    parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     continuation = None
     if 'studio' in config:
         def continuation(registration, clients, step, logs, executor_bond):
+            if args.resume_claim is not None:
+                return resume_admitted_studio(config, args.output, args.resume_claim, registration, clients, step, logs, executor_bond)
             return studio_lifecycle(config, args.output, registration, clients, step, logs, executor_bond)
     print(json.dumps(run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
                          resume_tokenizer=args.resume_tokenizer,
                          tokenizer_clock_checkpoint=args.tokenizer_clock_checkpoint, isolated_node=args.isolated_node,
-                         resume_studio=args.resume_studio)))
+                         resume_studio=args.resume_studio, resume_claim=args.resume_claim)))
 
 
 if __name__ == '__main__':

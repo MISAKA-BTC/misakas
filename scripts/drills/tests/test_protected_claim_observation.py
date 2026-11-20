@@ -63,6 +63,37 @@ class Rpc:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_resume_keeps_original_carrier_and_rechecks_each_peer_without_submission(self):
+        from protected_private_registration_run import resume_admitted_studio
+        clients = [Rpc(), Rpc()]
+        rpc = clients[0]
+        chain = {k: rpc.expected[k] for k in ('genesisHash', 'consensusParamsId', 'networkDomain')}
+        registration = dict(chain=chain)
+        run = dict(fp_job_id=h(20), output_root=h(21))
+        job = dict(object='misaka.request', job_id=h(20), output_root=h(21), claim_id=h(4), submission_txid=h(5))
+        rail = dict(schema='misaka.palw.fp-rail-tx.v1', fp_claim_id=h(4), submitted=h(5),
+                    protected_execution_root=h(6), protected_funding_sompi=100)
+        original = observe(rpc, rpc.expected)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, new = root / 'old', root / 'new'
+            (old / 'studio').mkdir(parents=True)
+            new.mkdir()
+            for name, value in [('studio-run', run), ('studio-evidence', dict(studioRun=run, studioJob=job, rail=rail, chain=chain)),
+                                ('original', original)]:
+                (old / 'studio' / (name + '.json')).write_text(json.dumps(value))
+            args = (dict(studio=dict(timeoutSeconds=3)), new, old, registration, clients,
+                    lambda: self.fail('unexpected heartbeat or submit'), new / 'clock', h(20))
+            with patch('protected_private_registration_run.observe_admitted_studio', return_value='resumed') as continuation:
+                self.assertEqual(resume_admitted_studio(*args), 'resumed')
+                self.assertEqual(continuation.call_args.args[4], [new / 'clock', old / 'clock'])
+                self.assertEqual(continuation.call_args.args[-2], original)
+                self.assertTrue(all('getPalwClaimDetail' in client.calls for client in clients))
+                clients[1].read['acceptingBlock'] = h(99)
+                with self.assertRaisesRegex(ValueError, 'original inclusion changed'):
+                    resume_admitted_studio(*args)
+                continuation.assert_called_once()
+
     def test_only_the_executor_receives_its_matching_studio_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
