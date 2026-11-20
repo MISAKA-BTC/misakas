@@ -1,0 +1,10 @@
+running 5 tests
+test tb1_exposure::tests::custody_process ... ok
+test tb1_exposure::tests::generation_change_during_read_neither_reserves_nor_halts ... ok
+test tb1_exposure::tests::incomplete_substitution_contention_and_cold_import_cannot_reset_custody ... ok
+test tb1_exposure::tests::observed_finality_loss_halts_across_branch_return_and_restart ... ok
+qualification 33daa76a7c2e4c3910fc128c358347b820fd8bd654801fc9571e119a1d124d7b03e41d57656c2e7f5c238168e559a8135e3d5933e11f1869807e89462e411e59
+recovered 3/3 original holder signatures, seed 99df6ee58636a43cf174f09e4f60eac5c81ac8e5e7addcc21b7b00de72a06f4e
+test tb1_exposure::tests::three_holders_killed_before_signing_recover_only_the_original_release ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 205 filtered out; finished in 2.88s

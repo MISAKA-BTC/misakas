@@ -1,0 +1,23 @@
+{
+  "scope": "Three independent executions of the native class registration fold and the local settlement book. The funding terms and accepted claim are fixture inputs. No worker UTXO was submitted.",
+  "registrationBlockDaa": 100,
+  "claimSettlementDaa": 201,
+  "postRegistrationStateRoots": [
+    "2ca74eb1e837e898b70d2a7ff2eb2ae7216b646d233f01f33fac148a32f071c110b2901d68ed0cbf2a05c1106079f83331739ae038bf562c76815d0899e9140b",
+    "2ca74eb1e837e898b70d2a7ff2eb2ae7216b646d233f01f33fac148a32f071c110b2901d68ed0cbf2a05c1106079f83331739ae038bf562c76815d0899e9140b",
+    "2ca74eb1e837e898b70d2a7ff2eb2ae7216b646d233f01f33fac148a32f071c110b2901d68ed0cbf2a05c1106079f83331739ae038bf562c76815d0899e9140b"
+  ],
+  "fundingUnit": "sompi",
+  "positionUnit": "native Position units",
+  "reward": 100000000000000,
+  "purchase": 30000000000000,
+  "liquidity": 20000000000000,
+  "purchasedUnits": 14563,
+  "liquidityUnits": 9425,
+  "retiredUnits": 5138,
+  "miner": 40000000000000,
+  "panel": 10000000000000,
+  "finalInventory": 494862,
+  "testBinarySha256": "3a6e7fd5aedffc60aab112092b062560988faf7c3ac7c0685e0b1a3bc886025b",
+  "repeatedWorkspaceTest": "palw_state_v2::tests::model_market_virtual::moe2_registered_market_settles_a_reserved_fixture_reward"
+}
