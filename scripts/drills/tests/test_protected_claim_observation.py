@@ -78,6 +78,19 @@ class ObservationTests(unittest.TestCase):
         clients[1].call.assert_called_once_with('submitBlock', dict(block=block, allowNonDAABlocks=False))
         clients[2].call.assert_not_called()
 
+    def test_retry_a_peer_at_the_same_daa_only_for_its_retained_direct_child(self):
+        from unittest.mock import Mock
+        from protected_private_registration_run import retry_retained_sink
+        clients = [Mock() for _ in range(3)]
+        views = [dict(sink=h(i), virtualDaaScore=8, tipHashes=[h(8)]) for i in (7, 8, 6)]
+        child = dict(header=dict(hash=h(8)), verboseData=dict(hash=h(8), isChainBlock=True,
+                                                             isHeaderOnly=False, selectedParentHash=h(7)))
+        clients[1].call.return_value = dict(block=child)
+        clients[0].call.return_value = dict(report=dict(type='success'))
+        retry_retained_sink(clients, views)
+        clients[0].call.assert_called_once_with('submitBlock', dict(block=child, allowNonDAABlocks=False))
+        clients[2].call.assert_not_called()
+
     def test_restart_retries_the_single_shared_direct_child_through_native_validation(self):
         from unittest.mock import Mock
         from protected_private_registration_run import retry_shared_child

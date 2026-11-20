@@ -61,19 +61,22 @@ def wait_until(deadline, read):
 
 def retry_retained_sink(clients, views):
     """Retry native resolution when a resumed peer already has the selected block body."""
-    index = max(range(len(views)), key=lambda i: views[i]['virtualDaaScore'])
-    best = views[index]
-    sink = best['sink']
-    targets = [client for client, view in zip(clients, views)
-               if view['virtualDaaScore'] < best['virtualDaaScore'] and sink in view['tipHashes']]
-    if not targets:
-        return
-    block = block_read(clients[index], sink, transactions=True)
-    if not block['verboseData']['isChainBlock']:
-        return
-    for client in targets:
-        reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
-        require(reply['report']['type'] == 'success', f'native retry refused the retained block: {reply}')
+    for source in sorted(range(len(views)), key=lambda i: views[i]['virtualDaaScore'], reverse=True):
+        best = views[source]
+        sink = best['sink']
+        targets = [(client, view) for client, view in zip(clients, views)
+                   if view['sink'] != sink and view['virtualDaaScore'] <= best['virtualDaaScore'] and sink in view['tipHashes']]
+        if not targets:
+            continue
+        block = block_read(clients[source], sink, transactions=True)
+        if not block['verboseData']['isChainBlock']:
+            continue
+        for client, view in targets:
+            # Adjacent DAG blocks can share a DAA score. Only retry a direct child at a tie.
+            if view['virtualDaaScore'] == best['virtualDaaScore'] and block['verboseData']['selectedParentHash'] != view['sink']:
+                continue
+            reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
+            require(reply['report']['type'] == 'success', f'native retry refused the retained block: {reply}')
 
 
 def retry_shared_child(clients, views):
@@ -501,7 +504,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                     next_retained_retry = time.monotonic() + 2
                     return None
                 return views[0]
-            if recover_retained and time.monotonic() >= next_retained_retry:
+            if checkpoint is not None and time.monotonic() >= next_retained_retry:
                 retry_retained_sink(clients, views)
                 next_retained_retry = time.monotonic() + 2
             return None
