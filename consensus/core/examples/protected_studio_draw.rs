@@ -205,6 +205,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let maximum = fp_quantum_target_of_compute_v1(upper, u128::from(claim.pwu) / u128::from(quanta), quantum);
     let ticket_strings: Vec<_> = tickets.iter().map(u128::to_string).collect();
     let Some(answer) = court_answer else {
+        let draws: Vec<_> = cert.draws.iter().copied().map(Hash64::from_bytes).collect();
+        let attestations: Vec<_> = cert
+            .attestations
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "bond": Hash64::from_bytes(a.verifier), "verdict": format!("{:?}", a.verdict),
+                    "transcript": Hash64::from_bytes(a.transcript), "attestedDaa": a.attested_daa
+                })
+            })
+            .collect();
         let possible: Vec<_> = (0..quanta).filter(|i| palw_ticket_admits_v1(tickets[*i as usize], maximum)).collect();
         println!(
             "{}",
@@ -212,6 +223,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "claim": id, "tipDaa": start, "certificateDaa": certified_daa, "drawSlot": slot,
                 "beaconBlock": beacon.beacon_block, "beaconDaa": beacon.beacon_daa, "tickets": ticket_strings,
                 "target": target.to_string(), "winningIndices": winners,
+                "gateC": { "finalDaa": final_daa, "drawnDaa": cert.drawn_daa, "drawnBonds": draws,
+                    "positivePositions": cert.positive_positions(), "negativePositions": cert.negative_positions(),
+                    "attestations": attestations },
                 "remainingWindowBound": { "lastEligibleDaa": end, "maximumEffectiveTarget": maximum.to_string(),
                     "possibleIndicesAtMaximum": possible }
             }))?

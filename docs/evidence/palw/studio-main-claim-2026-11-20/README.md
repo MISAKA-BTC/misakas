@@ -44,6 +44,8 @@ zstd -dc "$d/before-final-state.borsh.zst" > "$state"
 cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --draw "$d/before-final-capture.json" "$state"
 ```
 
+認証後の `--draw` 出力では、`gateC.drawnBonds` に抽選順の bond、`gateC.attestations` に記録された判定・transcript digest・DAA が入る。賛成数と反対数は抽選位置で数える。同じ bond が複数回選出された場合は、抽選位置数と実際の署名 bond 数を区別できる。
+
 DAA 5474 で3ピアをいったん停止し、コンセンサス DB の全327ファイルを圧縮ストレージに移した。各ピアの個別アーカイブを元ファイルと比較し、移動先でも全件の SHA-256 を照合した。同じノードバイナリを再起動すると、3ピアとも DAA 5477 で元の受付ブロック、Panel 承認、未消費を返した。再起動直後のブロック再検証には drill 設定の `stepTimeoutSeconds` を適用する。[ファイル照合と再起動後の3ピアの記録](compressed-storage-restart.json)
 
 ### Studio main の提出済みジョブから再開する
