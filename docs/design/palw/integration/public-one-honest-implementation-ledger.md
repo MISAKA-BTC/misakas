@@ -6,6 +6,10 @@
 
 [実装方針書](public-one-honest-vertical-implementation-plan-2026-11-10.md) の I0 作業記録。出荷設定と公開ネットワークでの有効化はこの台帳の対象外。以下の既存コードは接続先であり、新 profile の検証結果は未取得。
 
+## 2026-11-20　隔離 T12 での Studio claim と独立 Panel 承認
+
+追加登録済みモデルを Studio で実行した claim `9d08847f…26ccb68c` は DAA 318 で受理された。DAA 323 で選出された seat 7 は実行者と別のピアで 85,938 leaves を再実行した。承認取引は DAA 325 の選択鎖に含まれ、同一の受付に `fullReplayApprovalRecorded = true` を確認した。この時点で Gate C は `pending`、21 量子の消費数は 0。Final と PFS3 ブロックは検証中。[隔離実行の記録](../../../evidence/palw/studio-winning-receipt-2026-11-20/README.md)
+
 ## 2026-11-12: 受付の一往復を優先する
 
 未確定設定の具体案作成について追加依頼を受け、[公開T12初期設定候補](public-t12-profile-candidate-2026-11-12.md)を作成した。これは実装・検証用の未採択Draftであり、公開受付の成功や設定の有効化を記録するものではない。未確定値と実装不足を分け、`other_relative_graph`等は実装側で導出する。
