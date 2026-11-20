@@ -1,5 +1,7 @@
 # MISAKA-Studio main から生成した TFO3 claim
 
+**元の Studio claim は落選した。** Final、Gate C 認証を経て、DAA 7730 の beacon で21枚の ticket が確定した。使用期限 DAA 8330 までの最大 target も全 ticket が上回った。3ピアとも消費数は0で、この claim の受賞ブロックと決済は発生しなかった。[最終結果](result.json)
+
 2026-11-20 に MISAKA-Studio の `main`（`c9257516b23b14527ef9cef06af143756a422e8f`）を未変更のソースからビルドした。チャット画面と共通の `POST /api/v1/network/mining-queue` に “Continue the count: three, four,” を投入した。隔離 testnet-12 の登録済み TIR クラスで17入力トークン、1出力トークン、85,938 leaves を実行した。Studio の queue、gateway の receipt、rail による Borsh の再読は同じ claim `05ba473f…e1c0cce9` を返した。[入力・実行 root・ファイルハッシュ](commitment.json)
 
 | 段階 | 観測 |
@@ -15,6 +17,7 @@
 | 予約の返上 | 資料要求を開いていなかった6件について、各所有者が元の署名済み取引・prompt・実行・出力・停止条件・tokenizer を照合して返上した。DAA 7607、7613、7614 の返上取引と包含順が隔離3ピアで一致した。3件の再送も選択鎖に入ったが、返上済み件数は増えていない。[所有者・受付取引・前後の状態](unused-reservation-releases.json) |
 | Final | DAA 7615 で3ピアが同じ claim の Final を返した。未処理の予約と Court はともに0、認証は pending、21 quanta の消費数は0だった。[Final のノード応答](final.json) |
 | Gate C | DAA 7685 で3ピアが同じ元取引について `certified` を返した。抽選された7つの bond が合計75の抽選位置に対して再実行結果を提出し、DAA 7623 に承認が記録された。認証時点の消費数は0。[認証](gate-c-certification.json)・[3ピアの照会](gate-c-peers.json)・[検証者の記録](gate-c-worker.log) |
+| 当落 | 認証後40 DAA の slot 7725 以降で最初の attempt は DAA 7730 の `6e09a6dc…fd01974`。3ピアが同じブロックで同一の状態 7,631,437 バイトを返した。全21枚が通常 target と期限内の上限を上回った。[全 ticket・検証者別の判定](draw.json)・[3ピアの照会](draw-capture.json)・[再検算用の状態](draw-state.borsh.zst) |
 
 別入力 “Hi” も Studio main の queue で実行した。入力は10トークン、価格は同じ21 quanta だった。この比較用 claim の処理は outbox までで、上表はすべて元の claim を追跡している。[比較用の実行記録](short-prompt-price.json)
 
@@ -36,7 +39,7 @@ DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピア�
 
 異議申立期間中の DAA 4859 で隔離VMを正常停止し、検証用ディスクの上限を42 GiBから54 GiBに拡張した。同じノードバイナリと3つのデータベースで再開し、DAA 4864 に全ピアが元の受付ブロック、Panel 承認と未消費の権利を返した。[再起動後の3ピアの照会](notice-window-restart.json)
 
-DAA 5213 の状態を同じブロックに固定して再読した。3ピアとも7,147,447バイトが一致し、Panel 承認済みの claim は `receipt_licensed`、Gate C は `pending` だった。抽選の照合器はこの状態を `claim is not Final` で終了した。当落はまだ確定していない。[3ピアの固定ブロックと照会結果](before-final-capture.json)・[固定した状態（Borsh、zstd）](before-final-state.borsh.zst)
+DAA 5213 の状態を同じブロックに固定して再読した。3ピアとも7,147,447バイトが一致し、Panel 承認済みの claim は `receipt_licensed`、Gate C は `pending` だった。抽選の照合器はこの状態を `claim is not Final` で終了した。この時点では当落を判定できなかった。[3ピアの固定ブロックと照会結果](before-final-capture.json)・[固定した状態（Borsh、zstd）](before-final-state.borsh.zst)
 
 この検査はリポジトリのルートから次のコマンドで再現できる。照合器は当該 claim の Final、Gate C の行、異議申立中の時計停止を照合し、成熟後に各 ticket と target を計算する。Court への申立てがない claim にも使える。 保存済みの旧抽選では、従来の署名付き Court 応答の照合と全21枚の ticket 再現も通った。同じ資料の network domain、価格基準クラス、成熟期間、親ブロックの DAA、単一ピアの attempt 列をそれぞれ差し替えると、照合器は全5件を拒否した。
 
@@ -45,6 +48,15 @@ d=docs/evidence/palw/studio-main-claim-2026-11-20
 state=$(mktemp)
 zstd -dc "$d/before-final-state.borsh.zst" > "$state"
 cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --draw "$d/before-final-capture.json" "$state"
+```
+
+最終結果も同じ手順で再検算できる。
+
+```sh
+d=docs/evidence/palw/studio-main-claim-2026-11-20
+state=$(mktemp)
+zstd -dc "$d/draw-state.borsh.zst" > "$state"
+cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --draw "$d/draw-capture.json" "$state"
 ```
 
 認証後の `--draw` 出力では、`gateC.drawnBonds` に抽選順の bond、`gateC.attestations` に記録された判定・transcript digest・DAA が入る。賛成数と反対数は抽選位置で数える。同じ bond が複数回選出された場合は、抽選位置数と実際の署名 bond 数を区別できる。
