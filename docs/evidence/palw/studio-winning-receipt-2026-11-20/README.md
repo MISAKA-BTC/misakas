@@ -35,3 +35,9 @@ PublicDA 入力をメタデータだけで先読みした場合に、検証用�
 ## Panel 抽選前の未使用予約の返上
 
 全再実行を承認した seat 7 は、抽選前に公開異議を予約していた。この予約で開いた session と参加した lane はともに0件だった。再開後、seat 7 の worker が自分の鍵で通常の `DisputeReleasedV1` を送信した。3ピアとも選択鎖上の同一ブロックで、取引 `75f3a31d…f59bbd1` の受理を DAA 421、ordinal 6 に確認した。seat 7 の予約は閉じ、預託は `dismissedHeld` に1件残った。資料要求を行ったほかの6件は継続している。この時点で同じ claim の phase は `receipt_licensed`、Gate C は `pending`、消費済みは 0/21。[3ピアでの返上取引と異議状態](seat-reservation-release.json)
+
+## 公開回答を確認した6人の予約返上
+
+同じ3台の台帳をローカル隔離環境に移した。停止中の台帳、Studio の元取引、実行者の保持資料を移行前後で照合し、3ピアで DAA 468 の受付点と Panel 承認を読み戻した。
+
+公開異議を予約した seat 1〜6 は、それぞれ同じ claim を自分の TIR バックエンドで再実行した。回答済みの row 0・tile 0 から出力トークン `26226` を復元し、元の入力、実行・logits・出力の各 root、停止条件、事前登録された tokenizer の rendering と EOG を照合した。各 seat が署名した通常の `DisputeReleasedV1` 6件を3ピアが同じ包含点で受理した。5件は DAA 472、seat 4 の1件は DAA 473。DAA 474 で生存予約は0件、預託を保持した返上は先の seat 7 を含め7件。phase は `receipt_licensed`、Gate C は `pending`、消費は 0/21。各ピアは同一ホスト上で動作した。[6取引の所有者・取引ID・包含点・各ピアの読み戻し](answered-reservation-releases.json)
