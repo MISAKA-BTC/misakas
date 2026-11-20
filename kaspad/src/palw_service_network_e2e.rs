@@ -42,24 +42,7 @@ async fn sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to
 /// A dedicated child isolates the simulated calendar from other unit tests;
 /// service ticks, socket deadlines and monotonic stall budgets remain real.
 async fn run_scoped_socket_test(name: &str, case: PublicCase, mode: RecoveryMode) {
-    let full = format!("{}::{name}", module_path!());
-    if std::env::var("MISAKA_SOCKET_CLOCK_CHILD").ok().as_deref() == Some(full.as_str()) {
-        let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
-        let _clock = kaspa_core::time::test_clock::start_at(params.genesis.timestamp);
-        fresh_public_service_with_recovery(case, Some(mode)).await;
-        return;
-    }
-    let status = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([full.as_str(), "--exact", "--nocapture", "--test-threads=1"])
-            .env("MISAKA_SOCKET_CLOCK_CHILD", &full)
-            .env("KASPA_TEST_CLOCK_ISOLATED", "1")
-            .status()
-            .expect("isolated native socket test starts")
-    })
-    .await
-    .expect("the isolated test process joins");
-    assert!(status.success(), "isolated socket scenario failed: {status}");
+    isolated_chain_clock(module_path!(), name, fresh_public_service_with_recovery(case, Some(mode))).await;
 }
 
 pub(super) struct NetworkRun {

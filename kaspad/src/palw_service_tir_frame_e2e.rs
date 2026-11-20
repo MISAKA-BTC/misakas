@@ -1840,10 +1840,50 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
             })
             .unwrap();
         assert!(spent, "the receipt block must consume the claim's quantum in consensus state");
+        if !declared {
+            let child = chain.history.last().unwrap().hash();
+            chain.heartbeat(Vec::new()).await;
+            check_paid_chain(&chain, paid_claim, block, child);
+            for peer_number in 1..=2 {
+                let peer = Chain::new(chain.config.clone(), chain.bundle.clone(), &premine);
+                for block in &chain.history {
+                    peer.tc.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("peer validates block");
+                }
+                assert_eq!(peer.tc.get_sink(), chain.tc.get_sink());
+                check_paid_chain(&peer, paid_claim, block, child);
+                eprintln!("[service-tir-frame] reader {peer_number} accepted receipt {block} and child {child}");
+            }
+        }
         assert_eq!(collateral_of(&chain, producer_bond), before, "payment never charges the honest producer");
         eprintln!("[service-tir-frame] honest: claim {paid_claim} Final and paid in receipt block {block} at DAA {}", chain.daa());
     }
     node.finish().await;
+}
+
+// Read each reader's own accepted state and UTXO set after the blue child's coinbase is merged.
+fn check_paid_chain(chain: &Chain, claim_id: Hash64, receipt: Hash64, child: Hash64) {
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3;
+    use kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2;
+
+    let block = chain.tc.get_block(receipt).unwrap();
+    let spend = PalwReceiptSpendEnvelopeV3::decode(&block.header.palw_commitment).unwrap().spend;
+    assert_eq!(spend.claim_id, claim_id);
+    let blue = chain.tc.get_ghostdag_data(child).unwrap();
+    assert_eq!(blue.selected_parent, receipt);
+    assert_eq!(blue.mergeset_blues, [receipt]);
+    assert!(blue.mergeset_reds.is_empty());
+    let child = chain.tc.get_block(child).unwrap();
+    let cb = &child.transactions[0];
+    let output = &cb.outputs[0];
+    assert_eq!(output.script_public_key, card_payout_spk(0));
+    assert!(output.value > 0);
+    let entry = chain.tc.get_virtual_utxo_entry(TransactionOutpoint::new(cb.id(), 0)).expect("worker payout in the UTXO set");
+    assert!(entry.is_coinbase);
+    assert_eq!((entry.amount, entry.script_public_key), (output.value, output.script_public_key.clone()));
+    let (_, state) = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap();
+    let claim = state.claim(&claim_id).unwrap();
+    assert!(matches!(claim.phase, PalwClaimPhaseV2::Final { .. }));
+    assert!(matches!(&claim.source, PalwClaimSourceV2::FreePrompt { spent, .. } if spent.contains(&spend.quantum_index)));
 }
 
 /// **T-N1, honest, at node level**: the producer service's framed claim is replayed (material pulled over socket P2P) and licensed
@@ -1865,7 +1905,12 @@ async fn tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_se
 /// acceptance case above. Both cases remain required; a pass here does not close 02-B.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum() {
-    on_service_stack(|| tn1_node(false, false)).await;
+    isolated_chain_clock(
+        module_path!(),
+        "tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum",
+        on_service_stack(|| tn1_node(false, false)),
+    )
+    .await;
 }
 
 // ---- lane FPSEL: the free-prompt RAIL's path in T-N1 ---------------------------------------------------------------------------

@@ -1579,6 +1579,35 @@ async fn fresh_public_service_with_recovery(case: PublicCase, recovery_mode: Opt
     on_service_stack(move || fresh_public_service_with_recovery_inner(case, recovery_mode)).await
 }
 
+/// Run one libtest case in its own process before advancing the native observation clock.
+/// A zero-match libtest exits successfully, so require the child's completion record as well.
+pub(super) async fn isolated_chain_clock(module: &str, name: &str, scenario: impl std::future::Future<Output = ()>) {
+    let (_, module) = module.split_once("::").expect("test module beneath the crate");
+    let name = format!("{module}::{name}");
+    if std::env::var("MISAKA_CHAIN_CLOCK_CASE").ok().as_deref() == Some(&name) {
+        let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let _clock = kaspa_core::time::test_clock::start_at(params.genesis.timestamp);
+        scenario.await;
+        std::fs::write(std::env::var_os("MISAKA_CHAIN_CLOCK_RESULT").unwrap(), name).expect("record completed scenario");
+        return;
+    }
+    tokio::task::spawn_blocking(move || {
+        let dir = tempfile::tempdir().unwrap();
+        let result = dir.path().join("completed");
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([&name, "--exact", "--nocapture", "--test-threads=1"])
+            .env("MISAKA_CHAIN_CLOCK_CASE", &name)
+            .env("MISAKA_CHAIN_CLOCK_RESULT", &result)
+            .env("KASPA_TEST_CLOCK_ISOLATED", "1")
+            .status()
+            .expect("isolated native test starts");
+        assert!(status.success(), "isolated {name} failed: {status}");
+        assert_eq!(std::fs::read_to_string(result).expect("child ran the selected case"), name);
+    })
+    .await
+    .expect("isolated test joins");
+}
+
 /// **Runs a node-service E2E body on a dedicated thread and runtime with the stack a node's own threads have.** In a debug build
 /// the service's call depth overflowed the 2 MiB libtest thread that polls it (SIGABRT for the whole binary — every other test in
 /// the process lost — and, under nextest, the test itself). Four worker threads, as the `#[tokio::test]` flavor these bodies were
