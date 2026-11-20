@@ -128,13 +128,32 @@ def chain_read(rpc, start, maximum, *, tip=None, include_transactions=True):
     return result
 
 
+class ClaimReadBusy(ContextMoved):
+    """An otherwise admissible native read is competing with another reservation."""
+
+
+def read_claim_detail(rpc, claim):
+    try:
+        return rpc.call('getPalwClaimDetail', {'claimHex': claim})
+    except RuntimeError as error:
+        message = str(error)
+        capacity = re.search(
+            r'typed requests exceed logical capacity \(RAM bytes: outstanding (\d+), request (\d+), limit (\d+); '
+            r'DB bytes: outstanding (\d+), request (\d+), limit (\d+)\)', message)
+        if 'local resource unavailable:' in message and capacity:
+            ram, want_ram, max_ram, db, want_db, max_db = map(int, capacity.groups())
+            if want_ram <= max_ram and want_db <= max_db and (ram + want_ram > max_ram or db + want_db > max_db):
+                raise ClaimReadBusy('native claim read is waiting for an outstanding resource reservation') from error
+        raise
+
+
 def claim_snapshot(rpc, expected, previous):
     dag, node = rpc.call('getBlockDagInfo'), rpc.call('getPalwNodeStatus')
     before = context(dag, node)
     require(node['genesisHash'] == expected['genesisHash']
             and node['consensusParamsId'] == expected['consensusParamsId'], 'another chain/profile')
     require(node['pruningImportStable'] is True, 'import is not stable')
-    response = rpc.call('getPalwClaimDetail', {'claimHex': expected['claim']})
+    response = read_claim_detail(rpc, expected['claim'])
     require(response['available'] is True and response['found'] is True, 'claim is not admitted/readable')
     detail = json.loads(response['viewJson'])
     require(detail['kind'] == 'palwClaimDetail' and detail['version'] == 1, 'unknown claim detail schema')

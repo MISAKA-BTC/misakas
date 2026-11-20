@@ -160,6 +160,32 @@ class ObservationTests(unittest.TestCase):
         self.assertFalse(receipt_window_elapsed(original, dict(tipDaa=10_100)))
         self.assertTrue(receipt_window_elapsed(original, dict(tipDaa=10_101)))
 
+    def test_only_competing_native_capacity_is_retried_without_advancing_the_claim(self):
+        from unittest.mock import Mock, patch
+        from protected_claim_observation import ClaimReadBusy, read_claim_detail
+        from protected_private_registration_run import until_claim_observation
+        import time
+
+        def failure(held, requested, limit):
+            return RuntimeError(f'getPalwClaimDetail: local resource unavailable: typed requests exceed logical capacity '
+                                f'(RAM bytes: outstanding {held}, request {requested}, limit {limit}; '
+                                'DB bytes: outstanding 0, request 0, limit 100)')
+
+        rpc = Mock()
+        rpc.call.side_effect = [failure(6, 5, 9), {'available': True}]
+        step = Mock()
+        with patch('protected_private_registration_run.time.sleep'):
+            result = until_claim_observation('read', lambda: read_claim_detail(rpc, h(4)), step=step,
+                                            timeout=2, deadline=time.monotonic() + 2, check_alive=None)
+        self.assertEqual(result, {'available': True})
+        step.assert_not_called()
+        for error in [failure(4, 12, 9), RuntimeError('unavailable: broken checkpoint')]:
+            rpc.call.side_effect = error
+            with self.assertRaises(RuntimeError) as raised:
+                read_claim_detail(rpc, h(4))
+            self.assertIs(raised.exception, error)
+            self.assertNotIsInstance(raised.exception, ClaimReadBusy)
+
     def test_progress_reads_current_state_without_scanning_notice_history(self):
         rpc = Rpc()
         original = observe(rpc, rpc.expected)

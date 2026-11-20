@@ -15,7 +15,7 @@ import urllib.request
 from misaka_wrpc_json import WsRpc
 from rfc12_acceptance_observe import sha256_file
 from protected_claim_observation import (
-    block_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
+    ClaimReadBusy, block_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
     require, require_gate_c_status, unsigned, validate_receipt_observation,
 )
 from protected_historical_clock import HEARTBEAT_INTERVAL_MS, ProtectedHistoricalClock
@@ -818,6 +818,10 @@ def until_claim_observation(stage, read, *, step, timeout, deadline, check_alive
             check_alive(stage)
         try:
             value = read()
+        except ClaimReadBusy:
+            # Retry this observation on the same clock slot after native leases can drain.
+            time.sleep(0.25)
+            continue
         except ContextMoved:
             # Allow an in-flight block or earlier context sample to
             # settle before opening another heartbeat slot.
