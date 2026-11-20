@@ -339,7 +339,8 @@ impl PublicTfp1FrameV1 {
         self.pins.original
     }
 
-    pub(crate) fn origin_v1(&self) -> AcceptedOrigin {
+    /// Native acceptance coordinates recorded in this frame.
+    pub fn origin_v1(&self) -> AcceptedOrigin {
         self.pins.origin
     }
 

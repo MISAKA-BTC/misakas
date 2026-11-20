@@ -18,6 +18,7 @@ use kaspa_consensus_core::{
     palw_security_certification_v1::{
         PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwClaimCertificationRowV1, certification_claim_key_v1, palw_certification_id_v1,
     },
+    palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1},
     palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2, PalwConsensusObjectV2, PalwStateCarriageV2},
     palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
     palw_tir_court_v1::check_tir_trace_event_disclosure_v1,
@@ -55,6 +56,7 @@ struct WindowBound {
 #[serde(rename_all = "camelCase")]
 struct Expected {
     claim: Hash64,
+    transaction_id: Hash64,
     execution_root: Hash64,
     network_domain: Hash64,
     genesis_hash: Hash64,
@@ -150,6 +152,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     if quanta == 0 || claim.execution_root != r.expected.execution_root {
         return Err("unexpected claim".into());
     }
+    let key = PalwStagedCourtKeyV1::PublicTfp1FrameV1(id);
+    let row = c.staged_courts.get(&key).ok_or("missing protected original frame")?;
+    row.check(&key)?;
+    let PalwStagedCourtRowV1::PublicTfp1FrameV1(frame) = row else { return Err("wrong protected original row".into()) };
+    let origin = frame.origin_v1();
+    if Hash64::from_bytes(origin.carrier_transaction.0) != r.expected.transaction_id
+        || Hash64::from_bytes(origin.accepting_block.0) != claim.accepted_block
+        || origin.accepted_daa != claim.accepted_daa
+        || origin.accepted_blue_score != claim.accepted_blue_score
+    {
+        return Err("protected original carrier or accepting point differs from the claim".into());
+    }
     let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return Err("claim is not Final".into()) };
     if !r.readback_peers.iter().all(|p| p.phase == "final" && p.certification == "certified") {
         return Err("peers did not confirm Final and Gate C".into());
@@ -220,7 +234,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "claim": id, "tipDaa": start, "certificateDaa": certified_daa, "drawSlot": slot,
+                "claim": id, "carrierTransaction": r.expected.transaction_id, "acceptingBlock": claim.accepted_block,
+                "acceptedDaa": claim.accepted_daa, "acceptedTxOrdinal": origin.accepted_tx_ordinal, "tipDaa": start, "certificateDaa": certified_daa, "drawSlot": slot,
                 "beaconBlock": beacon.beacon_block, "beaconDaa": beacon.beacon_daa, "tickets": ticket_strings,
                 "target": target.to_string(), "winningIndices": winners,
                 "gateC": { "finalDaa": final_daa, "drawnDaa": cert.drawn_daa, "drawnBonds": draws,

@@ -63,5 +63,13 @@
       "childBlueScore": 15299
     },
     "regression": "A later selected block can settle at a lower ordinal at the same DAA. A sibling at the same blue score cannot advance settlement."
+  },
+  "drawOriginalCarrierReadback": {
+    "preFinalStudioMain": "Error: \"claim is not Final\"",
+    "historicalCertifiedClaim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+    "historicalAcceptedCarrier": "3a989cfc95014170d270399eaee1e78491d6f51f302968a1d359f10c76fa512c0d2e90fd43b0c890a23c3790c526a09a649f92ecadfa6afd02c74928a54f08de",
+    "historicalTicketsChecked": 21,
+    "historicalSignedCourtEventVerified": true,
+    "substitutedTransactionIdRejectedOnBoth": "Error: \"protected original carrier or accepting point differs from the claim\""
   }
 }
