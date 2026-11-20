@@ -48,13 +48,15 @@ DAA 5474 で3ピアをいったん停止し、コンセンサス DB の全327フ
 
 ### Studio main の提出済みジョブから再開する
 
-Studio のキューで追加したジョブは、起動中の Studio main の queue ID を指定して直接追跡できる。`--config` の `studio.port` をその Studio のループバック HTTP ポートに合わせ、gateway と署名済み rail のファイルがある outbox と、提出直前の選択先端を渡す。
+Studio のキューで追加したジョブは、起動中の Studio main の queue ID を指定して直接追跡できる。`--config` の `studio.port` をその Studio のループバック HTTP ポートに合わせ、gateway と署名済み rail のファイルがある outbox を指定する。
 
 ```sh
 python3 scripts/drills/protected_private_registration_run.py \
   --config "$CONFIG" --output "$FRESH_OUTPUT" --resume-studio "$REGISTERED_RUN" \
-  --studio-main-job "$QUEUE_ID" "$OUTBOX" "$SCAN_FROM_BLOCK"
+  --studio-main-job "$QUEUE_ID" "$OUTBOX"
 ```
+
+受付済みの場合はノードの claim 記録にある受付ブロックと取引位置を使う。未受付の場合はノードが返す pruning point 以降の選択鎖で署名済み取引を探す。探索開始位置が分かっていれば第3引数で指定できる。
 
 drill は指定 ID が `committed` になるまで待ち、該当する gateway ファイルと `.rail.json` を読み、署名済み取引から先を追跡する。Studio main の実バイナリで保存済みの queue ID `1a1f8c8c241c3fc5588` を再読し、この経路が DAA 4429 に受け付けた同じ取引 `dcb4a75f…` に結び付くことを確認した。[queue ID・取引・受付ブロックの照合](queue-id-readback.json)
 

@@ -691,13 +691,13 @@ def retain_studio_claim(rpc, rail, claim, outbox):
 
 def studio_admission(rpc, expected, scan_from, data):
     """Keep a selected carrier and a refused native claim distinguishable after submission."""
-    _, before = chain_identity(rpc, expected)
+    dag, before = chain_identity(rpc, expected)
     response = read_claim_detail(rpc, expected['claim'])
     require(response['available'] is True, 'native claim details unavailable')
     if response['found']:
         return observe(rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
     try:
-        carrier = observe_transaction(rpc, dict(expected, scanFromBlock=scan_from),
+        carrier = observe_transaction(rpc, dict(expected, scanFromBlock=scan_from or dag['pruningPointHash']),
                                       maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
     except AcceptancePending:
         return None
@@ -740,8 +740,9 @@ def receipt_peer_view(rpc, expected, producer, receipt, quantum):
 
 def read_studio_main_job(port, main_job, deadline):
     """Join the queue row chosen in Studio and the rail's on-disk submission for that row."""
-    queue_id, directory, scan_from = main_job
-    scan_from = hash64(scan_from)
+    require(len(main_job) in (2, 3), 'expected QUEUE_ID OUTBOX [SCAN_FROM_BLOCK]')
+    queue_id, directory = main_job[:2]
+    scan_from = hash64(main_job[2]) if len(main_job) == 3 else None
     outbox = Path(directory)
     require(outbox.is_absolute() and outbox.is_dir(), 'Studio gateway outbox is unavailable')
     require(unsigned(port, 16) > 0, 'Studio needs an explicit loopback port')
@@ -802,7 +803,7 @@ def follow_studio_queue_submission(config, output, registration, clients, step, 
     rail = bundle['rail']
     chain = registration['chain']
     expected = expectation_from_studio(queue, job, rail, chain)
-    scan_from = hash64(bundle['scanFromBlock'])
+    scan_from = bundle['scanFromBlock'] if main_job is not None else hash64(bundle['scanFromBlock'])
     rpc = clients[unsigned(config['studio']['producerPeer'])]
     data = output / 'studio'
     data.mkdir(mode=0o700)
@@ -1238,11 +1239,13 @@ def main():
     parser.add_argument('--resume-settlement', type=Path, help='verify a completed receipt and follow its native payout and settlement')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
     queue = parser.add_mutually_exclusive_group()
-    queue.add_argument('--studio-main-job', nargs=3, metavar=('QUEUE_ID', 'OUTBOX', 'SCAN_FROM_BLOCK'),
-                       help='follow a Studio main queue ID through its local gateway outbox and signed rail record')
+    queue.add_argument('--studio-main-job', nargs='+', metavar='ARG',
+                       help='QUEUE_ID OUTBOX [SCAN_FROM_BLOCK]: follow the local Studio queue and signed rail record')
     queue.add_argument('--studio-queue-submission', type=Path,
                         help='join Studio main using a JSON file with studioRun, outbox, rail and scanFromBlock')
     args = parser.parse_args()
+    if args.studio_main_job is not None and len(args.studio_main_job) not in (2, 3):
+        parser.error('--studio-main-job expects QUEUE_ID OUTBOX [SCAN_FROM_BLOCK]')
     config = json.loads(args.config.read_text())
     queue_requested = args.studio_queue_submission is not None or args.studio_main_job is not None
     if queue_requested and ('studio' not in config or args.resume_claim or args.resume_settlement):

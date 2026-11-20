@@ -194,12 +194,14 @@ class ObservationTests(unittest.TestCase):
             with patch.object(rpc, 'call', side_effect=absent):
                 self.assertIsNone(studio_admission(rpc, rpc.expected, rpc.dag['sink'], data))
                 self.assertEqual(list(data.iterdir()), [])
+                rpc.dag['pruningPointHash'] = h(11)
                 with self.assertRaisesRegex(ValueError, 'but claim .* is absent'):
-                    studio_admission(rpc, rpc.expected, h(11), data)
+                    studio_admission(rpc, rpc.expected, None, data)
             recorded = json.loads((data / 'carrier-accepted-without-claim.json').read_text())
             self.assertEqual(recorded['carrier']['acceptingBlock'], h(9))
+            self.assertEqual(recorded['carrier']['expected']['scanFromBlock'], h(11))
             self.assertFalse(recorded['claimDetail']['found'])
-            self.assertEqual(studio_admission(rpc, rpc.expected, h(11), data)['origin']['claim'], h(4))
+            self.assertEqual(studio_admission(rpc, rpc.expected, None, data)['origin']['claim'], h(4))
 
     def test_final_is_insufficient_for_gate_c_milestone(self):
         detail = dict(gateCGoverns=True, claim=dict(phase='final', securityCertification='pending'))
@@ -377,6 +379,10 @@ class ObservationTests(unittest.TestCase):
                 handoff = runner.read_studio_main_job(1234, ('from-chat', temp, h(11)), runner.time.monotonic() + 1)
             self.assertEqual(handoff, dict(studioRun=selected, rail=rail, outbox=temp, scanFromBlock=h(11)))
             self.assertEqual(opener.return_value.open.call_args.args[0], 'http://127.0.0.1:1234/api/v1/network/mining-queue')
+
+            opener.return_value.open.side_effect = [response(selected)]
+            automatic = runner.read_studio_main_job(1234, ('from-chat', temp), runner.time.monotonic() + 1)
+            self.assertEqual(automatic, dict(handoff, scanFromBlock=None))
 
     def test_studio_queue_id_propagates_terminal_queue_and_rail_outcomes(self):
         import protected_private_registration_run as runner

@@ -9,5 +9,35 @@
   "signedTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
   "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
   "acceptedDaa": 4429,
-  "readFrom": "Studio GET /api/v1/network/mining-queue and saved native rail summary"
+  "readFrom": "Studio GET /api/v1/network/mining-queue and saved native rail summary",
+  "scanFromBlockArgument": null,
+  "nativeReadback": [
+    {
+      "peer": 54703,
+      "daa": 6109,
+      "phase": "receipt_licensed",
+      "acceptedDaa": 4429,
+      "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "fullReplayApprovalRecorded": true,
+      "spentCount": 0
+    },
+    {
+      "peer": 54713,
+      "daa": 6109,
+      "phase": "receipt_licensed",
+      "acceptedDaa": 4429,
+      "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "fullReplayApprovalRecorded": true,
+      "spentCount": 0
+    },
+    {
+      "peer": 54723,
+      "daa": 6109,
+      "phase": "receipt_licensed",
+      "acceptedDaa": 4429,
+      "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "fullReplayApprovalRecorded": true,
+      "spentCount": 0
+    }
+  ]
 }
