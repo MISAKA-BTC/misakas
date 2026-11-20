@@ -85,3 +85,17 @@ TB1 の有限体検査では、固定した全 qualified dealer に対して同�
 同じ日に T‑N1 の既存ローカル試験で、producer service が別の TFP1 claim `e6770642…f8934791` を投入した。DAA 1733 で署名が定足数に達し、Final 後の DAA 2725 に実行済み attempt が抽選 beacon を供給した。index 0 は当選し、使用期限は DAA 3325 だった。通常のテンプレートに署名済み PFS3 を載せて受賞ブロック `7cb8b072…56e5a147` を生成した。直接の子 `64525d97…457388fd` が生成者へ 320,084,650,080 sompi を割り当てた。生成側と、新しい DB に genesis から全ブロックを入れた2つの reader が、同じ index の消費と子の coinbase UTXO を検証した。初回のこの3台帳は1つのテストプロセス内にあった。[当選と3台帳の実行ログ](independent-tn1-receipt.log)
 
 この試験は T‑N1 の固定 genesis、試験用の期間・価格、PoW を省略するネイティブテスト設定を使う。Studio が追加した冒頭の TFO3 claim とは識別子も規則も異なる。
+
+同じ当選履歴の5,473ブロックを RPC の raw block 形式で保存し、同じバイナリを使う3つの独立プロセスで読み込んだ。各プロセスは新しい DB と試験用 genesis の UTXO から開始し、全ブロックを通常のネイティブ検査に通した。受付 DAA 1726、Final DAA 2325、受賞 DAA 2725、先端、消費 index、子の coinbase の outpoint と金額が全て一致した。この履歴は Gate C 適用前の条件に属する。先端 DAA 2726 では子の支払 UTXO が存在し、子に対する別の決済確定照会は3台とも `false` だった。ブロック配送には保存したストリームを用いた。[3プロセスの照合結果](independent-tn1-readers.json)
+
+通常の生成試験は、新しい履歴を作って2つの子プロセスで検査する。保存済みの同じ当選履歴を再検査する場合は、ローカルの `misaka-tn1-winning-receipt-20261120.jsonl.zst` を使う。圧縮ファイルの SHA-256 は `68f482b493efa458b56de0eb965bd9aabcdea14564d877976f4457bff52af983`。次の例では `test_bin` に `cargo test --locked -p kaspad --lib --no-run` が表示する実行ファイルを、`archive` に圧縮ファイルのパスを指定する。
+
+```sh
+case_name=palw_panel::palw_service_public_e2e::tir_frame::tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum
+result_dir=$(mktemp -d)
+for peer in 1 2 3; do
+    zstd -dc "$archive" | KASPA_TEST_CLOCK_ISOLATED=1 MISAKA_TN1_REPLAY_RESULT="$result_dir/$peer.json" \
+        "$test_bin" "$case_name" --exact --test-threads=1 || exit 1
+done
+cmp "$result_dir/1.json" "$result_dir/2.json" && cmp "$result_dir/1.json" "$result_dir/3.json"
+```

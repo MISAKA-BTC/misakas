@@ -11,6 +11,9 @@ use super::*;
 use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
 use std::path::PathBuf;
 
+#[path = "palw_service_receipt_replay_e2e.rs"]
+mod receipt_replay;
+
 // ---- the network ---------------------------------------------------------------------------------------------------------------
 
 /// The parent's testnet-12 fixture with the IR class fence and the TIR frame route armed at genesis (unvalidated: still refused).
@@ -1289,6 +1292,18 @@ async fn tn1_node(forged: bool, declared: bool) {
     tn1_node_with(forged, declared, Tn1ProducerV1::Service).await
 }
 
+fn tn1_panel_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
+    let (config, mut bundle, premine, floats) = tir_frame_config();
+    // HARNESS ONLY: the test-only frame clock has a short preparation door.
+    // Draw the real panel before it closes for both the honest services and
+    // the scripted colluders; every ordinary seat approval is still required.
+    bundle.panel =
+        kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2::new(bundle.panel.seat_count(), bundle.panel.quorum(), 1).unwrap();
+    let mut params = config.params.clone();
+    params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+    (Config::new(params), bundle, premine, floats)
+}
+
 async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV1) {
     assert!(!forged || !declared, "the separate forged fixture uses the original semantic identities");
     let rail = match producer_kind {
@@ -1303,15 +1318,7 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         _ => Vec::new(),
     };
     kaspa_core::log::try_init_logger(&std::env::var("TN1_LOG").unwrap_or_else(|_| "warn,kaspad_lib::palw_panel=info".into()));
-    let (mut config, mut bundle, premine, mut floats) = tir_frame_config();
-    // HARNESS ONLY: the test-only frame clock has a short preparation door.
-    // Draw the real panel before it closes for both the honest services and
-    // the scripted colluders; every ordinary seat approval is still required.
-    bundle.panel =
-        kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2::new(bundle.panel.seat_count(), bundle.panel.quorum(), 1).unwrap();
-    let mut params = config.params.clone();
-    params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
-    config = Config::new(params);
+    let (mut config, mut bundle, premine, mut floats) = tn1_panel_config();
     if declared {
         let mut params = config.params.clone();
         params.palw_class_semantics_v1 = Some(ForkActivation::new(0));
@@ -1843,16 +1850,7 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         if !declared {
             let child = chain.history.last().unwrap().hash();
             chain.heartbeat(Vec::new()).await;
-            check_paid_chain(&chain, paid_claim, block, child);
-            for peer_number in 1..=2 {
-                let peer = Chain::new(chain.config.clone(), chain.bundle.clone(), &premine);
-                for block in &chain.history {
-                    peer.tc.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("peer validates block");
-                }
-                assert_eq!(peer.tc.get_sink(), chain.tc.get_sink());
-                check_paid_chain(&peer, paid_claim, block, child);
-                eprintln!("[service-tir-frame] reader {peer_number} accepted receipt {block} and child {child}");
-            }
+            receipt_replay::check_readers(&chain, paid_claim, block, child).await;
         }
         assert_eq!(collateral_of(&chain, producer_bond), before, "payment never charges the honest producer");
         eprintln!("[service-tir-frame] honest: claim {paid_claim} Final and paid in receipt block {block} at DAA {}", chain.daa());
@@ -1861,7 +1859,7 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
 }
 
 // Read each reader's own accepted state and UTXO set after the blue child's coinbase is merged.
-fn check_paid_chain(chain: &Chain, claim_id: Hash64, receipt: Hash64, child: Hash64) {
+fn check_paid_chain(chain: &Chain, claim_id: Hash64, receipt: Hash64, child: Hash64) -> serde_json::Value {
     use kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3;
     use kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2;
 
@@ -1882,8 +1880,16 @@ fn check_paid_chain(chain: &Chain, claim_id: Hash64, receipt: Hash64, child: Has
     assert_eq!((entry.amount, entry.script_public_key), (output.value, output.script_public_key.clone()));
     let (_, state) = chain.tc.palw_state_v2_store.read().load_tip(&chain.bundle.state).unwrap().unwrap();
     let claim = state.claim(&claim_id).unwrap();
-    assert!(matches!(claim.phase, PalwClaimPhaseV2::Final { .. }));
+    let PalwClaimPhaseV2::Final { final_daa } = &claim.phase else { panic!("paid claim must be Final") };
     assert!(matches!(&claim.source, PalwClaimSourceV2::FreePrompt { spent, .. } if spent.contains(&spend.quantum_index)));
+    serde_json::json!({
+        "claim": claim_id, "quantum": spend.quantum_index, "receipt": receipt, "child": child.hash(),
+        "tip": chain.tc.get_sink(), "acceptedDaa": claim.accepted_daa, "finalDaa": final_daa,
+        "gateCRequired": kaspa_consensus_core::palw_rfc0018_v1::palw_gate_c_governs_v1(&chain.bundle.state, claim),
+        "receiptDaa": block.header.daa_score, "childDaa": child.header.daa_score,
+        "coinbaseTx": cb.id(), "outputIndex": 0, "coinbaseAmount": entry.amount,
+        "settledThroughChild": chain.tc.palw_settlement_v1(child.header.daa_score).map(|query| query.settled),
+    })
 }
 
 /// **T-N1, honest, at node level**: the producer service's framed claim is replayed (material pulled over socket P2P) and licensed
@@ -1905,6 +1911,10 @@ async fn tir_frame_node_tn1_a_forged_framed_claim_is_convicted_by_one_outside_se
 /// acceptance case above. Both cases remain required; a pass here does not close 02-B.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum() {
+    if let Some(output) = std::env::var_os(receipt_replay::RESULT) {
+        on_service_stack(move || receipt_replay::read_archive(output.into())).await;
+        return;
+    }
     isolated_chain_clock(
         module_path!(),
         "tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum",

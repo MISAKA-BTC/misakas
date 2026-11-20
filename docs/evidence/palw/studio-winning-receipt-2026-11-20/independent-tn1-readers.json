@@ -1,0 +1,75 @@
+{
+  "binarySha256": "412aa2a8b49bbb7af7c3e6f34f29eaad4d92180c9976e2f32d4ecc3e69a6423b",
+  "archiveSha256": "68f482b493efa458b56de0eb965bd9aabcdea14564d877976f4457bff52af983",
+  "readers": [
+    {
+      "reader": 0,
+      "pid": 18107,
+      "blocks": 5473,
+      "observation": {
+        "acceptedDaa": 1726,
+        "child": "64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd",
+        "childDaa": 2725,
+        "claim": "e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791",
+        "coinbaseAmount": 320084650080,
+        "coinbaseTx": "ee6ed4928107b92aef388d63af9100fcc0677f1e16ed75c26c77d584ad3c29e71323458d3ace551338f7583fbb6d4f27478679a46faa7e2b4503003cfc5e35cb",
+        "finalDaa": 2325,
+        "gateCRequired": false,
+        "outputIndex": 0,
+        "quantum": 0,
+        "receipt": "7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147",
+        "receiptDaa": 2725,
+        "settledThroughChild": false,
+        "tip": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028"
+      },
+      "testResult": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 63.05s"
+    },
+    {
+      "reader": 1,
+      "pid": 18108,
+      "blocks": 5473,
+      "observation": {
+        "acceptedDaa": 1726,
+        "child": "64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd",
+        "childDaa": 2725,
+        "claim": "e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791",
+        "coinbaseAmount": 320084650080,
+        "coinbaseTx": "ee6ed4928107b92aef388d63af9100fcc0677f1e16ed75c26c77d584ad3c29e71323458d3ace551338f7583fbb6d4f27478679a46faa7e2b4503003cfc5e35cb",
+        "finalDaa": 2325,
+        "gateCRequired": false,
+        "outputIndex": 0,
+        "quantum": 0,
+        "receipt": "7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147",
+        "receiptDaa": 2725,
+        "settledThroughChild": false,
+        "tip": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028"
+      },
+      "testResult": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 63.10s"
+    },
+    {
+      "reader": 2,
+      "pid": 18109,
+      "blocks": 5473,
+      "observation": {
+        "acceptedDaa": 1726,
+        "child": "64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd",
+        "childDaa": 2725,
+        "claim": "e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791",
+        "coinbaseAmount": 320084650080,
+        "coinbaseTx": "ee6ed4928107b92aef388d63af9100fcc0677f1e16ed75c26c77d584ad3c29e71323458d3ace551338f7583fbb6d4f27478679a46faa7e2b4503003cfc5e35cb",
+        "finalDaa": 2325,
+        "gateCRequired": false,
+        "outputIndex": 0,
+        "quantum": 0,
+        "receipt": "7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147",
+        "receiptDaa": 2725,
+        "settledThroughChild": false,
+        "tip": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028"
+      },
+      "testResult": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 63.20s"
+    }
+  ],
+  "transport": "One local RPC raw-block stream per process, each replayed against a fresh isolated test DB",
+  "archiveFile": "misaka-tn1-winning-receipt-20261120.jsonl.zst",
+  "case": "palw_panel::palw_service_public_e2e::tir_frame::tir_frame_node_tn1_default_semantics_spends_an_actual_honest_quantum"
+}
