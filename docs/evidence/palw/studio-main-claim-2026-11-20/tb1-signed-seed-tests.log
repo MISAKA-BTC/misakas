@@ -1,0 +1,33 @@
+running 9 tests
+test palw_tb1::tests::canonical_521_bit_field_and_wide_product ... ok
+test palw_tb1::tests::seven_slots_require_five_distinct_consistent_public_points ... ok
+test palw_tb1::tests::whole_qualified_set_is_bound_once_in_frozen_order ... ok
+test palw_tb1::reconstruction::tests::no_quorum_or_workspace_cannot_produce_a_candidate ... ok
+test palw_tb1::reconstruction::tests::every_two_fault_pattern_reconstructs_the_same_quorum_polynomial ... ok
+test palw_tb1::releases::tests::each_dealer_uses_its_own_signed_column_and_support_subset ... ok
+test palw_tb1::releases::tests::shares_require_the_fixed_key_preimage_and_native_release_window ... ok
+test palw_tb1::releases::tests::same_holder_and_cross_freeze_references_cannot_supply_a_quorum ... ok
+test palw_tb1::releases::tests::qualification_counts_every_eligible_dealer_before_the_fixed_cut ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6100 filtered out; finished in 1.46s
+
+running 5 tests
+test palw_model_market_v1::moe2::tests::canonical_purchase_lp_and_residual ... ok
+test palw_model_market_v1::moe2::tests::dust_bounds_and_rounding ... ok
+test palw_model_market_v1::moe2::tests::worker_plan_applies_to_residual_of_additional_only ... ok
+test palw_model_market_v1::moe2::settlement::tests::anchored_slippage_and_current_price_impact_hold_both_legs_and_worker_reward ... ok
+test palw_model_market_v1::moe2::settlement::tests::settlement_is_atomic_across_dust_order_retries_and_alternate_forks ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 6104 filtered out; finished in 0.00s
+
+running 8 tests
+test palw_settlement_v1::tests::the_guard_reads_code_and_only_code ... ok
+test palw_settlement_v1::tests::nothing_is_settled_before_the_first_final ... ok
+test palw_settlement_v1::tests::depth_counts_final_anchors_at_or_after_the_accepting_block ... ok
+test palw_settlement_v1::tests::a_final_anchor_above_an_open_one_counts_but_does_not_settle ... ok
+test palw_settlement_v1::tests::the_frontier_is_dated_by_its_claim_then_by_its_header_and_otherwise_not_at_all ... ok
+test palw_settlement_v1::tests::depth_is_a_lower_bound_only_where_retirement_can_have_reached_the_asked_score ... ok
+test palw_settlement_v1::tests::a_burst_of_blocks_without_claims_is_zero_confirmations ... ok
+test palw_settlement_v1::tests::the_settlement_path_names_none_of_the_overlay ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 6101 filtered out; finished in 1.28s

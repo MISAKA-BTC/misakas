@@ -1,9 +1,10 @@
-//! RFC-0061 public dealer-certificate arithmetic. Verifying these equations
-//! is only one part of TB1. The caller authenticates the frozen roster, signed
-//! releases, VSS qualification, purpose, position and limits before using them.
+//! RFC-0061 private profile for signed qualification, release and seed reconstruction.
+//! The native owner supplies the authenticated roster, VSS outcomes, original
+//! timing plan, branch positions and resource limits for the frozen purpose.
 pub mod qualification;
 pub mod reconstruction;
 pub mod releases;
+pub mod signatures;
 
 use kaspa_math::{Uint576, Uint3072};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,6 +61,7 @@ pub enum Tb1PolynomialError {
     PreparationContext,
     PreparationBudget,
     ReleaseContext,
+    ReleaseTiming,
     ReconstructionBudget,
 }
 
