@@ -1384,6 +1384,22 @@ async fn sanity_test() {
                     assert!(rpc_client.get_palw_staged_preclaim_quote_call(None, garbage).await.is_err());
                 })
             }
+            KaspadPayloadOps::GetPalwTokenizerRegistrationQuote => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let short = GetPalwTokenizerRegistrationQuoteRequest { open_body_hex: "00".into() };
+                    assert!(rpc_client.get_palw_tokenizer_registration_quote_call(None, short).await.is_err());
+                })
+            }
+            KaspadPayloadOps::GetPalwTokenizerRegistrationStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let short = GetPalwTokenizerRegistrationStatusRequest { open_id: "00".into() };
+                    assert!(rpc_client.get_palw_tokenizer_registration_status_call(None, short).await.is_err());
+                    let absent = GetPalwTokenizerRegistrationStatusRequest { open_id: "00".repeat(64) };
+                    assert!(!rpc_client.get_palw_tokenizer_registration_status_call(None, absent).await.unwrap().found);
+                })
+            }
             KaspadPayloadOps::GetPalwTirOriginalQuote => {
                 let rpc_client = client.clone();
                 tst!(op, {

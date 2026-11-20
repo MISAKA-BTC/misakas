@@ -115,7 +115,7 @@ pub struct PromptSegmentsV1<'a> {
     count: u32,
 }
 
-fn number<'a>(input: &mut &'a str, delimiter: char) -> Result<u32, ContractError> {
+fn number(input: &mut &str, delimiter: char) -> Result<u32, ContractError> {
     let (digits, rest) = input.split_once(delimiter).ok_or(ContractError::NonCanonical)?;
     if digits.is_empty()
         || digits.len() > 10
