@@ -700,6 +700,7 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
                 raise TimeoutError(stage)
 
             def submission():
+                require(child.poll() is None, 'Studio exited during protected rail submission')
                 # The rail removes terminal failures from the status endpoint's
                 # input queue. Keep the local marker as the authoritative reason
                 # to stop stepping this job.
@@ -716,7 +717,9 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
                           dict(studioRun=run_result, studioJob=job, rail=rail, chain=registration['chain']))
                 return expected
 
-            expected = until('protected rail submission', submission)
+            # Publication and signing use the quoted parent. Open the next
+            # heartbeat slot only after Studio reports its signed carrier.
+            expected = wait_until(deadline, submission)
             observe_lifecycle = partial(observe, rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
 
             def admission():
