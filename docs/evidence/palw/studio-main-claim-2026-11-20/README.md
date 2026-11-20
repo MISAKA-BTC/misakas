@@ -10,6 +10,7 @@
 | 初回の受付拒否 | 実行者 bond のクラスは21ブロック分の枠を必要とした。epoch 4 の最終 DAA 3679 でも配分比率から得られる上限は13.61ブロック分だった。[ノードの拒否理由](allocation-refusal.log) |
 | 資本割当 | 実行者が隔離チェーン上で、既存 bond の 10,000,000,000 sompi をこのクラスに割り当てた。3ピアとも sequence 1 を epoch 4 の pending として記録した。[署名済み取引の ID と3ピアでの照会結果](capital-assignment.json) |
 | 同じ claim の受付 | epoch 6 の DAA 4429 で必要な21,000,000単位に対して21,142,278単位が貯まった。再提出した取引 `dcb4a75f…22c7b175` をブロック `99ea4ea7…9a7718166` が受理し、3ピアとも同じ claim、execution root、受付 DAA を返した。[配分枠と3ピアの受付記録](claim-admission.json) |
+| Panel 検証 | 選出 seat 1 の再実行承認を DAA 4444 の選択鎖で確認した。3ピアの `fullReplayApprovalRecorded` が true となり、同じ claim が `receipt_licensed` に移った。異議申立期間は DAA 7549 まで。[承認取引と3ピアの状態](panel-approval.json) |
 
 別入力 “Hi” も Studio main の queue で実行した。入力は10トークン、価格は同じ21 quanta だった。この比較用 claim の処理は outbox までで、上表はすべて元の claim を追跡している。[比較用の実行記録](short-prompt-price.json)
 
