@@ -1,0 +1,108 @@
+{
+  "studio": {
+    "repository": "https://github.com/MISAKA-BTC/MISAKA-Studio",
+    "ref": "refs/heads/main",
+    "commit": "c9257516b23b14527ef9cef06af143756a422e8f",
+    "runtimeVersion": "0.1.2",
+    "runtimeSha256": "a186e3b10d0ed537d1280e283e624f067dcffdd65762686ac685fca1210128f9",
+    "entryPoint": "POST /api/v1/network/mining-queue",
+    "build": "cargo +1.93.0 build --locked -p misaka-studio-runtime --bin misaka-studiod"
+  },
+  "node": {
+    "repository": "https://github.com/MISAKA-BTC/misakas",
+    "sidecarCommit": "6943a5a7106e0ab5cc479630d2743400ec0846fa",
+    "gatewayDecodeCap": 1,
+    "anchorDaa": 3616,
+    "chainPoint": "1d910ff68aff527a781d9c2a8ac7ec151f1b6c87c0466636dee23f7e8d4d14f4ce2ab6f7fadfd9871e60e734baa7a3f52d066cb3854526ea23f0aeb0b7ce7b37",
+    "network": "isolated testnet-12"
+  },
+  "queue": {
+    "id": "1a1f8c8c241c3fc5588",
+    "conversation_id": "studio-main-c925751",
+    "message_id": "count-four",
+    "prompt": "Continue the count: three, four,",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Continue the count: three, four,"
+      }
+    ],
+    "created_ms": 1795175268929,
+    "status": "committed",
+    "attempts": 1,
+    "not_before_ms": 0,
+    "started_ms": 1795175268930,
+    "finished_ms": 1795175274154,
+    "fp_job_id": "5853ff54e729b61478f57f47299d2b0bb469bdb0575acd451bb7918f5b2927ffd356838b24fcf87d9d91533bf013fa89364ae5c88d99aec98551b65602213406",
+    "claim_id": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "answer": "Continue",
+    "prompt_tokens": 17,
+    "completion_tokens": 1,
+    "error": null,
+    "gateway_url": "http://127.0.0.1:54842"
+  },
+  "outbox": {
+    "fp_claim_id": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "fp_job_id": "5853ff54e729b61478f57f47299d2b0bb469bdb0575acd451bb7918f5b2927ffd356838b24fcf87d9d91533bf013fa89364ae5c88d99aec98551b65602213406",
+    "work_leaves": 85938,
+    "quanta_at_configured_quantum": 21,
+    "trace_root": "3325d3346f3678f3d8b5f58fb933105bb70e753fd8f6295aaec02bc14ce91d82a7c85b831c65ccc180b06bbf0609362bcb140d200cf8f797ecf5080b06b6ab22",
+    "trace_manifest_root": "6559fed81b43300353d5201d7aac5282d2acb98fceb42f3f7e908ab81cce2625165b06db369b88eac8264d8f23daeb9fcee7ac9a46236c17127b8d14aa956a6b",
+    "output_root": "5785d1cc059c80e74ec85b5f1745999c6f1cead8d7f30fb758f61264b2a1d044a667dc01639e7aa352c9a7c7637676f24d1354c1bafa8291e64d71c684045768",
+    "class_leaves": 160420734835,
+    "commit_by_anchor_daa": 6616,
+    "receipt": {
+      "authentication": "by the chain: verify against the claim's commitment (verify_receipt) and the node's claim row (check_against_chain); the gateway holds no key and signs nothing",
+      "claim_id": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "decode_config_digest": "323968f2156c6f8de20af09dbbf4dcfa576092d910bd84a645541ae6c7b3e604911aa2c0f86e09778cc995b5620d1726c4e4b39a5bb094d341f7ebc8593c9396",
+      "execution_root": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "executor_bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "job_context_hash": "d3cb7ccc486c0f9b906294d0d63417f788d4ee9cff4bf27d3ee138a7eb2012a51a7d274795c8f2e44ba162c4d87c70d01c32b0c3788cabd333e217a17a416146",
+      "job_id": "5853ff54e729b61478f57f47299d2b0bb469bdb0575acd451bb7918f5b2927ffd356838b24fcf87d9d91533bf013fa89364ae5c88d99aec98551b65602213406",
+      "job_version": 7,
+      "network_domain": "e8721ed44c1f304d4b0f701e223872c758ebb174ac6766e1da1c3552f9fc627cdd77a6d7b5d9daccbb2beb59f4e2a67d71ee224312b9b626d7154e9e9775f9c6",
+      "output_root": "5785d1cc059c80e74ec85b5f1745999c6f1cead8d7f30fb758f61264b2a1d044a667dc01639e7aa352c9a7c7637676f24d1354c1bafa8291e64d71c684045768",
+      "output_token_ids_hash": "068e938231fce97b6c20432b39fb8053fc2a674112bf1e154de11cb68b98187480d075614e6add3e0837b272ebe871ce12fa37f75ecf162e7f6c761d57c9ce06",
+      "output_tokens": 1,
+      "receipt_id": "9ac1ee28b717520b9b557683973621d2e1a9c0dd5d6a53791852c07523bcf9e887fa7c21b92ec07b4b9d3465fad2f449029a7ad51fd4c6c6df41392cc978a68a",
+      "request_digest": "1593565cb7c32106ec5246a00ff974329c595fda915f2091d7aa901de655eb1fd7890adc4e7cb24b1f695f41c67b8395b79ac636cc568768bf807c262dd6718c",
+      "schema": "misaka.palw.output-receipt.v1",
+      "shown_digest": "219ff18efe14066d376ef94f63e1787d976e23cd0c9f94fd9ca8986b0832926d3ca1001b4031ff444649f53446809d7da938ee9ed16825abbf40c387ec340d00",
+      "submission_txid": null,
+      "template_id": "misaka-palw/fp-gateway-template/chat-segments/v1",
+      "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+      "version": 1
+    },
+    "evidence": {
+      "chunks": 24,
+      "claim_id": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "manifest_id": "e0bdd7107847b2e39f79da0ea0fc00cf0c510a75be66ffd24130ca22140bbad4a1218c05fb6a27a2868810477e1e0c0a196ee19b6546e5bedf9bfcbf299656a1",
+      "material_bytes": 24621472,
+      "note": "a placement read back by this gateway, not proof of future availability; the producer stays accountable for the claim's retention window",
+      "provenance": "LOCAL_OBSERVATION",
+      "providers": [
+        {
+          "error": null,
+          "provider": "http://127.0.0.1:54740",
+          "read_back_verified": true
+        }
+      ],
+      "retention_until_daa": 503616,
+      "verified_copies": 1
+    }
+  },
+  "railPrintClaim": {
+    "decode_tokens_executed": 1,
+    "fp_claim_id": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "prompt_tokens": 17,
+    "schema": "misaka.palw.fp-rail-claim.v1",
+    "signing_purpose": "PalwFpCommitmentV3",
+    "work_leaves": 85938
+  },
+  "filesSha256": {
+    "fp-job-5853ff54e729b614.commitment-unsigned.borsh": "50ad7a3a0e8c4ba8449595a5c70cd84590f88bd9c614484f191d50c1761003cb",
+    "fp-job-5853ff54e729b614.request.borsh": "51f053e48b92650ab9d3f29831e22bd54bd1eceb026ea1240a70e51c8e45099b",
+    "fp-job-5853ff54e729b614.result.borsh": "9aef3b5b913cb3276869f0cbc220eba3407bf44ca8c4063420e60eb2223e069a"
+  }
+}
