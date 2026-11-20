@@ -125,3 +125,76 @@ pub fn protected_filer_tir_view_v1(
     }
     Ok(Some((view, Box::new(header.clone()))))
 }
+
+/// Selected-chain operands for a public bond checking its own answered DA
+/// reservation. Reading these facts does not release the reservation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtectedFilerReservationV1 {
+    pub origin: ProtectedReplayBindingV1,
+    pub owner: crate::palw_state_v2::PalwBondKeyV2,
+    pub reserved_daa: u64,
+    pub sessions_opened: u8,
+    pub registration_block: Hash64,
+    pub registration_id: Hash64,
+    pub tokenizer: crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2,
+}
+
+pub fn protected_filer_reservation_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    owner: crate::palw_state_v2::PalwBondKeyV2,
+) -> Result<Option<ProtectedFilerReservationV1>, String> {
+    use crate::{
+        palw_da_rcore_v1::{PalwDaUnitV1, palw_da_unit_answered_v1},
+        palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key,
+        palw_state_v2::PalwClaimPhaseV2,
+        palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1,
+    };
+    let Some(record) = state.legacy_dispute_v1(&claim) else { return Ok(None) };
+    let Some(row) = record.live.get(&owner) else { return Ok(None) };
+    if row.sessions_opened == 0
+        || row.lanes_joined != 0
+        || !record.courts.is_empty()
+        || !record.reacquiring.is_empty()
+        || state.da_sessions_of(&claim).next().is_some()
+        || state.open_courts_of(&claim) != 0
+        || state.staged_tir_public_demand_open_v1(&claim)
+        || state.court_shared_initial_notice_daa_v1(claim).is_some()
+        || state.staged_owned_row_v1(claim, owner).is_some()
+        || state.staged_court_row_v1(&Key::Claim(claim)).is_some()
+        || state.staged_court_row_v1(&Key::TirClaim(claim)).is_some()
+        || state.claim(&claim).is_none_or(|c| c.bond == owner || !matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
+        || state.panel(&claim).is_none_or(|p| p.seats.iter().any(|s| s.bond == owner))
+    {
+        return Ok(None);
+    }
+    let Some(frame) = state.public_tfp1_frame_v1(claim).map_err(|e| format!("protected frame: {e:?}"))? else { return Ok(None) };
+    let fp = frame.original_v1();
+    if !fp.job.is_v4()
+        || fp.job.is_prefix_state()
+        || fp.job.is_constraint()
+        || fp.job.tail.is_some()
+        || fp.job.prompt_mode != crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER
+        || fp.job.decode.is_none()
+        || state
+            .da_claim(&claim)
+            .is_none_or(|da| !palw_da_unit_answered_v1(da, &PalwDaUnitV1::Event { row: 0, tile: 0 }, fp.decode_tokens_executed))
+        || state.has_public_pending_manifest_v1(frame.original_id_v1()).map_err(|e| format!("protected manifest: {e:?}"))?
+    {
+        return Ok(None);
+    }
+    let Some(read) = protected_original_readback_v1(state, claim)? else { return Ok(None) };
+    if read.public_refutation_recorded {
+        return Ok(None);
+    }
+    let Some(registration) = palw_claim_tokenizer_registration_v1(state, claim)? else { return Ok(None) };
+    Ok(Some(ProtectedFilerReservationV1 {
+        origin: read.replay_binding_v1(),
+        owner,
+        reserved_daa: row.reserved_daa,
+        sessions_opened: row.sessions_opened,
+        registration_block: registration.registration_point_v1().block,
+        registration_id: registration.record_id_v1(),
+        tokenizer: registration.facts_v1().clone(),
+    }))
+}

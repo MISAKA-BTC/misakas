@@ -53,6 +53,26 @@ use misaka_palw_positive_contract::{
     wire::{AuthenticatedEvidenceFrame, EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
 
+/// Open the complete generated sequence against the accepted output entry and native commitment.
+pub fn public_output_tokens_match_v1(
+    original: &OriginalCommit,
+    manifest: &misaka_palw_positive_contract::public_one_honest::CheckedManifestV1,
+    ids: &[u32],
+) -> bool {
+    use crate::{palw_attempt_rules_v1::palw_attempt_rendered_output_v1, palw_v2::output_commitment_v2};
+    use misaka_palw_positive_contract::public_one_honest::tir_output_material_codec_v1;
+    let entry = manifest.entry(MaterialScope::Output);
+    manifest.original() == original.id()
+        && entry.codec == tir_output_material_codec_v1()
+        && entry.content_root == original.output
+        && entry.total_bytes == u64::from(original.decode) * 4
+        && entry.total_bytes <= u64::from(entry.chunk_bytes)
+        && ids.len() == original.decode as usize
+        && output_commitment_v2(&crate::Hash64::from_bytes(original.execution.0), ids, &palw_attempt_rendered_output_v1(ids))
+            .as_bytes()
+            == original.output.0
+}
+
 pub const PART_OVERHEAD: u64 = (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES) as u64;
 
 pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;

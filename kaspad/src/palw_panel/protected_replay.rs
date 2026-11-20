@@ -213,13 +213,7 @@ fn read_carrier_inputs_v1(
     }
     original.authenticate(&signed.key, &signed.signature).map_err(|e| format!("protected companion signature: {e:?}"))?;
     let body = wire.manifest_bytes_v2().ok_or("protected original manifest missing")?;
-    let manifest: ManifestV1 = borsh::from_slice(body).map_err(|e| e.to_string())?;
-    let limits = manifest.entries.map(|e| ManifestScopeRules { codec: e.codec, max_bytes: e.total_bytes, chunk_bytes: e.chunk_bytes });
-    let total = manifest.entries.iter().try_fold(0u64, |n, e| n.checked_add(e.total_bytes)).ok_or("manifest byte overflow")?;
-    let checked = original
-        .authenticate_manifest(body, ManifestV1::WIRE_BYTES)
-        .and_then(|m| m.decode(original, &limits, total))
-        .map_err(|e| format!("protected replay manifest: {e:?}"))?;
+    let checked = checked_manifest_v1(original, body)?;
     // Native acceptance already authenticates every manifest subject, byte size,
     // rule/cold-state preimage and registered container pin against this original.
     // Derive the public Text/control relation here, without a served FPM or
@@ -238,8 +232,21 @@ fn read_carrier_inputs_v1(
     Ok(PalwFpMaterialV1 { job: fp.job.clone(), prompt_token_ids })
 }
 
+pub(super) fn checked_manifest_v1(
+    original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    body: &[u8],
+) -> Result<misaka_palw_positive_contract::public_one_honest::CheckedManifestV1, String> {
+    let manifest: ManifestV1 = borsh::from_slice(body).map_err(|e| e.to_string())?;
+    let limits = manifest.entries.map(|e| ManifestScopeRules { codec: e.codec, max_bytes: e.total_bytes, chunk_bytes: e.chunk_bytes });
+    let total = manifest.entries.iter().try_fold(0u64, |n, e| n.checked_add(e.total_bytes)).ok_or("manifest byte overflow")?;
+    original
+        .authenticate_manifest(body, ManifestV1::WIRE_BYTES)
+        .and_then(|m| m.decode(original, &limits, total))
+        .map_err(|e| format!("protected replay manifest: {e:?}"))
+}
+
 #[allow(clippy::too_many_arguments)]
-fn read_prompt_material_v1(
+pub(super) fn read_prompt_material_v1(
     original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
     checked: &misaka_palw_positive_contract::public_one_honest::CheckedManifestV1,
     body: &[u8],

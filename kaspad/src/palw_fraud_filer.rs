@@ -58,6 +58,8 @@ pub(super) mod history;
 pub(super) mod input;
 #[path = "palw_fraud_filer_prefix.rs"]
 mod prefix;
+#[path = "palw_fraud_filer_protected.rs"]
+mod protected;
 #[path = "palw_selected_event_scheduler.rs"]
 mod selected_event_scheduler;
 #[path = "palw_tir_acquisition_driver.rs"]
@@ -126,6 +128,32 @@ pub(super) const PALW_FRAUD_FILER_STAGED_ROUND_V1: u32 = u32::MAX - 14;
 pub(super) struct FilerTirContextV1 {
     pub view: kaspa_consensus_core::palw_decode_view_v1::PalwDecodeViewV1,
     pub header: Box<kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>,
+}
+
+impl FilerTirContextV1 {
+    /// Open the entire generated-ID sequence from the first public tile against
+    /// the locally admitted header. The carried class supplies no verification parameters.
+    pub(super) fn row_zero_ids<'a>(&self, unit: &PalwDaUnitV1, answer: &'a PalwDaAnswerV1) -> Option<&'a [u32]> {
+        use kaspa_consensus_core::{
+            palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+            palw_step_refute::{tiled_row_authenticate_view_v1, tiled_tile_authenticate_v1},
+            palw_tir_court_v1::PalwTirTraceEventDisclosureV1,
+        };
+        let (PalwDaUnitV1::Event { row: 0, tile: 0 }, PalwDaAnswerV1::TirEvent(event)) = (unit, answer) else { return None };
+        let PalwTirTraceEventDisclosureV1::Tiled { binding, generated_token_ids, row_root, row_opening, tile_lanes, tile_opening } =
+            event.as_ref()
+        else {
+            return None;
+        };
+        if !binding.class.program.is_empty() || PalwPublicTirBindingHeaderV1::of_binding_v1(binding) != *self.header {
+            return None;
+        }
+        let bound = self.view.step_leaf_count.max(self.view.tiles_v1()).max(u64::from(self.view.job_context.exact_decode_tokens));
+        let (ctx, vocab, tiles) =
+            tiled_row_authenticate_view_v1(&self.view, generated_token_ids, 0, row_root, row_opening, bound).ok()?;
+        tiled_tile_authenticate_v1(&ctx, 0, vocab, tiles, row_root, 0, tile_lanes, tile_opening, bound).ok()?;
+        Some(generated_token_ids)
+    }
 }
 
 fn palw_fraud_filer_paid_progress_v1(
@@ -404,6 +432,7 @@ pub(super) fn palw_fraud_filer_read_page_with_form_v1(
         legacy_rounds,
         rcore_wanted,
         &BTreeMap::new(),
+        &BTreeMap::new(),
         network,
         kaspa_consensus_core::palw_legacy_answer_chunks_v2::PALW_LEGACY_ANSWER_MAX_BYTES_V2,
     )
@@ -421,6 +450,7 @@ fn palw_fraud_filer_read_page_with_budget_v2(
     legacy_rounds: &BTreeMap<Hash64, BTreeSet<PalwLegacyHeldUnitV2>>,
     rcore_wanted: &BTreeMap<Hash64, PalwDaUnitV1>,
     event_wanted: &BTreeMap<Hash64, Vec<PalwDaUnitV1>>,
+    native_views: &BTreeMap<Hash64, Arc<FilerTirContextV1>>,
     network: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     maximum: u64,
 ) -> Result<(PalwFraudFilerWalkV1, bool, Vec<((Hash64, PalwDaUnitV1), PalwDaBuiltAnswerV1)>), String> {
@@ -441,6 +471,9 @@ fn palw_fraud_filer_read_page_with_budget_v2(
         PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, .. }
             if wanted.get(&claim).is_some_and(|root| {
                 kaspa_consensus_core::palw_legacy_public_filer_v1::palw_fraud_filer_answer_authenticates_v1(&unit, &answer, root)
+                    || native_views
+                        .get(&claim)
+                        .is_some_and(|tir| tir.view.committed_execution_root == *root && tir.row_zero_ids(&unit, &answer).is_some())
             }) && (palw_fraud_filer_cache_unit_v1(&unit, rcore_wanted.get(&claim))
                 || event_wanted.get(&claim).is_some_and(|units| units.contains(&unit))) =>
         {
@@ -655,6 +688,8 @@ pub(super) struct PalwFraudFilerCaseV1 {
     /// A TIR required-family claim's native context (behind `palw_staged_tir_route_v1`): set by the
     /// native TIR replay. Such a case never enters the legacy binding/probe pipeline.
     pub(super) tir: Option<Arc<FilerTirContextV1>>,
+    protected_replay_origin: Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedReplayBindingV1>,
+    protected_withdrawal: Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedFilerReservationV1>,
 }
 
 impl PalwFraudFilerCaseV1 {
@@ -717,6 +752,8 @@ impl PalwFraudFilerCaseV1 {
             direct_handed: 0,
             direct_asked_at: None,
             tir: None,
+            protected_replay_origin: None,
+            protected_withdrawal: None,
         }
     }
 
@@ -982,6 +1019,7 @@ impl PalwFraudFilerCaseV1 {
     ) {
         self.registered_preflight = true;
         self.release_pending = false;
+        self.protected_withdrawal = None;
         self.staged_bundle_pending = true;
         self.arithmetic_matched = (replay.execution_root, replay.full_logits_trace_root, replay.output_root)
             == (self.candidate.job.execution_root, self.candidate.job.trace_root, self.candidate.job.output_root);
@@ -1714,6 +1752,8 @@ impl PalwFraudFilerBookV1 {
                 }
                 case.arithmetic_matched = false;
                 case.tir_selection_ids = None;
+                case.protected_replay_origin = None;
+                case.protected_withdrawal = None;
                 case.prefix_plan = None;
                 case.prefix_complete = false;
                 case.prefix_stage_pending = false;
@@ -1758,7 +1798,7 @@ impl PalwFraudFilerBookV1 {
                                 &key.1,
                                 answer,
                                 &case.candidate.job.execution_root,
-                            )
+                            ) || case.tir.as_ref().is_some_and(|tir| tir.row_zero_ids(&key.1, answer).is_some())
                         }
                         PalwDaBuiltAnswerV1::LegacyHeldV2(answer) => {
                             let PalwDaUnitV1::LegacyHeldV2(unit) = key.1 else { return false };
@@ -1802,6 +1842,8 @@ impl PalwFraudFilerBookV1 {
             case.prefix_stage_pending = false;
             case._prefix_reservation = None;
             case.release_pending = false;
+            case.protected_replay_origin = None;
+            case.protected_withdrawal = None;
             case.fp_bootstrap = None;
             case.fp_replay_input = None;
             case.tir_selection_ids = None;
@@ -3010,6 +3052,12 @@ impl PalwPanelService {
                     .collect();
                 let rcore_wanted: BTreeMap<Hash64, PalwDaUnitV1> =
                     book.cases.values().filter_map(|case| case.rcore_wanted.map(|unit| (case.candidate.claim_id, unit))).collect();
+                let native_views = book
+                    .cases
+                    .iter()
+                    .filter(|(_, case)| case.pursued())
+                    .filter_map(|(id, case)| Some((*id, case.tir.clone()?)))
+                    .collect();
                 let history_form = params.palw_prompt_ids_form_at(current_daa);
                 let history_maximum = self
                     .config
@@ -3058,6 +3106,7 @@ impl PalwPanelService {
                                     &legacy_rounds,
                                     &rcore_wanted,
                                     &event_wanted,
+                                    &native_views,
                                     history_form,
                                     history_maximum,
                                 )
@@ -3407,6 +3456,51 @@ impl PalwPanelService {
                 court_outbox
                     .retain_pending(|(held, round, responder, _)| *held != claim || !palw_fraud_filer_queued_v1(*round, *responder));
                 book.settle(&claim, PalwFraudFilerVerdictV1::Settled(facts.outcome.unwrap_or(PalwFilerPhaseV1::Expired)));
+                continue;
+            }
+            if facts.reserved
+                && !facts.session_open
+                && !own_court_open
+                && staged_authority.get(&claim).is_some_and(|v| matches!(v, Ok(None)))
+                && book.cases.get(&claim).is_some_and(|case| {
+                    case.protected_replay_origin.is_some()
+                        && case.protected_withdrawal.is_none()
+                        && case.arithmetic_matched
+                        && current_daa >= case.input_retry_at
+                        && matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending)
+                })
+                && let Some(PalwDaBuiltAnswerV1::Rcore(answer @ PalwDaAnswerV1::TirEvent(_))) =
+                    book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 }))
+            {
+                let result = self.protected_filer_withdrawal(session, &book.cases[&claim], answer, bond_key).await;
+                let case = book.cases.get_mut(&claim).expect("pursued");
+                match result {
+                    Ok(Some(checked)) => {
+                        info!(
+                            "[{PALW_PANEL}] claim {claim}: public bond {bond_key:?} reproduced the protected prompt, execution, output, stop and tokenizer; withdrawing its answered reservation"
+                        );
+                        case.protected_withdrawal = Some(checked);
+                        case.release_pending = true;
+                        case.verdict = PalwFraudFilerVerdictV1::Honest;
+                    }
+                    Ok(None) => {}
+                    Err(why) => {
+                        debug!("[{PALW_PANEL}] claim {claim}: protected reservation remains live: {why}");
+                        case.input_retry_at = current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    }
+                }
+            }
+            if let Some(checked) = &book.cases[&claim].protected_withdrawal
+                && protected::owner_context(session, claim, bond_key).ok().flatten().as_ref() != Some(checked)
+            {
+                court_outbox.retain_pending(|(held, round, _, _)| *held != claim || *round != PALW_FRAUD_FILER_RELEASE_ROUND_V1);
+                court_outbox.retain_due(|(held, round, _), _| *held != claim || *round != PALW_FRAUD_FILER_RELEASE_ROUND_V1);
+                let case = book.cases.get_mut(&claim).expect("pursued");
+                case.protected_withdrawal = None;
+                case.release_pending = false;
+                case.verdict = PalwFraudFilerVerdictV1::SemanticPending;
+                case.sent = None;
+                book.read_at = None;
                 continue;
             }
             if book.cases.get(&claim).is_some_and(|case| case.release_pending) {
@@ -7205,6 +7299,10 @@ impl PalwPanelService {
             Ok(tickets) => tickets,
             Err(why) => return retry(book, why),
         };
+        let origin = match session.palw_protected_original_readback_v1(claim) {
+            Ok(read) => read.map(|r| r.replay_binding_v1()),
+            Err(why) => return retry(book, why),
+        };
         let header = tir.header.clone();
         let replay_job = job.clone();
         let replay = tokio::task::spawn_blocking(move || {
@@ -7225,10 +7323,21 @@ impl PalwPanelService {
             book.settle(&claim, PalwFraudFilerVerdictV1::Unjudged("the TIR replay changed the exact decode count".into()));
             return;
         }
+        if let Some(binding) = origin
+            && session.palw_protected_original_readback_v1(claim).ok().flatten().map(|r| r.replay_binding_v1()) != Some(binding)
+        {
+            return retry(book, "protected acceptance changed during replay".into());
+        }
         let case = book.cases.get_mut(&claim).expect("selected case");
         case.tir = Some(Arc::new(tir));
+        case.protected_replay_origin = origin;
         let selection_matches = replay.full_logits_trace_root == case.tir.as_ref().expect("set").view.full_logits_trace_root;
         case.retain_tir_selection_replay_v1(job, replay, job_ticket, ids_ticket);
+        // Earlier history pages did not authenticate this claim's native answers.
+        book.walk = None;
+        book.walked_from = None;
+        book.walked_to = None;
+        book.read_at = None;
         info!(
             "[{PALW_PANEL}] claim {claim}: native TIR replay finished (matching logits: {selection_matches}); required public families remain pending (G14)"
         );

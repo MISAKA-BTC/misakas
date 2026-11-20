@@ -1317,6 +1317,36 @@ fn an_ir_artifact_passes_the_startup_manifest_verification_by_its_ir_manifest() 
     assert!(verify().is_err(), "a sidecar that does not parse");
 }
 
+/// A class-bound FP disclosure authenticates all generated IDs in its first public tile.
+#[test]
+fn protected_filer_reads_the_generated_ids_from_the_original_trace() {
+    use kaspa_consensus_core::{
+        palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1},
+        palw_decode_view_v1::PalwDecodeViewV1,
+        palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        palw_tir_court_v1::PalwTirTraceEventDisclosureV1,
+    };
+    let ir = ir_class("protected-filer-ids", true);
+    let (record, _) = kaspa_consensus_core::palw_tir_admission_v1::palw_tir_class_record_v1(ir.tir().class(), &ir.root).unwrap();
+    let backend = ir.backend();
+    let (mut job, prompt) = backend.job_for_anchor(h64(42)).unwrap();
+    job.shape_profile_id = record.facts.class_id;
+    job.tokenizer_id = record.tokenizer_id;
+    let run = backend.execute(&job, &prompt).unwrap();
+    let mut event = misaka_palw_sdk::lineages::tir::tir_trace_event_disclosure_of_capture_v1(&run.material, 0, 0).unwrap().unwrap();
+    event.strip_program_v1();
+    let header = PalwPublicTirBindingHeaderV1::of_binding_v1(event.binding());
+    let view = PalwDecodeViewV1::from_tir_header_v1(&header, &record, LADDER).unwrap();
+    let context = super::palw_fraud_filer::FilerTirContextV1 { view, header: Box::new(header) };
+    let first = PalwDaUnitV1::Event { row: 0, tile: 0 };
+    let good = PalwDaAnswerV1::TirEvent(Box::new(event.clone()));
+    assert_eq!(context.row_zero_ids(&first, &good).unwrap().len(), job.exact_decode_tokens as usize);
+    assert!(context.row_zero_ids(&PalwDaUnitV1::Event { row: 0, tile: 1 }, &good).is_none());
+    let PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = &mut event else { panic!("expected tiled capture") };
+    generated_token_ids[0] ^= 1;
+    assert!(context.row_zero_ids(&first, &PalwDaAnswerV1::TirEvent(Box::new(event))).is_none());
+}
+
 /// **An IR claim answers its data-availability demands in the IR form** (F6 D): the node's own
 /// answering path (`palw_da_claim_answers_v1`: the kept capture verified against the claim, then each
 /// unit) discloses a trace event of an IR claim as a `TirEvent` — the row's tile opened under the
