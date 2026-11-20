@@ -1782,6 +1782,9 @@ impl PalwFraudFilerBookV1 {
 
     /// Settle a case: its run (and the capture's reservation) and cached answers are let go.
     pub(super) fn settle(&mut self, claim: &Hash64, verdict: PalwFraudFilerVerdictV1) {
+        if let PalwFraudFilerVerdictV1::Unjudged(why) = &verdict {
+            debug!("[{PALW_PANEL}] claim {claim}: public replay ended without a verdict: {why}");
+        }
         self.answers.retain(|(held, _), _| held != claim);
         self.focus.retain(|_, focused| focused != claim);
         if let Some(case) = self.cases.get_mut(claim) {
