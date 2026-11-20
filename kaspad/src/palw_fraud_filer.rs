@@ -1474,6 +1474,7 @@ impl PalwFraudFilerBookV1 {
                 case.may_probe_v1()
                     && case.fp_bootstrap.as_ref().is_none_or(|input| {
                         input.ready()
+                            || (!busy && input.may_reread_public_carrier())
                             || input.payload.job().prompt_mode
                                 == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
                     })
@@ -7612,6 +7613,35 @@ pub(super) mod tests {
         changed.job.accepted_block = Hash64::from_u64_word(999);
         book.refresh(vec![changed, second], 110);
         assert_eq!(book.next_replay_at(110), Some(first.claim_id), "a new job clears its predecessor's wait");
+    }
+
+    #[test]
+    fn an_idle_filer_reopens_the_accepted_publicda_body_after_a_metadata_probe() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER};
+        let mut book = PalwFraudFilerBookV1::default();
+        let mut fp = candidate(1, 100, false);
+        fp.job.free_prompt = true;
+        book.refresh(vec![fp.clone()], 100);
+        let mut payload = input::tests::payload();
+        payload.commitment.job.prompt_mode = PALW_FP_PROMPT_MODE_USER;
+        payload.prompt_token_ids.clear();
+        for privacy in [PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PRIVACY_PANEL_DA] {
+            payload.commitment.job.privacy_mode = privacy;
+            let case = book.cases.get_mut(&fp.claim_id).unwrap();
+            case.input_retry_at = 130;
+            case.fp_bootstrap = Some(PalwFraudFilerFpBootstrapV1 {
+                payload: Arc::new(input::PalwFraudFilerFpDescriptorV1::Accepted(payload.clone())),
+                form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                ids: vec![],
+                chunk: 0,
+                _reservation: None,
+            });
+            assert_eq!(book.next_probe_at(129, true), None);
+            assert_eq!(book.next_probe_at(130, false), None);
+            assert_eq!(book.next_probe_at(130, true), (privacy == PALW_FP_PRIVACY_PUBLIC_DA).then_some(fp.claim_id));
+            book.cases.get_mut(&fp.claim_id).unwrap().fp_bootstrap.as_mut().unwrap().chunk = 1;
+            assert_eq!(book.next_probe_at(131, true), None, "a partial disclosure keeps its own cursor");
+        }
     }
 
     #[test]

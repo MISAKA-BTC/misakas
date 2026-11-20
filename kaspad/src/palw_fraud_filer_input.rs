@@ -414,6 +414,18 @@ pub(in crate::palw_panel) struct PalwFraudFilerFpBootstrapV1 {
 }
 
 impl PalwFraudFilerFpBootstrapV1 {
+    /// A metadata-only PublicDA descriptor may have been read while the replay lane
+    /// was busy. Its accepted transaction can supply the complete input on a later
+    /// idle turn. Leave a partial court disclosure on its contiguous chunk path.
+    pub(in crate::palw_panel) fn may_reread_public_carrier(&self) -> bool {
+        self.ids.is_empty()
+            && self.chunk == 0
+            && matches!(self.payload.as_ref(), PalwFraudFilerFpDescriptorV1::Accepted(p)
+                if p.commitment.job.privacy_mode == PALW_FP_PRIVACY_PUBLIC_DA
+                    && p.commitment.job.prompt_mode == PALW_FP_PROMPT_MODE_USER
+                    && p.prompt_token_ids.is_empty())
+    }
+
     pub(in crate::palw_panel) fn ready(&self) -> bool {
         self.ids.len() == self.payload.job().prompt_tokens as usize
     }
