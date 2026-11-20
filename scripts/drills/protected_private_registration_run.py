@@ -16,7 +16,7 @@ from misaka_wrpc_json import WsRpc
 from rfc12_acceptance_observe import sha256_file
 from protected_claim_observation import (
     block_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
-    require, unsigned, validate_receipt_observation,
+    require, require_gate_c_status, unsigned, validate_receipt_observation,
 )
 from protected_historical_clock import HEARTBEAT_INTERVAL_MS, ProtectedHistoricalClock
 from protected_inventory_acceptance import AcceptancePending, observe_transaction
@@ -596,16 +596,6 @@ def studio_admission(rpc, expected, scan_from, data):
 def receipt_window_elapsed(original, detail):
     accepted_daa = unsigned(original['origin']['acceptedDaa'])
     return unsigned(detail['tipDaa']) > accepted_daa + PROTECTED_HARD_WINDOW_DAA
-
-
-def require_gate_c_status(detail):
-    """Require this protected claim to use the independent certification lane."""
-    require(detail['gateCGoverns'] is True, 'protected Studio claim is outside Gate C')
-    status = detail['claim']['securityCertification']
-    if status == 'pending':
-        return False
-    require(status == 'certified', f'protected Studio claim Gate C ended with {status}')
-    return True
 
 
 def receipt_peer_view(rpc, expected, producer, receipt, quantum):

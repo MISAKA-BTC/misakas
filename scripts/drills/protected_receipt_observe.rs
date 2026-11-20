@@ -7,7 +7,7 @@ use kaspa_consensus_core::{
     hashing::header::{hash, pre_pow_hash_64},
     header::{CompressedParents, Header},
     palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
-    palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3,
+    palw_freeprompt_v3::{PalwReceiptSpendEnvelopeV3, fp_quantum_ticket_v3, fp_spend_id_v3},
     palw_protected_original_readback_v1::ProtectedOriginalReadbackV1,
 };
 use serde_json::{Value, json};
@@ -75,6 +75,10 @@ fn audit(observed: &Value) -> Result<Value, String> {
     )?;
     check(read.full_replay_approval_recorded && !read.public_refutation_recorded, "approval missing or public refutation recorded")?;
     check(detail["claim"]["claimId"] == expected["claim"] && detail["claim"]["phase"] == "final", "same claim is not Final")?;
+    check(
+        detail["gateCGoverns"] == true && detail["claim"]["securityCertification"] == "certified",
+        "protected receipt requires native Gate C certification for this claim",
+    )?;
     let block = &observed["receiptBlock"];
     check(
         block["verboseData"]["isChainBlock"] == true && block["verboseData"]["isHeaderOnly"] == false,
@@ -97,10 +101,13 @@ fn audit(observed: &Value) -> Result<Value, String> {
     check(detail["claim"]["quantaSpent"].as_u64() == Some(indices.len() as u64), "claim spent count differs")?;
     check(unique.contains(&envelope.spend.quantum_index), "receipt quantum is not recorded spent")?;
     check(quanta["total"].as_u64().is_some_and(|n| u64::from(envelope.spend.quantum_index) < n), "receipt quantum outside claim")?;
+    let spend = &envelope.spend;
+    let ticket = fp_quantum_ticket_v3(spend.network_domain, spend.beacon_block, claim, spend.quantum_index);
     Ok(json!({
         "version": 1, "kind": "protectedReceiptObservationAudit", "claim": claim,
         "block": header.hash, "quantumIndex": envelope.spend.quantum_index,
-        "beaconBlock": envelope.spend.beacon_block, "headerHashChecked": true,
+        "beaconBlock": spend.beacon_block, "quantumTicketHex": format!("{ticket:032x}"),
+        "spendId": fp_spend_id_v3(spend), "gateCCertifiedObserved": true, "headerHashChecked": true,
         "nativeReceiptEnvelopeValidated": true, "spentIndexObserved": true,
         "statefulChecksSource": "native selected-chain RPC observation",
         "actualPanelWorkerExecutionVerified": false, "actualClaimCompletion": false,
@@ -195,17 +202,23 @@ mod tests {
             "expected": {"claim": claim, "transactionId": domain, "executionRoot": domain,
                 "networkDomain": domain, "genesisHash": domain, "consensusParamsId": domain},
             "context": [header.hash, domain, 4401, domain, domain], "origin": read,
-            "detail": {"tipBlock": header.hash, "protectedOriginal": read,
-                "claim": {"claimId": claim, "phase": "final", "executorBond": format!("{domain}:0"), "quantaSpent": 1},
+            "detail": {"tipBlock": header.hash, "protectedOriginal": read, "gateCGoverns": true,
+                "claim": {"claimId": claim, "phase": "final", "securityCertification": "certified", "executorBond": format!("{domain}:0"), "quantaSpent": 1},
                 "receiptQuanta": {"total": 1, "spentCount": 1, "spentIndices": [0], "spentIndicesComplete": true}},
             "receiptBlock": {"header": rpc, "verboseData": {"hash": header.hash, "isChainBlock": true, "isHeaderOnly": false}},
         });
-        assert_eq!(audit(&observed).unwrap()["nativeReceiptEnvelopeValidated"], true);
+        let report = audit(&observed).unwrap();
+        assert_eq!(report["nativeReceiptEnvelopeValidated"], true);
+        assert_eq!(report["spendId"], fp_spend_id_v3(&receipt.spend).to_string());
+        assert_eq!(report["quantumTicketHex"], format!("{:032x}", fp_quantum_ticket_v3(domain, domain, claim, 0)));
+        assert_eq!(report["gateCCertifiedObserved"], true);
         for (pointer, replacement) in [
             ("/origin/eventOrdinal", json!(1)),
             ("/detail/protectedOriginal/fullReplayApprovalRecorded", json!(false)),
             ("/detail/protectedOriginal/publicRefutationRecorded", json!(true)),
             ("/detail/claim/phase", json!("provisional")),
+            ("/detail/gateCGoverns", json!(false)),
+            ("/detail/claim/securityCertification", json!("pending")),
             ("/detail/receiptQuanta/spentIndices", json!([])),
             ("/detail/receiptQuanta/spentIndicesComplete", json!(false)),
             ("/receiptBlock/verboseData/isChainBlock", json!(false)),

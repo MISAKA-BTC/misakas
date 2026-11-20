@@ -30,8 +30,9 @@ class Rpc:
                          acceptedTxOrdinal=0, eventOrdinal=0, acceptedDaa=100, acceptedBlueScore=100,
                          observedTip=h(10), observedTipDaa=200,
                          fullReplayApprovalRecorded=True, publicRefutationRecorded=False)
-        self.detail = dict(version=1, kind='palwClaimDetail',
-                           claim=dict(claimId=h(4), phase='final', phaseDaa=150, executorBond=h(20), seats=[h(21)]),
+        self.detail = dict(version=1, kind='palwClaimDetail', gateCGoverns=True,
+                           claim=dict(claimId=h(4), phase='final', phaseDaa=150, executorBond=h(20),
+                                      seats=[h(21)], securityCertification='certified'),
                            protectedOriginal=self.read, tipBlock=h(10), tipDaa=200)
         self.blocks = {}
         for n in (8, 9, 10):
@@ -117,6 +118,10 @@ class ObservationTests(unittest.TestCase):
         detail['gateCGoverns'] = False
         with self.assertRaisesRegex(ValueError, 'outside Gate C'):
             require_gate_c_status(detail)
+        rpc = Rpc()
+        rpc.detail['claim']['securityCertification'] = 'pending'
+        with self.assertRaisesRegex(ValueError, 'before Gate C'):
+            observe(rpc, rpc.expected, receipt=h(10))
 
     def test_receipt_window_elapsed_uses_original_acceptance_and_inclusive_hard_deadline(self):
         rpc = Rpc()

@@ -148,6 +148,16 @@ def claim_snapshot(rpc, expected, previous):
     return dag, before, detail, origin
 
 
+def require_gate_c_status(detail):
+    """Require this protected claim to use the independent certification lane."""
+    require(detail['gateCGoverns'] is True, 'protected Studio claim is outside Gate C')
+    status = detail['claim']['securityCertification']
+    if status == 'pending':
+        return False
+    require(status == 'certified', f'protected Studio claim Gate C ended with {status}')
+    return True
+
+
 def observe_claim_progress(rpc, expected, previous):
     """Read current claim state against an already verified admission."""
     check_expectation(expected)
@@ -239,6 +249,7 @@ def observe(rpc, expected, *, previous=None, receipt=None, panel_approval=None, 
 
     receipt_block = None
     if receipt is not None:
+        require(require_gate_c_status(detail), 'protected receipt observed before Gate C certification')
         receipt_block = block_read(rpc, receipt)
         require(receipt_block['verboseData']['isChainBlock'] is True, 'receipt block is not on the selected chain')
         require(receipt_block['header']['powAlgoId'] == 7, 'block is not a PFS3 receipt')
