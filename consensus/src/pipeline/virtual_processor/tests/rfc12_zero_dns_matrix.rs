@@ -56,6 +56,10 @@ use std::collections::BTreeMap;
 #[path = "evm_market_production_pipeline_v2.rs"]
 mod production_market_pipeline_v2;
 
+#[cfg(unix)]
+#[path = "tb1_holder_finality.rs"]
+mod tb1_holder_finality;
+
 /// The first DAA at which the retirement is in force in these tests. A TEST value: the harness clock reaches DAA 1 and stops.
 const FENCE: u64 = 1;
 const DEPOSIT: u64 = 100_000_000;
@@ -2606,13 +2610,8 @@ async fn rfc12_r4_work_that_has_not_matured_is_a_maturity_wait_with_an_exact_clo
     assert_eq!(readiness_of(&a).safe, Some(pre[0].header.hash));
 }
 
-/// One run of x8's scenario with the placed work either already mature at the moment the heavier branch arrives, or not yet:
-/// `(snapshot before the reorg, snapshot after it, readiness after it)`. The harness clock stops at DAA 1-2, so "time" is the fact's
-/// own `matured_daa` against the sink DAA: a rule that has elapsed by the release is `matured_daa = 0`, one that has not is far ahead.
-async fn reorg_across_the_would_be_safe_point(
-    nonce: u64,
-    mature_at_release: bool,
-) -> (NativeSettlementSnapshotV1, NativeSettlementSnapshotV1, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1) {
+/// Build a common prefix, then extend one branch with the RFC-0012 work fixture.
+async fn competing_finality_branches(nonce: u64, mature_at_release: bool) -> (Rig, Rig) {
     let p = parts(Some(FENCE));
     let mut a = Rig::new(&p, nonce);
     let pre_blocks = prefix(&mut a).await;
@@ -2623,6 +2622,17 @@ async fn reorg_across_the_would_be_safe_point(
     place_maturing_fact(&a, &e3, 10, if mature_at_release { 0 } else { 1_000_000 });
     a.vp().pruning_point_store.write().set(pre_blocks[0].header.hash, 1).unwrap();
     extend(&mut a, &[3]).await;
+    (a, b)
+}
+
+/// One run of x8's scenario with the placed work either already mature at the moment the heavier branch arrives, or not yet:
+/// `(snapshot before the reorg, snapshot after it, readiness after it)`. The harness clock stops at DAA 1-2, so "time" is the fact's
+/// own `matured_daa` against the sink DAA: a rule that has elapsed by the release is `matured_daa = 0`, one that has not is far ahead.
+async fn reorg_across_the_would_be_safe_point(
+    nonce: u64,
+    mature_at_release: bool,
+) -> (NativeSettlementSnapshotV1, NativeSettlementSnapshotV1, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1) {
+    let (mut a, mut b) = competing_finality_branches(nonce, mature_at_release).await;
     let before = snapshot_of(&a).expect("a snapshot");
     let ys = extend(&mut b, &[4, 5, 6]).await;
     for y in &ys {

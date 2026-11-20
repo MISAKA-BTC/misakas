@@ -73,6 +73,27 @@ pub struct Tb1ReleaseSet<'a, R> {
     releases: BTreeMap<R, Tb1HolderRelease<'a>>,
 }
 
+impl Tb1Qualification<'_> {
+    /// Signer and certificate reader use the same qualified dealer columns,
+    /// slot and registered key. The native freeze/stability gate is separate.
+    pub fn holder_release_message(
+        &self,
+        row: &Tb1HolderRelease<'_>,
+        key: &libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey,
+        byte_limit: usize,
+    ) -> Result<Vec<u8>, Tb1PolynomialError> {
+        if row.context.round_ref != self.round_ref
+            || row.context.qual_root != self.qual_root
+            || self.roster.holder_keys.get(row.holder_slot).is_none_or(|registered| registered.as_slice() != key.as_slice())
+            || row.shares.len() != self.dealers.len()
+            || !row.shares.iter().map(|(dealer, _)| dealer).eq(self.dealers)
+        {
+            return Err(Tb1PolynomialError::ReleaseContext);
+        }
+        signatures::release_message(row, byte_limit).ok_or(Tb1PolynomialError::ReleaseContext)
+    }
+}
+
 impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
     /// Use the full Q resolved from native preparation outcomes and Ready
     /// records. A release for another qualification cannot borrow this quorum.
@@ -102,14 +123,10 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
             .filter_map(|(&id, signed)| {
                 let row = signed.row;
                 let key = qualified.roster.holder_keys.get(row.holder_slot)?;
-                if row.context != context
-                    || !(cut.release_from..cut.certificate_at).contains(&signed.accepted_position)
-                    || row.shares.len() != qualified.dealers.len()
-                    || !row.shares.iter().map(|(dealer, _)| dealer).eq(qualified.dealers)
-                {
+                if row.context != context || !(cut.release_from..cut.certificate_at).contains(&signed.accepted_position) {
                     return None;
                 }
-                let msg = signatures::release_message(&row, max_message_bytes)?;
+                let msg = qualified.holder_release_message(&row, key, max_message_bytes).ok()?;
                 signatures::verify(key, signed.signature, &msg, signatures::RELEASE_CONTEXT).then_some((id, row))
             })
             .collect();

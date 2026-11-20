@@ -1,0 +1,34 @@
+CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/protected-core-tests
+cargo +1.93.0 test --locked --offline -p misaka-palw-remote --lib -- --nocapture
+test binary SHA256 4514a0c17efc800fd053bcfdd7f1d318aeaba88a5fd06312fa95d3160ee725c8
+test tb1_exposure::tests::custody_process ... ok
+test tb1_exposure::tests::generation_change_during_read_neither_reserves_nor_halts ... ok
+test tb1_exposure::tests::observed_finality_loss_halts_across_branch_return_and_restart ... ok
+test tb1_exposure::tests::incomplete_substitution_contention_and_cold_import_cannot_reset_custody ... ok
+recovered 3/3 original holder signatures, seed d654a9ce18d8738a2ca407cbe74d2c5d354a58d1b888937c442328ed3bcc6c77
+test tb1_exposure::tests::three_holders_killed_before_signing_recover_only_the_original_release ... ok
+test result: ok. 209 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.26s
+
+cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib palw_tb1 -- --nocapture
+test binary SHA256 1ffbbbb2a1415060ce47c318572f669aa6325372d93a795aa3dc9eed7ae0ba00
+test palw_tb1::reconstruction::tests::no_quorum_or_workspace_cannot_produce_a_candidate ... ok
+test palw_tb1::tests::canonical_521_bit_field_and_wide_product ... ok
+test palw_tb1::tests::seven_slots_require_five_distinct_consistent_public_points ... ok
+test palw_tb1::tests::whole_qualified_set_is_bound_once_in_frozen_order ... ok
+test palw_tb1::reconstruction::tests::every_two_fault_pattern_reconstructs_the_same_quorum_polynomial ... ok
+test palw_tb1::releases::tests::each_dealer_uses_its_own_signed_column_and_support_subset ... ok
+test palw_tb1::releases::tests::shares_require_the_fixed_key_preimage_and_native_release_window ... ok
+test palw_tb1::releases::tests::same_holder_and_cross_freeze_references_cannot_supply_a_quorum ... ok
+test palw_tb1::releases::tests::qualification_counts_every_eligible_dealer_before_the_fixed_cut ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6100 filtered out; finished in 2.21s
+
+RUST_MIN_STACK=67108864 cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected -- --nocapture
+test binary SHA256 0ef6e5301eaf3434222b260ffc1cf96e199f2ded7f871a643265aba26ddffa4a
+TB1 native custody: anchor 49587dcfbb95aa444e552c34fb67516b06447b79341dc08e7c9203542499114fe95b86709531820d9ae4dc98167683c3aa654188758b7e2b50bfedf8ddeab8f6, prior sink 5c6e7d66724f1e6d0c0fdcb7681d031e01882a7d03ce597b02693e298abbb8c97432176f4633dfb5955d37b100a3e81c4c0b5334ec20e91bce8dc71a0bf020ec, replacement 563d21e210d110a92f081d8beb16d6f3f666ce3884b747808e6ec72cd96f8979751a5dbe3ed12484dc6772a947da706d6c7f501e79bb21f2e29c26e9cba67968, stop Some(InsufficientDepth)
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1493 filtered out; finished in 0.67s
+
+RUST_MIN_STACK=67108864 cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib rfc12_r5_a_late_private_branch_withdraws_a_published_safe_and_finalized_only_if_the_rule_had_counted_the_work -- --nocapture
+test binary SHA256 0ef6e5301eaf3434222b260ffc1cf96e199f2ded7f871a643265aba26ddffa4a
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::rfc12_r5_a_late_private_branch_withdraws_a_published_safe_and_finalized_only_if_the_rule_had_counted_the_work ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1493 filtered out; finished in 0.79s

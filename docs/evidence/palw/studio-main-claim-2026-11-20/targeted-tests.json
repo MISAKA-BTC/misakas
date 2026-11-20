@@ -442,5 +442,35 @@
       "log": "tb1-signed-seed-tests.log",
       "testBinarySha256": "0cab2210c72d75a94b90f5000681698ffe5ac1623d7f578b7b64dc94eb3ae431"
     }
+  },
+  "tb1HolderCustody": {
+    "log": "tb1-holder-custody-tests.log",
+    "privateStabilityPolicy": "Accepting block covered by the finalized head at the selected sink, release window read from sink header DAA; recheck after sync.",
+    "processFault": {
+      "holders": 3,
+      "crashSignal": "SIGKILL",
+      "boundary": "after durable reservation and before signing",
+      "siblingFreeze": "refused by all three",
+      "originalReleaseSignatures": 3,
+      "recoveredSeed": "d654a9ce18d8738a2ca407cbe74d2c5d354a58d1b888937c442328ed3bcc6c77"
+    },
+    "storageAssumption": "Private durable directory stays outside chain undo. A complete rollback of the holder directory, or unobserved historical fork transitions, cannot be detected from this journal alone.",
+    "inputsStillSupplied": "Native VSS outcome, roster enrollment, freeze association and original TimingPlan. No active TB1 consumer or FOW1 mining claim in this test.",
+    "nativeWithdrawal": {
+      "harness": "RFC-0012 EVM-feature virtual processor; mature-work fact and frontier placed by the existing test harness",
+      "freezeBlockStillSelected": true,
+      "finalizedAfter": null,
+      "withdrawnFrom": "original freeze block",
+      "stop": "InsufficientDepth",
+      "afterReopen": "halted"
+    },
+    "tests": {
+      "remoteLibraryPassed": 209,
+      "remoteLibraryIgnored": 1,
+      "tb1CorePassed": 9,
+      "nativeWithdrawalPassed": 1,
+      "existingRfc12R5Passed": 1,
+      "nativeTestStackBytes": 67108864
+    }
   }
 }

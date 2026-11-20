@@ -47,6 +47,8 @@ pub mod register;
 pub mod relay;
 pub mod resubmit;
 pub mod template;
+#[cfg(unix)]
+pub mod tb1_exposure;
 pub mod track;
 pub mod transport;
 pub mod trust;

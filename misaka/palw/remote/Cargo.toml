@@ -33,6 +33,7 @@ faster-hex.workspace = true
 libcrux-ml-dsa.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha3.workspace = true
 thiserror.workspace = true
 
 # The `palw-remote-miner` binary (feature `rpc`): a wRPC client, the miner's key and the PoW state for the network draw. The library above
@@ -63,6 +64,7 @@ path = "src/bin/palw-fork-choice-issuer.rs"
 required-features = ["rpc"]
 
 [dev-dependencies]
+tempfile.workspace = true
 misaka-palw-tir-exec = { path = "../tir/exec", features = ["node"] }
 # DA16: the sketch's fixture weights (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../tir/sketch" }

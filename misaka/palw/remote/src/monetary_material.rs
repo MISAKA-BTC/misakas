@@ -923,13 +923,19 @@ impl DurableMonetaryMaterialProviderV1 {
 
 #[cfg(unix)]
 pub(crate) fn acquire_provider_lease(path: &Path) -> Result<File, String> {
-    use std::os::fd::AsRawFd;
     let lease = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| e.to_string())?;
+    try_exclusive_lease(&lease).map_err(|e| format!("provider snapshot is already leased or unavailable: {e}"))?;
+    Ok(lease)
+}
+
+#[cfg(unix)]
+pub(crate) fn try_exclusive_lease(lease: &File) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
     // SAFETY: flock uses the live File's descriptor; no pointers or aliasing.
     if unsafe { libc::flock(lease.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err(format!("provider snapshot is already leased or unavailable: {}", std::io::Error::last_os_error()));
+        return Err(std::io::Error::last_os_error());
     }
-    Ok(lease)
+    Ok(())
 }
 #[cfg(not(unix))]
 pub(crate) fn acquire_provider_lease(_path: &Path) -> Result<File, String> {
