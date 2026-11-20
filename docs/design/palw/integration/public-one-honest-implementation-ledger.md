@@ -11,7 +11,7 @@
 
 ## 2026-11-20　隔離 T12 での Studio claim と独立 Panel 承認
 
-追加登録済みモデルを Studio で実行した claim `9d08847f…26ccb68c` は DAA 318 で受理された。DAA 323 で選出された seat 7 は実行者と別のピアで 85,938 leaves を再実行した。承認取引は DAA 325 の選択鎖に含まれ、同一の受付に `fullReplayApprovalRecorded = true` を確認した。この時点で Gate C は `pending`、21 量子の消費数は 0。Final と PFS3 ブロックは検証中。[隔離実行の記録](../../../evidence/palw/studio-winning-receipt-2026-11-20/README.md)
+追加登録済みモデルを Studio で実行した claim `9d08847f…26ccb68c` は DAA 318 で受理された。DAA 323 で選出された seat 7 は実行者と別のピアで 85,938 leaves を再実行した。承認取引は DAA 325 の選択鎖に含まれ、同一の受付に `fullReplayApprovalRecorded = true` を確認した。この時点で Gate C は `pending`、21 量子の消費数は 0。同じ claim は通知期限を通過し、DAA 3439 で3ピアが Final を確認した。Final 時点は Gate C が pending、消費は 0/21。[隔離実行の記録](../../../evidence/palw/studio-winning-receipt-2026-11-20/README.md)
 
 ## 2026-11-12: 受付の一往復を優先する
 
