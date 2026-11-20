@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "scope": "MOE2 documentation revision and reference arithmetic; not native activation",
+  "counts": {
+    "adr": 228,
+    "rfc": 65,
+    "adr-v2": 50,
+    "rfc-v2": 20
+  },
+  "baseline_files_retained": 2817,
+  "modified_existing": 75,
+  "unchanged_existing": 2742,
+  "deleted_existing": 0,
+  "before_copies_exact": true,
+  "historical_preservation": "PASS",
+  "reference_mathematics": "PASS",
+  "no_unexplained_new_failures": true,
+  "global_legacy_checkers_passed": false,
+  "runtime_or_deployment_tested": false,
+  "failures": []
+}

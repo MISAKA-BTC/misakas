@@ -1,0 +1,3628 @@
+{
+  "source": "previous completed TB1/FOW1 docs snapshot",
+  "method": "All Markdown regex inventory; hints are classification aids, not proof that every hit is current normative text.",
+  "pattern": "ModelPosition|Misaka\\s*Options?|MisakaOption|PALW_MODEL_BUYBACK|buyback|buy.back|買い上げ|買上げ|買付|NonTransferable|non.transferable|holder.to.holder|Position.{0,40}(譲渡|移転|transfer)|owner.{0,45}(5\\s*%|five.percent)|leg[_ ]?permille|ownerPermille|burnPermille",
+  "files_with_hits": 79,
+  "hit_occurrences": 333,
+  "scope_counts": {
+    "current_entry_or_versioned_design_requires_review": 33,
+    "numbered_original_or_later_adoption": 97,
+    "embedded_historical_source": 99,
+    "current_compilation_authored_or_appendix_scope": 27,
+    "historical_evidence_or_prior_revision": 56,
+    "dated_or_evidence_requires_scope_review": 21
+  },
+  "files": [
+    {
+      "path": "docs/PRINCIPLES.md",
+      "sha256": "ae2402677d4a5ff5680f12f19807b01647cdbfa9c979c57d38af2049183ddaea",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 92,
+          "section": "## 0. 最終Goal — 2026-10-14改定（ユーザー決定）",
+          "text": "   - **(b) 所有者個人:** 元の所有者自身の取り分が共有で増えるか。マイナー報酬はモデル登録者へ直接分配しない。登録者の収入はModelPositionの売買手数料と、自らMiner/Verifierとして参加した場合のその役割の報酬である（[RFC-0015 §8.5.5](rfc/0015-panel-free-permissionless-verification.md)）。モデル内の配分、自己資本を追加してbondを増やす場合との資本コスト・期待収益の差を含める。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "MODEL_SCOPE"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "sha256": "349530a80ae555c13ba49a9e494eff23011daf593980f6e00f4865dc0ab48ea2",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 55,
+          "section": "## Context — why ADR-0037 Decision 1 was wrong",
+          "text": "header-bound, non-transferable, progress-free\". It is kept verbatim. What is replaced is the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 698,
+          "section": "## Invariants v2 (release-blocking; supersede ADR-0037's I1/I2/I12, carry the rest)",
+          "text": "    tickets are non-transferable and non-replayable across headers",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "sha256": "42c96943def3b953216e34becdf18fffa054357372bedb3cd3eee9ebb508e55d",
+      "hit_count": 9,
+      "hits": [
+        {
+          "line": 14,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 31,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "> **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 54,
+          "section": "## 0. A position is not a share — it is how a model's usefulness is held",
+          "text": "**a fixed, non-transferable place in one model line's pair, the only thing the protocol itself",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 110,
+          "section": "### 0.3 The words, because the words are where the misreading starts",
+          "text": "In this repository, in the CLI, in the RPC, in the explorer and on misakaoptions.com these are",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 175,
+          "section": "## 3. Decisions",
+          "text": "burned_sompi, registrant_paid_sompi, closed_to_buys }`. Per holder: `PalwModelPositionV1 {",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 238,
+          "section": "## 3. Decisions",
+          "text": "price, supply sold, burned, paid, status), `getPalwModelPositions(holder)`; per-class chain",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 322,
+          "section": "## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)",
+          "text": "| RPC | `getPalwModelMarket(classId)` (an unregistered class is `found: false`; an unopened market reads as the whole supply in the curve) and `getPalwModelPositions(holder)`, through core, service, gRPC (proto ids 1144–1147) and wRPC. |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 353,
+          "section": "## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)",
+          "text": "misakaoptions.com) reads the market over wRPC and the EVM windows, and offers only the two moves.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 393,
+          "section": "## 10. Amendment 2026-09-23: the holder id is not a payout payload (P-B4)",
+          "text": "  to fix. No other market, line, benefit or buyback path pays a holder id. The owner, contributor",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "sha256": "9b2675d2e90f499d5c4339aa8318afc20841567bd1de844a2cb8ba5561aaad5e",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 187,
+          "section": "### 2.1 A line is not a company, and its position is not a share of one",
+          "text": "  explorer, the wallet, misakaoptions.com — may present it as one.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 339,
+          "section": "## 3. Decisions",
+          "text": "(line_id)`; `getPalwModelMarket` and `getPalwModelPositions` keyed by line. CLI: `misaka palw",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 448,
+          "section": "## 8. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| RPC | `getPalwModelLine(lineId)` (the row, its roots in force, its current root), `getPalwModelVersion(lineId, version)` (the row with its evaluations), `getPalwModelLines(classId)`, `getPalwModelProposals(lineId)` — ops 173–176 through core, service, gRPC and wRPC; `getPalwModelMarket` and `getPalwModelPositions` re-keyed to `lineId`; the integration test's round trips. |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "sha256": "9dd6dbf5cce911b31b093b6122cb85e4c8074c43ce376462dbd852d39f972a00",
+      "hit_count": 15,
+      "hits": [
+        {
+          "line": 14,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 20,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "> **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the BILI the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 26,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "ERC-20\" (ERC-20 の単なるコピーにせず); `ModelPosition`, `ModelRegistry` and `ModelAMM` are to be",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 186,
+          "section": "## 4. Decisions",
+          "text": "| `0x…F012` | `ModelPosition` | read precompile |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 220,
+          "section": "## 4. Decisions",
+          "text": "→ `(supplyUnits, unitsPerPosition, virtualSompi, burnPermille, legPermille)`. The quotes call the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 225,
+          "section": "## 4. Decisions",
+          "text": "`ModelPosition`: `balanceOf(line, holderId)` for any 64-byte holder id, `balanceOfAddress",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 255,
+          "section": "## 4. Decisions",
+          "text": "    //      those four selectors revert NonTransferable(); supportsInterface(0x36372b07 /* ERC-20 */) == false",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 268,
+          "section": "## 4. Decisions",
+          "text": "the wrapper (a contract buys positions and issues its own transferable shares) and the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 332,
+          "section": "## 4. Decisions",
+          "text": "`CLASSICAL-ECC`, and `getPalwModelPositions` returns it per row so a wallet shows it; the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 390,
+          "section": "## 4. Decisions",
+          "text": "`IMisakaModelAMM.sol`, `IMisakaModelPosition.sol`, `IMRC20.sol`, `IMisakaModelWriter.sol` and",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        },
+        {
+          "line": 395,
+          "section": "## 4. Decisions",
+          "text": "fields are standard); `getPalwModelMarket` gains `evm_namespace_units`, `getPalwModelPositions`",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 428,
+          "section": "## 6. Security — the four principles, checked before it is built",
+          "text": "| A1 | **A wrapper**: a contract buys positions and sells its own transferable shares. | Decision 4: a contract cannot be a holder (`NotAnAccount`). Residual: off-chain custody of a key is outside every protocol; stated, not closed. |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 438,
+          "section": "## 6. Security — the four principles, checked before it is built",
+          "text": "| A10 | **Security downgrade by default**: a wallet routing a PQ holder into the EVM door. | Positions never move between doors; a wallet cannot route what does not move. ADR-0023 FD-SUPPLY's display rule applies to the *label* of an EVM-held position, which `getPalwModelPositions` carries. |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 498,
+          "section": "## 9. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| `misaka/evm/core/src/model_market.rs` | The intercept: `MarketHandlers` wrapping `handler.execution.call` (the F002 seam's shape) — the three read doors decode the ABI and answer from the view; the facade family answers ERC-20's read half, refuses its transfer half with `NonTransferable`, and routes `buy`/`sell` to the writer's path; the writer charges its gas, refuses a static frame, a caller that is not `tx.origin` or has code (Decision 4), a dormant market, an unknown line, a market closed to buys, a value that is not whole sompi, the 129th action, then moves the escrow caller → writer in the tx's journal and emits `ActionQueued` — the two unwind together on a revert; `decode_action_log` (strict: address, topics, lengths, zero padding) and `settlement_log` (`Bought` / `Sold` / `Refused` from the line's facade). |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 502,
+          "section": "## 9. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| `misaka/evm/contracts/misaka-model/` | `MisakaModelAddresses.sol`, `IMisakaModelRegistry.sol`, `IMisakaModelAMM.sol`, `IMisakaModelPosition.sol`, `IMRC20.sol`, `IMisakaModelWriter.sol`, a README — 64-byte ids as two `bytes32` words; compiled with solc 0.8.28. |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "sha256": "73978cc6bc1acb1e441756fdcdf0e0525725cd4a111cf35d249d38b03c172213",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 14,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 40,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "Adding a model to the site (misakaoptions.com) must make a *model–BILI pair*. To make it the user",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "sha256": "dfd861f3cc4ae76ce165e909263aa8e52448c3dc29639131d094e22df9578920",
+      "hit_count": 21,
+      "hits": [
+        {
+          "line": 14,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 46,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "> それを分配からマイナー報酬でモデルと BILI のペア流動性から BILI で買い上げるようにして価格が上がる",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 49,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "> またそのモデルのマイナー報酬全体のうちの 5% で買い上げるとすること　95% はマイナーに支払うこと",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 88,
+          "section": "## 3. Decisions",
+          "text": "prices it.** `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`; `slice = ⌊escrowed_reward × 50 / 1000⌋`. The",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 105,
+          "section": "## 3. Decisions",
+          "text": "`buyback_sompi += slice`; `model_moves += 1`. **No leg and no burn** — the whole slice is",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 117,
+          "section": "## 3. Decisions",
+          "text": "claim: the fold names the whole escrow as before. The seed is what switches the buyback on; a",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 134,
+          "section": "## 3. Decisions",
+          "text": "**Decision 6 — what a participant reads.** The row gains `buyback_sompi` (BILI the reward has put",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 137,
+          "section": "## 3. Decisions",
+          "text": "prints them; the AMM window's `market()` gains two words at its END — `buybackSompi`,",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 212,
+          "section": "## 6. Invariants the tests must hold",
+          "text": "  reserve; `buyback_sompi` and `model_moves` advance. `palw_state_v2::tests::model_market::the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest`.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 226,
+          "section": "## 6. Invariants the tests must hold",
+          "text": "* **B8 (the drill).** On the armed devnet the seeded founding line's `buyback_sompi` rises on",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 232,
+          "section": "## 7. Order of work",
+          "text": "2. The constant, the row's two fields, the buyback quote and its goldens (B6).",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 245,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* `consensus/core/src/palw_model_market_v1.rs` — `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`, the row's",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 246,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  `buyback_sompi` and `retired_units`, `palw_model_buyback_slice_v1`, `palw_model_buyback_quote_v1`",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 250,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  `the_product_never_falls_under_the_reward_too` (B6/P1, buys and buybacks interleaved).",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 252,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  does not lapse with a version), `TransitionBuilder::model_buyback_at_final`, and `finalize_claim`",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 257,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* RPC: `buybackSompi` / `retiredUnits` on `getPalwModelMarket` (wire version 4, backward-loading;",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 263,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* `web/misaka-options/` — `curve.buybackSlice` / `curve.buyback` (the chain's arithmetic, for the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 270,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  reward alone moves the pair, and the reserve carries the seed and the whole buyback (B8). The",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 271,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  node-agreement row now compares `traded = reserve − buyback`, which the reward's own move leaves",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 272,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  alone; the reserve, the buyback and the retired count are logged for the reader.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 307,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  the drill has grown the chain, on its own clock (`BUYBACK_WAIT`, default 5,400 s). Run 11 with",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "sha256": "f77645fe7798f075076a8fdf54e9f8c9c865c243805ba4ad85ef223385aa408c",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 78,
+          "section": "## 2. Why a membership, and why this market was already shaped for one",
+          "text": "* **A position cannot be transferred** (ADR-0087 Decision 5). A membership that cannot be",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 269,
+          "section": "## 5. Security — the four principles, checked",
+          "text": "* **The credential cannot be lent.** Positions do not transfer, so a membership cannot be rented;",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 282,
+          "section": "## 5. Security — the four principles, checked",
+          "text": "| A6 | a whale buys the top tier and resells access | positions do not transfer; proxying costs them their own slot |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "sha256": "4bcc6c87a8576ad37219c66efa0c19edb92a2ef55c04e09dd208a3f31f277af3",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 131,
+          "section": "## 2. The requirement",
+          "text": "> carrier; and a Position stays a membership — never transferred, never a payment.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "sha256": "c910224a5c686aee35e9856691ab9609266a555325802331f591938274da067a",
+      "hit_count": 4,
+      "hits": [
+        {
+          "line": 75,
+          "section": "### 1.2 A Position's movement, read off the fold",
+          "text": "| the reward's buyback (ADR-0091) | retires units into the market row's `retired_units`; credits no holder | `model_buyback_at_final` |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 77,
+          "section": "### 1.2 A Position's movement, read off the fold",
+          "text": "| the EVM facade (ADR-0089) | `transfer`, `transferFrom`, `approve`, `allowance` answer `NonTransferable()` | `misaka/evm/core/src/model_market.rs` |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 150,
+          "section": "## 5. Invariants the tests hold",
+          "text": "6  The EVM facade answers transfer, transferFrom, approve and allowance with NonTransferable(),",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 156,
+          "section": "## 5. Invariants the tests hold",
+          "text": "`a_position_has_no_transfer_door_on_the_evm`.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "sha256": "674483248cc5f390f03fe7f6f3d17082b58e22c5ed56c4a62ca9483104fb782d",
+      "hit_count": 8,
+      "hits": [
+        {
+          "line": 1,
+          "section": "# ADR-0114 — The owner's leg is five percent, and it arrives at a height",
+          "text": "# ADR-0114 — The owner's leg is five percent, and it arrives at a height",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 40,
+          "section": "## 1. Decisions",
+          "text": "   `PalwModelFeesV1 { burn_permille, leg_permille }` with `V1 = 50/10` (ADR-0087 D4 as shipped) and",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 41,
+          "section": "## 1. Decisions",
+          "text": "   `V2 = 50/50` (`PALW_MODEL_OWNER_LEG_PERMILLE_V2`), and `PalwModelFeesV1::at(leg_v2_active)`. The fold,",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 52,
+          "section": "## 1. Decisions",
+          "text": "3. **The owner's leg is the whole change.** The burn stays 5 %. What the fold does with the leg is",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 58,
+          "section": "## 1. Decisions",
+          "text": "   appends `burnPermille`, `legPermille` (at the virtual DAA) and `legV2ActivationDaa` (0 = not",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 88,
+          "section": "## 4. What does not change",
+          "text": "falls, the refusals (a join that releases nothing, a leave that pays nothing), ADR-0091's buyback (no leg),",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 119,
+          "section": "## 7. Tests",
+          "text": "* `the_v2_schedule_pays_the_owner_five_percent_and_leaves_the_v1_table_alone` — §2's table, V1 through",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 121,
+          "section": "## 7. Tests",
+          "text": "* `past_the_leg_fence_the_owner_is_paid_five_percent_of_every_move` — the fold: the same buy on the same",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "sha256": "f3f575c898928935f2cada5bda2a01823047993632c36275d0fd88d0a2e77b11",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 24,
+          "section": "# ADR-0120 — The least seed is one million BILI, and it arrives at a height",
+          "text": "* Builds on: [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) (a market rule",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "sha256": "d04264352849608b5b72044477bb078f2c07ee49b238c321a5b0ca0b19ff8cb1",
+      "hit_count": 5,
+      "hits": [
+        {
+          "line": 34,
+          "section": "# ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies",
+          "text": "  (the buyback is a slice of the reward), [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 37,
+          "section": "# ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies",
+          "text": "  reuses), [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) §3 (why a",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 140,
+          "section": "## 3. Decisions",
+          "text": "and after ADR-0091's buyback slice; the pool is `⌊R × 200 / 1000⌋` and the producer is named the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 217,
+          "section": "## 3. Decisions",
+          "text": "(`work_priced_escrow`). The buyback (ADR-0091) is five percent of `priced`; Decision 1's split is",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 335,
+          "section": "## 7. What does not change",
+          "text": "escrow's ladder (escrowed while immature, forfeit on void); ADR-0091's buyback and the pair; the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "sha256": "292a036fc3beaf9ebe538bfb79181a8eb5a270fda3594c4947baef81978b5a0a",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 249,
+          "section": "## 6. What is built (shadow, node-local)",
+          "text": "  so their credited seats read as none); ADR-0091's buyback slice; a recorder that survives a node that",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "sha256": "af51e3d1c0e88ee070108c0131828db4b17660bae0b778b95e3db233d68dc805",
+      "hit_count": 4,
+      "hits": [
+        {
+          "line": 130,
+          "section": "## 3. Decision",
+          "text": "**D3. One source for every attribution.** Usage attribution, ADR-0091's buyback, the owner fee and",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 171,
+          "section": "## 3. Decision",
+          "text": "history. They simply stop being the answer: past activation they attract no usage, no buyback and no",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 174,
+          "section": "## 3. Decision",
+          "text": "**D8. Nothing settled before the fence is recomputed.** Past payouts and buybacks are final, the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 201,
+          "section": "## 5. What must be proved",
+          "text": "* usage attribution and buyback attribution both read it, asserted separately;",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "sha256": "1d050f11843da18706f3f12a5ab6b083168185884abc97a4ec86fd83f51367be",
+      "hit_count": 8,
+      "hits": [
+        {
+          "line": 14,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 32,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "  IMPL-15 (the buyback in a seat's lock price).",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 49,
+          "section": "## 1. What the operator asked",
+          "text": "   positions, a first price of 20 BILI, the fees and the reward's buyback unchanged.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 155,
+          "section": "## 4. Decisions",
+          "text": "(`model_buyback_market_v2`), so a seat's lock and the fold never disagree about the slice.",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 306,
+          "section": "## 10. Implementation record (2026-10-01, `position/virtual-reserve`)",
+          "text": "  (`palw_model_seed_deepen_v2`), `X`-based buy/sell/buyback quotes with the sell's real-reserve",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 309,
+          "section": "## 10. Implementation record (2026-10-01, `position/virtual-reserve`)",
+          "text": "  `ModelClassNotTrading`, `model_market_in_force_v2`, the trading gate, the buyback's market, the",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 327,
+          "section": "### 10a. The one fold that takes default model extras has no caller",
+          "text": "arms the market, the lines, the EVM window, the owner's 5 % leg and the million-MSK floor from",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 416,
+          "section": "## 2026-10-16 改定(ユーザー決定)— genesis・年次フォークのモデルは Position 化できない",
+          "text": "- `ApprovedModels` のモデル(genesis assembly、genesis カタログ、有効な年次 edition)への**買いを拒否する**:`ModelPositionOnApprovedModel`。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "MODEL_SCOPE"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "sha256": "c3ecd98a1dd86837e74637212153e285ec4d9312a1000bf72acf0ed429698c03",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 110,
+          "section": "### D4 — 固定された総発行予算の中でcoinbaseを配分する",
+          "text": "**2026-10-14改定:** モデル配分のcoinbaseにowner/登録者のlegは置かない。マイナー報酬は登録者へ直接分配せず、登録者の収入はModelPositionの売買手数料とする（末尾の2026-10-14決定）。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 250,
+          "section": "## モデル配分の確定 — 2026-10-14（ユーザー決定）",
+          "text": "- **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbaseとブロック報酬はclaimを生成したMinerと検証責任を果たしたVerifierにだけ帰属し、登録者・ownerのlegを置かない（[ADR-0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**（売買ごとのBILI額の5 %、[ADR-0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`でADR-0087の1 %から引き上げ。別に5 %をburn）であり、モデルが使われPositionの売買が増えるほど増える。報酬の5 %による買い上げ（ADR-0091）はlegなしで価格を上げるだけである。登録者が自らMiner/Verifierとして参加する場合は、その役割の報酬を同じ規則で受ける。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "sha256": "7545cf72b1d0246218c35884fc243a03f5a66fc84c4f701bd32c682b013cf136",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 122,
+          "section": "# ADR 番号順索引",
+          "text": "| ADR-0114 | [The owner's leg is five percent, and it arrives at a height](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | 原文と後続改定を参照 |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "sha256": "e2e9679993f665fae20c6ade6a16d3d73f8c9eb179550543dffa16b55a912973",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 74,
+          "section": "## Consensus / architecture",
+          "text": "- [ADR-0114 — The owner's leg is five percent, and it arrives at a height](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0005-palw-consensus-architecture.md",
+      "sha256": "a3d2add414c1f86b3dabe54980fa8453e73dcde072b31c3a41284346de259879",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 1359,
+          "section": "## Context — why ADR-0037 Decision 1 was wrong",
+          "text": "header-bound, non-transferable, progress-free\". It is kept verbatim. What is replaced is the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 2002,
+          "section": "## Invariants v2 (release-blocking; supersede ADR-0037's I1/I2/I12, carry the rest)",
+          "text": "    tickets are non-transferable and non-replayable across headers",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0007-evm-exec-lane-and-anchors.md",
+      "sha256": "e5d3cbb97c712abe91457d3541433531062caec1730ac05d08b0362da2f2ad36",
+      "hit_count": 15,
+      "hits": [
+        {
+          "line": 261,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 267,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "> **Amended again (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md): the AMM window's `market()` (Decision 2) gains two words at its end — `buybackSompi`, `retiredUnits` — the BILI the mining reward has put into the pair and the positions the chain holds for good; every earlier word keeps its offset. The move itself is the fold's, on no lane: no action, no event.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 273,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "ERC-20\" (ERC-20 の単なるコピーにせず); `ModelPosition`, `ModelRegistry` and `ModelAMM` are to be",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 433,
+          "section": "## 4. Decisions",
+          "text": "| `0x…F012` | `ModelPosition` | read precompile |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 467,
+          "section": "## 4. Decisions",
+          "text": "→ `(supplyUnits, unitsPerPosition, virtualSompi, burnPermille, legPermille)`. The quotes call the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 472,
+          "section": "## 4. Decisions",
+          "text": "`ModelPosition`: `balanceOf(line, holderId)` for any 64-byte holder id, `balanceOfAddress",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 502,
+          "section": "## 4. Decisions",
+          "text": "    //      those four selectors revert NonTransferable(); supportsInterface(0x36372b07 /* ERC-20 */) == false",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 515,
+          "section": "## 4. Decisions",
+          "text": "the wrapper (a contract buys positions and issues its own transferable shares) and the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 579,
+          "section": "## 4. Decisions",
+          "text": "`CLASSICAL-ECC`, and `getPalwModelPositions` returns it per row so a wallet shows it; the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 637,
+          "section": "## 4. Decisions",
+          "text": "`IMisakaModelAMM.sol`, `IMisakaModelPosition.sol`, `IMRC20.sol`, `IMisakaModelWriter.sol` and",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 642,
+          "section": "## 4. Decisions",
+          "text": "fields are standard); `getPalwModelMarket` gains `evm_namespace_units`, `getPalwModelPositions`",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 675,
+          "section": "## 6. Security — the four principles, checked before it is built",
+          "text": "| A1 | **A wrapper**: a contract buys positions and sells its own transferable shares. | Decision 4: a contract cannot be a holder (`NotAnAccount`). Residual: off-chain custody of a key is outside every protocol; stated, not closed. |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 685,
+          "section": "## 6. Security — the four principles, checked before it is built",
+          "text": "| A10 | **Security downgrade by default**: a wallet routing a PQ holder into the EVM door. | Positions never move between doors; a wallet cannot route what does not move. ADR-0023 FD-SUPPLY's display rule applies to the *label* of an EVM-held position, which `getPalwModelPositions` carries. |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 745,
+          "section": "## 9. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| `misaka/evm/core/src/model_market.rs` | The intercept: `MarketHandlers` wrapping `handler.execution.call` (the F002 seam's shape) — the three read doors decode the ABI and answer from the view; the facade family answers ERC-20's read half, refuses its transfer half with `NonTransferable`, and routes `buy`/`sell` to the writer's path; the writer charges its gas, refuses a static frame, a caller that is not `tx.origin` or has code (Decision 4), a dormant market, an unknown line, a market closed to buys, a value that is not whole sompi, the 129th action, then moves the escrow caller → writer in the tx's journal and emits `ActionQueued` — the two unwind together on a revert; `decode_action_log` (strict: address, topics, lengths, zero padding) and `settlement_log` (`Bought` / `Sold` / `Refused` from the line's facade). |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 749,
+          "section": "## 9. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| `misaka/evm/contracts/misaka-model/` | `MisakaModelAddresses.sol`, `IMisakaModelRegistry.sol`, `IMisakaModelAMM.sol`, `IMisakaModelPosition.sol`, `IMRC20.sol`, `IMisakaModelWriter.sol`, a README — 64-byte ids as two `bytes32` words; compiled with solc 0.8.28. |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0015-permissionless-model-registration.md",
+      "sha256": "dd0742548ba0d2fd23de29113d35771c88677e8dd658e7a2c5c86d202b8247cc",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 1151,
+          "section": "## 2. The requirement",
+          "text": "> carrier; and a Position stays a membership — never transferred, never a payment.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0016-artifact-ownership-and-model-lineage.md",
+      "sha256": "599e418f81a123166776f0ec5fd5a23e041be37fe053eaa819ecab9b72f75a21",
+      "hit_count": 7,
+      "hits": [
+        {
+          "line": 246,
+          "section": "### 2.1 A line is not a company, and its position is not a share of one",
+          "text": "  explorer, the wallet, misakaoptions.com — may present it as one.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 398,
+          "section": "## 3. Decisions",
+          "text": "(line_id)`; `getPalwModelMarket` and `getPalwModelPositions` keyed by line. CLI: `misaka palw",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 507,
+          "section": "## 8. Implementation record (2026-09-05, `palw-adr0088-0089-impl`)",
+          "text": "| RPC | `getPalwModelLine(lineId)` (the row, its roots in force, its current root), `getPalwModelVersion(lineId, version)` (the row with its evaluations), `getPalwModelLines(classId)`, `getPalwModelProposals(lineId)` — ops 173–176 through core, service, gRPC and wRPC; `getPalwModelMarket` and `getPalwModelPositions` re-keyed to `lineId`; the integration test's round trips. |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 712,
+          "section": "## 3. Decision",
+          "text": "**D3. One source for every attribution.** Usage attribution, ADR-0091's buyback, the owner fee and",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 753,
+          "section": "## 3. Decision",
+          "text": "history. They simply stop being the answer: past activation they attract no usage, no buyback and no",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 756,
+          "section": "## 3. Decision",
+          "text": "**D8. Nothing settled before the fence is recomputed.** Past payouts and buybacks are final, the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 783,
+          "section": "## 5. What must be proved",
+          "text": "* usage attribution and buyback attribution both read it, asserted separately;",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0019-model-tiers-and-annual-catalog.md",
+      "sha256": "b1304ec625b75775c8a8fd8883eeb01283ecf108e5c0d6a501e05fd0247a1393",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 168,
+          "section": "### D4 — 固定された総発行予算の中でcoinbaseを配分する",
+          "text": "**2026-10-14改定:** モデル配分のcoinbaseにowner/登録者のlegは置かない。マイナー報酬は登録者へ直接分配せず、登録者の収入はModelPositionの売買手数料とする（末尾の2026-10-14決定）。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 308,
+          "section": "## モデル配分の確定 — 2026-10-14（ユーザー決定）",
+          "text": "- **マイナー報酬はモデル登録者へ直接分配しない。** モデル別のcoinbaseとブロック報酬はclaimを生成したMinerと検証責任を果たしたVerifierにだけ帰属し、登録者・ownerのlegを置かない（[ADR-0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)の「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**（売買ごとのBILI額の5 %、[ADR-0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`でADR-0087の1 %から引き上げ。別に5 %をburn）であり、モデルが使われPositionの売買が増えるほど増える。報酬の5 %による買い上げ（ADR-0091）はlegなしで価格を上げるだけである。登録者が自らMiner/Verifierとして参加する場合は、その役割の報酬を同じ規則で受ける。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0021-positions-and-membership.md",
+      "sha256": "d99031fd5acf2908058f2345cae6a3b9e9ae525980de113dbb8f5061fa7bfe9b",
+      "hit_count": 19,
+      "hits": [
+        {
+          "line": 1,
+          "section": "# ADR-v2-0021 — Position・curve・membership・非譲渡性",
+          "text": "# ADR-v2-0021 — Position・curve・membership・非譲渡性",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 13,
+          "section": "## 1. この文書の役割",
+          "text": "ModelPositionを報酬請求権や譲渡可能tokenと混同せず、その権利と検証をまとめる。",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 27,
+          "section": "### 2.3",
+          "text": "membershipのchain認証と第三者による証拠配布を区別し、Positionをholder間で移転させない条件を保持する。[旧ADR-0101](../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 73,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 90,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "> **Amended a third time (2026-09-06, design first).** [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) adds the chain's own move to Decision 3: at a claim's `Final`, five percent of its escrowed worker reward buys from the pair of the line the claim ran, the positions the curve gives up are retired (the chain's, for good — M1 counts them), no leg is taken (Decision 4), and the miner is named the other ninety-five percent; nothing is ever distributed to a holder. Decision 8's row gains `buyback_sompi` and `retired_units`.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 113,
+          "section": "## 0. A position is not a share — it is how a model's usefulness is held",
+          "text": "**a fixed, non-transferable place in one model line's pair, the only thing the protocol itself",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 169,
+          "section": "### 0.3 The words, because the words are where the misreading starts",
+          "text": "In this repository, in the CLI, in the RPC, in the explorer and on misakaoptions.com these are",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 234,
+          "section": "## 3. Decisions",
+          "text": "burned_sompi, registrant_paid_sompi, closed_to_buys }`. Per holder: `PalwModelPositionV1 {",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 297,
+          "section": "## 3. Decisions",
+          "text": "price, supply sold, burned, paid, status), `getPalwModelPositions(holder)`; per-class chain",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 381,
+          "section": "## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)",
+          "text": "| RPC | `getPalwModelMarket(classId)` (an unregistered class is `found: false`; an unopened market reads as the whole supply in the curve) and `getPalwModelPositions(holder)`, through core, service, gRPC (proto ids 1144–1147) and wRPC. |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 412,
+          "section": "## 7. Implementation record (2026-09-05, `palw-adr0084-served-answer`)",
+          "text": "misakaoptions.com) reads the market over wRPC and the EVM windows, and offers only the two moves.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 452,
+          "section": "## 10. Amendment 2026-09-23: the holder id is not a payout payload (P-B4)",
+          "text": "  to fix. No other market, line, benefit or buyback path pays a holder id. The owner, contributor",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 545,
+          "section": "## 2. Why a membership, and why this market was already shaped for one",
+          "text": "* **A position cannot be transferred** (ADR-0087 Decision 5). A membership that cannot be",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 736,
+          "section": "## 5. Security — the four principles, checked",
+          "text": "* **The credential cannot be lent.** Positions do not transfer, so a membership cannot be rented;",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 749,
+          "section": "## 5. Security — the four principles, checked",
+          "text": "| A6 | a whale buys the top tier and resells access | positions do not transfer; proxying costs them their own slot |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 890,
+          "section": "### 1.2 A Position's movement, read off the fold",
+          "text": "| the reward's buyback (ADR-0091) | retires units into the market row's `retired_units`; credits no holder | `model_buyback_at_final` |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 892,
+          "section": "### 1.2 A Position's movement, read off the fold",
+          "text": "| the EVM facade (ADR-0089) | `transfer`, `transferFrom`, `approve`, `allowance` answer `NonTransferable()` | `misaka/evm/core/src/model_market.rs` |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 965,
+          "section": "## 5. Invariants the tests hold",
+          "text": "6  The EVM facade answers transfer, transferFrom, approve and allowance with NonTransferable(),",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 971,
+          "section": "## 5. Invariants the tests hold",
+          "text": "`a_position_has_no_transfer_door_on_the_evm`.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md",
+      "sha256": "45783248fcf22686ce6ef3fe23d3b1f141f814bf7d2f423f86bff821cffbb5bb",
+      "hit_count": 12,
+      "hits": [
+        {
+          "line": 35,
+          "section": "## 4. 隣接する判断との分担",
+          "text": "Positionの意味は[ADR-v2-0021](0021-positions-and-membership.md)、報酬からの買付と手数料は[ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md)。",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 74,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 100,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "Adding a model to the site (misakaoptions.com) must make a *model–BILI pair*. To make it the user",
+          "scope": "embedded_historical_source",
+          "purpose_hints": []
+        },
+        {
+          "line": 544,
+          "section": "# ADR-0120 — The least seed is one million BILI, and it arrives at a height",
+          "text": "* Builds on: [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) (a market rule",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 626,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 644,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "  IMPL-15 (the buyback in a seat's lock price).",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 661,
+          "section": "## 1. What the operator asked",
+          "text": "   positions, a first price of 20 BILI, the fees and the reward's buyback unchanged.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 767,
+          "section": "## 4. Decisions",
+          "text": "(`model_buyback_market_v2`), so a seat's lock and the fold never disagree about the slice.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 918,
+          "section": "## 10. Implementation record (2026-10-01, `position/virtual-reserve`)",
+          "text": "  (`palw_model_seed_deepen_v2`), `X`-based buy/sell/buyback quotes with the sell's real-reserve",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 921,
+          "section": "## 10. Implementation record (2026-10-01, `position/virtual-reserve`)",
+          "text": "  `ModelClassNotTrading`, `model_market_in_force_v2`, the trading gate, the buyback's market, the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 939,
+          "section": "### 10a. The one fold that takes default model extras has no caller",
+          "text": "arms the market, the lines, the EVM window, the owner's 5 % leg and the million-MSK floor from",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 1028,
+          "section": "## 2026-10-16 改定(ユーザー決定)— genesis・年次フォークのモデルは Position 化できない",
+          "text": "- `ApprovedModels` のモデル(genesis assembly、genesis カタログ、有効な年次 edition)への**買いを拒否する**:`ModelPositionOnApprovedModel`。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "MODEL_SCOPE"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0023-model-reward-routing-and-owner-leg.md",
+      "sha256": "c7ec00d7b523746c63b7640d9e107516d2f02a52b8e619f4408e8a733277ccfc",
+      "hit_count": 40,
+      "hits": [
+        {
+          "line": 13,
+          "section": "## 1. この文書の役割",
+          "text": "モデルの利用報酬、買付、ownerの売買手数料を分けて二重支払を防ぐ。",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 19,
+          "section": "### 2.1",
+          "text": "claimのescrowed worker rewardから市場を買い上げる仕組みを、holderへ現金配当する仕組みと区別する。[旧ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 23,
+          "section": "### 2.2",
+          "text": "owner legの比率変更は売買のDAAに適用するscheduleとして記録し、旧比率と新比率を各consumerで統一する。[旧ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 27,
+          "section": "### 2.3",
+          "text": "後続ADR-0177の「マイナー報酬を登録者へ直接分配しない」と、ModelPosition売買手数料の収入を同じものにしない。[旧ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 31,
+          "section": "## 3. 維持する境界・後続改定",
+          "text": "ここでの5%は用途が異なる複数の値を含む。buyback・burn・owner trading feeを一つの5%配当として要約しない。",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 44,
+          "section": "## 原資料一覧",
+          "text": "| [0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | L1–L125 | L14–L28 |",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 72,
+          "section": "## 2026-10-09 改定 — Positionと市場の対象を固定する",
+          "text": "[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 104,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "> それを分配からマイナー報酬でモデルと BILI のペア流動性から BILI で買い上げるようにして価格が上がる",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 107,
+          "section": "## 1. What the operator asked, in the operator's words",
+          "text": "> またそのモデルのマイナー報酬全体のうちの 5% で買い上げるとすること　95% はマイナーに支払うこと",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 146,
+          "section": "## 3. Decisions",
+          "text": "prices it.** `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`; `slice = ⌊escrowed_reward × 50 / 1000⌋`. The",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 163,
+          "section": "## 3. Decisions",
+          "text": "`buyback_sompi += slice`; `model_moves += 1`. **No leg and no burn** — the whole slice is",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 175,
+          "section": "## 3. Decisions",
+          "text": "claim: the fold names the whole escrow as before. The seed is what switches the buyback on; a",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 192,
+          "section": "## 3. Decisions",
+          "text": "**Decision 6 — what a participant reads.** The row gains `buyback_sompi` (BILI the reward has put",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 195,
+          "section": "## 3. Decisions",
+          "text": "prints them; the AMM window's `market()` gains two words at its END — `buybackSompi`,",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 270,
+          "section": "## 6. Invariants the tests must hold",
+          "text": "  reserve; `buyback_sompi` and `model_moves` advance. `palw_state_v2::tests::model_market::the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest`.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 284,
+          "section": "## 6. Invariants the tests must hold",
+          "text": "* **B8 (the drill).** On the armed devnet the seeded founding line's `buyback_sompi` rises on",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 290,
+          "section": "## 7. Order of work",
+          "text": "2. The constant, the row's two fields, the buyback quote and its goldens (B6).",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 303,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* `consensus/core/src/palw_model_market_v1.rs` — `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`, the row's",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 304,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  `buyback_sompi` and `retired_units`, `palw_model_buyback_slice_v1`, `palw_model_buyback_quote_v1`",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 308,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  `the_product_never_falls_under_the_reward_too` (B6/P1, buys and buybacks interleaved).",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 310,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  does not lapse with a version), `TransitionBuilder::model_buyback_at_final`, and `finalize_claim`",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 315,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* RPC: `buybackSompi` / `retiredUnits` on `getPalwModelMarket` (wire version 4, backward-loading;",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 321,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "* `web/misaka-options/` — `curve.buybackSlice` / `curve.buyback` (the chain's arithmetic, for the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 328,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  reward alone moves the pair, and the reserve carries the seed and the whole buyback (B8). The",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 329,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  node-agreement row now compares `traded = reserve − buyback`, which the reward's own move leaves",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 330,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  alone; the reserve, the buyback and the retired count are logged for the reader.",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 365,
+          "section": "## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "  the drill has grown the chain, on its own clock (`BUYBACK_WAIT`, default 5,400 s). Run 11 with",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 390,
+          "section": "## 10. Number hygiene",
+          "text": "<a id=\"source-0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height\"></a>",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 393,
+          "section": "## 10. Number hygiene",
+          "text": "<summary>0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md — 原文 L1–L125</summary>",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 395,
+          "section": "## 10. Number hygiene",
+          "text": "[原文を開く](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) · SHA-256: `674483248cc5f390f03fe7f6f3d17082b58e22c5ed56c4a62ca9483104fb782d`",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 397,
+          "section": "## 10. Number hygiene",
+          "text": "<!-- ADR_SOURCE_BEGIN:0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md -->",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 399,
+          "section": "# ADR-0114 — The owner's leg is five percent, and it arrives at a height",
+          "text": "# ADR-0114 — The owner's leg is five percent, and it arrives at a height",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 438,
+          "section": "## 1. Decisions",
+          "text": "   `PalwModelFeesV1 { burn_permille, leg_permille }` with `V1 = 50/10` (ADR-0087 D4 as shipped) and",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 439,
+          "section": "## 1. Decisions",
+          "text": "   `V2 = 50/50` (`PALW_MODEL_OWNER_LEG_PERMILLE_V2`), and `PalwModelFeesV1::at(leg_v2_active)`. The fold,",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 450,
+          "section": "## 1. Decisions",
+          "text": "3. **The owner's leg is the whole change.** The burn stays 5 %. What the fold does with the leg is",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 456,
+          "section": "## 1. Decisions",
+          "text": "   appends `burnPermille`, `legPermille` (at the virtual DAA) and `legV2ActivationDaa` (0 = not",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 486,
+          "section": "## 4. What does not change",
+          "text": "falls, the refusals (a join that releases nothing, a leave that pays nothing), ADR-0091's buyback (no leg),",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 517,
+          "section": "## 7. Tests",
+          "text": "* `the_v2_schedule_pays_the_owner_five_percent_and_leaves_the_v1_table_alone` — §2's table, V1 through",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 519,
+          "section": "## 7. Tests",
+          "text": "* `past_the_leg_fence_the_owner_is_paid_five_percent_of_every_move` — the fold: the same buy on the same",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 525,
+          "section": "## 7. Tests",
+          "text": "<!-- ADR_SOURCE_END:0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md -->",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0026-canonical-work-and-answer-accounting.md",
+      "sha256": "970654fb7960d09b0e3e1c3729879f3bc7b650849b365344afe58c3f561d4c94",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 1137,
+          "section": "## 6. What is built (shadow, node-local)",
+          "text": "  so their credited seats read as none); ADR-0091's buyback slice; a recorder that survives a node that",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0037-fee-escrow-and-role-consent.md",
+      "sha256": "b5af6bebaac966caf4f5fa566a53621721dd15c0a90df26f94c84151e2aedff8",
+      "hit_count": 5,
+      "hits": [
+        {
+          "line": 256,
+          "section": "# ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies",
+          "text": "  (the buyback is a slice of the reward), [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 259,
+          "section": "# ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies",
+          "text": "  reuses), [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) §3 (why a",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 362,
+          "section": "## 3. Decisions",
+          "text": "and after ADR-0091's buyback slice; the pool is `⌊R × 200 / 1000⌋` and the producer is named the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 439,
+          "section": "## 3. Decisions",
+          "text": "(`work_priced_escrow`). The buyback (ADR-0091) is five percent of `priced`; Decision 1's split is",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 557,
+          "section": "## 7. What does not change",
+          "text": "escrow's ladder (escrowed while immature, forfeit on void); ADR-0091's buyback and the pair; the",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/0050-freeze-deferred-rejected-and-governance.md",
+      "sha256": "b9714b7c0c50d9fd8ef58991cbf8f94fe76379d19915ba760877334b3a270940",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 73,
+          "section": "## 5. 凍結・延期・撤回・不採用・未採択の集約台帳",
+          "text": "| P31 | Miner報酬から登録者への直接owner配当 | 採択していない／後続決定で否定 | [旧ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) [旧ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) [旧ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) | ModelPosition売買手数料、自らMiner／Verifierとして参加した役割報酬は別。 | [ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md) |",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/MAPPING.md",
+      "sha256": "31ef7083d38c200fe1877a8c06c306e5cc628ddf38fdaef3b4dda2547aa31d3f",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 120,
+          "section": "## 旧文書から探す",
+          "text": "| [0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | [ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md) | L1–L125 | [原文宣言の記録](STATUS-LEDGER.md#source-0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height) (L14–L28) |",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 296,
+          "section": "### ADR-v2-0021 — Position・curve・membership・非譲渡性",
+          "text": "### ADR-v2-0021 — Position・curve・membership・非譲渡性",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 306,
+          "section": "### ADR-v2-0023 — モデル報酬の送金先・owner leg",
+          "text": "[統合本文を開く](0023-model-reward-routing-and-owner-leg.md) / [旧ADR-0091](../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)、[旧ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/PRECEDENCE.md",
+      "sha256": "8393a96fc4e62257466dc30323205de008a9e143c82464b617171183f47b15a9",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 46,
+          "section": "## 従来の採択と置換の索引",
+          "text": "| Position手数料 | 旧0087の旧料率 → 0114のfenced料率。0177は直接採掘配当を否定 | [旧ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) [旧ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) [旧ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md) | [ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md) |",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/README.md",
+      "sha256": "beb7eaad5cba78fcdc11167ba9c672ac27165ca4d888fbce4a483443df74f325",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 110,
+          "section": "## 50本の一覧",
+          "text": "| [ADR-v2-0021](0021-positions-and-membership.md) | Position・curve・membership・非譲渡性 | 3 | [11](../rfc-v2/0011-bond-budgets-fees-and-payments.md) |",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRANSFER",
+            "TRADE_FEES",
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/adr-v2/STATUS-LEDGER.md",
+      "sha256": "41ef61543e12ecbeb0c939b740f212c383f5752d12333f0155a8602a130f2d74",
+      "hit_count": 8,
+      "hits": [
+        {
+          "line": 1792,
+          "section": "## 0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+          "text": "ERC-20\" (ERC-20 の単なるコピーにせず); `ModelPosition`, `ModelRegistry` and `ModelAMM` are to be",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 2511,
+          "section": "## 0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+          "text": "<a id=\"source-0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height\"></a>",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 2513,
+          "section": "## 0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+          "text": "## 0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 2515,
+          "section": "## 0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+          "text": "[原文](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) / [新しい主担当](0023-model-reward-routing-and-owner-leg.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 2701,
+          "section": "## 0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+          "text": "* Builds on: [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) (a market rule",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 2810,
+          "section": "## 0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+          "text": "  (the buyback is a slice of the reward), [0098](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md)",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 2813,
+          "section": "## 0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+          "text": "  reuses), [0114](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) §3 (why a",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 3559,
+          "section": "## 0162-the-pair-opens-on-a-virtual-reserve.md",
+          "text": "  IMPL-15 (the buyback in a seat's lock price).",
+          "scope": "current_compilation_authored_or_appendix_scope",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/architecture/palw-specification.md",
+      "sha256": "cd0f264b95ef2ad4ef69c72ea99cbca0e85d3e3f161815e0b83b7cc517580c8f",
+      "hit_count": 14,
+      "hits": [
+        {
+          "line": 41,
+          "section": "## Local Useful Inference, Panel-Assisted Verification, Court and Model Economy",
+          "text": "| 対象 | テキストLLMの整数実行、モデル登録、claim、Panel、Court、ブロック生成、bond、ModelPosition、モデル別DAG並列生成、報酬 |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 255,
+          "section": "### 1.2 不変性",
+          "text": "変更後のモデルは、新しい登録として扱う。旧モデルのclaim、bond責任、ModelPosition、市場reserve、履歴を、新モデルへ自動的に付け替えてはならない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 772,
+          "section": "## 6. モデルの売買対象となるModelPosition",
+          "text": "## 6. モデルの売買対象となるModelPosition",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 778,
+          "section": "### 6.1 何を売買するか",
+          "text": "ModelPositionは、固定されたモデル登録に紐付く、プロトコル上のポジションとする。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 784,
+          "section": "### 6.1 何を売買するか",
+          "text": "[既存設計](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)では、ModelPositionは自由譲渡型のERC-20ではなく、**モデル別の曲線から購入し、その曲線へ売却する非譲渡型ポジション**である。この構造を維持する。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 802,
+          "section": "### 6.3 会計と状態の正本",
+          "text": "ModelPositionの残高、市場reserve、供給、売買、retirementは、共通の決定論的状態遷移で管理する。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 823,
+          "section": "### 6.5 計算経済との接続",
+          "text": "モデル利用に伴うbuybackやretirementを設ける場合、その財源・割合・対象・実行時点を明示する。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 826,
+          "section": "### 6.5 計算経済との接続",
+          "text": "同じ報酬をMinerに全額支払った後、存在しない別予算からbuybackを実行したことにしてはならない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 829,
+          "section": "### 6.5 計算経済との接続",
+          "text": "登録者への売買手数料と、Miner・Verifierとして働いた対価を分離する。ModelPositionの保有だけで、計算認証権、Panel席、consensus weight、bond資格を与えてはならない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 835,
+          "section": "### 6.6 表示上の境界",
+          "text": "ModelPositionについて、配当、元本保証、価格上昇保証、モデルの所有権を表示してはならない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 982,
+          "section": "### 8.2 「モデル＝miner」の意味と責任の分離",
+          "text": "「モデル＝miner」を理由に、モデル登録者だけに採掘権を与えたり、一モデルにつき一つの物理Node・鍵・bondに限定したりしてはならない。ModelPositionの保有を、生成主体としての必須資格に追加してはならない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "MODEL_SCOPE",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 1355,
+          "section": "## 適合性確認",
+          "text": "| 6 | Positionの二重発行、無許可移転、virtual reserveの払出しを拒否する |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 1401,
+          "section": "## 維持する中核構造",
+          "text": "> **モデル登録、claim認証、bond管理、ModelPosition、市場価格、報酬を混同しない。どの主体も、署名や運用上の地位だけで計算の真実を決定できない。**",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 1413,
+          "section": "## 改訂範囲と参照",
+          "text": "根拠・照合先は[PRINCIPLES](../PRINCIPLES.md)、[変更管理](../governance/design-freeze.md)、[対象範囲](../governance/post-mainnet-scope.md)、[パラメーター台帳](../governance/parameter-register.md)、[Remote Client](../rfc/0009-palw-remote-miner.md)、[公開検証](../rfc/0015-panel-free-permissionless-verification.md)、[DAG・Gate C](../rfc/0018-dag-parallel-multi-model-consensus.md)、[ModelPosition](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)、[検証者経済](../design/palw/economics/econ-verifier-incentive-and-allocation.md)とする。参照文書の過去の実装・試験記録を、今回の実装適合性やネットワーク有効化の証拠として流用しない。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/audit/adr/STATUS-AUDIT-2026-09-18.md",
+      "sha256": "664b3cd1593cf18439d562078522cef501e3b0df4896fd653a0a80036ce26545",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 586,
+          "section": "# ADR status audit — 2026-09-18 (mechanical pass; see the reviewed notes at the end)",
+          "text": "| 0087 | ADR-0087 — a position is bought from the curve and sold back to it | IMPLEMENTED |  | `Final`:530/35, `buyback_sompi`:29/0, `retired_units`:38/0 | 2 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 615,
+          "section": "# ADR status audit — 2026-09-18 (mechanical pass; see the reviewed notes at the end)",
+          "text": "| 0091 | 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`) | IMPLEMENTED |  | `buyback_sompi`:29/0, `retired_units`:38/0, `palw_model_buyback_slice_v1`:5/0, `palw_model_buyback_quote_v1`:12/0, `None`:0/0, `the_reward_slice_is_worked_as_the_adr_table`:1/0, `the_product_never_falls_under_the_reward_ | 7 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 737,
+          "section": "# ADR status audit — 2026-09-18 (mechanical pass; see the reviewed notes at the end)",
+          "text": "| 0114 | 1. Decisions | IMPLEMENTED-BUT-UNVERIFIED |  | `PALW_MODEL_OWNER_LEG_PERMILLE_V2`:2/0 | 1 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/audit/palw/design-reviews/emission-audit-2026-10-04.md",
+      "sha256": "53c501b371167720e35572a94e2c2d7967e7bde0c94d8c7fb5b5d0061f74f842",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 4,
+          "section": "# Emission audit 2026-10-04 (lane EM; written by the lead from the agent's final report)",
+          "text": "escrow 3,200.8465 MSK (producer leg 40/50, panel seat legs 2/50 each = 128/256/384 MSK); no miner/validator/buyback payouts.",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md",
+      "sha256": "41d963f787d763f03b6cac42f4053c724ecdd2ac8ef190b8766044c222e527df",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 23,
+          "section": "## RFC18: design options for the certified reward split (no ratio chosen)",
+          "text": "2. **Three legs with buyback** — producer, verifiers, and a buyback/burn leg `R·b` (removed from supply, not paid). Conservation:",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 28,
+          "section": "## RFC18: design options for the certified reward split (no ratio chosen)",
+          "text": "Values to decide: `p` (Panel/verifier share), `b` (buyback), `V` (vesting), and whether the verifier leg is per drawn seat or per",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/audit/palw/rfc18-dag-audit-2026-10-17/source_evidence.md",
+      "sha256": "235c1ba095a448c50a1a12a278b2cca00f55e2894fb3e289b977ea8b428cae42",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 2301,
+          "section": "### `docs/rfc/0018-dag-parallel-multi-model-consensus.md:350–360`",
+          "text": "   353 | * **U-2** 発行由来報酬legの保留を、producerへの1 legで支払うか(本実装)、Panel share・buyback・vestingへ分けるか(GAP-C4)。",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/economics/bond-budget-and-model-allocation.md",
+      "sha256": "a184542d5cf6a7eb54758d1fbe3a75a921e89946d4ddf0e5177982f7cd4fe77c",
+      "hit_count": 7,
+      "hits": [
+        {
+          "line": 71,
+          "section": "### 2.1 Units",
+          "text": "| `R` reward | base units (BILI × 10^8) | the most the claim can be paid on every leg (producer, seats, reserve, buyback): an Attempt its `escrowed_reward`, a free-prompt claim `quanta × worker carve` at commit (the subsidy never rises) |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 179,
+          "section": "### 2.6 Consumption (payout, maturity, Final, reward blocks)",
+          "text": "The Final reward is clipped **before** the existing split: buyback slice, panel pool, producer and reserve. Every leg then derives",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 406,
+          "section": "## 4. Inventory: every reward-bearing writer and reader on this tree",
+          "text": "| 1 | **Attempt claim** — `apply_attempt` S:40060 records `reserved`, `escrowed_reward` (worker carve), `immature_contribution`, issuance slot/bucket, emission charge, economics snapshot; `accepted_daa` = accepting chain block's DAA | Q 1; B `U` (its carrying block); R `escrowed_reward`; F the Final contribution. Immature weight clipped to `F` | B at acceptance (the block exists); F at `finalize_claim` S:27817 (clip); R at `finalize_claim` before the buyback/panel split (clip) | wired (M3) |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 412,
+          "section": "## 4. Inventory: every reward-bearing writer and reader on this tree",
+          "text": "| 7 | **Final** — `finalize_claim`: `safe_weight += palw_weight_final_safe_v1(…)`; escrow → economics price → buyback → panel/producer/reserve legs → payout row or vesting row | — | F clip, R clip (all legs) | wired (M3) |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 478,
+          "section": "## 6b. PESG §6: safety bounds independent of the economics (round 3, 2026-10-10)",
+          "text": "| External export cap | Nothing leaves before Final. After Final, while the liability holds collateral, what leaves at once is at most `⌊export_cap_permille · K / 1000⌋`. The cap is at most 510 permille (0.51), and `K` is the claim's `reserved`. \"What leaves at once\" means a leg written straight into the payout queue (no vesting), a buyback slice in a market reserve, or the sum of FP receipt spends while `now < final + H_L`. A vesting row is not an export, because it moves only after its lock (the liability) has ended. The rest is never named, so never minted. Legacy claims are paid by their old rule. | `finalize_claim` (non-vesting legs and buyback); `bond_budget_receipt_spend_v1` plus the processor's H-5 pre-check (`bond_budget_spend_fits_v1`, now given params and DAA). |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 489,
+          "section": "## 6b. PESG §6: safety bounds independent of the economics (round 3, 2026-10-10)",
+          "text": "* EVM `MarketSettle` trades. These are holders trading positions, and the reserve a claim's buyback adds is capped above.",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "EVM"
+          ]
+        },
+        {
+          "line": 586,
+          "section": "## 10. Open questions for the user",
+          "text": "* **D-2** `R` covers the whole claim reward: producer, seats, reserve and buyback. Should seat pay instead count against the",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/economics/econ-verifier-incentive-and-allocation.md",
+      "sha256": "f759a79aa6f494b6fb77c7c632483d1cb08d63e52cc7efd0bf8c7e5b7a991b36",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 673,
+          "section": "### 5.4 The proposed bar (POLICY; to fix before any curve is chosen) and the verdict",
+          "text": "| **A** | concentration premium ≤ 1: a single owner of 10%, 25% or 50% of the capital gets no more than its share |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 796,
+          "section": "### 5c.4 The answer: a verified-work gate on the model leg (DERIVED)",
+          "text": "* The owner leg raises the linear ratio to 75× at ω = 5% and 112× at ω = 10% (`S_0` = 1, `e` = 9).",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/economics/palw-position-benefits-consumer-p-b2-2026-09-24-ja.md",
+      "sha256": "fc2c71192eaebd2219d2c9892e098a0a5a7a3464952564b1193281f592842c6a",
+      "hit_count": 13,
+      "hits": [
+        {
+          "line": 11,
+          "section": "## 決定（2026-09-24、ユーザー）",
+          "text": "- **Q2（ADR-0091 buyback の値上がり益）は未決です。** §5 の選択肢はそのまま残します。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 15,
+          "section": "## この段階で入ったもの（RPC の半分）",
+          "text": "- `getPalwModelPositions`（op 172）の wire version 2。各行に `holdingSinceDaa`、`tenureDaa`、`tierIndex`、`tier` を、応答に `tipDaa` と **`tipHash`** を載せます。新しい op は作りません。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 18,
+          "section": "## この段階で入ったもの（RPC の半分）",
+          "text": "- `GetPalwModelPositionsRequest.holder` と rpc.proto の doc を直しました。holder id は payout payload ではありません。carrier lane では `palw_model_holder_of_pubkey_v1(pubkey)`（keyless の `mldsa87_key_id`）、EVM lane では `evm_holder_v1(chain_id, address)` です（P-B4 の修正と同じ整理）。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "EVM"
+          ]
+        },
+        {
+          "line": 56,
+          "section": "## 2. t12（5a559459）に実際にあるもの",
+          "text": "| 保有量を読む RPC | `getPalwModelPositions` は **`(lineId, units)` しか返さない** | message.rs :3200 |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 71,
+          "section": "### 3.1 何を変えるか",
+          "text": "| consensus-core `api` | `PalwModelPositionsReadV1 { tip_daa, rows }` と `PalwModelPositionReadV1 { line_id, units, holding_since_daa, tenure_daa, tier }`。`at_tip(state, holder)` は chain 自身の `model_position_tenure` と `model_benefit_tier` を tip の DAA で呼ぶ。`ConsensusApi::palw_model_positions_read_v1` を**新しく追加**する（default は空）。既存の `palw_model_positions_v1` には触れない。pb3 がその直前に hunk を入れるので、衝突を避けるため |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MODEL_SCOPE"
+          ]
+        },
+        {
+          "line": 74,
+          "section": "### 3.1 何を変えるか",
+          "text": "| rpc-core wire | `RpcPalwModelPosition` を v2 にし、`holdingSinceDaa?`、`tenureDaa`、`tierIndex?`、`tier?`（`RpcPalwModelBenefitTier`）を追加。`GetPalwModelPositionsResponse` を v2 にし、`tipDaa` を追加。どちらも末尾に追加する。v1 のデータは fail-closed で読む（clock なし、tier なし、tip 0）。JSON の新しいフィールドには `#[serde(default)]` を付ける |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MODEL_SCOPE"
+          ]
+        },
+        {
+          "line": 75,
+          "section": "### 3.1 何を変えるか",
+          "text": "| gRPC | proto の `RpcPalwModelPosition` に 3〜6、`GetPalwModelPositionsResponseMessage` に 3 を追加。変換を両方向で行う |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MODEL_SCOPE"
+          ]
+        },
+        {
+          "line": 121,
+          "section": "### 3.3 provider 側の検証レシピ（このパッチの後に使えるもの）",
+          "text": "6. **保有を読む。** `getPalwModelPositions(holder_id)` を呼び、次を確かめます。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 127,
+          "section": "### 3.3 provider 側の検証レシピ（このパッチの後に使えるもの）",
+          "text": "9. **信頼の前提。** RPC の答えは証明ではありません。provider は自分のノードに問い合わせるか、複数ノードで照合してください。position は譲渡できないので、証明を貸すことは自分の枠を代理で使うことにしかなりません（ADR-0095 A6）。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "TRANSFER"
+          ]
+        },
+        {
+          "line": 139,
+          "section": "## 5. Q2: ADR-0091 の buyback が生む値上がり益と ADR-0095 の矛盾",
+          "text": "## 5. Q2: ADR-0091 の buyback が生む値上がり益と ADR-0095 の矛盾",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 153,
+          "section": "## 5. Q2: ADR-0091 の buyback が生む値上がり益と ADR-0095 の矛盾",
+          "text": "| **T2 slice を売り手に渡さない** | slice は reserve に入るが、seed と同じく永久にロックする。buy の quote は全 reserve で計算し、使われるほど入会価格が上がる。sell の quote は `reserve − buyback_sompi`（drill がすでに計算している `traded`）で計算する | **消える**（自分の払った MSK から leg を引いた額までしか戻らない） | **残る**（新規参加者の価格にだけ効く） | あり。sell の quote、M1/M2、EVM window の説明を変える。`audit_2026_09_23` で t12 のみ | ADR-0091 と ADR-0095 の両方の意図を保てる唯一の案。buy と sell の非対称（spread）が時間とともに広がる。仕様を詰めて drill で確認する必要がある |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 155,
+          "section": "## 5. Q2: ADR-0091 の buyback が生む値上がり益と ADR-0095 の矛盾",
+          "text": "| **T4 buyback を 0 にする** | `PALW_MODEL_BUYBACK_PERMILLE` を t12 で 0 にし、miner が 100% を受け取る | 消える | 消える | あり、最小 | ADR-0091 を t12 で事実上撤回する |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 165,
+          "section": "## 6. 関連する注意点",
+          "text": "- **B4 との関係:** carrier lane の holder id は keyless の BLAKE2b(pubkey) で、使える payout payload（keyed）とは別物です。`GetPalwModelPositionsRequest.holder` と rpc.proto の doc comment は、この段階で直しました。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/execution/rfc-0008-implementation-spec.md",
+      "sha256": "0e4301ebcb9dba5fe52035fe6b98d21012d5a7a844ec534bb32554d3fb5d6678",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 947,
+          "section": "### 13.2 Source and cap accounting",
+          "text": "Let `A` be the root executor allocation after the native bond-budget clip, buyback and panel split. Aggregate each executor's",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/integration/activation-readiness-matrix.md",
+      "sha256": "3b7be624ed7117d8167f09ed3a6ce84df11ddeccda1c6035a1a2d922381907fa",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 358,
+          "section": "## 3k. Final goal: closure is uneconomic, fraud is bounded not eliminated (user, 2026-10-14)",
+          "text": "- **Allocation finalized later the same day (user, 2026-10-14; RFC-0015 §8.5.5, ADR-0177):** α = 1.5 adopted (the μ proposal kept for comparison only); `S_m` = miner + claim-bound permissionless verifier capital, deduplicated; a 30-day-DAA average; `P_m = S̄^1.5 / Σ S̄^1.5` sets both each model's block opportunity and its coinbase budget, applied once; `W` = 7 days of DAA for the per-bond Q/B/R/F caps. **Miner rewards are never paid to the model registrant**: the registrant earns the 5 % ModelPosition trade fee (ADR-0114, past `palw_model_leg_v2`; it was 1 % under ADR-0087), and the 5 % reward buyback (ADR-0091) pays no leg. Required before activation: new models are not starved of block opportunity under α = 1.5; verifier participation, liability, hold and reward rules, including bond-without-checking, are defined.",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/integration/adr-0162-0178-implementation-status-2026-10-15.md",
+      "sha256": "288d8b8caa143e63cf2122dcc876cb6be40f2390185ebd51c3012e1fe21dd58a",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 21,
+          "section": "## Summary",
+          "text": "| 0162 | The pair opens on a virtual reserve | dormant (`palw_model_virtual_v1`); owner leg 5 % live past `palw_model_leg_v2`; no code gap |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 85,
+          "section": "### ADR-0162 — The pair opens on a virtual reserve",
+          "text": "| D6 buyback only into a trading pair | `fold_read.rs:787` | dormant |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/integration/rfc-0018-implementation-status-2026-10-15.md",
+      "sha256": "de7bb292c613584fe31dc71382702d21992060300374769076eb5ea0de031f07",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 43,
+          "section": "## 3. 完了できなかった点と理由",
+          "text": "* **GAP-C4:** 保留した発行由来報酬は認証時にproducerへ1 legで払う。Panel share・buyback・vestingへの分配は未設計(U-2)。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/integration/unmerged-inventory-2026-10-15.md",
+      "sha256": "05f488300d10f190a1742b6673db08ae920b9223661e42601d971f97991a7389",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 51,
+          "section": "## 2. What was merged (first-parent commits on `integ/merge-sweep`)",
+          "text": "| `fcac2d1f4` | `feat/misakaoptions-access-first` `36902502d` (gas fix only) | Options site: a 120,000 gas ceiling for a topping-up wallet the node cannot estimate. |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 152,
+          "section": "### 4.4 Branches 09-19..09-29",
+          "text": "| feat/misakaoptions-access-first (`36902502d`) | NEEDS-MERGE (gas fix only) | `addEstimatedGas` had no short-of-funds guard | gas ceiling ported `fcac2d1f4`; the storefront rewrite is a product decision |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 171,
+          "section": "### 4.5 Branches before 09-19 (t11 era and the 06–08 `main` lineage), grouped",
+          "text": "| t11 wallet, panel and tooling fixes | fix/wallet-send-foreign-floats (+origin), fix/issue-90-carrier-float (+origin), fix/issues-83-84 (+origin), fix/issue-89-windows-mmap (+origin), genesis/t11-faucet-float (+origin), fix/wallet-core-collapsible-if (+origin), cli-wallet-settlement (+origin), options-any-node (+origin), feat/misakaoptions-access-first | ALREADY-IN or SUPERSEDED | `wallet send --coinbase-only` is in `misaka/apps/cli/src/wallet.rs`; #83 locks DNS `StakeBondRecord` (retired); #89: integ's `base0/src/mmap.rs` refuses off-POSIX instead of mapping on Windows; t11 genesis floats are gone | none |",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "MODEL_SCOPE",
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/positive-court/SOURCE-AUDIT.md",
+      "sha256": "45d800b34986496647d87804687a208b159d09bd9a02aea06b78518fb802156e",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 79,
+          "section": "### `docs/PRINCIPLES.md`",
+          "text": "L65:    - **(b) 所有者個人:** 元の所有者自身の取り分が共有で増えるか。マイナー報酬はモデル登録者へ直接分配しない。登録者の収入はModelPositionの売買手数料と、自らMiner/Verifierとして参加した場合のその役割の報酬である（[RFC-0015 §8.5.5](rfc/0015-panel-free-permissionless-verification.md)）。モデル内の配分、自己資本を追加してbondを増やす場合との資本コスト・期待収益の差を含める。",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "MODEL_SCOPE"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/rfc-completion-audit-2026-10-17/report_ja.md",
+      "sha256": "1e570373caceb448a92ca9b2244bd9846946918362c2755961fa9ba0a23e8a1d",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 622,
+          "section": "#### 18-B [P1] held issuance releaseを所定の分配へ接続する",
+          "text": "**満たすべき要件:** RFC18 U-2/報酬分配: producer/Panel share/buyback/vestingの扱いを決定し、合意の発行総額を保存。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/design/palw/rfc-completion-audit-2026-10-17/source_evidence.md",
+      "sha256": "261b18de998fab10a5cf78fa0089563ede32133a21feb46be17fab41e9139d54",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 3292,
+          "section": "### `docs/design/palw/rfc-0018-implementation-status-2026-10-15.md:33–45`",
+          "text": "41: * **GAP-C4:** 保留した発行由来報酬は認証時にproducerへ1 legで払う。Panel share・buyback・vestingへの分配は未設計(U-2)。",
+          "scope": "dated_or_evidence_requires_scope_review",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/README-2026-10-12.md",
+      "sha256": "755f32ea4e657e94e3ee5872632c7665ce460f5a7d377f7b59ffc2f121c32d79",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 132,
+          "section": "# 旧ルート README（2026-10-12 まで、全文）",
+          "text": "> owner fee on every join and leave is 5 % instead of 1 % (ADR-0114; the 5 % burn is unchanged). From",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/decisions/2026-10/adr-0162-0178-user-decisions-2026-10-15.md",
+      "sha256": "746f3f6c3ed29ef1667fc3d79e149e5cf77b927cd12074dac30af0664d1de2c9",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 13,
+          "section": "## A. Binding (recorded, implemented dormant — not reopened)",
+          "text": "| Miner rewards never go to the registrant; ModelPosition registrant fee 5 % | allocation pays no owner leg; `PALW_MODEL_OWNER_LEG_PERMILLE_V2 = 50` past `palw_model_leg_v2` (live) |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/decisions/2026-10/rfc-0006-0012-user-decisions-2026-10-15.md",
+      "sha256": "6a3ec7d26125974e3d0c7e68ff552045b3dbe42b3f900eb29021d1a7d4d77f57",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 78,
+          "section": "## 4. RFC07 sources and economics (R7-SOURCE, R7-RANDOM, R7-ECON)",
+          "text": "| R7-ECON wiring (round 3): `palw_model_verification_gate_v1` beacon → tally → payout (aux 125 `0x01` context / `0x02` deferred / `0x03` decided) | context frozen at the epoch roll: `ClaimVerification`, `commitment_root = H(m, e)`, sealed-source policy = `palw_onboarding_sealed_policy_v1()` (interim), eligible = OPV-eligible classes minus `m`; tally opens on the VERIFIED locked beacon output: sample one Final claim of `(m, e)`, pool = Active bonds with `collateral ≥ min_collateral_sompi` minus the sampled producer's operator, `m` slots by stake; Final payout `= palw_model_verification_subsidy_v1(outcome(m, e), amount)` after the budget grant: Attested/NoFinalClaim → paid, Unattested (incl. beacon unavailable/vetoed, empty pool, closed epoch without context) → withheld, Pending → deferred whole, later released to the producer payload or dropped | **open**: (1) the tally contexts' beacon policy (today the interim onboarding sealed policy); (2) whether a released deferred amount keeps the Panel/buyback split (source pays the producer alone); (3) whether an unavailable beacon withholds (source) or pays; (4) whether the verifier pool should exclude more than the sampled producer's operator |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 117,
+          "section": "## 8. Round 3 additions (2026-10-15)",
+          "text": "| Verification gate payout routing | Released held rewards currently go wholly to the producer; decide whether Panel/buyback splits are preserved. |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/00-header-and-changelogs.md",
+      "sha256": "5d362765cbb8659c944f25d51af3d3dd994df195cd44fcb5026b5a70ed6e184d",
+      "hit_count": 5,
+      "hits": [
+        {
+          "line": 85,
+          "section": "# ADR-0152 — A bond is standing stake, a claim reserves until its licence, and a reward vests until its conviction window closes (R-core+) — v3.1",
+          "text": "  * ADR-0151 D1–D5, ADR-0130 λ, ADR-0091 buyback at Final, ADR-0144 §9, Mainnet Decision A (`1827850e`).",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 232,
+          "section": "## Integration amendments (2026-09-24)",
+          "text": "| **IA-3** | **IMPL-15 and the S re-review: `g_res` carries the buyback bound `s`, and the vested lock prices `s` at its cap.** `G_res = w + R + s`, where `s` is the ADR-0091 slice, 5% of `E`, when the claim's line has a pair open to the buy, else 0. `0b56c4d8` reverted an `s = 0` deviation. The lock the fold posts once the vesting rows land takes `s` at its **cap**, `5% · E`, whatever the pair's state at the licence, because a pair can open between the licence and the `Final`: it is L-1 on `g_res − s + s_cap` with the escrow term on `E − s_cap`. While the rows had not landed, the lock was priced on the whole gain, with `s` inside `E` | §3.6 \"G, as a function\", L-1, §2 values note | `rcore_buyback_bound`, `rcore_g_res` (the fold view); `palw_rcore_lock_v1`, `palw_rcore_lock_vested_at_cap_v1`, `palw_rcore_lock_vested_v1`, `palw_rcore_lock_unvested_v1`; `palw_model_buyback_slice_v1` (5%) | `rcore_whole_gain_and_buyback` (`h1_…`: the fold's lock is the at-cap price; `m2_…`: an open pair raises `G_res` by `s` ≈ 160 MSK on 8k, and the armed price is the same with the pair open or closed) | `0b56c4d8`, `479cdfa3` |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 235,
+          "section": "## Integration amendments (2026-09-24)",
+          "text": "| **IA-6** | **The vesting contract, as the vesting work ships it** (`phase2-plan.md` §2.3/§2.4). The planner takes three arguments, `palw_vesting_mint_plan_v1(state, budget_new_keys, market_waiting)`, and step 3d calls it on the state it plans. The RPC and the Phase 2 coinbase harness call **`palw_vesting_next_block_plan_v1(state, params, next_daa, raw_depth)`** on a committed state: it replays the next block's 1b drain and 3d latch, and equals the next fold's plan unless that block itself moves step 3d's inputs. The budget helpers are `palw_vesting_budget_v1` and the market/non-market queue counts. The note tags **5 `BuybackAtFinal`** and **6 `ReserveCredited`** close V-3's identity from deltas. A row's position is counted **in keys**: `palw_vesting_mint_position_v1` returns (moves ahead, keys ahead). Step 3d moves a reporter reward **in the block the sweep wrote it** when its budget has room | V-3, V-7, §7.3 | `palw_vesting_v1.rs`: the functions named, `palw_vesting_market_rows_waiting_v1`, `palw_vesting_market_rows_waiting_after_drain_v1`, `palw_vesting_non_market_rows_waiting_v1`, `PalwVestingNoteV1`; `apply_vesting_maturity` (step 3d) | `vesting_fold_v1`; `the_next_block_plan_is_the_next_folds_plan_over_a_simulated_chain`; T03, T16/T30, T47, T82 | `d3ece0d5` |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 236,
+          "section": "## Integration amendments (2026-09-24)",
+          "text": "| **IA-7** | **`PALW_RCORE_VESTING_ROWS_LANDED_V1` is `true` on the integration line, and why it may be.** `finalize_claim` writes the row (V-2), `burn_vesting_row` burns it, and **every post-Final conviction reaches that burn through S-4's funnel**: S3 for kinds 3 and 4, for a proven court verdict and for the FinalRow DA default; U3 for a free-prompt claim, which writes no row. Before the funnel only the DA default burned a row, and the flag stayed `false` for that reason: pricing the residual `G − E` without the burn under-collateralizes. **kaspad refuses to start** a network that arms `palw_rcore_plus` while the flag is `false` (N1) | V-2, V-5, L-1, §3.3 ownership, §6 | `PALW_RCORE_VESTING_ROWS_LANDED_V1`, `write_vesting_row_at_final`, `burn_vesting_row`, `post_final_producer_leg_v1` (STATE); `palw_rcore_build_can_run_v1`, `ConfigError::PalwRcoreVestingRowsNotLanded` (`kaspad/src/daemon.rs`) | `rcore_whole_gain_and_buyback` (asserts the flag), `dos_l5_4b` (no stall with the flag), `dos_l5_6` (`daa_2m_dead == 0` with the flag), `n1_rcore_plus_needs_the_vesting_rows_at_startup` | `479cdfa3` (N1); the S-4 merge `68f0d672` (the flag set `true`) |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 351,
+          "section": "## v3 changes",
+          "text": "| **P2 V-3** | The coinbase identity omits buyback and `panel_reserve_sompi` | V-3: the identity restated; notes for both | A (notes), B (T03) | T03 | S; P2 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/01-operator-summary-ja.md",
+      "sha256": "7a7cc1bdb64d9e20ea61c1e04e8179497629ee4793772860cb1283f8d2f75ab0",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 127,
+          "section": "## 運用者向け要約（日本語）",
+          "text": "- （この 2 行の lock と duty は `s = 0` の値です。武装後の lock は買い戻しの上限 `s_cap` を含むので、およそ `s_cap / k′` 高くなります（8k の `lock_3` で約 53 MSK、`rcore_whole_gain_and_buyback`）。8k の duty は `lock_2` で決まるので一緒に動きます。再計算はしていません。IA-3）",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/02-motivation-and-overview.md",
+      "sha256": "10fa3e4a55024fa323d902e6fd72765995ff1b0296300c0126f3c89a152e60f0",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 206,
+          "section": "## 2. Decision overview",
+          "text": "| `s` | buyback bound; 0 on every genesis row (no line, no pair at launch). **The lock the fold posts takes `s` at its cap, `5%·E` (IA-3)**, so the lock values below are L-1 at `s = 0`, which `rcore_whole_gain_and_buyback` pins as the residual at `s = 0`; the armed price is about `s_cap / k` higher (≈ 53 MSK on `lock_3`, the test's 8k figure) and is not tabulated here | 0 | 0 | 0 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "MODEL_SCOPE"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/03-rules-b-sr-v-l-a.md",
+      "sha256": "ebc25b7cf1e30c6fd46412446fac4c48300ea3b3c8429a6c21e7a44d5048f804",
+      "hit_count": 9,
+      "hits": [
+        {
+          "line": 333,
+          "section": "### 3.3 V — vesting rows",
+          "text": "the S re-review's N1). Tests: `rcore_whole_gain_and_buyback` asserts the flag; `dos_l5_4b` licenses every claim",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 358,
+          "section": "### 3.3 V — vesting rows",
+          "text": "    pub buyback_bound: u64,                        // s",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 374,
+          "section": "### 3.3 V — vesting rows",
+          "text": "Not vested: the ADR-0091 buyback slice (priced into `G_res` as `s`), the work-price remainder, FP receipt-spend",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 438,
+          "section": "### 3.3 V — vesting rows",
+          "text": "* **Consistency.** Every row amount is ≤ `escrowed_reward − buyback_bound`; a row exists only for a claim that is",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 445,
+          "section": "### 3.3 V — vesting rows",
+          "text": "    + Σ unnamed (work-price remainder) + Σ buyback executed at Final + Δ panel_reserve_sompi",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 450,
+          "section": "### 3.3 V — vesting rows",
+          "text": "  entries for the buyback slice and the reserve credit so the identity closes from deltas alone: the vesting work",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 451,
+          "section": "### 3.3 V — vesting rows",
+          "text": "  appends them to `PalwVestingNoteV1` as tag 5 `BuybackAtFinal { claim_id, sompi }` and tag 6 `ReserveCredited",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 611,
+          "section": "### 3.4 L — the seat lock",
+          "text": "  L-1 above with the buyback bound at its **cap**, `s_cap = 5% · E` (`palw_model_buyback_slice_v1`), whatever the",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 615,
+          "section": "### 3.4 L — the seat lock",
+          "text": "* The table above is L-1 at `s = 0`. `rcore_whole_gain_and_buyback` pins exactly those values as \"the residual at",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/04-rules-s-t-w-p0-10.md",
+      "sha256": "de07767aba22fa4a779e7d2779f3c6aac13b2f95ee68a1ab00bb1741ce621d5f",
+      "hit_count": 3,
+      "hits": [
+        {
+          "line": 15,
+          "section": "### 3.6 S — the action-based slash schedule (t12), and the reporter reward",
+          "text": "weight, `rights` is `claim_realizable_rights_v1(claim, ..)` at admission (`rr`), `s` is the buyback bound. No class-level",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 24,
+          "section": "### 3.6 S — the action-based slash schedule (t12), and the reporter reward",
+          "text": "  (`rcore_g_res`), with `s` = `rcore_buyback_bound`: the ADR-0091 slice, 5% of `E`",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 25,
+          "section": "### 3.6 S — the action-based slash schedule (t12), and the reporter reward",
+          "text": "  (`palw_model_buyback_slice_v1`), where the claim's line has a pair open to the buy, else 0. The S review's M2",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/07-invariant-and-comparison.md",
+      "sha256": "c8f5051f21dcef1105ec14d9cb341eb2eb9cad4d5f75a72e7387dacdaf64ec28",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 278,
+          "section": "### 4.4 Per-class t12 numbers (MSK; v3)",
+          "text": "**The lock, duty and row-7 figures are at `s = 0` (IA-3).** The armed lock prices the buyback bound at its cap, so it",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 279,
+          "section": "### 4.4 Per-class t12 numbers (MSK; v3)",
+          "text": "is about `s_cap / k′` higher (≈ 53 MSK on 8k's `lock_3`, `rcore_whole_gain_and_buyback`). Where `lock_2` binds the",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/08-fences-schema-phasing.md",
+      "sha256": "4549f686b2e8b28268d53f6d5282fef416c10181cd8c9c5ba396088c5d7152d0",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 266,
+          "section": "### 7.3 Phase 2 (B), updated from `phase2-plan.md`",
+          "text": "  * **Note tags** appended to `PalwVestingNoteV1` (§2.5): **5 `BuybackAtFinal { claim_id, sompi }`** and **6",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/09-tests-and-launch-gate.md",
+      "sha256": "93613b8dd7365402e40e3dcf6c1772cc76b02d3e62ccbbfd852dbbc19b2d983f",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 18,
+          "section": "### 8.1 Tests",
+          "text": "| T03 | Row creation and exact move; counters; the restated coinbase identity (buyback slice, `panel_reserve_sompi`, reporter and market mints excluded) | A/B [S/P2] |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 28,
+          "section": "### 8.1 Tests",
+          "text": "| T13 | Buyback excluded and priced; FP rights in `G_res` | A [S] |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/design/palw/0152/10-questions-traceability-reviews.md",
+      "sha256": "1f7bea65c4125eec69826cebff47cb6995c9b2f25be000a966c8bc87be624204",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 105,
+          "section": "## Appendix — traceability",
+          "text": "| audit req. (1)–(7) | P0-10; door release; escape; per-door k; 2M; buyback; withholding | §3.9; SR-1; V-8; L-1/Q-3; T-2(b), T-4; V-2; §3.8 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/adr/README.md",
+      "sha256": "e0159ee1e2827f32113bd689ca7a6ec1b183190e8668bc9ec07a8e5985f49267",
+      "hit_count": 9,
+      "hits": [
+        {
+          "line": 261,
+          "section": "## Superseded, in whole or in part",
+          "text": "| 0087 D3 — the moves on the row are the two (three since 0090) objects' and the writer's; D4 — a leg on every move; D8 — the row's words; 0088 §10 — \"a per-line service fee … a share of a claim's escrowed reward to the owner\" left undecided; 0089 D2 — `market()`'s words; 0090 D2/§5 — the reserve grows by buys, and the conservation identity has two sources | amended (PROPOSED 2026-09-06 on `palw-adr0088-0089-impl`, design first at the operator's word): at a claim's `Final` FIVE PERCENT of its escrowed worker reward (ADR-0042 D10's carve — the miner's whole subsidy reward on every shipped preset) buys from the pair of the LINE the claim ran, the positions the curve gives up are RETIRED (the chain's, for good; M1 counts them), no leg and no holder, and the other 95 % is named for the miner as before; no pair (or a closed one, or an unattributed claim) means the miner is paid in full — nothing is burned for a model; the service fee is decided *no*; the row and `market()` gain `buyback_sompi` / `retired_units` at the end | [0091](../../../../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) D1–D8 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 262,
+          "section": "## Superseded, in whole or in part",
+          "text": "| 0087 D2 — the virtual reserve (retired by 0090); 0090 D2/D3/D5 — a market opens ONLY by a seed of at least the least seed, the curve has no virtual reserve, `constants()`' third word is the least seed; 0094 — pledges collect toward the floor and open the market on the payment that crosses it; 0120 — the least seed is 1,000,000 BILI; 0091 D3 — the reward buys the pair wherever a market exists; 0089 D2 — `market()`'s words | amended past the dormant fence `palw_model_virtual_v1` (PROPOSED and IMPLEMENTED 2026-10-01 on `position/virtual-reserve`, at the operator's request): every line's market is OPEN from the line's creation — the founding line's at class registration, the others' at `ModelLineFounded`, an older line's at the fence — on its own virtual reserve `V` = 10,000,000 BILI that prices the curve (`X = V + reserve`, first price 20 BILI) and that no object ever pays out; a sell is refused beyond the real reserve above the locked seed; buys (and the reward's buyback) only while the class is `Active` in status and lifecycle (`ActiveLimited` does not count; refusal reason 3), sells never gated; the seed is optional, any amount, accumulates, locked for good, and taken only before the first trade (refusal reason 14, writer `SeedAfterTrade()`); the least seed is zero; a pledge-only row opens at the fence with its pledges as its seed; a market opened before the fence keeps `V = 0` and quotes exactly as before; `market()` gains a twelfth word (the row's `V`) and `quoteSell`'s first word is the gross | [0162](../../../../adr/0162-the-pair-opens-on-a-virtual-reserve.md) D1–D9 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 287,
+          "section": "## Number hygiene — collisions, renumberings and dangling references",
+          "text": "| 0077, 0078, 0079 | Written 2026-09-02 on three sessions' own branches and **landed here the same day**, texts and security amendments together: [0077](../../../../adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) (`70084763`…`d3a6190b`), [0078](../../../../adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) (`4047e86c`, `bb14b63a`), [0079](../../../../adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) (`9f97db97`). Only the ADR text is here; the implementation branches (`palw-adr0078-impl` and the `palw-adr0077-*` set) carry code that is theirs to land. `palw-adr0078-impl` also edits ADR-0078's §6 as it goes, in a different region from the security amendment appended at the end of that file, and merging it into this `main` was measured clean on the day this row was written. Each ADR's own §\"Number hygiene\" says a concurrent claimant renumbers the later writer; the numbers are now resident, so the next free number was 0080; 0080–0088 are resident now (0083 on `palw-daa-bits-priced-rows`, 0084–0087 on `palw-adr0084-served-answer`, 0088 and 0089 on `palw-adr0088-0089-impl`, their texts and their implementation together) and 0090 is resident on `palw-adr0088-0089-impl` (2026-09-05, with its implementation), as is 0091 (2026-09-06, design first); 0092 and 0093 were taken while 0091 was written, 0094 and 0095 are resident here (2026-09-07), 0096 here too (written 2026-09-10 on `feat/adr-0096-everyday-lane` and merged with its implementation on 2026-09-11), 0097 here (written 2026-09-10 on `feat/adr-0097-model-fit`, resident through `feat/adr-0099-sharded-seat`'s lineage), and 0098 here (2026-09-10, its node-side half cherry-picked from `feat/adr-0098-seat-coverage`); 0099, 0100, 0101 and 0102 (the embedding lift) here, written 2026-09-10 on `feat/adr-0099-sharded-seat` with their implementations, and [0106](../../../../adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md) there too (2026-09-11, with its implementation — written as 0103 and renumbered; ADR-0106 §9 has the table); [0105](../../../../adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md) is resident here (written 2026-09-11 on `fix/heartbeat-trap-slow-producers` with its implementation, as 0102 — the later writer of that number, renumbered on `main` in `40ac431b` to the 0105 the other sessions held for it; commits of that day still say ADR-0102); [0103](../../../../adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md) is resident here (held context, written on `docs/adr-0103-the-context-is-held-off-the-chain` and implemented on `feat/adr-0103-held-context`, merged for the unarmed testnet-11 build and into `main` on 2026-09-11), and so are [0110](../../../../adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md) (the verification vectors) and [0111](../../../../adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) (the leaf demand, written on `feat/adr-0103-held-context` as 0108 and then 0109, and renumbered twice — ADR-0111 §7); 0104 (the close cut, renumbered from 0102 on `fix/panel-pays-consensus-rent`) and 0107 (share growth) were taken on other branches and are not resident here, skipped rather than reused; [0108](../../../../adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md) is resident here (2026-09-11, `feat/adr-0108-extension-envelope`, with its implementation) and [0109](../../../../adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md) here (2026-09-11, `feat/adr-0109-bridge-liveness`, with its implementation); [0112](../../../../adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md) is resident here too (2026-09-11, `feat/adr-0103-held-context`, with its implementation); 0113 is skipped rather than reused (the writers of 0114 and 0115 left it to this line of work, which did not take it); [0114](../../../../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) is resident here (2026-09-11, written as 0112 on `feat/adr-0112-developer-leg` and renumbered before it landed, the later 0112 being the earlier-landing candidate's), as is [0115](../../../../adr/0115-a-pending-transaction-is-announced-until-it-lands.md) (2026-09-11, `feat/adr-0113-evm-tx-liveness`, written as 0113); [0116](../../../../adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md) and [0117](../../../../adr/0117-a-draw-is-one-forward.md) are resident here too (2026-09-11, `feat/adr-0103-held-context`, with their implementations), and so are [0118](../../../../adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md) (2026-09-12, the same branch, with its implementation) and [0119](../../../../adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md) (2026-09-12, the same branch, with its consensus half); [0120](../../../../adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md) is resident here too (2026-09-12, written by the model-seed session on `feat/adr-0120-seed-min-1m` with its implementation and merged for testnet-11's 7,000 release), and [0121](../../../../adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md) — the node half of 0119, written as 0120 and renumbered the same day — is resident here (2026-09-12, the same branch, with its implementation); [0122](../../../../adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md) is resident here (2026-09-12, `feat/adr-0122-operator-ux`, the operator surface, design with its first phases); [0123](../../../../adr/0123-the-epoch-progressively-releases-unused-class-budget.md) is resident here (2026-09-12, `feat/adr-0123-epoch-budget-release`, with its implementation); [0124](../../../../adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md) and [0125](../../../../adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md) were written 2026-09-17 on `feat/adr-0124-panel-reward-and-compute-weight` (0124 with its implementation, 0125 design first) and 0125 was implemented the same day on `feat/palw-exec-lane-and-validator-retirement`, where [0126](../../../../adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md) was written, implemented, and revised the same day, and so were [0127](../../../../adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md), [0128](../../../../adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md) and [0129](../../../../adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md) (2026-09-17, with their implementations), as is [0130](../../../../adr/0130-bps1-is-hardened-before-it-is-widened.md) (the same day, design with its implementation in progress), and [0131](../../../../adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) (the same day, proposed, shadow first); **the next free number is 0132.** |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 528,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0087](../../../../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) | PROPOSED 2026-09-05; IMPLEMENTED 2026-09-05 behind `Params::palw_model_market` (`None` on every preset): state, objects, fold, fence, RPC, CLI, 12 tests (§7); the site `web/misaka-options/` (misakaoptions.com) and the 2026-09-05 devnet drill (buy/sell on both lanes; the sink's output class carved out of the mempool and consensus rules on the way) landed later the same day; retire/drain under the drill and the testnet-11 activation are outstanding. Model Positions: a fixed-supply, per-class position bought from and sold back to a protocol-owned constant-product curve in MSK, never transferred between holders; 5 % of every MSK leg burned, 1 % to the class's registrant; a consensus rule armed by activation (state v21). **§0 (2026-09-08) is the canonical statement that a position is NOT a share** — no issuer, no dividend, no claim on anything, no vote, no transfer, no maturity, each clause named against the rule that makes it so — and states the one path by which a model's added value reaches a position: use → the escrowed worker reward → 0091's five percent buys the line's pair and retires the units → the curve pays more. What a holder receives is 0095's service, from a grant set the fold closes; the section ends with the vocabulary every surface must use and with the reminder that intent is not a legal verdict. |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRANSFER",
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 530,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0089](../../../../adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) | PROPOSED 2026-09-05; **IMPLEMENTED 2026-09-05 behind `Params::palw_model_evm` (`None` on every preset)** on `palw-adr0088-0089-impl`: fold (actions, settlements, the EVM holder namespace), executor (three read doors, the writer, the facade family, `MarketSettle` system ops in a system receipt), processor (the action list into `fold(B)`, the settlement ops and sink outputs at `C`, the template), `eth_call` at the head, Solidity interfaces, 14 tests (§9); **devnet drill PASSED 12/12 on 2026-09-05** (`scripts/drills/misaka-palw-model-market-devnet-e2e.sh`: carrier buy, EVM buy/refused/sell settled across `B`/`C`, six nodes agreeing, a partition's minority settlement re-included after the heal; three private-devnet flags added); the site `web/misaka-options/` is live at misakaoptions.com (wRPC reads; the EVM window needs a node serving `--evm-rpc-listen`); a historical `eth_call` view, the `CLASSICAL-ECC` label and the wallet label are outstanding. The fold is the truth; the EVM is its window and its hand: three read precompiles (`ModelRegistry` 0x…F010, `ModelAMM` 0x…F011, `ModelPosition` 0x…F012) return the fold's rows at the EVM block's selected parent; `ModelWriter` 0x…F013 is CoreWriter's shape with two actions (buy, sell) applied by the fold after the block and settled by system ops in the selected child (escrow → sink output, credit, refund); every class has an MRC-20 facade — ERC-20's read half, the curve in place of its transfer half, `supportsInterface(ERC-20) == false`; holders are signing accounts only, so no contract can rebuild a transfer; two holder namespaces that never cross; fence `palw_model_evm` requiring `palw_model_market` and an EVM-active preset. Hyperliquid's HyperEVM is the reference, cited with dates. |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRANSFER",
+            "EVM"
+          ]
+        },
+        {
+          "line": 540,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0100](../../../../adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md) | PROPOSED 2026-09-10 on `feat/adr-0099-sharded-seat`; **Decisions 1–4 and 6 IMPLEMENTED the same day, consensus-inert on every shipped preset.** A model is data: the boundary \"permissionless\" means (the model is permissionless, the execution semantics are a deterministic protocol; a line's ownership is not permission; the line controls the PRODUCT, providers the SERVING, the chain the MEMBERSHIP) and three things ADR-0099 left as words, built: **D1** the one-move court is a consensus object (`ShardCourtAccused`: acceptance arm, fold arm, seat filer, `palw shard-accuse`; its signing context in `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`, so `palw_shard_court` arms only over a genesis stating V3 — the ruleset move), **drilled on a live three-node devnet the same day: a seat accused a corrupted free-prompt claim, a block carried it, the claim reads `voided court_fraud` on two nodes and the liar's bond was slashed, with no human step (§9)**; **D2** a held artifact measures itself from the inventory and a shard's rows are the inventory's (the shard manifest, derived); **D3** `palw-class measure` / `verify` — run on the real A16 artifact, reproducing its genesis class id and registered root, signed and tamper-refused; **D4** licensing per shard, built with no flag day: the class's registrant declares a plan, a bond declares its shards (correcting ADR-0099 D3 — `capable_classes` holds class ids only), a claim on a sharded class draws a stratified panel and licenses by parts (14,393 bytes a part, one carrier at any shard count), its three collections rooted and carried only once written, behind `Params::palw_shard_licensing`; **D5** the economics (paid seats, the fuzz gate) before arming; **D7** the \"model is data\" order of work with the two shipped families as the positive control; **D8** a Position is a membership and never money — no transfer, no payment role — settled and kept. |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRANSFER",
+            "TRADE_FEES",
+            "MODEL_SCOPE",
+            "MEMBERSHIP"
+          ]
+        },
+        {
+          "line": 541,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0101](../../../../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) | PROPOSED 2026-09-10 on `feat/adr-0099-sharded-seat`; **Decisions 2, 3 and 5 IMPLEMENTED the same day, consensus-inert.** The membership half of ADR-0100's boundary: **the line controls the PRODUCT, providers control the SERVING, the chain proves the MEMBERSHIP.** **D2** which grant needs whom (`palw_benefit_server_v1`: the chain for the holder mark; any provider holding bytes under a root the chain names for priority, quota, experimental, private beta, early version; the line's origin for developer access and support); **D3** the signed service descriptor and the check a client runs against chain facts (declared grants in effect, the line's roots, its bond keys), refusing by name; **D4** discovery is not chain state (no URL on chain); **D5** **a Position is a membership and never money — settled by the operator: no transfer between holders, no payment or settlement role**, pinned three ways (the fold has two writers of a holding, the buy and the sell; no object moves a Position between holders; the EVM facade answers `transfer`/`transferFrom`/`approve`/`allowance` with `NonTransferable()`); **D6** serving stays unadjudicated. Also records that ADR-0095's reference gateway check exists on `feat/adr-0095-membership-serving` (not on `main`) and is already provider-neutral. |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRANSFER",
+            "MEMBERSHIP",
+            "EVM"
+          ]
+        },
+        {
+          "line": 551,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0114](../../../../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | PROPOSED 2026-09-11 at the operator's request; **IMPLEMENTED the same day, dormant** behind `Params::palw_model_leg_v2` (`None` on every preset — no fingerprint moves). Past the fence every join and leave pays 5 % burned and 5 % to the line's owner (ADR-0087 D4's owner leg was 1 %), so a round trip leaves about a fifth behind; the schedule is chosen at the move's DAA by one function the fold, the EVM window, the RPC (`getPalwModelMarket` v6: `burnPermille`, `legPermille`, `legV2ActivationDaa`) and the CLI all ask. Arming it on testnet-11 is a flag day at a height the operator names (§5). |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 587,
+          "section": "## Added after the 2026-09-02 pass",
+          "text": "| [0162](../../../../adr/0162-the-pair-opens-on-a-virtual-reserve.md) | PROPOSED 2026-10-01 at the operator's request (relayed by the coordinating session, revised twice the same day) and **IMPLEMENTED the same day on `position/virtual-reserve`**, behind its own dormant fence `Params::palw_model_virtual_v1` (`None` on every preset; no fingerprint, schedule or fold moves). The pair opens on a virtual reserve, pump.fun-style: a model's market opens the moment the model is added on `V` = 10,000,000 MSK (500,000 whole positions, first price 20 MSK, the fees and ADR-0091's buyback unchanged); trading starts when the chain approves the model (class `Active` in status and lifecycle); the seed is optional depth paid before the first trade, at the payer's risk. A locked seed `S` and a virtual reserve `V = S` quote identically (§3), so nothing the floor promised is lost; ADR-0087 §0 holds unchanged (§7). Invariants I-V1..I-V10 pinned in `palw_model_market_v1.rs` and the fold's tests. 0160 and 0161 are held elsewhere (§12). |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/architecture/overview.md",
+      "sha256": "db2ed2658e540d393079f8dbf922c5667fad28c4c2d0b21d686a454fa70c1cf2",
+      "hit_count": 6,
+      "hits": [
+        {
+          "line": 65,
+          "section": "## 1. The system in one picture",
+          "text": "    OPT[\"misakaoptions.com<br/>model store app\"]",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": []
+        },
+        {
+          "line": 172,
+          "section": "### 2.8 Model market: stores and memberships",
+          "text": "burns 5 % and pays the owner 5 %. Part of each reward for a model's work buys into its curve. No",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 173,
+          "section": "### 2.8 Model market: stores and memberships",
+          "text": "holder is ever paid. The app is [misakaoptions.com](https://misakaoptions.com).",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": []
+        },
+        {
+          "line": 174,
+          "section": "### 2.8 Model market: stores and memberships",
+          "text": "- **Governing:** [0087](../../../../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) bought from the curve, sold back to it · [0088](../../../../adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) the owner keeps publishing · [0089](../../../../adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) the fold is the truth, the EVM its window · [0090](../../../../adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) a real, locked seed, whole positions · [0091](../../../../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) no holder is paid · [0094](../../../../adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md) a seed in as many transactions as it takes · [0095](../../../../adr/0095-a-position-is-a-membership-not-an-income.md) a position is a membership, not an income · [0101](../../../../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) a membership is proven by the chain · [0114](../../../../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) the owner's leg is 5 % · [0120](../../../../adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md) the least seed is 1,000,000 BILI",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "MEMBERSHIP",
+            "EVM"
+          ]
+        },
+        {
+          "line": 175,
+          "section": "### 2.8 Model market: stores and memberships",
+          "text": "- **Superseded, often cited:** 0087's 1 % leg → [0114](../../../../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) · 0090's 100,000 MSK least seed → [0120](../../../../adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md)",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 250,
+          "section": "### Applications and integrations",
+          "text": "| `web/misaka-options/` | [misakaoptions.com](https://misakaoptions.com), the model store app |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet-11.md",
+      "sha256": "4793d549c4ddafc5eb84c133c46d2619279237c57068032fb0f7afddf18640aa",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 113,
+          "section": "# testnet-11 — history",
+          "text": "> owner fee on every join and leave is 5 % instead of 1 % (ADR-0114; the 5 % burn is unchanged). From",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch-5f-genesis-card.md",
+      "sha256": "76831b0e06cdf6ad23800066e87588993aa4aa90812a5f70b88e151cd6afe1f4",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 6511,
+          "section": "### 10w. The pair is seeded, and the reward buys it: ADR-0090 and ADR-0091 (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "`buybackSompi` / `retiredUnits` (wire 4; the AMM window's `market()` appends two words, so every",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 6512,
+          "section": "### 10w. The pair is seeded, and the reward buys it: ADR-0090 and ADR-0091 (2026-09-06, `palw-adr0088-0089-impl`)",
+          "text": "earlier offset holds). The market's front end is <https://misakaoptions.com>. Both ADRs are drilled",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/history/networks/testnet-12/t12-rcore-launch-checklist.md",
+      "sha256": "c970d28d38133924ab7ab1e56c1e7787b66677d2372fc34b2c5ca9f732ea7d9c",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 216,
+          "section": "#### S（Phase 1 skeleton。T01–T44 の P1 部分、T02c、T17、T22、T47、T57、T74 V2、T75–T78、T80–T82、T84）",
+          "text": "| T13 / T14 / T15 | buyback の除外と価格、FP の権利は `G_res` / staging は単調、`escrow_released` は戻らない / lock は再計数した k で価格、flat-/3 の反例 | `vf::t13_…` ×2、`vf::t03_t13_…`、`rcore_s3::t13_…` / `rcore_s2::t01_…`（\"T14\"）、`rcore_s2::t74_sr1b_…` / `rcore_s3::t15_every_door_locks_l1s_price_with_the_attested_mask` | 有 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "sha256": "a5282bdb1c8648461cac3b49a4d1b1b115193122be5ad01ac8bda03009d7943d",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 126,
+          "section": "## adr",
+          "text": "- [adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md",
+      "sha256": "aaba6051cb028ce218fe56165cbd44fbc9f0ed2e09fce51f45d8f25d6b715527",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 218,
+          "section": "### 元ADR番号（001〜230、既存欠番・重複を含む）",
+          "text": "| [0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md](../../../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | FROZEN_ORIGINAL_WITH_OVERRIDE | 原文bytesを保持。新規採掘では共通移行契約とRFC61/62が該当規則に優先。旧方式へfallback不可。 |",
+          "scope": "historical_evidence_or_prior_revision",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/operations/releases/mainnet-readiness.md",
+      "sha256": "38e5ec3ece5bdab945bb512d5b9993366be3c0f0a57da3749e8dfd4cfc048ef3",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 88,
+          "section": "## 4. Network",
+          "text": "| **PASS** | App on the chain | [misakaoptions.com](https://misakaoptions.com) ([web/misaka-options](../../../web/misaka-options/README.md)) |",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        }
+      ]
+    },
+    {
+      "path": "docs/reference/explorer/user-dictionary.md",
+      "sha256": "d345cea35e0d32d09d09c19973a68389a4105f00fd2040c70ecb11655d80ca66",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 1,
+          "section": "# The user dictionary — one vocabulary for MISAKAScan and MISAKA Options",
+          "text": "# The user dictionary — one vocabulary for MISAKAScan and MISAKA Options",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": []
+        },
+        {
+          "line": 82,
+          "section": "### Membership, shared with MISAKA Options",
+          "text": "### Membership, shared with MISAKA Options",
+          "scope": "current_entry_or_versioned_design_requires_review",
+          "purpose_hints": [
+            "MEMBERSHIP"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 759,
+          "section": "### 8.5 The pool",
+          "text": "- **Not PALW worker rewards.** They are the reward path (ADR-0144 P4–P7), and the market's buyback slice",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 1481,
+          "section": "### R7-ECON — costs, collection and lazy verification",
+          "text": "   - **Pay.** At a gated claim's Final, after the budget grant and before the export cap, buyback and splits, the amount is",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 1490,
+          "section": "### R7-ECON — costs, collection and lazy verification",
+          "text": "     byte-identical. **USER DECISION REQUIRED**: whether a deferred amount released later should keep the Panel/buyback",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c",
+      "hit_count": 4,
+      "hits": [
+        {
+          "line": 655,
+          "section": "#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**である。売買ごとのBILI額の5 %がownerへ入り、5 %がburnされる",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 656,
+          "section": "#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  （[ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`で[ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)の1 %から引き上げ）。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 657,
+          "section": "#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  モデルが使われてPositionの売買が増えるほど登録者の収入が増える。報酬の5 %によるPosition買い上げ（ADR-0091）はlegもburnもなく、価格を上げるだけで登録者へ払わない。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 675,
+          "section": "#### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "| モデル登録者の収入 | ModelPositionの売買手数料（5 %、ADR-0114）のみ。マイナー報酬は直接分配しない |",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "sha256": "1e3dbe8df6d19dabf080c319f8b2d00251a3a101cfcf3238591103b6433d0be8",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 354,
+          "section": "## 12. ユーザー判断が必要な事項",
+          "text": "* **U-2** 発行由来報酬legの保留を、producerへの1 legで支払うか(本実装)、Panel share・buyback・vestingへ分けるか(GAP-C4)。",
+          "scope": "numbered_original_or_later_adoption",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "sha256": "37ed661eac51f7c08bd45f902117398c8d92abde82f4ae52f122e4d2f3f21e01",
+      "hit_count": 2,
+      "hits": [
+        {
+          "line": 2909,
+          "section": "##### R7-ECON — costs, collection and lazy verification",
+          "text": "   - **Pay.** At a gated claim's Final, after the budget grant and before the export cap, buyback and splits, the amount is",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        },
+        {
+          "line": 2918,
+          "section": "##### R7-ECON — costs, collection and lazy verification",
+          "text": "     byte-identical. **USER DECISION REQUIRED**: whether a deferred amount released later should keep the Panel/buyback",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "sha256": "2608561889b1050180bf231cc2580053a0e8041083eb4da5380958e1de8215a1",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 1250,
+          "section": "#### 12. ユーザー判断が必要な事項",
+          "text": "* **U-2** 発行由来報酬legの保留を、producerへの1 legで支払うか(本実装)、Panel share・buyback・vestingへ分けるか(GAP-C4)。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "sha256": "85ed193c82707afa7d7f35cd611211de77d9da435e6c3ebfde807c4488d878f2",
+      "hit_count": 4,
+      "hits": [
+        {
+          "line": 582,
+          "section": "###### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  「報酬からのowner service feeはNo」を維持）。登録者の収入は**ModelPositionの売買手数料**である。売買ごとのBILI額の5 %がownerへ入り、5 %がburnされる",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 583,
+          "section": "###### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  （[ADR-0114](../adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)。fence `palw_model_leg_v2`で[ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)の1 %から引き上げ）。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES",
+            "EVM"
+          ]
+        },
+        {
+          "line": 584,
+          "section": "###### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "  モデルが使われてPositionの売買が増えるほど登録者の収入が増える。報酬の5 %によるPosition買い上げ（ADR-0091）はlegもburnもなく、価格を上げるだけで登録者へ払わない。",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK",
+            "TRADE_FEES"
+          ]
+        },
+        {
+          "line": 602,
+          "section": "###### 8.5.5 モデル配分の確定 — 2026-10-14決定（α = 1.5、Miner＋Verifier元本、30日平均、ブロック機会にも適用）",
+          "text": "| モデル登録者の収入 | ModelPositionの売買手数料（5 %、ADR-0114）のみ。マイナー報酬は直接分配しない |",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "TRADE_FEES"
+          ]
+        }
+      ]
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "sha256": "5b186682be3617d0d7de63909182ba832186d3f8f063155203af5dc02b0230bc",
+      "hit_count": 1,
+      "hits": [
+        {
+          "line": 1710,
+          "section": "##### 8.5 The pool",
+          "text": "- **Not PALW worker rewards.** They are the reward path (ADR-0144 P4–P7), and the market's buyback slice",
+          "scope": "embedded_historical_source",
+          "purpose_hints": [
+            "BUYBACK"
+          ]
+        }
+      ]
+    }
+  ]
+}

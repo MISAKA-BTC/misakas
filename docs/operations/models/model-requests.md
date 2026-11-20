@@ -1,5 +1,34 @@
 # Requesting a model, and what happens to a request
 
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
+
+永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
+
+旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
+<!-- MOE2-ADOPTED-20261120-END -->
+
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。以下の旧testnet command・測定は当時の記録である。現行の手順6/7と資金説明を登録時市場生成・追加50%・core100%へ改訂した。
+
+追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
+
+[RFC0063](../../rfc/0063-additional-model-option-economics.md) / [ADR0231](../../adr/0231-additional-model-option-economics.md) / [適用と移行](../../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。一般のモデル追加とFOW1の採掘適格化を分ける。従来のkernel/class認証に加え、コアz・非衝突上界・複数試行費用・全検証関係への適合が必要である。名前・品質・登録者の自己申告だけを追加条件の代用にしない。
+
+[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 > **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 A request is the door ADR-0096 Decision 13 puts on a path that already existed end to end and had
@@ -28,8 +57,8 @@ a permission — the court grades the evidence in the transition, and the fee is
 | 3 | **The class id and the artifact root.** The class id is the graph's, computed by the node (`shape_profile_id()`); the root the chain pins is the artifact's INVENTORY root — what `qwen36-run --artifact … --root-only` prints on the hybrid tier and `palw-class inspect` on both, and what `getPalwProducerFacts.artifactRoot` reports once registered. It is not the file's sha256. Rebuilding the artifact from the same weights lands on the same root, which is the only reason downloading someone else's conversion is safe: the Studio's `PalwClassSpec` pins that root and the file's sha256 side by side, and the components manifest carries both as `artifact_root` and `sha256` (`docs/components-manifest.md`). | the converter | ADR-0056 Decision 6 (duplicate roots are priced, not policed) |
 | 4 | **Registration.** From the node that holds the artifact: `misaka model add <model id>` against it, or `kaspad --palw-class-artifact <file> --palw-register-class <model id> --palw-producer-bond <txid>:<index> …` with a bonded key. **That `kaspad` must be the only process running the bond.** Since 2026-09-25 it runs the bond's duties, round blocks included, and a second process beside a live node double-signs its round permits and is slashed (`docs/palw-add-a-model-runbook.md` §5). The node reads live terms, applies the known-weights rule (weights the chain already has never candidate for a new class) and the sibling filters, runs the admission preflight again, and only then signs and funds. Entry is priced in bonded collateral by the chain's own terms — share, target, slash value are the chain's, never the registrant's to choose — and a class registers weightless (0‰) until a certified family covers it. | the registrant (a bonded key) | ADR-0056 Decision 3 (registration exposure); ADR-0075 Decision 4 (every gate reads genesis ∪ chain) |
 | 5 | **Certification.** `palw-certify drill --model-id … --lane attempt\|fp --out …` writes the family's evidence (once per family per lane; chunked when it exceeds one carrier), `misaka palw submit-object` carries it, the transition grades it (`FamilyCertified`), then `palw-certify bind` seats the class at the floor share, weight-bearing (`ClassLaneCertified`). A drill certifies kernels, not weights: a model whose graph reaches a kernel no shipped family drills is a new architecture and needs a build whose court serves it. | anyone with a funded key; usually the registrant | ADR-0075 Decisions 1, 2, 5, 7; `docs/palw-certify-a-new-model.md` |
-| 6 | **The line and its owner.** A line is `(class, owner bond, name)`; every class's founding line has `line_id = class_id` and its owner is the registrant's bond — so the owner of what a request becomes is whoever bonded it. Versions are signed objects the line's developer publishes (`ModelVersionPublished`: root, parent, declared hashes, preview flag), history is kept whole, and the owner sets roles or hands the line over; positions never move with it. On testnet-11 the model fences arm at DAA 1,900 (the second flag day, 2026-09-06); on every other preset they are `None`. | the line's owner and developer | ADR-0088 Decisions 1, 2, 6, 9 |
-| 7 | **The seeded pair.** A line's market opens only on a seed of at least 100,000 BILI locked for good — no fee, no position for the seeder, the reserve never falls under it; 500,000 whole positions on a curve whose product never falls. The seed may precede the class's approval, no buy may. ADR-0094 (resident on `feat/adr-0094-accumulating-seed`, not on `main`) lets the seed accumulate over several transactions instead of one; ADR-0091 has the miner's reward buy the pair, 5 % of the escrow, and pays no holder. | a bonder with the BILI | ADR-0090 §0; ADR-0094; ADR-0091 |
+| 6 | **Model identity, owner and market.** The registered model identity and its owner are authenticated native facts. Under MOE2 an ADDITIONAL registration atomically creates its unique market and initial inventory/reserve state; GENESIS and FORK_DESIGNATED registrations create no Option market. Transferring a Position does not transfer the model owner, management keys, model bytes or historical liabilities. | the registrant / native transition | RFC0064; ADR0179/0232 |
+| 7 | **The market already exists at registration.** There is no normal registered-without-market or seed-waiting state. Optional seed/deepen adds liquidity to the existing additional-model market; it does not create mining eligibility. MOE2 allocates 30% of that model's priced/capped worker reward to Position purchase, 20% BILI plus the required portion of those purchased Positions to permanent liquidity, and the remaining 50% nominally to the versioned reward plan. Only excess purchased Positions are retired; neither internal leg adds BILI burn or an owner fee. Core models have no Option market and allocate 100% of R to the Miner; their verification service fees use separate pre-funded contracts. | the native transition / optional liquidity contributor | RFC0064; ADR0091/0232 |
 | 8 | **What the Studio then shows.** A class row with its readiness — `ReadyBuiltIn` for the floor, `ArtifactPresent { verified }`, `ArtifactMissing { downloadable }`, `ArtifactMismatch` — and, for a downloadable class, the artifact row from the components manifest (`url`, `sha256`, `size`, `class_id`, `artifact_root`), installed through the download manager that verifies the digest. The offline copy in `PalwClassSpec.artifact` is pinned to the manifest's sha256 by a test. | the Studio, from the manifest | ADR-0096 Decision 10; `docs/components-manifest.md` |
 
 ## What a request cannot do
@@ -57,9 +86,7 @@ Honest numbers, from what has been run:
 * **Certification** is a drill per family per lane, and the drill's evidence rides the chain in
   chunks (the integer floor's free-prompt family object was 214,243 bytes against a 100,000-byte
   carrier). A family that is already certified for a lane needs only the `bind`.
-* **Registration and the pair** wait on money and on a person: a bonded key with the collateral
-  the live terms name, and a bonder willing to lock at least 100,000 BILI for good. A request
-  whose `bonder` field says "undecided" is at this step until it does not.
+* **Registration and the market** are one atomic transition for an additional model under MOE2. Registration can still require the collateral and admission conditions named by the active profile, but it does not wait for a separate market seed. A missing market after successful additional registration is a state-invariant violation.
 * **A wider context** is a mint, which is the operator's decision and a flag day, not a step
   anyone on this page can take.
 

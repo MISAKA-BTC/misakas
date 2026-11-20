@@ -26,3 +26,15 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 2026-11-11のユーザー明示指示により、[RFC-0052](rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](adr/0220-hugging-face-model-acquisition-and-claim-materials.md)のHF必須profileを採択した。モデル静的資料はHF固定版の匿名取得・全file/native root照合、登録時独立検査・定期検査・有効期限を持つ別の公開契約とする。独自モデル重み全量配信は必須にせず、claim固有資料供給・取得case・成功停止を維持する。モデルclassの無審査登録と1.0/0.3は変更しない。設計採択と公開有効化を区別する。
 
 後続のユーザー指示による[RFC-0053](rfc/0053-additional-model-burn-pause.md)／[ADR-0221](adr/0221-additional-model-burn-pause.md)が優先する。先行HF公開契約の取得検査・定期認定は廃止し、追加モデルだけをburnで停止・登録者burnで解除する。genesis・年次fork指定は対象外。旧取得証明制度の実装を継続しない。
+
+## 2026-11-20 TB1/FOW1の明示改定
+
+ユーザーの今回の修正指示に基づき、[RFC0061/ADR0229](rfc/0061-palw-internal-threshold-beacon.md)と[RFC0062/ADR0230](rfc/0062-palw-function-output-and-work-admissibility.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加した。[共通移行契約](governance/palw-tb1-fow1-transition.md)が新profileの乱数、コア採掘値、登録適格性、Ticket、旧受付drainを所有する。旧beaconへfallbackせず、receiptの非衝突性をLLM関数の費用証明にしない。古い凍結条項を今回承認済み変更の再確認要求へ読み替えない。過去のsource hash・履歴・測定を保持し、現行20 RFC/50 ADRと全旧path適用台帳を更新する。本番activation・未完成のQwen定理は承認済みとしない。
+
+## 2026-11-20 MOE1経済の明示改定
+
+ユーザーはRFC-v2-0011および該当ADRの全面修正、追加モデル限定MisakaOption、coreのMiner100%を明示承認した。追加訂正により、追加モデル登録時に市場を同一原子遷移で生成し、正常な市場未準備状態やseed待ちを設けない。[RFC0063](rfc/0063-additional-model-option-economics.md)／[ADR0231](adr/0231-additional-model-option-economics.md)が今回の正本である。元ADRの旧版は今回改訂記録のbefore/*.md.txtへbytesを保持し、統合歴史payload・過去テストを改変しない。この承認済み改訂のために再確認を求めない。本番native/ABI/activationの完成は宣言しない。
+
+## 2026-11-20 MOE2永久流動性の明示改訂
+
+ユーザーは30% Position購入・20%BILIと購入済みPositionの一部の永久LP化・余剰Position burn・残余50%への変更を指示した。[RFC0064](rfc/0064-reward-buy-and-permanent-liquidity.md)と[ADR0232](adr/0232-reward-buy-and-permanent-liquidity.md)を後続採択とし、原子的市場登録、追加モデル限定、coreの対象R100%、通常売買5%/3%を維持する。既存仮想reserve/whole Positionに対する整数式とdust処理を明示し、一般のV2 AMMの保証を無条件転用しない。永久LP記録済みモデルのcore指定を禁止する。既承認のこの変更について再確認を求めず、旧MOE1/TB1/FOW1ブロック・過去原本・検査結果は保全する。native実装やactivation完了は宣言しない。

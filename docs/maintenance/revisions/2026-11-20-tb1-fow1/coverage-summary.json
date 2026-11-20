@@ -1,0 +1,21 @@
+{
+  "base_numbered_documents": 355,
+  "revised_numbered_documents": 359,
+  "base_documents_with_randomness_hits": 536,
+  "base_randomness_hit_occurrences": 5252,
+  "covered_base_occurrences": 5252,
+  "coverage_records": 679,
+  "disposition_counts": {
+    "CURRENT_SCOPE_AMENDED": 136,
+    "HISTORICAL_NAVIGATION_RETAINED": 7,
+    "FROZEN_ORIGINAL_WITH_OVERRIDE": 259,
+    "LEGACY_PROFILE_WITH_OVERRIDE": 24,
+    "PRIOR_CONTRACT_AMENDED": 4,
+    "NEW_NORMATIVE_CONTRACT": 4,
+    "HISTORICAL_EVIDENCE_RETAINED": 187,
+    "OTHER_CONTRACT_OR_TEST_RETAINED": 13,
+    "VERSIONED_COMPATIBILITY_WITH_OVERRIDE": 45
+  },
+  "current_rfc_v2_count": 20,
+  "current_adr_v2_count": 50
+}

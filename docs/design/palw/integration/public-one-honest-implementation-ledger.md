@@ -1,5 +1,13 @@
 # PublicOneHonest 実装台帳
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新規実装はTB1のEXEC/PANELとFOW1の計算依存Ticketを正本とする。旧SWC1のJOB/TICKET/PANEL三段抽選を新profileへ実装しない。以下の実装・測定記録の日付、結果、旧profileの未完了事項は保持する。
+
+[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 <!-- SWC1-PROPOSAL-BEGIN -->
 > **2026-11-17 監査対応の設計案:** [RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../../../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../../../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
 <!-- SWC1-PROPOSAL-END -->

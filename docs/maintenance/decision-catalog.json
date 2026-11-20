@@ -693,9 +693,9 @@
       "kind": "adr",
       "number": "0087",
       "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
-      "title": "ADR-0087 — a position is bought from the curve and sold back to it",
+      "title": "ADR-0087 — 追加モデルのMisakaOption市場・送金・保存則",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -709,9 +709,9 @@
       "kind": "adr",
       "number": "0089",
       "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
-      "title": "ADR-0089 — the fold is the truth; the EVM is its window and its hand",
+      "title": "ADR-0089 — native正本とEVMのMisakaOption転送・承認・決済",
       "topic": "EVM / wallet",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -725,9 +725,9 @@
       "kind": "adr",
       "number": "0091",
       "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
-      "title": "ADR-0091 — The reward buys the pair, and no holder is paid",
+      "title": "ADR-0091 — 追加モデル報酬の30%購入・20%永久LP・余剰burn",
       "topic": "Economics / budgets",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -757,9 +757,9 @@
       "kind": "adr",
       "number": "0095",
       "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
-      "title": "ADR-0095 — A position is a membership, not an income",
+      "title": "ADR-0095 — 譲渡可能な追加モデルPositionと現在保有に結び付くmembership",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -805,9 +805,9 @@
       "kind": "adr",
       "number": "0101",
       "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
-      "title": "ADR-0101 — A membership is proven by the chain and served by anyone, and a Position never moves between holders",
+      "title": "ADR-0101 — chain認証membershipとPositionの直接送受信",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -893,9 +893,9 @@
       "kind": "adr",
       "number": "0114",
       "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
-      "title": "ADR-0114 — The owner's leg is five percent, and it arrives at a height",
+      "title": "ADR-0114 — 通常AMMのburn 5%・owner総leg 3%と版付き適用",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -973,9 +973,9 @@
       "kind": "adr",
       "number": "0124",
       "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
-      "title": "ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the compute it certifies",
+      "title": "ADR-0124 — モデル分類別のMiner報酬・Panel原資・責任予約",
       "topic": "Economics / budgets",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -1365,9 +1365,9 @@
       "kind": "adr",
       "number": "0177",
       "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
-      "title": "ADR-0177 — Model-bond coinbase allocation without model-availability consensus",
+      "title": "ADR-0177 — モデル配分・owner収入とMOE2の分類別報酬",
       "topic": "Models / execution / onboarding",
-      "status": "原文と後続改定を参照"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -1381,9 +1381,9 @@
       "kind": "adr",
       "number": "0179",
       "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
-      "title": "ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3",
+      "title": "ADR-0179 — モデル二階層と追加モデル専用MisakaOption",
       "topic": "Models / execution / onboarding",
-      "status": "Accepted / 二階層"
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
     },
     {
       "kind": "adr",
@@ -1776,6 +1776,54 @@
       "title": "ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する",
       "topic": "Consensus / architecture",
       "status": "Proposed design / SWC1判断案、未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0227",
+      "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "title": "ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する",
+      "topic": "Verification / court",
+      "status": "AN1の履歴と今回の置換 / ADR229/230優先"
+    },
+    {
+      "kind": "adr",
+      "number": "0228",
+      "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "title": "ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する",
+      "topic": "Models / execution / onboarding",
+      "status": "MOR1の履歴と今回の置換 / ADR230のコアz条件優先"
+    },
+    {
+      "kind": "adr",
+      "number": "0229",
+      "path": "docs/adr/0229-palw-internal-threshold-beacon.md",
+      "title": "ADR-0229 — 全対象乱数源をPALW内部閾値beaconへ統合する",
+      "topic": "Verification / court",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / TB1選択・移行"
+    },
+    {
+      "kind": "adr",
+      "number": "0230",
+      "path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
+      "title": "ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする",
+      "topic": "Consensus / architecture",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計"
+    },
+    {
+      "kind": "adr",
+      "number": "0231",
+      "path": "docs/adr/0231-additional-model-option-economics.md",
+      "title": "ADR-0231 — 追加モデル限定MisakaOptionと新しい報酬・売買・移転規則",
+      "topic": "Economics / budgets",
+      "status": "旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0232",
+      "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "title": "ADR-0232 — 30%買付・20%永久流動性・余剰Position burnを採択する",
+      "topic": "Economics / budgets",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約"
     },
     {
       "kind": "rfc",
@@ -2255,15 +2303,7 @@
       "path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
       "title": "RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court",
       "topic": "Verification / court",
-      "status": "DRAFT_NOT_ACTIVATED / Panel＋Court維持、費用下界未証明"
-    },
-    {
-      "kind": "adr",
-      "number": "0227",
-      "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
-      "title": "ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する",
-      "topic": "Verification / court",
-      "status": "DRAFT_NOT_ACTIVATED / AN1変更草案"
+      "status": "旧AN1記録 / 新規採掘はRFC61/62へ置換、未有効化"
     },
     {
       "kind": "rfc",
@@ -2271,15 +2311,39 @@
       "path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
       "title": "RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性",
       "topic": "Models / execution / onboarding",
-      "status": "DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別"
+      "status": "旧MOR1記録 / receiptとコアzを分離、新規採掘はRFC62"
     },
     {
-      "kind": "adr",
-      "number": "0228",
-      "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
-      "title": "ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する",
-      "topic": "Models / execution / onboarding",
-      "status": "DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別"
+      "kind": "rfc",
+      "number": "0061",
+      "path": "docs/rfc/0061-palw-internal-threshold-beacon.md",
+      "title": "RFC-0061 — PALW内部閾値beaconと用途別乱数契約",
+      "topic": "Verification / court",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / TB1用途別乱数"
+    },
+    {
+      "kind": "rfc",
+      "number": "0062",
+      "path": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+      "title": "RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性",
+      "topic": "Consensus / architecture",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / FOW1コア出力・費用適格性"
+    },
+    {
+      "kind": "rfc",
+      "number": "0063",
+      "path": "docs/rfc/0063-additional-model-option-economics.md",
+      "title": "RFC-0063 — 追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転",
+      "topic": "Economics / budgets",
+      "status": "旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0064",
+      "path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "title": "RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn",
+      "topic": "Economics / budgets",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn"
     }
   ]
 }

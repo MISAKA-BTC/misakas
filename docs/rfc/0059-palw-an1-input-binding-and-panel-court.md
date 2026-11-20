@@ -1,5 +1,15 @@
 # RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court
 
+<!-- FOW1-TB1-20261120-BEGIN -->
+## 現行の適用 — FOW1・TB1への限定的置換
+
+2026-11-20のユーザー明示指示による新規採掘の設計正本は、[RFC-0062 PALW-FOW1](0062-palw-function-output-and-work-admissibility.md)／[ADR-0230](../adr/0230-palw-function-output-and-work-admissibility.md)と、乱数正本の[RFC-0061 PALW-TB1](0061-palw-internal-threshold-beacon.md)／[ADR-0229](../adr/0229-palw-internal-threshold-beacon.md)である。状態は**ADOPTED_DESIGN_NOT_ACTIVATED**。以下のAN1独立familyの原仕様・採択前記録は旧草案として保持する。
+
+FOW1はAN1の実入力・完全trace・Panel＋Courtを継承するが、推論関数自身の採掘出力`z`、関数非衝突性と複数試行費用の必須gate、四Root Ticketを追加する。本書§3.2の「異なる出力を要求しない」は自然回答`y`及び旧AN1の保証範囲であり、FOW1の`z`へ適用しない。AN1適合だけでFOW1の新規採掘資格は得られない。
+
+新profileの実行・Panel乱数は独立秘密を持つTB1 EXEC/PANELへ固定し、旧beacon・任意scheme・公開済みseedの再hashを代替にしない。0062のactivation A以後の全新規PALW採掘入口はFOW1＋TB1を必要とし、旧AN1受付をfallbackとして残さない。旧受理claimは受理時の版と固定されたdrain条件で処理し、過去の署名・元期限・責任を保存する。具体的費用定理と適合モデルは未完成であり、文書変更は現在runtimeの停止・公開activationを意味しない。
+<!-- FOW1-TB1-20261120-END -->
+
 - 日付: 2026-11-18（Asia/Tokyo）
 - 状態: **DRAFT_NOT_ACTIVATED**
 - 対応ADR: [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md)
@@ -9,9 +19,9 @@
 
 ## 0. 適用範囲と方針
 
-2026-11-18のユーザー指示に従い、whitepaperとRFCの改訂方式を **PALW-AN1、Panel＋Court** に統一する。Groth16その他の計算validity proofを導入しない。Panelは元claimの実行全体を再現・比較し、Nodeは認証された局所関係と状態遷移を裁定する。[PRINCIPLES](../PRINCIPLES.md)の計算証明不使用、モデル非保有Node、単独反証、モデル無審査登録・1.0/0.3を維持する。
+2026-11-18時点の草案は、whitepaperとRFCの改訂方式を **PALW-AN1、Panel＋Court** に統一する提案であった。現在の新規採掘規範は冒頭の0061/0062へ置換する。Groth16その他の計算validity proofを導入しない。Panelは元claimの実行全体を再現・比較し、Nodeは認証された局所関係と状態遷移を裁定する。[PRINCIPLES](../PRINCIPLES.md)の計算証明不使用、モデル非保有Node、単独反証、一般モデル登録・1.0/0.3を維持する。FOW1の共通数学的適合条件は一般モデル登録とは別の採掘条件である。
 
-本RFCの「必須」「拒否する」「してはならない」は、将来有効化される**AN1 family**の規範である。旧CAD1/CPN1/SWC1のwire、既存署名、旧claim、過去検証、採択済み経済条件を遡及変更しない。文書の作成は採択・native実装・本番測定・activationではない。
+以下の「必須」「拒否する」「してはならない」は、旧**AN1 family**の提案内容と、0062が明示的に継承する共通契約を記録する。新規採掘の追加条件・置換・受付終了は0062 §9を優先する。旧CAD1/CPN1/SWC1のwire、既存署名、旧claim、過去検証、採択済み経済条件を遡及変更しない。文書の作成はnative実装・本番測定・activationではない。
 
 AN1は次を目標とする。
 
@@ -31,6 +41,8 @@ AN1は次を目標とする。
 ## 2. profileと登録の型
 
 ### 2.1 固定するprofile
+
+FOW1で継承する際は、以下のbeacon項目をTB1 scheme/suite、role epoch、EXEC/PANEL RoundRef、roster root、公開scheduleへ具体化し、QualRootと閉鎖集合のFreezeRecordを別native recordとして保持する。0061のPREPARED、全Q、share certificate、曝露・no fallback条件を全consumerに適用する。
 
 AN1 profileは、familyと版、model/program認証、実行意味論、token表、trace schema、全local checker、Merkle規則、署名・beacon、TimingPlan、受付target、会計・移行を一体として識別する。profile digestはこれらのcanonical bytesへ結合する。
 
@@ -81,15 +93,17 @@ job token化・template・attention mask・position・生成条件を固定し�
 
 ### 3.2 意味論と最適化
 
-異なるsは異なる正規token列を与える。ただし異なる出力、異なる全内部値、通常推論と同じ実費は要求・保証しない。challenge prefixによって元job単独の場合と回答が変わり得るため、サービス契約と利用者への表示はAN1入力変換を含む実際の実行対象を記す。
+旧AN1では、異なるsは異なる正規token列を与えるが、異なる出力、異なる全内部値、通常推論と同じ実費は要求・保証しなかった。**新FOW1ではこの限界を採掘資格として受け入れず、コア採掘出力zの非衝突性と複数試行費用を0062 §4の必須gateにする。** 自然回答yや全中間値が必ず違うことは要求しない。challenge prefixによって元job単独の場合と回答が変わり得るため、サービス契約と利用者への表示は実際の実行対象を記す。
 
-共通prefixの直接再利用を限定する設計であり、cache、batch、正当な簡約、外注を禁止しない。正しい最適化自体をslash違反にしない。
+cache、batch、正当な簡約、外注による正しい最適化自体をslash違反にしない。FOW1の採掘資格では、これらの共有・償却を費用定理の分析範囲に含め、未分析の経路を許したまま下界を主張しない。
 
 ## 4. 時系列と二つのfreeze
 
+以下の順序はFOW1にも継承するが、実行用はTB1 EXEC、選出用は別秘密のTB1 PANELに限定する。双方を事前にPREPAREDとし、freezeは各roundの最初の正直share放出前にnative安定条件を満たす。certificate完成を未知性の境界にしない。旧64byte native beaconをTB1 seedへ暗黙変換しない。
+
 1. 資金付き登録と全nonce候補・model/job/profile/target/accountingを、実行用beaconへの攻撃者の最初のアクセスより前に閉じる。
 2. 登録した鍵・scheme・roundのσを認証し、sとxを導出する。早期漏洩・偏り・停止・別roundへの再試行を別のbeacon契約で扱う。
-3. Minerは規定実行からy/trace/三Root/Ticketを作る。候補を多数事前登録し一部だけ計算する行動は残る。
+3. Minerは規定実行から旧AN1のy/trace/三Root/Ticketを作る。FOW1では0062のy/z/trace/四Root/Ticketへ置換する。候補を多数事前登録し一部だけ計算する行動は残る。
 4. ownerの署名済み元claimを一回だけ固定し、元claim集合とPanel選出poolを閉じる。
 5. その閉鎖後の選出イベントでPanelを選ぶ。Panel再実行を見てから元Rootを置換・補完してはならない。
 6. 元期限・元予約で完全検査、資料case、Court、成熟、成功または非成功終端を処理する。
@@ -98,7 +112,7 @@ job token化・template・attention mask・position・生成条件を固定し�
 
 ## 5. Ticketと旧受付方式の分離
 
-AN1のTicketを次で固定する。
+以下は**旧AN1の三Root Ticket**である。FOW1は0062 §5の`R_z`を加えた四Rootと別domainを使う。同じwire/署名を暗黙に新しい式へ読み替えない。
 
 $$T=H_{\mathrm{ticket}}(\operatorname{Enc}(s,R_x,R_y,R_\tau)).$$
 
@@ -217,6 +231,8 @@ $$\Pr[\mathrm{correct\ win}]\le 1-(1-p)^q\le\min(1,pq).$$
 
 ### 11.2 未取得の費用定理
 
+この節の未証明条件は、新FOW1で任意の将来研究ではなく**採掘適格性とactivationの必須条件**となる。TheoremRuleと全適合predicateを0062 §2/§4に従って確認できないモデルはFOW1採掘を行えない。
+
 さらに、各実行の総予算Bと、前処理/cache/batch/外注/特殊model/入力選別を許した下界があって、正しい初回照会までに`q <= floor(B/c_min)`と示せる場合だけ、成功Final確率へ費用上界を接続できる。cryptoとPanel/gateの失敗は全期間・全候補の別項とする。
 
 本RFCはc_minを通常LLMのGPU費用・電力・金銭費用として与えていない。AN1は実入力がσに依存するので、旧FULL1の固定A/Bに対する`bC >= KN`、18N、rank-1の値生成・費用比を流用してはならない。正しいFinalからTicket以前の実費・本人労働・非償却性を直接推論しない。
@@ -238,6 +254,8 @@ hash木の呼出数は木ごとに計数するが、具体hashの衝突困難性
 Panelのcold資料取得、model root照合、全再実行、trace保持、証拠作成、包含・裁定を含めて最悪費用と期間を測定する。正常claimの完了には実資源が必要であり、nonceや署名の追加だけでは活性は得られない。
 
 ## 13. 移行
+
+現在の新規採掘への移行は0062 §9を優先する。指定されたactivation A以後は旧AN1の新規受付を閉じる。以下は旧受理claim・署名の互換処理と、継承する不変条件として扱う。
 
 AN1のfamily/codec/domainを新規に識別し、旧claimの意味・署名・元期限・過去の認証を保存する。旧profileの記録をimportするとき、AN1のfreezeや実入力結合が済んだと読み替えない。
 
@@ -270,6 +288,8 @@ profile更新・停止のpending処理は登録時に固定した移行規則に
 
 ## 15. 有効化gateと証拠
 
+新規FOW1には0062のG-EXEC/G-COLL/G-COSTと0061の完全TB1のgateを追加する。旧AN1又はMOR1の参照試験だけでこのgateを満たさない。新規familyの条件が未完なら、旧AN1をfallbackとして有効化しない。
+
 有効化には、仕様の採択、native登録/freeze/署名/beacon、全実行意味論・trace/local checkerの完全性、実効的なPanel＋Court/資料契約、全consumer、移行、資源実測、合意との接続を要求する。採掘費用を合意安全性の根拠として主張するなら、独立な費用定理とその適用範囲も別gateにする。
 
 独立参照実装は、入力・重み・trace・Courtと小さな状態モデルを検査する。学習済み本番LLM、実署名・beacon、ネットワークDA、native DB、全消費API、DAG定理、LLM評価費用の下界を証明しない。失敗がないテスト結果をこれらの代替にしない。
@@ -278,6 +298,8 @@ profile更新・停止のpending処理は登録時に固定した移行規則に
 
 <!-- MOR1-DRAFT-20261120-BEGIN -->
 ## 2026-11-20 MOR1追加草案の担当範囲
+
+以下はMOR1初版の追加記録である。現在の関数由来出力・費用・TB1・新規受付の規範は0061/0062を優先する。
 
 **DRAFT_NOT_ACTIVATED**。AN1への追加草案として、モデル登録時の認証出力構成をMOR1に定義する。AN1の完全C、s、実token入力、三Root、Ticket式、元claim、Panel＋Court、一回会計を維持する。MOR1のreceiptでTicketを置換したり、自由な再抽選を追加したりしない。
 

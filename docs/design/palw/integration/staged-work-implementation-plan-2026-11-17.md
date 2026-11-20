@@ -1,5 +1,13 @@
 # RFC-0058 — 実行束縛・段階commit・合意資格の実装計画
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。旧SWC1三段乱数は新規FOW1へ移植しない。TB1-EXEC/PANELの別秘密・別freezeと、コアz・四Rootに束縛した唯一のTicketへ接続する。第三のR_ticket、BLS比較案、旧work sourceを新規fallbackにしない。
+
+[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 日付: 2026-11-17（Asia/Tokyo）  
 状態: **PROPOSED_DESIGN_NOT_ACTIVATED**  
 規範案: [RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)  

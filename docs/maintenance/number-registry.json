@@ -191,6 +191,51 @@
       "adr_path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
       "status": "DRAFT_NOT_ACTIVATED",
       "audit": "Unused numbers checked in the supplied RFC AuditRevision archive only. Explicit user instruction switches to PALW-AN1 with Panel and Court; no Groth16. Historical next_local and adopted states retained; unexamined remote branches not audited."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0060",
+      "rfc_path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "adr": "0228",
+      "adr_path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "audit": "Existing MOR1 allocation verified from supplied latest archive; historical omission in local number registry repaired without renumbering."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0061",
+      "rfc_path": "docs/rfc/0061-palw-internal-threshold-beacon.md",
+      "adr": "0229",
+      "adr_path": "docs/adr/0229-palw-internal-threshold-beacon.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "TB1 input proposal used RFC0060, which collides with existing MOR1. Allocated0061; original input preserved."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0062",
+      "rfc_path": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+      "adr": "0230",
+      "adr_path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "FOW1 core output, theorem-conformance and work-admissibility migration; no native wire allocation or public activation."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0063",
+      "rfc_path": "docs/rfc/0063-additional-model-option-economics.md",
+      "adr": "0231",
+      "adr_path": "docs/adr/0231-additional-model-option-economics.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "MOE1 economics; no native wire ID or activation height allocation."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0064",
+      "rfc_path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "adr": "0232",
+      "adr_path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "MOE2 30/20/50, virtual-reserve integer kernel and permanent nonredeemable liquidity; no native wire or activation value assigned."
     }
   ]
 }

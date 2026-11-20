@@ -1,0 +1,18 @@
+{
+  "name": "rfc",
+  "command": [
+    "python3",
+    "docs/rfc-v2/check_integrity.py"
+  ],
+  "exit_code": 1,
+  "failures": [
+    "FAIL: Original bytes changed or missing: RFC-0009",
+    "FAIL: Original bytes changed or missing: RFC-0011",
+    "FAIL: Original bytes changed or missing: RFC-0014",
+    "FAIL: Original bytes changed or missing: RFC-0023",
+    "FAIL: Original bytes changed or missing: RFC-0026",
+    "FAIL: Original bytes changed or missing: RFC-0037",
+    "FAIL: Original bytes changed or missing: RFC-0041"
+  ],
+  "failure_count": 7
+}

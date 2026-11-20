@@ -1,0 +1,8 @@
+{
+  "name": "arithmetic",
+  "args": [
+    "python3",
+    "bgw_certificate_check.py"
+  ],
+  "exit_code": 0
+}

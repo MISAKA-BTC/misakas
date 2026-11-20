@@ -1,5 +1,13 @@
 # claim 認証 — Final と SecurityCertified
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。旧Gate C・SecurityCertifiedの条件を新規profileへそのまま移さない。FOW1Admissible、正規TB1 EXEC/PANEL、PublicOneHonestの全体再実行・資料と異議機会・反証優先を接続する。旧認証の状態名だけで新Final資格を与えない。
+
+[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 > 採用済み条項の読解用統合版。新規規則・実装検証・本番有効化ではありません。[状態](../../STATUS.md) / [凍結](../../governance/design-freeze.md)。
 
 モデル単位の旧資格審査を廃止しても、claimごとの認証・確率的検出・公開証拠・決定論的裁定は全階層で維持します。

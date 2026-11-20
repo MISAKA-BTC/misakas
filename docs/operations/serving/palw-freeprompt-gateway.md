@@ -1,5 +1,13 @@
 # The free-prompt gateway — run your own LLM, mine with the same inference (ADR-0044)
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。以下は旧gatewayと旧profileの運用記録である。任意promptの同一推論を新規FOW1採掘へ自動流用できない。新規採掘にはTB1 challengeの実入力adapter、適格なFOW1登録、zと四Rootへの対応を要する。未対応APIを旧profileへfallbackして成功させない。署名鍵seedはこのbeaconではない。
+
+[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 Status: FP-06 through FP-09b landed and measured on the pinned model — the gateway, the retained
 trace, and the executor rail that signs a real commitment transaction — plus `misaka palw
 fp-submit`, which puts that transaction on the chain. ADR-0077 Decisions 1-4 are landed on top:

@@ -2,7 +2,9 @@
 
 [入口](README.md) / [トピック別](TOPICS.md) / [番号台帳](../maintenance/numbering.md)。自動生成の探索用索引です。原文の過去のStatusを現在の稼働保証へ昇格させません。
 
-> **旧番号の履歴索引。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。
+> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。新規採掘の後続正本は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md)。RFC61/62・ADR229/230は設計採択済み・未有効化であり、旧sourceを新規受付へfallbackしない。
+
+> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
 
@@ -67,8 +69,9 @@
 | RFC-0056 | [全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md) | Proposed design / 全claim受付難易度・未実装未有効化 |
 | RFC-0057 | [Court nonce・Panel固有チャレンジと提出の一回性](0057-court-nonce-and-panel-challenges.md) | Proposed design / Court nonce・Panel固有challenge・未有効化 |
 | RFC-0058 | [実行commit・段階別抽選・仕事の一回性と合意資格](0058-staged-work-commitments-and-consensus-eligibility.md) | Proposed design / 実行commit・段階抽選・合意資格、未有効化 |
-
-## 2026-11-18 追加草案
-
-- [RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。
-| RFC-0060 | [モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md) | DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別 |
+| RFC-0059 | [PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md) | 旧AN1記録 / 新規採掘はRFC61/62へ置換、未有効化 |
+| RFC-0060 | [モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md) | 旧MOR1記録 / receiptとコアzを分離、新規採掘はRFC62 |
+| RFC-0061 | [PALW内部閾値beaconと用途別乱数契約](0061-palw-internal-threshold-beacon.md) | ADOPTED_DESIGN_NOT_ACTIVATED / TB1用途別乱数 |
+| RFC-0062 | [PALW-FOW1：推論関数の採掘出力と新規仕事の適格性](0062-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1コア出力・費用適格性 |
+| RFC-0063 | [追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転](0063-additional-model-option-economics.md) | 旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
+| RFC-0064 | [報酬30%買付・20%永久流動性・余剰Position burn](0064-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn |

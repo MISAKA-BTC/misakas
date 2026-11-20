@@ -1,0 +1,699 @@
+{
+  "revision": "MOE1-20261120",
+  "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "baseline_archive": "misaka_docs_TB1_FOW1_20261120.zip",
+  "baseline_sha256": "2c7491f244244857850ce93a828c709d164c7265de4edeb8fab810702dc351fe",
+  "baseline_file_count": 2702,
+  "baseline_files_preserved_at_original_path": 2702,
+  "modified_existing_file_count": 71,
+  "unchanged_existing_file_count": 2631,
+  "deleted_existing_file_count": 0,
+  "modified_existing": [
+    {
+      "path": "docs/AGENTS.md",
+      "before_sha256": "2bd1d8e502178f27397dbc8a15d6392b5a78923e922438f106c32de96e86cb31",
+      "after_sha256": "716718a2177bd4bcaa39b2dd82c760e6d00d84db539e29aacdda310c05439eca",
+      "before_bytes": 5275,
+      "after_bytes": 6010,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/AGENTS.md.txt"
+    },
+    {
+      "path": "docs/INDEX.md",
+      "before_sha256": "93cd95dadc1c2ee56f8f736f5c833bb84822cdfa4c483654b075f158da1a6e6e",
+      "after_sha256": "de6f333efe093c39e13c1afc95fe6d12989bf490c0c1e044885358fcc89db9a0",
+      "before_bytes": 8729,
+      "after_bytes": 9965,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/INDEX.md.txt"
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "before_sha256": "ae2402677d4a5ff5680f12f19807b01647cdbfa9c979c57d38af2049183ddaea",
+      "after_sha256": "26e149c977647d2d408296f3417ff1a65683f4a9a9a12e0dd77417e33fe902f2",
+      "before_bytes": 64253,
+      "after_bytes": 66854,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/PRINCIPLES.md.txt"
+    },
+    {
+      "path": "docs/README.md",
+      "before_sha256": "5372bfe5dc95a21370932b48a9e9b3e904f12c6a807e1fc8bfb8d89a1663eb41",
+      "after_sha256": "c43dc0bb418575f19d0556b829d9dcfbb51fac1a29baa33f99f59ba04b2615a0",
+      "before_bytes": 11003,
+      "after_bytes": 12239,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/README.md.txt"
+    },
+    {
+      "path": "docs/STATUS.md",
+      "before_sha256": "8570e438f2962a781bdbaf251d1ba2753955b682e671d9e91ec08b9d15e2acda",
+      "after_sha256": "936097754c194a467602a15ebe6d9d2570c70a4b547fa924123dc5d1a284d904",
+      "before_bytes": 13009,
+      "after_bytes": 14245,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/STATUS.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0007-evm-exec-lane-and-anchors.md",
+      "before_sha256": "e5d3cbb97c712abe91457d3541433531062caec1730ac05d08b0362da2f2ad36",
+      "after_sha256": "3f1fa5d39cec1527d43a62e50231c487351b818bc0e5aea496f0a4dd9a629831",
+      "before_bytes": 162677,
+      "after_bytes": 163988,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0007-evm-exec-lane-and-anchors.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0015-permissionless-model-registration.md",
+      "before_sha256": "dd0742548ba0d2fd23de29113d35771c88677e8dd658e7a2c5c86d202b8247cc",
+      "after_sha256": "bb2f1d465ef661a2a00773b990f92d96fc6c6d4969955dfbd297f7699d10997c",
+      "before_bytes": 167394,
+      "after_bytes": 168649,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0015-permissionless-model-registration.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0019-model-tiers-and-annual-catalog.md",
+      "before_sha256": "b1304ec625b75775c8a8fd8883eeb01283ecf108e5c0d6a501e05fd0247a1393",
+      "after_sha256": "472fcae5c89abaef4245cd6dfb7d97a6ac59d91d8e8b63dc9e23df2aa258d844",
+      "before_bytes": 58501,
+      "after_bytes": 59863,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0019-model-tiers-and-annual-catalog.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0021-positions-and-membership.md",
+      "before_sha256": "d99031fd5acf2908058f2345cae6a3b9e9ae525980de113dbb8f5061fa7bfe9b",
+      "after_sha256": "840085a5300f94e9f15a2d4e41a1c5e98f9c6bf609e82d798cf2672a100c9d2e",
+      "before_bytes": 84687,
+      "after_bytes": 89270,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0021-positions-and-membership.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md",
+      "before_sha256": "45783248fcf22686ce6ef3fe23d3b1f141f814bf7d2f423f86bff821cffbb5bb",
+      "after_sha256": "05473fd355b14653251aa954904003e35baaee98bf519742d132fb2f7cf2784f",
+      "before_bytes": 82290,
+      "after_bytes": 83639,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0023-model-reward-routing-and-owner-leg.md",
+      "before_sha256": "c7ec00d7b523746c63b7640d9e107516d2f02a52b8e619f4408e8a733277ccfc",
+      "after_sha256": "a780fda944298f53b4377a6aa574584c761b0e65f77c7ffee478cde7f3063eab",
+      "before_bytes": 42639,
+      "after_bytes": 48108,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0026-canonical-work-and-answer-accounting.md",
+      "before_sha256": "970654fb7960d09b0e3e1c3729879f3bc7b650849b365344afe58c3f561d4c94",
+      "after_sha256": "a9438bf1ad449bdb39e847e4b7fb96c68a8d2b82b354f34bccba6d3895ff9089",
+      "before_bytes": 189043,
+      "after_bytes": 190310,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0026-canonical-work-and-answer-accounting.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0035-bond-budget-and-shared-reservations.md",
+      "before_sha256": "9f544f4ab49f7fe77fc62032616f99d277ae18e6c42d74899405acbe0028b69a",
+      "after_sha256": "1320f4ab47e5dabbe4ff2ce69de6c97bb9e3dea5e4b061dcf7596ebbd21c9098",
+      "before_bytes": 168058,
+      "after_bytes": 169306,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0035-bond-budget-and-shared-reservations.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0036-capacity-scaling-and-emission-budget.md",
+      "before_sha256": "abcb59bcfabbf7be207f226a89585248497c0bc12f3f3855e1f0ef0564864130",
+      "after_sha256": "9b9c9e944966175e2cadc99714f769a4273511e54c37715080008358211e35e4",
+      "before_bytes": 32550,
+      "after_bytes": 33793,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0036-capacity-scaling-and-emission-budget.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0037-fee-escrow-and-role-consent.md",
+      "before_sha256": "b5af6bebaac966caf4f5fa566a53621721dd15c0a90df26f94c84151e2aedff8",
+      "after_sha256": "ca8fbe3143cd732d15004d097962a27600fa00f4a5c035287e74058fb7163785",
+      "before_bytes": 63239,
+      "after_bytes": 64585,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0037-fee-escrow-and-role-consent.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0047-funded-original-and-role-authorization.md",
+      "before_sha256": "45d8cf8ecff0b6ceecb3471368c0f8446ab76597dbd7fd70f27025cb17caa661",
+      "after_sha256": "4fea6f1b484e45318f13a32e0198d2f5ff42de8d386f5af4be67b8b88c33d173",
+      "before_bytes": 9306,
+      "after_bytes": 10530,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0047-funded-original-and-role-authorization.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0049-authenticated-state-map-and-row-stream.md",
+      "before_sha256": "87b3ef10ffcdad1acaaec0b7c76e9b35d6e78e49088896d8ac99ecd46078dd1d",
+      "after_sha256": "b6414b94e15011ef9f08784b89da27dd240a835f51be2c343aa4550d58456325",
+      "before_bytes": 12781,
+      "after_bytes": 14013,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0049-authenticated-state-map-and-row-stream.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/0050-freeze-deferred-rejected-and-governance.md",
+      "before_sha256": "b9714b7c0c50d9fd8ef58991cbf8f94fe76379d19915ba760877334b3a270940",
+      "after_sha256": "102a33d7bbc2d4e1e84bedcde32a7852245582ba13e155d41eb06a9aac780184",
+      "before_bytes": 100742,
+      "after_bytes": 101960,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0050-freeze-deferred-rejected-and-governance.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/PRECEDENCE.md",
+      "before_sha256": "8393a96fc4e62257466dc30323205de008a9e143c82464b617171183f47b15a9",
+      "after_sha256": "5a37035924f7c574e53108fe23e2c2adf346b4419c0197fde82169360f705a51",
+      "before_bytes": 11911,
+      "after_bytes": 13156,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/PRECEDENCE.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/README.md",
+      "before_sha256": "beb7eaad5cba78fcdc11167ba9c672ac27165ca4d888fbce4a483443df74f325",
+      "after_sha256": "ac7043cd280b21c2f17d63421f04f9e882fc60084bf0275ab7dcad6015b6fc79",
+      "before_bytes": 26224,
+      "after_bytes": 27472,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/README.md.txt"
+    },
+    {
+      "path": "docs/adr-v2/registry.json",
+      "before_sha256": "de0cd2624f5daf3f72802e3166441a24f24817a8f9d8e8ba10fe13a923307075",
+      "after_sha256": "bc55a749a19779328f553687ae227f2196974a8145fc90eab8253d2a310f78cd",
+      "before_bytes": 51430,
+      "after_bytes": 53085,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/registry.json.txt"
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "before_sha256": "42c96943def3b953216e34becdf18fffa054357372bedb3cd3eee9ebb508e55d",
+      "after_sha256": "7ed04bba60c28eb3bda04fb75634d97177fcbf35caae4481e9b1a8c8b288c32e",
+      "before_bytes": 37144,
+      "after_bytes": 10250,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt"
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "before_sha256": "9dd6dbf5cce911b31b093b6122cb85e4c8074c43ce376462dbd852d39f972a00",
+      "after_sha256": "34b7b89e6119c3382f3ecc56d61ae2effa5d442b8b1d8007dd17b42e1124c4c4",
+      "before_bytes": 59487,
+      "after_bytes": 9173,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt"
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "before_sha256": "dfd861f3cc4ae76ce165e909263aa8e52448c3dc29639131d094e22df9578920",
+      "after_sha256": "55cdb6fb726b74230ee4b49251641b4de40e576a659443bd6bf577e3abb272f0",
+      "before_bytes": 26298,
+      "after_bytes": 7801,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt"
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "before_sha256": "f77645fe7798f075076a8fdf54e9f8c9c865c243805ba4ad85ef223385aa408c",
+      "after_sha256": "347ebfe4bb8192cc7806b8dd9a3a406b15e859d65f0a2ef693f014801b8db483",
+      "before_bytes": 25661,
+      "after_bytes": 7084,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0095-a-position-is-a-membership-not-an-income.md.txt"
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "before_sha256": "c910224a5c686aee35e9856691ab9609266a555325802331f591938274da067a",
+      "after_sha256": "3ecf935d78c1408c55b7a23934fcb9c22e48292586c906e91103e9db1372686f",
+      "before_bytes": 15357,
+      "after_bytes": 6024,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt"
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "before_sha256": "674483248cc5f390f03fe7f6f3d17082b58e22c5ed56c4a62ca9483104fb782d",
+      "after_sha256": "75993ce8cc641640f340257b8b01f487101d27d52be41012ac1ea681fec51dd3",
+      "before_bytes": 10756,
+      "after_bytes": 5389,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt"
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "before_sha256": "d04264352849608b5b72044477bb078f2c07ee49b238c321a5b0ca0b19ff8cb1",
+      "after_sha256": "7723028f8aa376a14ed4e3b780d2cac430abb2d5babf3256eb162f0b82b244ed",
+      "before_bytes": 37286,
+      "after_bytes": 7000,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt"
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "before_sha256": "1d050f11843da18706f3f12a5ab6b083168185884abc97a4ec86fd83f51367be",
+      "after_sha256": "de2646dd93e0e0dfc830a8c89c2bb741f6d1212d9675a7e1cc7d00c2e7ab15f4",
+      "before_bytes": 33468,
+      "after_bytes": 34785,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt"
+    },
+    {
+      "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "before_sha256": "c3ecd98a1dd86837e74637212153e285ec4d9312a1000bf72acf0ed429698c03",
+      "after_sha256": "1ebf09d438120f7e38050e6e482c0e4ff59665eafb5891385e37ecb78a2738ef",
+      "before_bytes": 39469,
+      "after_bytes": 7538,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0177-model-bond-allocation-without-availability-consensus.md.txt"
+    },
+    {
+      "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
+      "before_sha256": "85afabad2ddee9576ce3139bd864a68c64274ff5d69d03f4d2ff5ec6ec01de7d",
+      "after_sha256": "6ff82d988881809cb1289069171dd06f45c3af5fc323f5af7c13d592e38ba1b1",
+      "before_bytes": 12902,
+      "after_bytes": 6048,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt"
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "before_sha256": "7545cf72b1d0246218c35884fc243a03f5a66fc84c4f701bd32c682b013cf136",
+      "after_sha256": "2820d517ded4f88ad1a68d0f43870066f798a73fa9a52f8c559480e8b0a7cad0",
+      "before_bytes": 40794,
+      "after_bytes": 42101,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/INDEX.md.txt"
+    },
+    {
+      "path": "docs/adr/README.md",
+      "before_sha256": "b7b310f32845f91262fe64698d7c376c27839142b26f18fe9e3634fdf469c2c7",
+      "after_sha256": "cb73d82d46644808947e3d3010cf72c0c24d61ec8058621c614ed8888546db48",
+      "before_bytes": 3806,
+      "after_bytes": 5044,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/README.md.txt"
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "before_sha256": "e2e9679993f665fae20c6ade6a16d3d73f8c9eb179550543dffa16b55a912973",
+      "after_sha256": "6567ac6eb4494dec9cdfb36908bc3abb51d2065a1a4a7bf6eeebdae39db3ecd7",
+      "before_bytes": 33049,
+      "after_bytes": 33700,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/TOPICS.md.txt"
+    },
+    {
+      "path": "docs/architecture/palw-specification.md",
+      "before_sha256": "cd0f264b95ef2ad4ef69c72ea99cbca0e85d3e3f161815e0b83b7cc517580c8f",
+      "after_sha256": "304f90f2510630e40629f746792c4962709e1b1088036e4d3cd4a97b72bbea5b",
+      "before_bytes": 66830,
+      "after_bytes": 68806,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/architecture/palw-specification.md.txt"
+    },
+    {
+      "path": "docs/design/palw/economics/bond-budget-and-model-allocation.md",
+      "before_sha256": "a184542d5cf6a7eb54758d1fbe3a75a921e89946d4ddf0e5177982f7cd4fe77c",
+      "after_sha256": "a9d967b086e199b274a4ec8857a9d4433a7ac00dd03314f938ba96ca0777b260",
+      "before_bytes": 58636,
+      "after_bytes": 59957,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/economics/bond-budget-and-model-allocation.md.txt"
+    },
+    {
+      "path": "docs/design/palw/integration/activation-readiness-matrix.md",
+      "before_sha256": "3b7be624ed7117d8167f09ed3a6ce84df11ddeccda1c6035a1a2d922381907fa",
+      "after_sha256": "e459efa649e98ee3a7e1f2488b36bd85c0a4c79f892b36f3f0593b3575e15604",
+      "before_bytes": 50465,
+      "after_bytes": 51748,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/integration/activation-readiness-matrix.md.txt"
+    },
+    {
+      "path": "docs/governance/design-freeze.md",
+      "before_sha256": "fd8fdc626f7fa9e3c073569d80fddda421d36efee6b194670d8ae21ac3dd6fae",
+      "after_sha256": "f3ea37b9f32a826893a0c9d638e5e9682e0ad1fec23e274e1c990d9153742261",
+      "before_bytes": 5992,
+      "after_bytes": 7223,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/design-freeze.md.txt"
+    },
+    {
+      "path": "docs/governance/document-lifecycle.md",
+      "before_sha256": "9d58170d6e84b1013b64c40d655e7d00304db7b6a75c1d063e2d49ace0ca4d01",
+      "after_sha256": "5966a629ddac6f3343490e1d5a2b575abe4415d43a6c2d36f9f2ebbc88c7c1cb",
+      "before_bytes": 3576,
+      "after_bytes": 4807,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/document-lifecycle.md.txt"
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "before_sha256": "9729c1f16e4ff346664f2c769ceb7ccc851e36da95469d6af8d8efc8eb6dc773",
+      "after_sha256": "2fbda41ca8d337a89d37d7e17cfbb85eeb59a072ac00ea898b9c4922f9ff394c",
+      "before_bytes": 59605,
+      "after_bytes": 60860,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/parameter-register.md.txt"
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "before_sha256": "a5282bdb1c8648461cac3b49a4d1b1b115193122be5ad01ac8bda03009d7943d",
+      "after_sha256": "e3c0304007c3211c95e4f28d513023621a2b5f98d19fbe0aee04e094a82b9bd8",
+      "before_bytes": 122855,
+      "after_bytes": 124093,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/catalog.md.txt"
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "before_sha256": "efb4b960901949549c4e0d0e6d56b136056b241be2a30c820441da456bd2f7bf",
+      "after_sha256": "308f89a67e0e80e54588a1657c3a06c4fcb078f7f67254b4ed6b473b6fa3f980",
+      "before_bytes": 97288,
+      "after_bytes": 98531,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/decision-catalog.json.txt"
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "before_sha256": "6be9d062ea67f3c6f18752a2a6f7d31ace94cc96d51c4692d30fc0ad2ee50c56",
+      "after_sha256": "4a86018127c08423f10a681011abd33bec8076ed3bac45ea6e06898b23b268a0",
+      "before_bytes": 7560,
+      "after_bytes": 8687,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/generate_indexes.py.txt"
+    },
+    {
+      "path": "docs/maintenance/number-registry.json",
+      "before_sha256": "09d0ed8c6094db84082a708bf6615a7209df912b5a8dafb1083640c04700206f",
+      "after_sha256": "4cc8600e630524637255eb2061e20a5f0381a6dd4ae8790287e83c45edf8d6f5",
+      "before_bytes": 9567,
+      "after_bytes": 9926,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/number-registry.json.txt"
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "before_sha256": "9900cc890dd4d5448735983c7a83d26bcb5847e48d74b16f5d774f5170fdc150",
+      "after_sha256": "3aba5ceaaf808b18a64daa8290722b8d01252605a0ddfd5a1d731a1859ab447a",
+      "before_bytes": 11697,
+      "after_bytes": 12024,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/numbering.md.txt"
+    },
+    {
+      "path": "docs/operations/models/model-requests.md",
+      "before_sha256": "49f14b8112f6b3cbbe7ee608ddb3525349301b25583e29cf72a3262a5478221a",
+      "after_sha256": "e56f4ad35d693102585844f8c21fba58954c04d2610c027d01643b0eac762a9f",
+      "before_bytes": 13625,
+      "after_bytes": 14767,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/model-requests.md.txt"
+    },
+    {
+      "path": "docs/operations/models/palw-add-a-model-runbook.md",
+      "before_sha256": "2ff76769ef0ae1428ec553142c14ea0d659e566e6f2b83da7dafbb7150858cad",
+      "after_sha256": "d42f6b3846d15e745b5035e5a0ebdbaff92e5f0d704ac11c6e7f6849a1108ad6",
+      "before_bytes": 31964,
+      "after_bytes": 33264,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/palw-add-a-model-runbook.md.txt"
+    },
+    {
+      "path": "docs/reference/palw/palw-registry-map.md",
+      "before_sha256": "6def62680323d49f9520b358e1b61fc25037afc228af6830e84dde90b4c7f29f",
+      "after_sha256": "b4f75f5bcbe6843f9e1b1d7332c0d0fa45d90124232a1b17d4c299f51517825a",
+      "before_bytes": 15886,
+      "after_bytes": 17163,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/reference/palw/palw-registry-map.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "before_sha256": "7e14ca0671f9ef8f68ca2d95b3f75d26b5fd685a205cbc626220238d29fb4577",
+      "after_sha256": "2f1460b4c2b20c8751f6669b236f4d2b0ac962354888fa384e7776a168dce26e",
+      "before_bytes": 290615,
+      "after_bytes": 291909,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0003-model-onboarding-and-artifacts.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "before_sha256": "753cefcf740b40dd74a6b9dba6cfd9b4c2e790360a1f8df95318c7c6a9bc0e82",
+      "after_sha256": "e85d0d45e11d36b54b4390dbd002c911798f0d74ef0c3957e6c078b1f1e9a24b",
+      "before_bytes": 75307,
+      "after_bytes": 76642,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0004-model-tiers-and-annual-catalog.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "before_sha256": "37ed661eac51f7c08bd45f902117398c8d92abde82f4ae52f122e4d2f3f21e01",
+      "after_sha256": "329605d970b5efc780a99c5e7f8487759adfb11a713dbbe79602911f74fe2f5e",
+      "before_bytes": 293919,
+      "after_bytes": 295232,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0006-panels-and-probabilistic-verification.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "before_sha256": "7dbf512dc7bbe5efe5563aafc3633d1b43318ff8e5b61f37b2e5367f7519d0f4",
+      "after_sha256": "a60ae4be9c6df703c2c4ebb1a80639f5af08d967cd9f2236ee10fa40e598fdae",
+      "before_bytes": 85063,
+      "after_bytes": 86338,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "before_sha256": "5191a8774c92091a9321e1c0d209f5e04244ad4f33de54588e999ecbefbe8cf7",
+      "after_sha256": "69fc0c1bdb25f9621994760c7a9986c9b8dd36a22ac937498b6852c57e5320c0",
+      "before_bytes": 57850,
+      "after_bytes": 59157,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0009-remote-client-and-sdk.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "before_sha256": "2608561889b1050180bf231cc2580053a0e8041083eb4da5380958e1de8215a1",
+      "after_sha256": "8e3f4aa7d6f394f56b45295dfc1142026381c51d36f4e832eeb16780741856c6",
+      "before_bytes": 152160,
+      "after_bytes": 153451,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "before_sha256": "85ed193c82707afa7d7f35cd611211de77d9da435e6c3ebfde807c4488d878f2",
+      "after_sha256": "31d5c29550cc65e717a73b88c1467a4faddcdec2af36a71a46dc1e45ff20e98d",
+      "before_bytes": 124327,
+      "after_bytes": 135452,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "before_sha256": "efcdf1fd08d99339f961ad2609dcd28d4200db2ac832042f6f43621a355e9f2e",
+      "after_sha256": "7312068e453f9ffbc85077268852b649dea3b2199a868f64cdb1df28019c64bd",
+      "before_bytes": 35949,
+      "after_bytes": 37246,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0012-authenticated-state-storage-and-ibd.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "before_sha256": "0f660df5dc19f69a1e2b84f800d3f9cc3f4c87eec22c3de17a2630dccc6acc77",
+      "after_sha256": "d9b8a1186974fd06d9674c8de218aa02d5cbba4e53650fa93d8d805d9233a8ae",
+      "before_bytes": 15644,
+      "after_bytes": 16946,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0013-permissionless-bootstrap-and-release.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0014-court-master-contract.md",
+      "before_sha256": "a90dda6da9600342f7208a17268f4495c0a15cf1b658d33952142320adb3945a",
+      "after_sha256": "d9a8e4c7079d32f110b04b7a191cb7c09d6bb0890ff642b9daa2cbcf772b08bd",
+      "before_bytes": 393999,
+      "after_bytes": 395291,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0014-court-master-contract.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "before_sha256": "5b186682be3617d0d7de63909182ba832186d3f8f063155203af5dc02b0230bc",
+      "after_sha256": "02527275aa48ca76e4a523929539d55803a9a9ba957707142b208859a22c5942",
+      "before_bytes": 299638,
+      "after_bytes": 300938,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0015-freeze-deferred-rejected-and-governance.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+      "before_sha256": "7e5a252b334dda876bf92beef7443b3e7ee2a6b90e0e824e9a2391e4545de7e4",
+      "after_sha256": "8332e19e9ed83c0fa4a666a0490386fcf761ecba6c46c410dd7154dd7dc141ba",
+      "before_bytes": 40458,
+      "after_bytes": 41736,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "before_sha256": "d6fde6484274c7de0446b543082b85d922a6b271679c837fd51689c21ea3d4e0",
+      "after_sha256": "258c3f5a1c0e47a76a4cce84704e04df7082a180d748ca89c313bbde1c83216b",
+      "before_bytes": 35083,
+      "after_bytes": 36378,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0017-noninteractive-positive-verification.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "before_sha256": "08bd0bdea30a64b8f01efee0778a34472ce3e0149826febf06ce5be9ea92aa71",
+      "after_sha256": "2052d84777508b3d23607299dd5d78ab5fdb7153da34fc5abd7026af4f48c3c2",
+      "before_bytes": 61190,
+      "after_bytes": 62470,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+      "before_sha256": "05b713ffc8a5c68e7002e1ba2bff6baf2bd4d673483f479b03dd56bbfc28dea7",
+      "after_sha256": "9d4e5d4ee62300e795f65f545f4179bdc0fcd42c107446ad3bd639dc43367eff",
+      "before_bytes": 46697,
+      "after_bytes": 47964,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "before_sha256": "a838b474b9564357da9aba5d99bdfb0f199feed38ce62b5f68501be6e30c3b66",
+      "after_sha256": "47d0aaeaac42e71751c00853f32b6e70c49c8830d4f9f61ed2fce98c111addd0",
+      "before_bytes": 59775,
+      "after_bytes": 61116,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/MIGRATION.md",
+      "before_sha256": "a0b34fdaffd384d27630b7c85d85d1ebdfed57f8f5fbf5a37e82f5090e37b265",
+      "after_sha256": "656586a4b76071caf8d41079cf5f738fe7f1f7449979b0e3e9340671b6e4d078",
+      "before_bytes": 13598,
+      "after_bytes": 14843,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/MIGRATION.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "before_sha256": "57602551b3df589ce0fb35c18092a73721862f7ab5541fffcd629cc45e5adfb9",
+      "after_sha256": "3b8921c8c0f1c029b76f9699849cbaae3f1d32440da21e2755fc0345dce05c74",
+      "before_bytes": 20968,
+      "after_bytes": 22213,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/README.md.txt"
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "before_sha256": "4db0db74101c8b0a118cbb70e7d1f684bc35d817fa458d3c52c08bf163e12b6f",
+      "after_sha256": "8ce0629730a9d1c437ab5012baed80127469400f76187b920ce8c87ff7bb7d33",
+      "before_bytes": 21985,
+      "after_bytes": 23320,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/registry.json.txt"
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "before_sha256": "3a7efb80b2141debc1d591b7c88c940698b15041138f8d0410dc7bfc85332778",
+      "after_sha256": "6928a189e35f35a3dc02fde97a4dc5e140241ce21bc7b4d51989cc10be5f2eda",
+      "before_bytes": 12109,
+      "after_bytes": 12923,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/INDEX.md.txt"
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "before_sha256": "cb4c1c34b899983739f10e8f5c0b767a1e048b752323f742882d6313b9120d3a",
+      "after_sha256": "9ace4bbf0d2ca2af0e75e7756f7a7e22358384c29f7c8b4d218e25bdb70d0e9b",
+      "before_bytes": 4909,
+      "after_bytes": 6147,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/README.md.txt"
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "before_sha256": "a67a268ca1f3638a57ff4ffee0282145e6297845d1bc12eb2230ae38ed7f5c2c",
+      "after_sha256": "225f7091c7a9dcfe37578d159d3021a4b8582a0d5b22050bbaf17d648bdca8a1",
+      "before_bytes": 9448,
+      "after_bytes": 10164,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/TOPICS.md.txt"
+    },
+    {
+      "path": "docs/spec/palw/model-tiers.md",
+      "before_sha256": "7d886d0b8dde56419abeb1a74575dbf73c6b6f39ad763a5cbb31bb847361252a",
+      "after_sha256": "c986e253edc9e8a6e05a2a665bb51f2bfeffe7409bd7682cc43ffc53aae9295c",
+      "before_bytes": 1544,
+      "after_bytes": 2777,
+      "before_copy": "docs/maintenance/revisions/2026-11-20-option-economics/before/spec/palw/model-tiers.md.txt"
+    }
+  ],
+  "added_files": [
+    "docs/adr/0231-additional-model-option-economics.md",
+    "docs/design/palw/economics/moe1-economic-policy.json",
+    "docs/governance/model-option-economics-transition.md",
+    "docs/maintenance/revisions/2026-11-20-option-economics/README.md",
+    "docs/maintenance/revisions/2026-11-20-option-economics/SUPERSESSION.md",
+    "docs/maintenance/revisions/2026-11-20-option-economics/VALIDATION.md",
+    "docs/maintenance/revisions/2026-11-20-option-economics/accounting-check.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/baseline-manifest.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/AGENTS.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/INDEX.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/PRINCIPLES.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/README.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/STATUS.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0007-evm-exec-lane-and-anchors.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0015-permissionless-model-registration.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0019-model-tiers-and-annual-catalog.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0021-positions-and-membership.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0026-canonical-work-and-answer-accounting.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0035-bond-budget-and-shared-reservations.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0036-capacity-scaling-and-emission-budget.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0037-fee-escrow-and-role-consent.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0047-funded-original-and-role-authorization.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0049-authenticated-state-map-and-row-stream.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0050-freeze-deferred-rejected-and-governance.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/PRECEDENCE.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/README.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/registry.json.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0095-a-position-is-a-membership-not-an-income.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0177-model-bond-allocation-without-availability-consensus.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/INDEX.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/README.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/TOPICS.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/architecture/palw-specification.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/economics/bond-budget-and-model-allocation.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/integration/activation-readiness-matrix.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/design-freeze.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/document-lifecycle.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/parameter-register.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/catalog.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/decision-catalog.json.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/generate_indexes.py.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/number-registry.json.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/numbering.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/model-requests.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/palw-add-a-model-runbook.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/reference/palw/palw-registry-map.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0004-model-tiers-and-annual-catalog.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0009-remote-client-and-sdk.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0012-authenticated-state-storage-and-ibd.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0013-permissionless-bootstrap-and-release.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0014-court-master-contract.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0015-freeze-deferred-rejected-and-governance.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/MIGRATION.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/README.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/registry.json.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/INDEX.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/README.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/TOPICS.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/before/spec/palw/model-tiers.md.txt",
+    "docs/maintenance/revisions/2026-11-20-option-economics/changes.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/check_accounting.py",
+    "docs/maintenance/revisions/2026-11-20-option-economics/check_preservation.py",
+    "docs/maintenance/revisions/2026-11-20-option-economics/check_revision.py",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.run.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.stderr.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.stdout.log",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/summary.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/checker-comparison.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/economic-final-independent-review.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/economic-legacy-inventory.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/economic-scope-audit.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/preservation-check.json",
+    "docs/maintenance/revisions/2026-11-20-option-economics/revision-check.json",
+    "docs/rfc/0063-additional-model-option-economics.md"
+  ],
+  "new_file_hash_scope": "Package verification covers ZIP content; this list has no recursive self-hash."
+}

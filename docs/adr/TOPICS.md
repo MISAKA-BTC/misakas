@@ -2,7 +2,9 @@
 
 [番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
 
-> **旧番号の履歴索引。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。
+> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。
+
+> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## Consensus / architecture
 
@@ -60,18 +62,18 @@
 - [ADR-0084 — The ids ride, the capture stays home — a model-class claim serves its answer, never its history](0084-the-ids-ride-the-capture-stays-home.md)
 - [ADR-0085 — The close is assembled from what the executor served — a disputed tile, not a capture](0085-the-close-is-assembled-from-what-was-served.md)
 - [ADR-0086 — the opening carries the fold, not the leaves](0086-the-opening-carries-the-fold-not-the-leaves.md)
-- [ADR-0087 — a position is bought from the curve and sold back to it](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)
+- [ADR-0087 — 追加モデルのMisakaOption市場・送金・保存則](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)
 - [ADR-0090 — The pair is seeded with real BILI, locked for good, and a position is whole](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
 - [ADR-0092 — The ladder is minted once, and the wall clock is what binds](0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md)
 - [ADR-0094 — A seed is paid in as many transactions as it takes](0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md)
-- [ADR-0095 — A position is a membership, not an income](0095-a-position-is-a-membership-not-an-income.md)
+- [ADR-0095 — 譲渡可能な追加モデルPositionと現在保有に結び付くmembership](0095-a-position-is-a-membership-not-an-income.md)
 - [ADR-0096 — The app you already use is the entrance, and the shape of the answer is committed](0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md)
 - [ADR-0099 — The adder measures, the chain recomputes, and a seat holds a shard](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md)
-- [ADR-0101 — A membership is proven by the chain and served by anyone, and a Position never moves between holders](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)
+- [ADR-0101 — chain認証membershipとPositionの直接送受信](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)
 - [ADR-0107 — A class's share grows on work that reached Final, not on blocks that were accepted](0107-a-share-grows-on-work-that-reached-final.md)
 - [ADR-0109 — A lock is its own claim, and finality is a label, not a pause](0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md)
 - [ADR-0111 — A seat may demand the committed leaf it needs to judge](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md)
-- [ADR-0114 — The owner's leg is five percent, and it arrives at a height](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)
+- [ADR-0114 — 通常AMMのburn 5%・owner総leg 3%と版付き適用](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md)
 - [ADR-0115 — A pending transaction is announced until it lands](0115-a-pending-transaction-is-announced-until-it-lands.md)
 - [ADR-0117 — A draw is one forward](0117-a-draw-is-one-forward.md)
 - [ADR-0120 — The least seed is one million BILI, and it arrives at a height](0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md)
@@ -121,12 +123,13 @@
 - [ADR-0222 — 公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md)
 - [ADR-0224 — 全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md)
 - [ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する](0226-staged-work-commitments-and-consensus-eligibility.md)
+- [ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md)
 
 ## EVM / wallet
 
 - [ADR-0020 — Selected-Parent EVM Execution Lane on L1](0020-selected-parent-evm-lane.md)
 - [ADR-0022 — Pruned-IBD support for the EVM lane and the DNS/PoS-v2 overlay](0022-pruned-ibd-evm-overlay-snapshot.md)
-- [ADR-0089 — the fold is the truth; the EVM is its window and its hand](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
+- [ADR-0089 — native正本とEVMのMisakaOption転送・承認・決済](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
 
 ## Economics / budgets
 
@@ -135,9 +138,9 @@
 - [ADR-0032 — PALW fee-bond escrow — pricing calls and paying challengers without new covenants](0032-palw-fee-bond-escrow.md)
 - [ADR-0065 — A bond must be earned, and a failure is not a verdict](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
 - [ADR-0068 — The LLM-primary economy — the floor retires to the doctrine's minimum](0068-the-llm-primary-economy-and-the-floors-minimum.md)
-- [ADR-0091 — The reward buys the pair, and no holder is paid](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)
+- [ADR-0091 — 追加モデル報酬の30%購入・20%永久LP・余剰burn](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)
 - [ADR-0105 — A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has landed](0105-a-heartbeat-never-turns-a-bonded-block-red.md)
-- [ADR-0124 — The panel is paid out of the claim's reward, a seat holds exposure, and a claim is paid for the comp](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
+- [ADR-0124 — モデル分類別のMiner報酬・Panel原資・責任予約](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md)
 - [ADR-0128 — DNS validators vote BFT by bonded stake, and that vote decides the stake reorg gate](0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md)
 - [ADR-0131 — A claim is paid for the compute it cost, in economic compute, not leaves](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md)
 - [ADR-0139 — O13 decided: the execution lane's gas throughput scales with the lane, one budget a round](0139-the-execution-lanes-gas-is-one-budget-a-round.md)
@@ -148,6 +151,8 @@
 - [ADR-0193 — Panel の追及を支える Miner Account Bond: 最低10万と責任連動追加、過大拘束を避ける](0193-miner-account-bond-for-panel-incentives.md)
 - [ADR-0207 — 通常 verifier fee と有限 provider 契約の判断](0207-finite-fee-consent-and-provider-payment-bounds.md)
 - [ADR-0209 — genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md)
+- [ADR-0231 — 追加モデル限定MisakaOptionと新しい報酬・売買・移転規則](0231-additional-model-option-economics.md)
+- [ADR-0232 — 30%買付・20%永久流動性・余剰Position burnを採択する](0232-reward-buy-and-permanent-liquidity.md)
 
 ## Governance / release scope
 
@@ -158,7 +163,6 @@
 
 ## Models / execution / onboarding
 
-- [ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md)
 - [ADR-0034 — PALW re-verification routing — four execution-class families, five model bands, one deciding binding](0034-palw-execution-class-model-band-routing.md)
 - [ADR-0036 — PALW mainnet activation — lineage reconciliation and the model that governs](0036-palw-mainnet-activation-model.md)
 - [ADR-0045 — The class economy is chain state — derived PWU, block-denominated epoch budgets, and the registratio](0045-palw-class-economy-on-chain.md)
@@ -191,14 +195,15 @@
 - [ADR-0172 — Model extensibility uses versioned kernels, not a universal VM](0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md)
 - [ADR-0173 — A seat holds a root, not a class: possession is keyed (bond, class, root), a new root is NotReady un](0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md)
 - [ADR-0175 — 新規モデル登録は自由、登録モデルは永久不変](0175-registered-models-are-permanently-immutable.md)
-- [ADR-0177 — Model-bond coinbase allocation without model-availability consensus](0177-model-bond-allocation-without-availability-consensus.md)
-- [ADR-0179 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
+- [ADR-0177 — モデル配分・owner収入とMOE2の分類別報酬](0177-model-bond-allocation-without-availability-consensus.md)
+- [ADR-0179 — モデル二階層と追加モデル専用MisakaOption](0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 - [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
 - [ADR-0210 — (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
 - [ADR-0212 — Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md)
 - [ADR-0215 — モデル非保有Node・非対話positive・対話negative・検証先行Final](0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)
 - [ADR-0220 — Hugging Face取得とclaim固有の資料供給を分離する](0220-hugging-face-model-acquisition-and-claim-materials.md)
 - [ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md)
+- [ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md)
 
 ## Operations / interfaces / recovery
 
@@ -250,8 +255,6 @@
 - [ADR-0218 — 公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md)
 - [ADR-0223 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS](0223-global-admission-court-calendar-and-one-bps.md)
 - [ADR-0225 — Court nonceとPanel固有チャレンジを役務・承認へ束縛する](0225-court-nonce-and-panel-challenges.md)
+- [ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する](0227-palw-an1-input-binding-and-panel-court.md)
+- [ADR-0229 — 全対象乱数源をPALW内部閾値beaconへ統合する](0229-palw-internal-threshold-beacon.md)
 
-
-## 2026-11-18 追加草案
-
-- [ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する](0227-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。

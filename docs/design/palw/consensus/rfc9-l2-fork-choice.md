@@ -1,5 +1,15 @@
 # RFC-0009 L2 — verifying the PALW fork choice without a full node (lane L2FC, 2026-10-09)
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
+
+[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 Lane L2FC · branch `rfc9/l2-fork-choice` (from the integration head `b676927de`; integration `b8ae9412b` merged 2026-10-10, with the
 user's design changes ADR-0175–0177 and rule E renumbered ADR-0178; integration `589d9aa3e` merged 2026-10-10 — the Lead's live-drill
 E2E of `palw-remote-miner`, BUDGET round 3 — and the issuer channel wired into the miner, §8) · closes the L2 DESIGN_GAP left by C1r2

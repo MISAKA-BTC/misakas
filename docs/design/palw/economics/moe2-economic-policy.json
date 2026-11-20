@@ -1,0 +1,82 @@
+{
+  "logical_profile": "MOE2",
+  "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "runtime_enabled": false,
+  "wire_ids_assigned": false,
+  "additional_registration_creates_unique_market_atomically": true,
+  "core_has_option_market": false,
+  "reward": {
+    "basis": "priced and capped worker R before market and Panel splits",
+    "ADDITIONAL": {
+      "purchase_permille": 300,
+      "permanent_lp_bili_permille": 200,
+      "residual": "R-floor(300R/1000)-floor(200R/1000)",
+      "universal_new_panel_pool": false
+    },
+    "GENESIS": {
+      "miner_permille": 1000,
+      "market_from_R": 0,
+      "panel_from_R": 0,
+      "owner_from_R": 0
+    },
+    "FORK_DESIGNATED": {
+      "miner_permille": 1000,
+      "market_from_R": 0,
+      "panel_from_R": 0,
+      "owner_from_R": 0
+    }
+  },
+  "kernel": {
+    "preconditions": ["R>=0 integer", "V>=0", "real_reserve>=seed_locked>=0", "X=V+real_reserve>0", "U>=1 integer", "checked native arithmetic"],
+    "X": "V+real_reserve",
+    "X1": "X+B",
+    "U1": "ceil(X*U/X1)",
+    "q": "U-U1",
+    "ell": "floor(A*U1/X1)",
+    "z": "q-ell",
+    "real_reserve_after": "r+B+A",
+    "inventory_after": "U1+ell",
+    "retired_after": "retired+z",
+    "virtual_reserve_changes": false,
+    "old_locked_seed_changes": false,
+    "position_mint_for_lp": false,
+    "receipt_in_supply_sum": false
+  },
+  "permanent_lp": {
+    "representation": "native LockedLiquidityReceipt at PERMANENT_PROTOCOL_LOCK",
+    "public_liquid_lp_token_created": false,
+    "withdrawable": false,
+    "transferable": false,
+    "owner_or_admin_key": false,
+    "lp_fee_claim": false,
+    "underlying_assets_used_in_normal_swaps": true,
+    "cumulative_contribution_equals_current_balance": false,
+    "core_promotion_after_positive_receipt": false,
+    "same_artifact_root_alias_or_successor_core_bypass": false,
+    "receipt_contains_its_own_global_post_state_root": false,
+    "receipt_on_A_zero": false
+  },
+  "dust": {
+    "condition": "(B>0 and q==0) or (A>0 and ell==0)",
+    "partial_commit": false,
+    "original_finite_deadline_only": true,
+    "deadline_outcome": "defined unsuccessful terminal and original-fund settlement",
+    "donation_or_mint_fallback": false,
+    "all_states_positive_lp_liveness_proved": false
+  },
+  "fees": {
+    "normal_burn_permille": 50,
+    "normal_owner_total_permille": 30,
+    "normal_net": "gross-burn-owner",
+    "owner_includes_contributor": true,
+    "internal_buy_burn_permille": 0,
+    "internal_buy_owner_permille": 0,
+    "internal_lp_burn_permille": 0,
+    "internal_lp_owner_permille": 0,
+    "direct_transfer_amm_fee_permille": 0
+  },
+  "both_market_legs_count_in_export_cap": true,
+  "old_claim_terms_preserved": true,
+  "tb1_fow1_gates_waived": false,
+  "future_price_or_mev_safety_proved": false
+}

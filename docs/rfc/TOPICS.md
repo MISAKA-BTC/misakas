@@ -2,7 +2,9 @@
 
 [番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
 
-> **旧番号の履歴索引。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。
+> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。
+
+> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## Consensus / architecture
 
@@ -25,6 +27,7 @@
 - [RFC-0054 — 公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md)
 - [RFC-0056 — 全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md)
 - [RFC-0058 — 実行commit・段階別抽選・仕事の一回性と合意資格](0058-staged-work-commitments-and-consensus-eligibility.md)
+- [RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性](0062-palw-function-output-and-work-admissibility.md)
 
 ## EVM / wallet
 
@@ -36,6 +39,8 @@
 - [RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性](0027-miner-account-bond-and-panel-incentives.md)
 - [RFC-0039 — 通常 verifier の fee consent と provider の有限支払・保持契約](0039-finite-fee-consent-and-provider-payment-bounds.md)
 - [RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる](0041-genesis-bond-free-bootstrap.md)
+- [RFC-0063 — 追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転](0063-additional-model-option-economics.md)
+- [RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn](0064-reward-buy-and-permanent-liquidity.md)
 
 ## Governance / release scope
 
@@ -44,7 +49,6 @@
 
 ## Models / execution / onboarding
 
-- [RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md)
 - [RFC-0002 — PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the cons](0002-palw-tensor-ir.md)
 - [RFC-0003 — PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top](0003-palw-generative-model-classes.md)
 - [RFC-0004 — PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR](0004-palw-model-improvement.md)
@@ -57,6 +61,7 @@
 - [RFC-0042 — (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md)
 - [RFC-0052 — Hugging Face 固定モデル取得と claim 固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md)
 - [RFC-0053 — 追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md)
+- [RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md)
 
 ## Operations / interfaces / recovery
 
@@ -84,8 +89,6 @@
 - [RFC-0050 — 公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md)
 - [RFC-0055 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS](0055-global-admission-court-calendar-and-one-bps.md)
 - [RFC-0057 — Court nonce・Panel固有チャレンジと提出の一回性](0057-court-nonce-and-panel-challenges.md)
+- [RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md)
+- [RFC-0061 — PALW内部閾値beaconと用途別乱数契約](0061-palw-internal-threshold-beacon.md)
 
-
-## 2026-11-18 追加草案
-
-- [RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。

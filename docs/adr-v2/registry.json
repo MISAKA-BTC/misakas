@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "namespace": "ADR-v2",
-  "editorial_date": "2026-10-30",
+  "editorial_date": "2026-11-20",
   "current_count": 50,
   "legacy_namespace": "ADR",
   "legacy_file_count": 204,
@@ -1069,44 +1069,117 @@
       "id": "RFC-0059",
       "path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
       "status": "DRAFT_NOT_ACTIVATED",
-      "provenance": "Explicit 2026-11-18 user direction: PALW-AN1 with Panel and Court; supplied archive reviewed; no cryptographic computation validity proof."
+      "provenance": "Explicit 2026-11-18 user direction: PALW-AN1 with Panel and Court; supplied archive reviewed; no cryptographic computation validity proof.",
+      "new_profile_superseded_by": [
+        "RFC-0061",
+        "RFC-0062"
+      ],
+      "historical_status_retained": true
     },
     {
       "kind": "adr",
       "id": "ADR-0227",
       "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
       "status": "DRAFT_NOT_ACTIVATED",
-      "provenance": "AN1 decision draft; native implementation, adoption and activation are separate."
+      "provenance": "AN1 decision draft; native implementation, adoption and activation are separate.",
+      "new_profile_superseded_by": [
+        "RFC-0061",
+        "RFC-0062"
+      ],
+      "historical_status_retained": true
     },
     {
       "kind": "rfc",
       "id": "RFC-0060",
       "path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
       "status": "DRAFT_NOT_ACTIVATED",
-      "provenance": "Explicit 2026-11-20 user direction: require astronomically low cross-attempt authenticated-output collision probability at model registration; AN1 Ticket and Panel/Court unchanged."
+      "provenance": "Explicit 2026-11-20 user direction: require astronomically low cross-attempt authenticated-output collision probability at model registration; AN1 Ticket and Panel/Court unchanged.",
+      "new_profile_superseded_by": [
+        "RFC-0061",
+        "RFC-0062"
+      ],
+      "historical_status_retained": true
     },
     {
       "kind": "adr",
       "id": "ADR-0228",
       "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
       "status": "DRAFT_NOT_ACTIVATED",
-      "provenance": "MOR1 decision draft: structural registration conformity and immutable execution/output binding; adoption, native implementation and activation remain separate."
+      "provenance": "MOR1 decision draft: structural registration conformity and immutable execution/output binding; adoption, native implementation and activation remain separate.",
+      "new_profile_superseded_by": [
+        "RFC-0061",
+        "RFC-0062"
+      ],
+      "historical_status_retained": true
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0061",
+      "path": "docs/rfc/0061-palw-internal-threshold-beacon.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit TB1/FOW1 integration instruction; input proposed RFC0060 renumbered due existing MOR1."
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0062",
+      "path": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit TB1/FOW1 integration instruction; input proposed RFC0060 renumbered due existing MOR1."
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0229",
+      "path": "docs/adr/0229-palw-internal-threshold-beacon.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit TB1/FOW1 integration instruction; input proposed RFC0060 renumbered due existing MOR1."
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0230",
+      "path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit TB1/FOW1 integration instruction; input proposed RFC0060 renumbered due existing MOR1."
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0063",
+      "path": "docs/rfc/0063-additional-model-option-economics.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MOE1 economic and registration-market instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0231",
+      "path": "docs/adr/0231-additional-model-option-economics.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MOE1 economic and registration-market instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0064",
+      "path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MOE2 30/20/50 permanent-liquidity instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0232",
+      "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MOE2 30/20/50 permanent-liquidity instruction"
     }
   ],
   "current_revision": {
-    "date": "2026-11-09",
+    "date": "2026-11-20",
+    "revision": "2026-11-20-permanent-liquidity",
     "current_rfc_book_count": 20,
     "current_adr_book_count": 50,
-    "adopted_decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+    "adopted_decision_records": [
+      "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+    ],
     "historical_consolidation_metadata_retained": true,
     "runtime_changed": false,
-    "activation_changed": false,
-    "revision": "2026-11-09-public-panel",
-    "subsequent_adopted_decision_records": [
-      "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
-      "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
-      "docs/adr/0218-public-materials-and-one-honest-panel.md"
-    ]
+    "activation_changed": false
   },
   "latest_proposal": {
     "revision": "2026-11-20-model-output-binding",
@@ -1124,7 +1197,12 @@
     "pow_lower_bound_proved": false,
     "dag_safety_proved": false,
     "claim": "cross-attempt authenticated-output collision bound under canonical encoding and the classical random-oracle model",
-    "verification": "AN1 Panel full replay + authenticated local Court; receipt equality is not a full-execution validity proof"
+    "verification": "AN1 Panel full replay + authenticated local Court; receipt equality is not a full-execution validity proof",
+    "superseded_for_new_mining_by": [
+      "RFC-0061",
+      "RFC-0062"
+    ],
+    "current_applicability": "MOR1 receipt remains auxiliary; new FOW1 mining follows the later adopted requirements."
   },
   "proposal_history": [
     {
@@ -1156,6 +1234,159 @@
       "pow_lower_bound_proved": false,
       "dag_safety_proved": false,
       "verification": "Panel full replay + authenticated local Court; no Groth16"
+    },
+    {
+      "revision": "2026-11-20-model-output-binding",
+      "rfc_record": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "decision_record": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "depends_on": [
+        "RFC-0059",
+        "ADR-0227"
+      ],
+      "amended_proposals": [],
+      "status": "DRAFT_NOT_ACTIVATED",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "adopted_policy_changed": false,
+      "pow_lower_bound_proved": false,
+      "dag_safety_proved": false,
+      "claim": "cross-attempt authenticated-output collision bound under canonical encoding and the classical random-oracle model",
+      "verification": "AN1 Panel full replay + authenticated local Court; receipt equality is not a full-execution validity proof"
+    }
+  ],
+  "subsequent_adoptions": [
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-tb1-fow1",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit current user instruction to apply the five audit revisions and replace all new-profile randomness with the attached PALW-TB1 design.",
+      "rfc_records": [
+        "docs/rfc/0061-palw-internal-threshold-beacon.md",
+        "docs/rfc/0062-palw-function-output-and-work-admissibility.md"
+      ],
+      "decision_records": [
+        "docs/adr/0229-palw-internal-threshold-beacon.md",
+        "docs/adr/0230-palw-function-output-and-work-admissibility.md"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false,
+      "qwen_cost_theorem_completed": false,
+      "core_function_theorem_certified": false,
+      "tb1_full_crypto_implemented": false,
+      "new_admission_policy": "FOW1 + TB1 mandatory at an explicitly adopted future activation boundary; legacy accepted claims drain under original terms."
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-option-economics",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction to revise RFC-v2-0011 and related ADRs; additional-only options, core Miner100%; registration atomically creates the additional-model market.",
+      "rfc_records": [
+        "docs/rfc/0063-additional-model-option-economics.md"
+      ],
+      "decision_records": [
+        "docs/adr/0231-additional-model-option-economics.md"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false,
+      "new_profile": "MOE1",
+      "buyback_additional_permille": 500,
+      "amm_burn_permille": 50,
+      "amm_owner_total_permille": 30,
+      "core_miner_permille": 1000,
+      "registration_creates_market_atomically": true,
+      "core_option_market_enabled": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-permanent-liquidity",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction: 30% Position purchase + 20% permanent liquidity + 50% residual rewards; inherited additional-only scope and atomic market creation.",
+      "rfc_records": [
+        "docs/rfc/0064-reward-buy-and-permanent-liquidity.md"
+      ],
+      "decision_records": [
+        "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false,
+      "new_profile": "MOE2",
+      "purchase_additional_permille": 300,
+      "permanent_liquidity_additional_permille": 200,
+      "residual": "R-floor(300R/1000)-floor(200R/1000)",
+      "amm_burn_permille": 50,
+      "amm_owner_total_permille": 30,
+      "core_miner_permille": 1000,
+      "registration_creates_market_atomically": true,
+      "core_option_market_enabled": false,
+      "permanent_lp_core_promotion_allowed": false,
+      "all_states_paired_liquidity_liveness_proved": false
+    }
+  ],
+  "latest_adoption": {
+    "date": "2026-11-20",
+    "revision": "2026-11-20-permanent-liquidity",
+    "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+    "authority": "Explicit user instruction: 30% Position purchase + 20% permanent liquidity + 50% residual rewards; inherited additional-only scope and atomic market creation.",
+    "rfc_records": [
+      "docs/rfc/0064-reward-buy-and-permanent-liquidity.md"
+    ],
+    "decision_records": [
+      "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+    ],
+    "runtime_changed": false,
+    "activation_changed": false,
+    "new_profile": "MOE2",
+    "purchase_additional_permille": 300,
+    "permanent_liquidity_additional_permille": 200,
+    "residual": "R-floor(300R/1000)-floor(200R/1000)",
+    "amm_burn_permille": 50,
+    "amm_owner_total_permille": 30,
+    "core_miner_permille": 1000,
+    "registration_creates_market_atomically": true,
+    "core_option_market_enabled": false,
+    "permanent_lp_core_promotion_allowed": false,
+    "all_states_paired_liquidity_liveness_proved": false
+  },
+  "revision_history": [
+    {
+      "date": "2026-11-09",
+      "current_rfc_book_count": 20,
+      "current_adr_book_count": 50,
+      "adopted_decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+      "historical_consolidation_metadata_retained": true,
+      "runtime_changed": false,
+      "activation_changed": false,
+      "revision": "2026-11-09-public-panel",
+      "subsequent_adopted_decision_records": [
+        "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+        "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+        "docs/adr/0218-public-materials-and-one-honest-panel.md"
+      ]
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-tb1-fow1",
+      "current_rfc_book_count": 20,
+      "current_adr_book_count": 50,
+      "adopted_decision_records": [
+        "docs/adr/0229-palw-internal-threshold-beacon.md",
+        "docs/adr/0230-palw-function-output-and-work-admissibility.md"
+      ],
+      "historical_consolidation_metadata_retained": true,
+      "runtime_changed": false,
+      "activation_changed": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-option-economics",
+      "current_rfc_book_count": 20,
+      "current_adr_book_count": 50,
+      "adopted_decision_records": [
+        "docs/adr/0231-additional-model-option-economics.md"
+      ],
+      "historical_consolidation_metadata_retained": true,
+      "runtime_changed": false,
+      "activation_changed": false
     }
   ]
 }

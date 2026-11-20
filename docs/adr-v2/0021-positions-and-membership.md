@@ -1,48 +1,66 @@
-# ADR-v2-0021 — Position・curve・membership・非譲渡性
+# ADR-v2-0021 — 追加モデルPosition・membership・直接移転と永久LP
 
-編集統合日: 2026-10-30　|　名前空間: `ADR-v2`　|　原文の主担当: 3本
+編集統合日: 2026-10-30　|　MOE2規範改訂: 2026-11-20　|　名前空間: `ADR-v2`　|　履歴原文の主担当: 3本
 
-**状態: 主題別の編集統合。採択・未採択・撤回・実装・有効化の状態は原資料から継承し、この統合では変更しません。** 新しい設計の採択、runtime修正、wire／署名domain／合意定数／activationの変更ではありません。
+**現行状態: ADOPTED_DESIGN_NOT_ACTIVATED。** MOE2の経済改訂を本書の現在著述部へ反映する。native/EVM実装、移行、試験又は公開有効化が完了したという意味ではない。原文payload、TB1/FOW1、MOE1採択記録を保全し、旧実装の実績をMOE2の完成記録へ書き換えない。
 
-[50本の一覧](README.md) · [全204本の対応](MAPPING.md) · [原文の状態宣言](STATUS-LEDGER.md) · [変更・置換の境界](PRECEDENCE.md)
+[50本の履歴一覧](README.md) · [全204本の対応](MAPPING.md) · [原文の状態宣言](STATUS-LEDGER.md) · [変更・置換の境界](PRECEDENCE.md)
 
-関連仕様: [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
+現在の共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
 
-## 1. この文書の役割
+直前MOE1版の原本: [0021-positions-and-membership.md](../maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0021-positions-and-membership.md.txt)。下の原資料一覧と旧行番号は、それより前の歴史payloadに対応する。
 
-ModelPositionを報酬請求権や譲渡可能tokenと混同せず、その権利と検証をまとめる。
+## 1. 対象と登録時の市場生成
 
-## 2. 統合した判断の読み方
+MisakaOption / ModelPositionはnativeで認証された`ADDITIONAL`専用である。モデル登録、一意市場、初期virtual/real reserve、Position在庫、owner参照を同じ原子遷移で生成する。外部seedなしの実reserve初期値0を許し、別市場作成・後続open・market-ready待機を要求しない。seed/deepenは存在後の任意増強である。
 
-### 2.1
+`ModelRegistered(m, ADDITIONAL) ⇒ ∃! MarketFor(m)`を維持し、部分失敗では両方をrollbackする。市場欠落はstate invariant違反であり、正常な未準備又はLiquidityDustと混ぜない。市場の存在はFOW1適格性や個々のclaimの正当性を証明しない。
 
-Positionはstate fold上の残高としてcurveから購入・売却する設計で、native UTXOと同じものではない。[旧ADR-0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)
+`GENESIS`及び`FORK_DESIGNATED`（native catalogの正式指定。softforkを含む）には市場、Position、transfer、allowance、membership、報酬購入、永久LPを有効にしない。対象worker報酬Rの100%をMinerへ帰属させ、検証役務はR以外の事前資金契約へ結合する。[ADR0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md)
 
-### 2.2
+## 2. Position残高と永久流動性の区別
 
-Positionはmembershipであり、自動的な配当や採掘報酬の受領権ではないという変更を反映する。[旧ADR-0095](../adr/0095-a-position-is-a-membership-not-an-income.md)
+### 2.1 一つのnative正本
 
-### 2.3
+Positionは固定model ID/artifact rootに結び付いた資産であり、BILI、native UTXO、bond、EXEC creditとは別である。curve、holder残高、locks、allowance、retired、永久LP receiptとsticky属性を同じnative状態へ結合する。EVM facadeが独立の残高・市場を作らない。[ADR0087](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)
 
-membershipのchain認証と第三者による証拠配布を区別し、Positionをholder間で移転させない条件を保持する。[旧ADR-0101](../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)
+追加モデル報酬はRの30%でPositionを購入し、Rの20%BILIと購入分の必要量ellを同じ市場へ永久LP化する。購入qの余剰q−ellだけをburnする。LPへ戻すellを先にretireしたり、mintで補充したりしない。整数値はRFC0064のB/A/Dとkernelを使う。
 
-## 3. 維持する境界・後続改定
+`LockedLiquidityReceipt(PERMANENT_PROTOCOL_LOCK)`は拠出履歴であり、転送・償還可能なLP token又は新しいholder資産ではない。withdraw/transfer/fee請求・owner/admin鍵を持たせず、公開LP入口を追加しない。拠出A/ellは売買可能なreserve/curve在庫へ一度だけ入れ、receiptを供給保存式の第四項へ数えない。後の通常swapによるreserve移動をLP解約と混同しない。
 
-後続ADR-0179のPosition対象範囲（追加モデルのみ）と、genesis／年次指定モデルに対する適用を必ず照合する。市場が存在することをモデルの正当性や取得可能性の証明にしない。
+### 2.2 holder間の直接移転
 
-## 4. 隣接する判断との分担
+native transfer、直接受取・譲渡、approve、allowance、transferFromは維持する。通常network fee/gasのみで、AMMの5% burn・3% owner税を課さない。残高移転はreserve、curve在庫、retired、LP receiptを変えず、locked/reserved分は支出できない。
 
-seedとreserveは[ADR-v2-0022](0022-liquidity-seeding-and-virtual-reserves.md)、ownerへの手数料は[ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md)、EVMの窓は[ADR-v2-0007](0007-evm-exec-lane-and-anchors.md)。
+EVM転送は同一tx journalで残高・allowance、読出し、event、revertを整合させる。旧の非同期`ActionQueued`を成功転送へ読み替えない。contract walletをEOA条件で排除しない。zero/self-transferは残高・tenureを変えない。永久LP receiptへapprove又はtransferを設定しない。[ADR0089](../adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
+
+### 2.3 現在の保有によるmembership
+
+Position保有は現金配当、合意weight、登録owner権を与えない。最大8tierの資格を現在残高とtier別連続保有期間へ結合し、少額の古い残高による上位tier待機回避や送信者のage継承を認めない。dust受取又はzero/selfで維持中tierの時計をresetしない。
+
+pool在庫、永久LP receipt、burn済みPositionにはmembershipを与えない。ellをholder残高と重複計上しない。通常買いでpoolから取得したPositionは、その取得後に通常のholder規則へ従う。転送は旧claim責任、bond、署名、slash対象、model owner権を移さない。[ADR0095](../adr/0095-a-position-is-a-membership-not-an-income.md) / [ADR0101](../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)
+
+## 3. 原子性・小額・移行
+
+購入・永久LP・余剰burn・receipt/sticky属性・Dの報酬権利を同じ原子的決済へ結合する。B>0かつq=0又はA>0かつell=0はLiquidityDustで、全工程未commitのまま元有限期限内だけ保留する。解消しなければ既定の未成功終端へ進む。A=0はLP/receiptなし、B=A=0は市場legのみno-opで、元の成功条件を満たすD=R配分は存続する。
+
+A>0かつell>0の永久LPが記録されたmodelは`hasPermanentLP`を保持し、core指定不可とする。winddown解除、owner/admin回収、後継移植、同rootの別ID再登録、receiptのpruningで迂回しない。永久LP未記録モデルの分類変更と旧core市場の処理には、元の権利・claim・残高・allowanceの明示winddownを要求する。自動没収、core sell-only継続、無原資補償は認めない。
+
+正規履歴の後日不正責任は元のbond等の契約で扱い、永久LPを特例で引き出さない。noncanonical reorgでは市場・receipt・claim配分を含む原子遷移全体を選択履歴へ戻す。旧の非譲渡、旧MOE1全量retire、延期されたgrant/marketplaceを新規則の代替経路へ使わない。
+
+## 4. 隣接する正本
+
+reserveとLPは[ADR-v2-0022](0022-liquidity-seeding-and-virtual-reserves.md)、報酬と通常5%/3%は[ADR-v2-0023](0023-model-reward-routing-and-owner-leg.md)、EVMは[ADR-v2-0007](0007-evm-exec-lane-and-anchors.md)。runtime、codec、資源上限、同tx rollback、tier時計、IBD/reorg、旧新境界を検証するまでMOE2を有効化しない。
 
 ## 原資料一覧
 
-各原文は一つの主担当だけに全文収録します。他の文書からの参照は副参照であり、別の規範を重複定義しません。以下の行番号は旧ファイルの行番号です。
+以下は改訂前の完全原本であり、行番号・状態記録もその版のもの。現在の上書き済みADRへ旧行番号を当てない。下の歴史収録payloadは保持しており、旧規則を新規MOE2受付のfallbackにしない。
 
 | 原文（完全ファイル名） | 全文の行範囲 | 原文の状態宣言の場所 |
 | --- | --- | --- |
-| [0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) | L1–L394 | L18–L25 |
-| [0095-a-position-is-a-membership-not-an-income.md](../adr/0095-a-position-is-a-membership-not-an-income.md) | L1–L334 | L20–L40 |
-| [0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md](../adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) | L1–L207 | L12–L34 |
+| [0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md](../maintenance/revisions/2026-11-20-option-economics/before/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt) | L1–L394 | L18–L25 |
+| [0095-a-position-is-a-membership-not-an-income.md](../maintenance/revisions/2026-11-20-option-economics/before/adr/0095-a-position-is-a-membership-not-an-income.md.txt) | L1–L334 | L20–L40 |
+| [0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md](../maintenance/revisions/2026-11-20-option-economics/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt) | L1–L207 | L12–L34 |
 
 ## 原条文の完全収録（履歴）
 
@@ -1025,3 +1043,26 @@ in all but name.
 
 </details>
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+holderの担保lot・鍵・役務lease・rosterを固定し、鍵数から実主体の独立性を推定しない。
+
+[TB1の正本](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — MOE1の経済置換
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。現在の経済範囲は本書冒頭と[RFC0063](../rfc/0063-additional-model-option-economics.md) / [ADR0231](../adr/0231-additional-model-option-economics.md)に従う。追加モデル登録と一意市場の原子生成、追加モデルだけの50%買上げ、通常売買5% burn・3% owner、直接移転、coreのOption無効・MinerへのR全額を採択する。旧の非譲渡、旧比率、登録後の市場準備待ち、core sell-onlyを新profileへ継承しない。TB1/FOW1の実行・登録・検証要件、旧claimの署名・原期限・責任、未有効化状態は維持する。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — MOE2の30%購入・20%永久LP・余剰burn
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。現在の経済規範は本書冒頭と[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)に従う。MOE1の50%全量購入・全量retireを、追加モデルRの30%購入・20%BILIと必要Positionの永久LP・余剰Positionのみburnへ置換する。残余は整数残差を含めworker planで配分する。通常5%/3%、直接移転、追加登録と市場の原子生成、coreのOption無効・Miner100%は維持する。
+
+永久LPはnativeの非償還receiptへ記録し、withdraw/transfer/fee請求・owner/admin鍵を設けず、外部LP tokenを増やさない。LiquidityDustは全工程未commitで元有限期限内だけ保留する。実LP記録済みmodelのcore指定、解除・後継移植・同root再登録による迂回は認めない。旧歴史payload、TB1/FOW1、MOE1の記録はその版のまま保持し、旧claimへ遡及適用しない。
+<!-- MOE2-ADOPTED-20261120-END -->

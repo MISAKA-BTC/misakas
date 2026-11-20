@@ -1,6 +1,8 @@
 # 全文書カタログ
 
-通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。
+通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。新規採掘の後続採択は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) に従います。旧記録の掲載は新profileでの有効性を意味しません。
+
+> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## (root)
 
@@ -234,6 +236,12 @@
 - [adr/0224-global-claim-admission-difficulty.md](../adr/0224-global-claim-admission-difficulty.md)
 - [adr/0225-court-nonce-and-panel-challenges.md](../adr/0225-court-nonce-and-panel-challenges.md)
 - [adr/0226-staged-work-commitments-and-consensus-eligibility.md](../adr/0226-staged-work-commitments-and-consensus-eligibility.md)
+- [adr/0227-palw-an1-input-binding-and-panel-court.md](../adr/0227-palw-an1-input-binding-and-panel-court.md)
+- [adr/0228-model-registration-and-attempt-output-binding.md](../adr/0228-model-registration-and-attempt-output-binding.md)
+- [adr/0229-palw-internal-threshold-beacon.md](../adr/0229-palw-internal-threshold-beacon.md)
+- [adr/0230-palw-function-output-and-work-admissibility.md](../adr/0230-palw-function-output-and-work-admissibility.md)
+- [adr/0231-additional-model-option-economics.md](../adr/0231-additional-model-option-economics.md)
+- [adr/0232-reward-buy-and-permanent-liquidity.md](../adr/0232-reward-buy-and-permanent-liquidity.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)
@@ -418,6 +426,7 @@
 - [design/palw/consensus/public-adjudication-policy-v0.2.md](../design/palw/consensus/public-adjudication-policy-v0.2.md)
 - [design/palw/consensus/public-adjudication-policy-v0.3.md](../design/palw/consensus/public-adjudication-policy-v0.3.md)
 - [design/palw/consensus/public-adjudication-policy-v0.4.md](../design/palw/consensus/public-adjudication-policy-v0.4.md)
+- [design/palw/consensus/public-adjudication-policy-v0.5.md](../design/palw/consensus/public-adjudication-policy-v0.5.md)
 - [design/palw/consensus/rfc9-l2-fork-choice.md](../design/palw/consensus/rfc9-l2-fork-choice.md)
 - [design/palw/consensus/rule-e-leaf-v2-note.md](../design/palw/consensus/rule-e-leaf-v2-note.md)
 - [design/palw/consensus/t12-replay-memory-1001.md](../design/palw/consensus/t12-replay-memory-1001.md)
@@ -768,6 +777,8 @@
 - [governance/README.md](../governance/README.md)
 - [governance/design-freeze.md](../governance/design-freeze.md)
 - [governance/document-lifecycle.md](../governance/document-lifecycle.md)
+- [governance/model-option-economics-transition.md](../governance/model-option-economics-transition.md)
+- [governance/palw-tb1-fow1-transition.md](../governance/palw-tb1-fow1-transition.md)
 - [governance/parameter-register.md](../governance/parameter-register.md)
 - [governance/post-mainnet-scope.md](../governance/post-mainnet-scope.md)
 - [governance/templates/README.md](../governance/templates/README.md)
@@ -922,6 +933,27 @@
 - [maintenance/revisions/2026-11-17-work-binding/SOURCE_AUDIT.md](revisions/2026-11-17-work-binding/SOURCE_AUDIT.md)
 - [maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md](revisions/2026-11-17-work-binding/THREAT_MATRIX.md)
 - [maintenance/revisions/2026-11-17-work-binding/VALIDATION.md](revisions/2026-11-17-work-binding/VALIDATION.md)
+- [maintenance/revisions/2026-11-18-an1/CHANGES.md](revisions/2026-11-18-an1/CHANGES.md)
+- [maintenance/revisions/2026-11-18-an1/README.md](revisions/2026-11-18-an1/README.md)
+- [maintenance/revisions/2026-11-18-an1/REVIEW.md](revisions/2026-11-18-an1/REVIEW.md)
+- [maintenance/revisions/2026-11-18-an1/SOURCE_AUDIT.md](revisions/2026-11-18-an1/SOURCE_AUDIT.md)
+- [maintenance/revisions/2026-11-18-an1/THREAT_MATRIX.md](revisions/2026-11-18-an1/THREAT_MATRIX.md)
+- [maintenance/revisions/2026-11-18-an1/VALIDATION.md](revisions/2026-11-18-an1/VALIDATION.md)
+- [maintenance/revisions/2026-11-18-an1/reference_impl/README.md](revisions/2026-11-18-an1/reference_impl/README.md)
+- [maintenance/revisions/2026-11-20-model-output-binding/CHANGES.md](revisions/2026-11-20-model-output-binding/CHANGES.md)
+- [maintenance/revisions/2026-11-20-model-output-binding/README.md](revisions/2026-11-20-model-output-binding/README.md)
+- [maintenance/revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md](revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md)
+- [maintenance/revisions/2026-11-20-model-output-binding/VALIDATION.md](revisions/2026-11-20-model-output-binding/VALIDATION.md)
+- [maintenance/revisions/2026-11-20-option-economics/README.md](revisions/2026-11-20-option-economics/README.md)
+- [maintenance/revisions/2026-11-20-option-economics/SUPERSESSION.md](revisions/2026-11-20-option-economics/SUPERSESSION.md)
+- [maintenance/revisions/2026-11-20-option-economics/VALIDATION.md](revisions/2026-11-20-option-economics/VALIDATION.md)
+- [maintenance/revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md](revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md)
+- [maintenance/revisions/2026-11-20-permanent-liquidity/README.md](revisions/2026-11-20-permanent-liquidity/README.md)
+- [maintenance/revisions/2026-11-20-permanent-liquidity/VALIDATION.md](revisions/2026-11-20-permanent-liquidity/VALIDATION.md)
+- [maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md](revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)
+- [maintenance/revisions/2026-11-20-tb1-fow1/README.md](revisions/2026-11-20-tb1-fow1/README.md)
+- [maintenance/revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md](revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md)
+- [maintenance/revisions/2026-11-20-tb1-fow1/VALIDATION.md](revisions/2026-11-20-tb1-fow1/VALIDATION.md)
 - [maintenance/v2-integration-2026-10-31.md](v2-integration-2026-10-31.md)
 - [maintenance/validation-report.md](validation-report.md)
 
@@ -981,6 +1013,7 @@
 - [reference/palw/palw-extension-envelope.md](../reference/palw/palw-extension-envelope.md)
 - [reference/palw/palw-fp-on-registered-classes.md](../reference/palw/palw-fp-on-registered-classes.md)
 - [reference/palw/palw-registry-map.md](../reference/palw/palw-registry-map.md)
+- [reference/palw-tb1/v1/README.md](../reference/palw-tb1/v1/README.md)
 
 ## rfc
 
@@ -1058,6 +1091,12 @@
 - [rfc/0056-global-claim-admission-difficulty.md](../rfc/0056-global-claim-admission-difficulty.md)
 - [rfc/0057-court-nonce-and-panel-challenges.md](../rfc/0057-court-nonce-and-panel-challenges.md)
 - [rfc/0058-staged-work-commitments-and-consensus-eligibility.md](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)
+- [rfc/0059-palw-an1-input-binding-and-panel-court.md](../rfc/0059-palw-an1-input-binding-and-panel-court.md)
+- [rfc/0060-model-registration-and-attempt-output-binding.md](../rfc/0060-model-registration-and-attempt-output-binding.md)
+- [rfc/0061-palw-internal-threshold-beacon.md](../rfc/0061-palw-internal-threshold-beacon.md)
+- [rfc/0062-palw-function-output-and-work-admissibility.md](../rfc/0062-palw-function-output-and-work-admissibility.md)
+- [rfc/0063-additional-model-option-economics.md](../rfc/0063-additional-model-option-economics.md)
+- [rfc/0064-reward-buy-and-permanent-liquidity.md](../rfc/0064-reward-buy-and-permanent-liquidity.md)
 - [rfc/INDEX.md](../rfc/INDEX.md)
 - [rfc/README.md](../rfc/README.md)
 - [rfc/TOPICS.md](../rfc/TOPICS.md)
@@ -1125,24 +1164,3 @@
 - [testing/rfc19-devnet-model-add-local-llm-2026-10-18.md](../testing/rfc19-devnet-model-add-local-llm-2026-10-18.md)
 - [testing/testnet10-update-2026-08-10.md](../testing/testnet10-update-2026-08-10.md)
 - [testing/vps-regression-fixture.md](../testing/vps-regression-fixture.md)
-
-## 2026-11-18 PALW-AN1追加草案と検証
-
-- [adr/0227-palw-an1-input-binding-and-panel-court.md](../adr/0227-palw-an1-input-binding-and-panel-court.md)
-- [maintenance/revisions/2026-11-18-an1/CHANGES.md](../maintenance/revisions/2026-11-18-an1/CHANGES.md)
-- [maintenance/revisions/2026-11-18-an1/README.md](../maintenance/revisions/2026-11-18-an1/README.md)
-- [maintenance/revisions/2026-11-18-an1/REVIEW.md](../maintenance/revisions/2026-11-18-an1/REVIEW.md)
-- [maintenance/revisions/2026-11-18-an1/SOURCE_AUDIT.md](../maintenance/revisions/2026-11-18-an1/SOURCE_AUDIT.md)
-- [maintenance/revisions/2026-11-18-an1/THREAT_MATRIX.md](../maintenance/revisions/2026-11-18-an1/THREAT_MATRIX.md)
-- [maintenance/revisions/2026-11-18-an1/VALIDATION.md](../maintenance/revisions/2026-11-18-an1/VALIDATION.md)
-- [maintenance/revisions/2026-11-18-an1/reference_impl/README.md](../maintenance/revisions/2026-11-18-an1/reference_impl/README.md)
-- [rfc/0059-palw-an1-input-binding-and-panel-court.md](../rfc/0059-palw-an1-input-binding-and-panel-court.md)
-
-## 2026-11-20 MOR1追加文書
-
-- [docs/rfc/0060-model-registration-and-attempt-output-binding.md](../rfc/0060-model-registration-and-attempt-output-binding.md)
-- [docs/adr/0228-model-registration-and-attempt-output-binding.md](../adr/0228-model-registration-and-attempt-output-binding.md)
-- [docs/maintenance/revisions/2026-11-20-model-output-binding/README.md](revisions/2026-11-20-model-output-binding/README.md)
-- [docs/maintenance/revisions/2026-11-20-model-output-binding/CHANGES.md](revisions/2026-11-20-model-output-binding/CHANGES.md)
-- [docs/maintenance/revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md](revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md)
-- [docs/maintenance/revisions/2026-11-20-model-output-binding/VALIDATION.md](revisions/2026-11-20-model-output-binding/VALIDATION.md)

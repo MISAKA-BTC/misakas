@@ -1,5 +1,15 @@
 # ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する
 
+<!-- FOW1-TB1-20261120-BEGIN -->
+## 後続採択と要求対象の訂正 — 2026-11-20
+
+今回改めて明示された要求は、識別用envelopeにとどまらず、**LLM関数自体の採掘出力**を別試行で非衝突にし、新しい機会に必要な計算を保証する設計である。以下のMOR1初版が要求を`O=(y,s,rho)`へ限定した解釈を、その要求全体の充足としては採用しない。
+
+新規採掘は[ADR-0230](0230-palw-function-output-and-work-admissibility.md)／[RFC-0062 PALW-FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md)へ、乱数生成は[ADR-0229](0229-palw-internal-threshold-beacon.md)／[RFC-0061 PALW-TB1](../rfc/0061-palw-internal-threshold-beacon.md)へ統一する。新方針は**ADOPTED_DESIGN_NOT_ACTIVATED**であり、FOW1のz・四Root Ticket・三つの必須gateを適用する。MOR1のreceipt定理は補助保証として保持する。
+
+以下の旧判断で自然回答yの一致を許すことは、FOW1のzの衝突を無条件に許すことを意味しない。「失効させる節はない」という初版記録は、今回の明示的置換より優先しない。0062のactivation A以後は旧MOR1の新規採掘受付を閉じ、旧署名済みclaimの履歴・固定drainは保持する。具体的なLLM費用定理・本番実装・公開activationは未完成である。
+<!-- FOW1-TB1-20261120-END -->
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **DRAFT_NOT_ACTIVATED**
 - 対応RFC: [RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)
@@ -7,13 +17,15 @@
 - 依存する草案: [RFC-0059 / PALW-AN1](../rfc/0059-palw-an1-input-binding-and-panel-court.md)、[ADR-0227](0227-palw-an1-input-binding-and-panel-court.md)
 - 記録: [モデル出力束縛改訂README](../maintenance/revisions/2026-11-20-model-output-binding/README.md)
 
-## 背景と今回の指示
+## 背景とMOR1初版への指示（旧記録）
+
+以下はMOR1初版の背景解釈である。今回の要求全体へは不足していたため、冒頭とADR0230で保証対象・登録条件・移行を訂正する。
 
 ユーザーは、モデル登録時に「別の採掘試行の出力が天文学的な確率でしか重複しない構成」を要求する設計をRFCへ追加するよう指示した。対象はQwen等の自然言語出力を無理に毎回変えることではなく、実際の推論入力・出力・元実行traceに結び付いた、試行ごとに区別できる正式なプロトコル出力である。
 
 既存AN1草案は、owner/nonceを含む事前登録文脈を実token入力へ結び付け、同じ試行の決定論的な再実行、三Rootに依存するTicket、Panelによる完全再実行とNodeによる局所Courtを定義している。MOR1はこの関係を引き継ぎ、登録仕様に認証出力の形式と共通の構造適合条件を追加する。
 
-今回の指示は設計文書の追加を認めるものであり、AN1やMOR1の本番採択・native実装・公開activationを済ませたという指示ではない。両文書の状態を区別し、既存claimや既存署名の意味を変更しない。
+MOR1初版への指示は設計文書の追加を認めるものであり、その時点でAN1やMOR1の本番採択・native実装・公開activationを済ませたという指示ではなかった。今回の追加指示による新規採掘の限定的置換は冒頭とADR0230に従い、既存claimや既存署名の意味は保持する。
 
 ## 現行方針との整合
 
@@ -25,6 +37,8 @@
 ## 判断
 
 ### 1. 正式な出力を固定する
+
+以下の正式出力は旧MOR1のenvelopeである。新FOW1のコア実行は`(y,z,tau)`、補助envelopeは`(y,z,s,rho)`とし、zの性質は0062の別gateで検査する。
 
 MOR1に適合する登録profileでは、自然言語等のコア出力を `y`、試行IDを `s`、実行識別値を `rho` として、正式な出力を次に固定する。
 
@@ -49,6 +63,8 @@ receiptはコア実行の後に計算する決定論的なenvelopeである。�
 
 ### 3. 登録検査を共通の構造適合条件とする
 
+新規FOW1では以下に加え、0062のTheoremRuleと全適合predicate、関数の非衝突性、複数試行費用、checker完全性を必須とする。MOR1の構造適合だけで新しい採掘資格を得る経路は閉じる。
+
 MOR1を選択した登録profileでは、認証出力の規則、実入力adapter、決定論的な数値意味論、生成・停止規則、trace/checker、全認証対象を必須の技術項目とする。適合性は、固定された規則と具体的なartifact bytesに基づいて検査する。
 
 「大量の回答を試したところ重複しなかった」「著名モデルだから安全」「検査員が高品質と認定した」は適合根拠としない。モデルの評判、品質、保有者数、公開可用性、通常推論費用の審査委員会を追加しない。これらの審査を通らないモデルのpermissionless登録を一般的に禁止する変更でもない。
@@ -62,6 +78,8 @@ AN1の固定されたbyteからtokenへの対応、challenge配置、attention m
 回答を一度計算し、nonceだけを変更したreceiptを何個も付ける方式を、AN1/MOR1の正しい実行としない。ただし、異なる実入力が異なる自然言語出力や異なる全中間値を必ず生むとは主張しない。正しい最適化、cache、batch、外部計算の利用を、この規則だけを理由に不正やslash対象へ変更しない。
 
 ### 5. Ticketと一回会計を引き継ぐ
+
+以下は旧MOR1の三Root式である。新規FOW1には0062の四Root Ticket・新domainを使い、この式を同じwireの意味変更で流用しない。EXEC/PANEL乱数もTB1に限定する。
 
 MOR1はAN1のTicket式
 
@@ -126,6 +144,8 @@ Nodeは元claimの認証済み文脈から期待する `C`、`sigma`、`s`、Roo
 native接続、実LLM上の再現性と品質、実資料取得、ネットワークの包含・Court活性、DAG/settlement、複数試行の費用下界は、本文の非重複性定理だけでは完了しない。未完事項を新しい小さな誤差項として理由なく消去しない。
 
 ## 状態・根拠・既存文書への影響
+
+以下の「失効させる節はない」はMOR1初版の状態記録である。今回ユーザーが明示した修正については、0061/0062とADR0229/0230の限定的置換・新規受付終了・互換drainを適用する。
 
 本ADRはユーザーの設計追加指示に基づく**草案**であり、設計freezeを解除する本番採択決定ではない。承認済みの追加作業は0060/0228の設計記述と関連参照の追加である。依存する0059/0227も `DRAFT_NOT_ACTIVATED` のままとする。
 

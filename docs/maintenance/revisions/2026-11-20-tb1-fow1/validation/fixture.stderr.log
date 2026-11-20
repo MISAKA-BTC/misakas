@@ -1,0 +1,34 @@
+test_01_descriptor_binds_every_field (__main__.BeaconModelTests.test_01_descriptor_binds_every_field) ... ok
+test_02_canonical_types_and_widths (__main__.BeaconModelTests.test_02_canonical_types_and_widths) ... ok
+test_03_only_two_purposes (__main__.BeaconModelTests.test_03_only_two_purposes) ... ok
+test_04_schedule_must_match_and_be_finite (__main__.BeaconModelTests.test_04_schedule_must_match_and_be_finite) ... ok
+test_05_fixed_qualified_set_minimum_and_canonicality (__main__.BeaconModelTests.test_05_fixed_qualified_set_minimum_and_canonicality) ... ok
+test_06_all_175_threshold_subsets_reconstruct_same_secrets (__main__.BeaconModelTests.test_06_all_175_threshold_subsets_reconstruct_same_secrets) ... ok
+test_07_threshold_private_recovery_is_not_public_certificate (__main__.BeaconModelTests.test_07_threshold_private_recovery_is_not_public_certificate) ... ok
+test_08_five_honest_holders_recover_every_dealer_without_dealers_online (__main__.BeaconModelTests.test_08_five_honest_holders_recover_every_dealer_without_dealers_online) ... ok
+test_09_all_21_public_subsets_give_same_output (__main__.BeaconModelTests.test_09_all_21_public_subsets_give_same_output) ... ok
+test_10_wrong_polynomial_has_no_authenticated_support (__main__.BeaconModelTests.test_10_wrong_polynomial_has_no_authenticated_support) ... ok
+test_11_changed_share_or_holder_index_rejected (__main__.BeaconModelTests.test_11_changed_share_or_holder_index_rejected) ... ok
+test_12_cross_purpose_cross_round_cross_dealer_rejected (__main__.BeaconModelTests.test_12_cross_purpose_cross_round_cross_dealer_rejected) ... ok
+test_13_missing_and_duplicate_shares_do_not_form_certificate (__main__.BeaconModelTests.test_13_missing_and_duplicate_shares_do_not_form_certificate) ... ok
+test_14_no_public_release_before_stable_freeze (__main__.BeaconModelTests.test_14_no_public_release_before_stable_freeze) ... ok
+test_15_panel_requires_later_phase_and_both_roots (__main__.BeaconModelTests.test_15_panel_requires_later_phase_and_both_roots) ... ok
+test_16_exec_cannot_smuggle_future_panel_state (__main__.BeaconModelTests.test_16_exec_cannot_smuggle_future_panel_state) ... ok
+test_17_signature_and_proof_bytes_do_not_change_seed (__main__.BeaconModelTests.test_17_signature_and_proof_bytes_do_not_change_seed) ... ok
+test_18_alternative_freeze_or_pool_after_release_rejected (__main__.BeaconModelTests.test_18_alternative_freeze_or_pool_after_release_rejected) ... ok
+test_19_Q_cannot_shrink_after_partial_reconstruction (__main__.BeaconModelTests.test_19_Q_cannot_shrink_after_partial_reconstruction) ... ok
+test_20_unavailable_is_finite_terminal_no_fallback (__main__.BeaconModelTests.test_20_unavailable_is_finite_terminal_no_fallback) ... ok
+test_21_next_round_cannot_rescue_same_attempt (__main__.BeaconModelTests.test_21_next_round_cannot_rescue_same_attempt) ... ok
+test_22_qualification_salt_and_ciphertext_transcript_bound (__main__.BeaconModelTests.test_22_qualification_salt_and_ciphertext_transcript_bound) ... ok
+test_23_certificate_rejects_changed_context_and_order (__main__.BeaconModelTests.test_23_certificate_rejects_changed_context_and_order) ... ok
+test_24_public_certificate_release_gate_and_same_output (__main__.BeaconModelTests.test_24_public_certificate_release_gate_and_same_output) ... ok
+test_25_threshold_collusion_demonstration_not_prevented (__main__.BeaconModelTests.test_25_threshold_collusion_demonstration_not_prevented) ... ok
+test_26_known_exec_hash_is_predictable_not_future_randomness (__main__.BeaconModelTests.test_26_known_exec_hash_is_predictable_not_future_randomness) ... ok
+test_27_two_private_points_alone_allow_different_secrets (__main__.BeaconModelTests.test_27_two_private_points_alone_allow_different_secrets) ... ok
+test_28_success_remains_success_but_late_release_is_rejected (__main__.BeaconModelTests.test_28_success_remains_success_but_late_release_is_rejected) ... ok
+test_29_full_vector_hash_does_not_collapse_equal_modular_sums (__main__.BeaconModelTests.test_29_full_vector_hash_does_not_collapse_equal_modular_sums) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 0.055s
+
+OK

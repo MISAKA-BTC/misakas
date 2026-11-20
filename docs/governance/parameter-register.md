@@ -1,5 +1,13 @@
 # パラメーター台帳 — 数値変更1件(2026-10-22 記録: 平均期間 30→7 日)
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。旧paid opt-in source、seal/reveal、初回固定bootstrap seed等の過去承認はその版に限定する。TB1では完全BGW/PQ、用途別独立秘密、最初の正直share前の安定freeze、初期rosterの明示fault仮定を要求する。古い固定seedを新EXECの予測不能性として使わず、未設定の新parameter・suite・native gateがある間は有効化しない。
+
+[TB1](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](palw-tb1-fow1-transition.md) / [全適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 ## 2026-10-31 全モデル G14 1 席移行（t12 配備候補）
 
 `palw_model_panel_one_v1`: `None` → DAA **18,640**。t12 の claim の最初の acceptance DAA に適用し、mainnet 等は `None` を維持する。
@@ -387,3 +395,42 @@ courtの実供給率、1 DAA＝1秒を意味しない。仕事量→credit量の
 
 各stageの有限cut、codec／集合上界、JobForSeedの有界変換、exact nullifier、責任終端とmaturity、方式／key／anchorは新profileの必須欄である。未設定を既定値で埋めず、未成立なら新profileを有効化しない。非償却性やDAG安全性を数値調整で成立扱いにしない。入力の56項目と、前回CAD1／CPN1の22項目を保全する。
 <!-- SWC1-PARAMETERS-END -->
+
+## 2026-11-20 MOE1の比率・対象・一回性
+
+[RFC0063](../rfc/0063-additional-model-option-economics.md)／[ADR0231](../adr/0231-additional-model-option-economics.md)を採択。値は新EconomicPolicyの規範であり既存runtime設定の変更済み値ではない。
+
+| 項目 | MOE1 | 範囲 |
+| --- | --- | --- |
+| reward buyback permille | 500 | ADDITIONALの価格付け後Rだけ |
+| core buyback/owner/burn/Panel控除 | 0 | GENESIS/FORK_DESIGNATEDのR |
+| core Miner permille | 1000 | 同じR。役務費は別原資 |
+| AMM burn permille | 50 | 通常買売のgross BILI |
+| AMM owner総額 permille | 30 | contributor内部配分を含む |
+| AMM net | G−floor(50G/1000)−floor(30G/1000) | 名目920‰、端数は残差 |
+| buyback追加BILI burn/owner | 0 / 0 | B全額reserve、Position retireは別 |
+| direct transfer AMM fee | 0 | network fee/gasは別 |
+| registration market creation | atomic | ADDITIONALだけ、一意market。coreは生成なし |
+
+追加モデルの残余Panel比率はclaimの版付き役務分配を参照する。旧20%の例を全profileへ昇格させない。activation位置、core旧残高winddown、newABI/署名domain、役務契約の具体値が未設定なら対象を有効化しない。
+
+## 2026-11-20 MOE2後続採択 — 30/20/残余と永久LP
+
+[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)が新規MOE2経路を所有する。前節のMOE1比率は旧cohortの記録として保持する。wire ID、activation位置、quote上限の数値はこの採択だけでは割り当てない。
+
+| 項目 | MOE2 | 適用 |
+| --- | --- | --- |
+| Position購入 | 300‰、floor | ADDITIONALの対象R |
+| 永久LP用BILI | 200‰、floor | 同じR。購入済みPositionと同じ市場へ拠出 |
+| 残余worker報酬 | R−B−A | 名目50%。独立floorで端数を失わない |
+| LP用Position | floor(A·U1/(X+B)) | X=V+r、U1=ceil(XU/(X+B)) |
+| Position burn | q−ell | q=U−U1。LPへ戻すellはburnしない |
+| 内部購入/LPの追加BILI burn / owner | 0 / 0 | 通常AMM5%/3%と別 |
+| GENESIS/FORK_DESIGNATED | 市場なし、Miner=R | RからのLP・買上げ・Panel等控除0 |
+| 通常AMM/直接移転 | 5%/3%/残額、直接移転AMM税0 | MOE1から継承 |
+| 永久lock | LP撤去・償還・転送・owner/管理者権なし | reserve資産は通常swapに使う |
+| 旧seed/virtual reserve | 不変 | Aをseed_lockedやVへ加算しない |
+| dust | 全体未commit、原有限期限内hold、期限なら未成功終端 | mint・donation・無期限待機・市場未準備fallbackなし |
+| coreへの指定変更 | 永久LP記録済みmodel IDは禁止 | alias・同root再登録・LP移植で迂回しない |
+
+quote上限・金額上限・許容価格影響・deadlineを経済snapshotへ固定し、未指定policyで新claimを受理しない。これらの具体値の採択・測定とMEV/活性評価はactivation前の課題であり、比率の採択だけで安全な値を捏造しない。

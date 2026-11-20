@@ -1,5 +1,13 @@
 # MISAKA の構成 — 採用済み設計の入口
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。2026-11-20の新規採掘設計はRFC0061/0062と公開裁定方針v0.5を入口とする。以下の旧日付・旧裁定版の案内は当時の状態であり、新profileの乱数・コア出力・適格性を置き換えない。
+
+[TB1](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 > **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
 
 **このページは設計の構成であり、全機能が稼働済みとの主張ではありません。** [状態](../STATUS.md) / [設計凍結](../governance/design-freeze.md)。

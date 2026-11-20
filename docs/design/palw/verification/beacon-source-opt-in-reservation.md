@@ -1,5 +1,15 @@
 # Per-attempt beacon source reservations — dormant implementation
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
+
+[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 > **Integration numbering (R6781 merges, 2026-10-11; R6781-F, codex final, 2026-10-12).** codex's numbers were renumbered against the integration registry (`remaining-rfc-integration-matrix.md`): inner kinds 21 → **40**, 22/23 → **61/62** (21–37 RFC-02, 38/39 G14R, 41–60 RFC-02 codex final); kernel ledger tables 28 (sources) → **30**, 27 (EXEC holds) → **31**; the source-fee books (codex tables 29/30) ride **table 27 as kinds 5 / 6** (`VerifierPayRowV1::SourceFeeFunding` key `(5, context)`, `SourceFeePromise` key `(6, H(context ‖ producer))`; every ledger number below the aux boundary 32 is spent), inside table 27's own root extension (codex's separate source-fee extension is dropped); kernel route aux tables 46/47/48/49 → **108/109/110/111** (aux 32–107 are spent); bond budget reporter-income table 6 → **9** (6 is PESG §6's liability releases). Numbers below are the integration ones.
 
 

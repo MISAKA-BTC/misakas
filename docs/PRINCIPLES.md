@@ -1,5 +1,36 @@
 # MISAKAの設計前提 — 不可侵原則
 
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
+
+永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
+
+旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
+<!-- MOE2-ADOPTED-20261120-END -->
+
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。§16の後続採択を新経済profileへ適用する。§15のTB1/FOW1安全性と一般の有限資金・責任規則を維持する。
+
+追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
+
+[RFC0063](rfc/0063-additional-model-option-economics.md) / [ADR0231](adr/0231-additional-model-option-economics.md) / [適用と移行](governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+本日の明示的な後続採択を§15に置く。旧§8のデータ認証とLLM validity proofの区別、§13のPanel＋Court、§14の既存権利を維持し、新規乱数・採掘値・適格性をTB1/FOW1へ置換する。
+
+[TB1の正本](rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 <!-- SWC1-PROPOSAL-BEGIN -->
 > **2026-11-17 監査対応の設計案:** [RFC-0058](rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
 <!-- SWC1-PROPOSAL-END -->
@@ -491,3 +522,25 @@ Nodeに全モデル取得・全推論を要求するfallbackを追加しない�
 EXEC負荷とcourt負荷が重なっても約束した供給を維持することを、同じ実装・設定・対象機材で示す。
 成功例だけの中央値や短いfixtureを、全サンプル・全合法経路の完了保証へ転用しない。
 全保有者の永久秘匿で供給前提が成立しない場合は、算術裁定の無条件成功を約束せず、成功停止・未検証終了・適格なdefault・残存責任の処理を別に確認する。
+
+<!-- TB1-FOW1-PRINCIPLE15-BEGIN -->
+## 15. TB1乱数・FOW1コア採掘値 — 2026-11-20採択
+
+ユーザーは前回監査の五項目の修正と、添付TB1への乱数生成変更を明示した。[新規採掘の共通移行契約](governance/palw-tb1-fow1-transition.md)を採択し、同契約の対象profileでは従来の不特定beacon・BFT/BLS候補・rhoのみの非衝突性を用いる規則に優先させる。
+
+採掘のコア値zは登録されたLLM関数の実行出力であり、自然回答yや認証envelopeとは別に定義する。非衝突性の対象系列と初回Ticket照会前の複数試行費用条件を、採掘適格性へ結合する。登録artifactについて要求する全ての構造・数値・入出力の適合前提は有界に検査する。暗号、故障上限、正直Panel、native安定性等の外部安全性仮定は、採択するsecurity profileの条件として明示し、Nodeが機械検査で真偽を証明したと扱わない。モデルの一般登録自由は維持し、定理が未確立なQwen等をFOW1適格と認定しない。正しい最適化・cache・外注をslashで排除せず費用モデルに含める。
+
+新profileの実行乱数とPanel乱数は独立TB1-EXEC/PANELとする。必要なschedule、次roster、別controlの受付順位はRFC0061のSCHEDULE/ROLE/ADMISSIONへ分離する。FOW1受付には新たなADMISSION抽選を課さない。Courtの既受理negative・資料・終端は新beacon待ちを持たない。新第三Ticket乱数、旧sourceへの自動fallback、曝露roundの別freezeへの再使用を禁止する。
+
+完全BGW VSSとPQ認証私信を採る。保持者のq share certificateは台帳finality投票でもLLM全体の正当性証明でもない。TB1の故障上限、native安定性・包含、一人の能動的な正直Panel、FOW1の関数/費用定理をそれぞれ明示する。
+
+状態はADOPTED_DESIGN_NOT_ACTIVATED。公開activation境界以後の新規PALW採掘・報酬・合意workはFOW1/TB1必須、旧受理claimは旧署名・原期限・責任でdrainする。現行runtimeの動作を文書更新だけで変更したとしない。新規入口は完全BGW/PQ/native実装・合成評価と具体モデルの定理/有界適合checkerがそろうまで開かない。
+<!-- TB1-FOW1-PRINCIPLE15-END -->
+
+## 16. 追加モデル限定MisakaOption経済MOE1 — 2026-11-20採択
+
+[RFC0063](rfc/0063-additional-model-option-economics.md)／[ADR0231](adr/0231-additional-model-option-economics.md)と[共通移行](governance/model-option-economics-transition.md)を後続採択する。追加モデル登録と一意市場の作成は同一原子遷移とし、seedや別openを待たない。genesis・有効softfork指定モデルには市場を作らず、価格付け・共通上限処理後RをMinerへ100%配分する。Panelその他の役務はRと独立した事前原資と同意で確保する。
+
+追加モデルのRから50%を市場へ買い上げ、残余を版付き役割規則で分配する。通常AMMのburn5%、owner総額3%、net残差を採用し、直接送受信・譲渡・承認を許可する。自動買上げの追加BILI burnとowner支払は0、取得Positionはretireする。直接移転でclaim・bond・ExecCredit・管理権・過去責任を移さない。
+
+保存則、同一native/EVM台帳、有限な元期限、共通上限・export cap、旧claimの条件、core旧市場winddownを守る。市場欠落を正常な準備待ちや買上げ免除にしない。TB1/FOW1の保証・登録適格性・Court・有効化条件は維持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、runtime実装・公開稼働を完了したとはしない。

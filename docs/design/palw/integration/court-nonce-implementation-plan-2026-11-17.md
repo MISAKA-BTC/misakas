@@ -1,5 +1,13 @@
 # RFC-0057 Court nonce — 実装接続表
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新規positive nonce/challengeのsourceは認証済みTB1-PANELと元claim・actor・義務である。旧WorkBeacon branch-relative lockの接続を新profileへそのまま継承しない。negative・資料case・Court継続・終端へ新beacon待ちを追加しない。
+
+[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 日付: 2026-11-17（Asia/Tokyo）  
 状態: **PROPOSED_DESIGN_NOT_ACTIVATED**  
 規範案: [RFC-0057](../../../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../../../adr/0225-court-nonce-and-panel-challenges.md)  

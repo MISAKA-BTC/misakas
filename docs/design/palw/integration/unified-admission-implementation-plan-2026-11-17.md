@@ -1,5 +1,13 @@
 # UnifiedAdmissionV1 実装接続計画 — 2026-11-17
 
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 新規profileの適用範囲
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新規FOW1の受付は計算依存Ticketと固定slot順に接続する。seed順位を要する別controlの候補集合はTB1-ADMISSIONの最初の正直share前に安定固定する。旧sourceへのfallback、集合の後付け、nonceの無償再抽選を認めない。
+
+[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 規範は[RFC-0055](../../../rfc/0055-global-admission-court-calendar-and-one-bps.md)、決定は[ADR-0223](../../../adr/0223-global-admission-court-calendar-and-one-bps.md)。source基準はpre@c3da7c6eaf5bf87f8e032d5b122c603d720a8398。本計画は新しい型・共通費用規則・実行予算の接続順と完了証拠を定める。設計状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、以下の作業を実装済み・測定済みとは宣言しない。
 
 最新指示に従い、claim/court件数、通常処理の固定30秒枠、one-winner、一claim一生成権、live permit四つ、十epoch更新は規範にしない。120秒は計画・集計・difficulty epochである。件数は共通bounded checkerの費用上界、共通容量、既存予約、各claimのshapeから導く。

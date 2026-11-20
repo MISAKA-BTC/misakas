@@ -1,0 +1,36 @@
+{
+  "passed": true,
+  "scope": "exact documentation adoption, source preservation and reference-fixture checks only",
+  "historical_checkers_are_not_marked_pass": true,
+  "statistics": {
+    "immutable_files": 1847,
+    "current_books_preserved_with_explicit_scope": 70,
+    "exact_authorized_scope_additions": 6,
+    "docs_checker": {
+      "status": "FAIL",
+      "before": 947,
+      "after": 947,
+      "new": 0
+    },
+    "rfc_checker": {
+      "status": "FAIL",
+      "before": 7,
+      "after": 7,
+      "new": 0
+    },
+    "adr_checker": {
+      "status": "FAIL",
+      "before": 86,
+      "after": 92,
+      "new_authorized_scope_notices": 6,
+      "new_unexplained": 0
+    },
+    "covered_numbered_documents": 359,
+    "covered_baseline_occurrences": 5252,
+    "consumer_rows": 10,
+    "reference_fixture_tests": 29,
+    "separate_reference_arithmetic_cases": 103152,
+    "production_cryptography_or_LLM_cost_verified": false
+  },
+  "errors": []
+}

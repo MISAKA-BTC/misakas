@@ -1,0 +1,8 @@
+{
+  "name": "rfc",
+  "args": [
+    "python3",
+    "docs/rfc-v2/check_integrity.py"
+  ],
+  "exit_code": 1
+}

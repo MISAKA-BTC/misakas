@@ -1,0 +1,19 @@
+{
+  "status": "PASS",
+  "scope": "declared documentation delta, exact before archives, preservation and integer-accounting report consistency",
+  "baseline_files_checked": 2702,
+  "unchanged_existing_files": 2631,
+  "modified_existing_files": 71,
+  "exact_before_archives": 71,
+  "numbered_documents": {
+    "rfc": 64,
+    "adr": 227,
+    "rfc-v2": 20,
+    "adr-v2": 50
+  },
+  "new_unexplained_checker_failures": [],
+  "old_checkers_all_pass": false,
+  "runtime_implemented_or_tested": false,
+  "network_activated": false,
+  "failures": []
+}

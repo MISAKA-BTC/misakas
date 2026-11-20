@@ -109,3 +109,18 @@ CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042
 - ADR-0228: [モデル登録時の試行別出力束縛](../adr/0228-model-registration-and-attempt-output-binding.md)。
 - 状態は`DRAFT_NOT_ACTIVATED`。添付の最新docsで未使用の番号を使用した。別branchとの番号競合が存在しないことや、本番採択・有効化を証明する割当ではない。
 - 現行の閲覧冊数20 RFC／50 ADRは維持し、両registryのpost_consolidation_documentsに草案を登録する。[変更記録](revisions/2026-11-20-model-output-binding/README.md)。
+
+<!-- TB1-FOW1-NUMBERING-20261120 -->
+## 2026-11-20 の後続割当
+
+既存RFC0060/ADR0228はMOR1として保持する。添付TB1の仮RFC0060は衝突を避け、[RFC0061](../rfc/0061-palw-internal-threshold-beacon.md)と[ADR0229](../adr/0229-palw-internal-threshold-beacon.md)へ統合した。関数由来のコア採掘値・費用適格性は[RFC0062](../rfc/0062-palw-function-output-and-work-admissibility.md)と[ADR0230](../adr/0230-palw-function-output-and-work-admissibility.md)。いずれもADOPTED_DESIGN_NOT_ACTIVATEDであり、wire値・activation heightの割当ではない。
+
+[number-registry.json](number-registry.json)の後続割当に追加し、過去のnext_localや旧重複・欠番の履歴は書き換えない。現行の統合冊数20 RFC-v2/50 ADR-v2は維持する。
+
+## 2026-11-20 MOE1後続割当
+
+[RFC0063](../rfc/0063-additional-model-option-economics.md)／[ADR0231](../adr/0231-additional-model-option-economics.md)を新経済契約へ割り当てる。現行20 RFC-v2/50 ADR-v2と旧欠番・重複番号は維持する。設計採択でありnative ID・有効化高さではない。
+
+## 2026-11-20 MOE2追加採択
+
+[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)と[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)を未使用番号として追加した。原子的市場登録と追加モデル限定を引き継ぎ、30%購入・20%永久LP・残余50%へ改訂する。既存番号、旧next_local、wire IDは再利用しない。設計採択済み・未有効化。

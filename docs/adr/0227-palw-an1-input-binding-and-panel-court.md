@@ -1,20 +1,30 @@
 # ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する
 
+<!-- FOW1-TB1-20261120-BEGIN -->
+## 後続採択と適用範囲 — 2026-11-20
+
+ユーザーの今回の修正指示により、新規採掘の正本を[ADR-0230](0230-palw-function-output-and-work-admissibility.md)／[RFC-0062 PALW-FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md)、乱数源を[ADR-0229](0229-palw-internal-threshold-beacon.md)／[RFC-0061 PALW-TB1](../rfc/0061-palw-internal-threshold-beacon.md)へ置換する。新方針は**ADOPTED_DESIGN_NOT_ACTIVATED**。以下は旧AN1草案の判断記録であり、単独の新規採掘適格性を与えない。
+
+新profileはAN1の実入力・Panel＋Courtを継承し、コア採掘出力zの非衝突性、複数試行費用と全checker coverageを共通登録条件へ追加する。EXEC/PANELは独立TB1秘密に固定し、四Root Ticketを使う。0062のactivation A以後は旧AN1の新規受付を閉じ、旧受理claimのみ固定drainで扱う。本番の定理・適合モデル・native実装・公開有効化の完了とはしない。
+<!-- FOW1-TB1-20261120-END -->
+
 - 日付: 2026-11-18（Asia/Tokyo）
 - 状態: **DRAFT_NOT_ACTIVATED**
 - 対応RFC: [RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md)
 - 同時改訂: RFC-0056 §17、RFC-0057 §17、RFC-0058 §16
 - 記録: [AN1改訂README](../maintenance/revisions/2026-11-18-an1/README.md)
 
-## 背景と最新指示
+## 背景と2026-11-18の指示（旧記録）
 
-ユーザーは、先行のwhitepaperに基づくRFC改訂の途中で、方式をPALW-AN1へ変更し、**Panel Court方式を維持してwhitepaperとRFCを修正する**よう明示した。本ADRはこの最新指示を設計草案へ反映する記録である。
+ユーザーは、先行のwhitepaperに基づくRFC改訂の途中で、方式をPALW-AN1へ変更し、**Panel Court方式を維持してwhitepaperとRFCを修正する**よう明示した。本ADRの以下の本文はその時点の指示を設計草案へ反映した記録である。現在の追加条件と乱数生成は冒頭の後続採択に従う。
 
 Groth16をFinal必須条件とする作業中の案は本改訂へ含めない。既存AGENTS/PRINCIPLESの計算validity proof不使用、モデル非保有Node、局所裁定、単独反証と整合させる。設計草案の作成指示を、nativeの公開activationや性能検証済みという承認に読み替えない。
 
 提供AN1説明は実入力へのnonce束縛、一意な実行、直接転用防止、全関係からの局所反証、一人正直Panelの条件付き安全性を述べる。元AN1のHTML/ZIPは未取得なので、報告された試験数・trace長は本改訂の再実行結果と分ける。今回の実際のRFC基準は添付AuditRevision ZIPである。
 
 ## 判断
+
+以下の判断1・3の未指定beaconは、新規FOW1でTB1 EXEC/PANELへ限定する。判断8の費用定理はFOW1では必須の採掘gateであり、AN1三Root Ticketをそのまま新familyへ用いない。
 
 1. **AN1を別familyにする。** 旧SWC1の未来R_ticket方式とは異なり、事前登録Cと実行beaconからsを作り、実入力・出力・traceの三RootからTicketを導出する。旧codecの意味を黙って変更せず、Dを二重に適用しない。
 2. **nonceを実tokenへ入れる。** 固定単射のbyte→token表とchallenge prefixを使い、実際の入力読出しまで検査する。切詰め、UNK、template削除で束縛を失わせない。
@@ -54,5 +64,7 @@ owner/nonce、実入力、元claim、Court、creditの対応が仕様として�
 本番のnative接続、実署名・beacon、cold取得、実LLM、最悪資源、全carrier、DAG/settlement、LLM費用下界は未完のgateとして残す。旧採択・旧署名・過去ログ・digestは保存し、新たな検証結果だけを今回のbytesへ結び付ける。
 
 ## 状態の扱い
+
+以下は旧AN1草案としての状態を保持する。新規採掘に適用する採択状態・置換点・未有効化条件はADR0230と0062 §9/§10が所有する。
 
 この記録は草案である。AN1を本番へ有効化するための採択、codec/パラメーター、実装・検証・公開条件はRFC-0059 §15に従う。現行RFC-v2の20冊・ADR-v2の50冊を維持し、新0059/0227を統合後の追加草案として案内する。

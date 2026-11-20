@@ -1,0 +1,137 @@
+{
+  "kind": "read_only_followup_scope_audit",
+  "snapshot": "work/docs after 20 RFC-v2 + 50 ADR-v2 + 42 current entries update",
+  "docs_modified_by_agent": false,
+  "must_add_scope": [
+    {
+      "path": "docs/architecture/consensus.md",
+      "reason": "現行の合意入口が旧RFC16/18・ADR178/180だけを案内する。TB1は乱数担当で合意投票権を持たず、新資格はFOW1に従うことを追加。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/architecture/overview.md",
+      "reason": "採用済み設計の入口だが11月8日と公開裁定v0.2で止まる。TB1/FOW1の現行入口を案内。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/spec/palw/claim-certification.md",
+      "reason": "Final/SecurityCertified/Gate Cを全モデルの現行ルールとして説明。新profileのPublicOneHonest・FOW1 eligibilityとの適用範囲を明示。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/public-one-honest-implementation-ledger.md",
+      "reason": "冒頭のSWC1案内がJOB/TICKET/PANEL三段乱数を案内。新規作業はTB1/FOW1優先とし、過去の測定・実装記録を維持。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/operations/serving/palw-freeprompt-gateway.md",
+      "reason": "現行運用入口が任意promptの同一推論から採掘できると一般化。旧gatewayの実測は保持し、TB1 challenge adapter・FOW1登録条件に未対応と明示。署名鍵seedはbeaconではない。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/reference/palw/palw-registry-map.md",
+      "reason": "モデル登録の最初の参照先を自称し既存fieldだけで十分と読める。旧structは維持し、新profileの登録証明・z・仕事条件が追加される旨を案内。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/operations/models/palw-add-a-model-runbook.md",
+      "reason": "登録→認証→着席の運用入口。版依存注意はあるが、新profileは従来登録/FamilyCertifiedだけではFOW1採掘適格にならないことを補足。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/operations/models/model-requests.md",
+      "reason": "モデル追加の7段階を一般化し旧class/kernel認証を採掘接続条件として案内。登録の正本をFOW1追加条件へ向ける。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/README.md",
+      "reason": "旧FP Job V4参照群の入口。現行wireは保持し、新TB1/FOW1への自動昇格・旧sampling seed流用を否定。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/job-v4-wire-spec.md",
+      "reason": "直接開かれるwire正本候補。RFC1が常に優先とだけあるため、この版のwire仕様であり新profileと別、と冒頭で限定。バイト仕様・vectorは変更しない。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/migration-guide.md",
+      "reason": "旧flag dayを新jobの一般移行手順として説明。旧V3→V4移行専用でありTB1/FOW1移行ではないと限定。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "reason": "現行パラメータ台帳に旧paid opt-in source・seal/reveal・初回固定bootstrap seedの承認がある。旧承認原文を保持して新profileへの非継承と新TB1未設定gateを追加。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/palw-class-activation-gate-status.md",
+      "reason": "living record/every Stage promotionを自称し、撤回済みfull-logits gateとchain-derived seedの実装状態へ誘導。新FOW1適格性/TB1 activationを別途満たす旨を追加。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/staged-work-implementation-plan-2026-11-17.md",
+      "reason": "旧SWC1新規実装計画。三段乱数/旧sourceをTB1 EXEC/PANEL・FOW1計算依存Ticketへ置換する優先案内が必要。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/court-nonce-implementation-plan-2026-11-17.md",
+      "reason": "旧WorkBeacon branch-relative lockとpost-commit sourceの接続計画。TB1 PANEL由来Courtに置換しnegativeへ新乱数待ちを追加しないと案内。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/claim-admission-difficulty-implementation-plan-2026-11-17.md",
+      "reason": "未来seedによる受付ticketを新profile作業として案内。TB1 ADMISSIONとFOW1採掘Ticketを分離し、受付seedを採掘当選の独立第三抽選にしない。",
+      "change_kind": "scope_notice_or_current_override_only"
+    },
+    {
+      "path": "docs/design/palw/integration/unified-admission-implementation-plan-2026-11-17.md",
+      "reason": "共通受付の今後の実装計画。候補集合固定後のseedをTB1の用途/ゲートへ接続し旧source fallbackを禁止する案内が必要。",
+      "change_kind": "scope_notice_or_current_override_only"
+    }
+  ],
+  "optional_scope": [
+    {
+      "path": "docs/design/palw/integration/public-one-honest-vertical-implementation-plan-2026-11-10.md",
+      "reason": "作成日・RFC1-50適用範囲が明記された旧計画。ledgerと現行入口からの置換案内があれば本文保存でよい。直接の今後作業計画として使うなら冒頭一段落の追補を追加。"
+    },
+    {
+      "path": "docs/design/palw/integration/additional-model-burn-pause-2026-11-11.md",
+      "reason": "旧burn/pause接続と2テストの記録。乱数源規範ではない。追加するとしてもburn解除だけではFOW1適格にならない共存案内だけ。"
+    },
+    {
+      "path": "docs/reference/palw/palw-fp-on-registered-classes.md",
+      "reason": "冒頭が過去の実装経緯の記録と明言しgatewayへ誘導。旧beacon/quantum本文は保持。gatewayが新版入口を案内すれば必須ではない。"
+    },
+    {
+      "path": "docs/operations/mining/testnet12-join-mining.md",
+      "reason": "冒頭で2026年9月Testnet12・旧build・版依存と明記。旧コマンド/鍵seed/測定は保存し、必要なら新profileの作業手順ではない一行だけ。"
+    },
+    {
+      "path": "docs/design/palw/consensus/public-adjudication-policy-v0.4.md",
+      "reason": "新claim補完方針として生きているが乱数生成は所有していない。RFCv2とtransitionの優先規則があれば本文を保てる。入口整備として短い共存注記は有用。"
+    }
+  ],
+  "preserve_body": [
+    {
+      "path": "docs/design/palw/execution/palw-full-logits-trace-v2-design.md",
+      "reason": "冒頭で旧trace/測定記録と明記。float/hash-floor撤回済み。測定、撤回、既存golden seedをTB1へ書換えない。問題はそれを現行gateとして引用する側。"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/operator-one-pager.md",
+      "reason": "DAA1500/2026-09-28という旧flag day専用。READMEに適用境界があれば値や作業内容を変更しない。"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/release-notes-draft.md",
+      "reason": "旧Testnet12リリース草稿でscope明確。sampling Seedは決定論生成設定であり乱数beaconではない。"
+    },
+    {
+      "path": "docs/reference/api/fp-job-v4/rollback-emergency.md",
+      "reason": "旧V3/V4緊急手順。新profileのfallbackとして使わない入口注記で十分。既存安全手順を書換えない。"
+    },
+    {
+      "path": "docs/design/palw/consensus/finality-palw-consistency.md",
+      "reason": "2026-10-08の内部安全性観測・旧DNS BFTの実際の挙動を記録。BFT語句を消すと証拠が変わる。"
+    }
+  ],
+  "general_rule": "Current implementation/registration/mining entry points need scoped transition guidance. Old signatures, wire vectors, observed node state, measured tests and approved historical quotations remain unchanged. BFT non-use and signature-key/test/sampling PRNG references are not old beacon sources."
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "docs",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/scratch/a3438b5a601e/lp_revision_20261120/work/docs/maintenance/check_docs.py",
+    "--root",
+    "/workspace/scratch/a3438b5a601e/lp_revision_20261120/work",
+    "--json-out",
+    "/workspace/scratch/a3438b5a601e/lp_revision_20261120/work/docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/docs.json"
+  ],
+  "exit_code": 1,
+  "runtime_executed": false
+}

@@ -1,0 +1,50 @@
+# ADR-0179 — モデル二階層と追加モデル専用MisakaOption
+
+- 改訂日: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。MOE1の設計改訂であり、native/EVM実装、測定又は公開有効化の完了ではない。
+- 共通正本: [RFC0063](../rfc/0063-additional-model-option-economics.md) / [ADR0231](0231-additional-model-option-economics.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)。
+- 変更前の完全な文書・旧実装記録: [2026-11-20改訂前の原本](../maintenance/revisions/2026-11-20-option-economics/before/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt)。
+
+本書の現行決定をMOE1へ適用する。過去の比率・非譲渡規則・実装結果・旧fenceは上記原本の版固有の記録として保持し、旧claimや署名を遡及変更しない。既存TB1/FOW1の登録・実行・完全検証・単独反証優先を維持し、この経済変更から免除を導かない。
+
+## 1. 経済tierと分類
+
+genesis及びnativeの年次fork catalogが指定したモデルは1.0、追加登録モデルは0.3という既存tier方針を維持する。係数はmodel配分の重みに一度だけ適用し、確定したRへ再度掛けない。κと縮小分・共通期間の適用版は現在のparameter台帳に従い、未承認値をこの改訂で確定しない。
+
+MOE1の分類は次とする。
+
+| 分類 | 判定元 | MisakaOption | 対象worker報酬R |
+| --- | --- | --- | --- |
+| GENESIS | native genesis catalogの固定model ID＋artifact root | 無効 | Minerが100% |
+| FORK_DESIGNATED | 有効化されたnative年次fork catalogの指定。softforkを含む | 無効 | Minerが100% |
+| ADDITIONAL | 正規追加登録であり、上の二分類に入らないmodel | MOE1下の追加登録と同時に一意市場を生成 | 50%買上げ、残余をreward planで分配 |
+
+「softforkモデル」はnative catalogによる指定を意味し、モデルの派生版・forkしたrepository・所有者の名称変更を意味しない。catalog/edition、model ID、root、分類、経済policy、受理anchorをEconomicsSnapshotへ固定する。判定不能な状態を都合のよいtierへfallbackしない。
+
+## 2. MisakaOptionの適用範囲
+
+Position化、protocol AMM、buy/sell、seed/任意LP入口、native/EVM transfer・受取・approve/transferFrom、自動報酬買上げ、PositionベースmembershipはADDITIONALだけに認める。genesis又はfork指定モデルについて、別のline名、proxy、facade、APIから市場を作ることはできない。
+
+coreのworker報酬Rは、買上げ0、owner0、報酬由来burn0、RからのPanel pool0でMinerへ全額帰属する。必要なPanel・資料・Court・TB1の役務資金は、Rから隠れて控除せず別の署名済み前払契約で確保する。資金不足なら新claimを受理しない。
+
+追加モデルの通常AMM売買はburn5%・owner総leg3%・残差net、直接送金はAMM税なし。追加モデルの買上げはRの50%、追加burn/owner0%、取得Positionはretireする。MOE1下の追加登録成功は一意市場の生成を含む。ただし、市場が存在することと、FOW1採掘適格性・個々のclaimの正当性が成立することは別である。
+
+## 3. 登録と実行の検証
+
+追加model登録、pair identity、初期virtual reserve・実reserve・Position在庫・owner参照を同じnative遷移で生成する。失敗時は全体をrollbackし、外部seedがなければ実reserve初期値0を許す。別の市場作成、後続open、seed/deepen又はmarket-ready待機を前提にしない。seed/deepenは登録後の任意増強である。GENESIS/FORK_DESIGNATED登録では市場を生成しない。登録済み追加モデルの市場欠落はstate invariant違反として拒否し、正常な未準備状態へ分類しない。
+
+一般登録はモデルの人気・品質・保有者数・取得ACKによる審査へ戻さない。固定artifactの不変性を保持する。新FOW1に対する数学的・構造的な適格性は[RFC0062](../rfc/0062-palw-function-output-and-work-admissibility.md)の別の共通ruleで確認する。モデルtier1.0を費用定理の証明にしない。
+
+全分類のclaimは同じ元実行binding、選出Panelの完全再実行、資料・異議機会、認証された局所Court、反証優先、成功条件を満たす。genesis・fork指定への100%Miner配分は、これらの免除ではない。Position移転でclaim責任・bond・owner権が移ることもない。
+
+## 4. Fork指定と旧市場の移行
+
+model/rootを上書きせず、catalogの版付き指定を使う。追加モデルをFORK_DESIGNATEDへ指定する場合は、切替より前に旧経済profileの新規受付を閉じ、受理済みclaim、buyback、AMM request、allowance、Position残高、保有に結び付く権利を明示した移行手順で処理する。
+
+MOE1でcore市場をsell-onlyのまま継続しない。旧Positionを自動没収したり、後継modelへ移し替えたり、無根拠にmintして補償したりしない。旧残高等のwinddownが完了しなければ、そのcore経済分類へのactivation条件を満たさない。新規claimと旧snapshot決済を混同し、後付け分類で50%買上げ又は100%Minerを選ばせない。
+
+既存core市場を持つnetworkでMOE1を初めて有効化する場合も同じwinddown gateを適用する。単にmarket flagをfalseにしてreserveやholder権利を消す手順は認めない。
+
+## 5. 完成条件
+
+分類の正本とsnapshot、全native/EVM入口、core禁止、追加登録と一意市場の原子生成、buyback決済資源予約、R全額Miner、別Panel原資、tierの二重乗算拒否、fork境界、再編・IBD・再起動、winddown完了を同じ実装・試験で確認する。過去のtier実装・未build試験source・旧fenceは保存原本の記録であり、新経済条件の実装完了ではない。

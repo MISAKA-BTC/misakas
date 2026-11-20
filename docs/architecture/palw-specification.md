@@ -1,5 +1,36 @@
 # MISAKA Architecture Specification
 
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
+
+永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
+
+旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
+<!-- MOE2-ADOPTED-20261120-END -->
+
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。§6の現行本文をMOE1へ改訂した。transfer可能化はmodel owner、管理鍵、bond、claim、ExecCredit、過去責任の移転を意味しない。
+
+追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
+
+[RFC0063](../rfc/0063-additional-model-option-economics.md) / [ADR0231](../adr/0231-additional-model-option-economics.md) / [適用と移行](../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
+
+[TB1の正本](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 <!-- SWC1-PROPOSAL-BEGIN -->
 > **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
 <!-- SWC1-PROPOSAL-END -->
@@ -771,7 +802,7 @@ ModelPositionは、固定されたモデル登録に紐付く、プロトコル�
 モデルの重みそのもの、著作権、登録者の秘密鍵、claim所有権、bond、将来のマイナー報酬を自動的に移転するものではない。
 
 
-[既存設計](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)では、ModelPositionは自由譲渡型のERC-20ではなく、**モデル別の曲線から購入し、その曲線へ売却する非譲渡型ポジション**である。この構造を維持する。
+[MOE1](../rfc/0063-additional-model-option-economics.md)では、ModelPositionは**追加モデルだけに存在し、AMM売買とholder間の直接送受信・譲渡を許可する**。追加モデル登録と市場初期化は同一原子遷移であり、genesis・有効softfork指定モデルには市場を作らない。市場存在はFOW1採掘適格性の証明ではない。
 
 
 ### 6.2 固定された市場対象
@@ -798,7 +829,7 @@ Native経路とEVM経路が存在する場合も、同じ状態を参照・変�
 ### 6.4 売買条件
 
 
-購入・売却には、対象モデル、数量、許容価格または最小受取量、期限、所有者認証、適用feeを拘束する。
+購入・売却には、対象モデル、数量、許容価格または最小受取量、期限、所有者認証、適用feeを拘束する。 通常AMMのgross BILIにburn5%・owner総額3%を課し、残差を取引原資又は売却者受取とする。直接送受信はAMM手数料を課さず、残高・allowance・lockを同一native正本で検査する。EVMのTransfer成功は同一transactionで確定するjournal更新を必要とし、旧queue受付と区別する。
 
 
 価格計算、整数丸め、overflow、供給変化、fee配分を決定論的に定義する。
@@ -810,7 +841,7 @@ virtual reserveを使用するprofileでは、virtual reserveを実際に払い�
 ### 6.5 計算経済との接続
 
 
-モデル利用に伴うbuybackやretirementを設ける場合、その財源・割合・対象・実行時点を明示する。
+価格付け・共通上限処理後の対象worker報酬Rは、genesis・有効softfork指定モデルで全額Minerへ配分する。MOE2の追加モデルはB=floor(300R/1000)でPositionを購入し、A=floor(200R/1000)と購入済みPositionの必要分を同じ市場へ永久LPとして追加する。余剰Positionだけをburnし、D=R-B-Aを版付きProducer/Panel規則で分配する。購入→LP→余剰burn→残余支払は同一原子遷移で、内部購入/LPの追加BILI burn・owner支払は0。core役務費はRと別原資である。永久LP記録は引出し・転送・LP手数料請求不可だが、拠出資産は通常swapで動き、旧locked seed下限を増やさない。receiptをpool在庫と別の供給に重複計上しない。整数dustは原期限内の未commit保留と既定未成功終端へ接続し、追加mintや成功報酬だけの先行発行を認めない。
 
 
 同じ報酬をMinerに全額支払った後、存在しない別予算からbuybackを実行したことにしてはならない。

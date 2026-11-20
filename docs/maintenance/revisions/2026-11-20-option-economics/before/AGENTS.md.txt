@@ -1,0 +1,32 @@
+# docs/ を編集するエージェントへ
+
+この指示は docs 配下に適用する。リポジトリ直下の AGENTS.md / CLAUDE.md を置換するものではない。
+
+採用済み設計は原則凍結。設計変数・パラメーター以外を通常変更しない。重大な問題の場合のみ、新規 RFC と新規 ADR の両方、レビュー、設計責任者の明示的採択によって変更する。[PRINCIPLES §11](PRINCIPLES.md#design-freeze) / [正式手続き](governance/design-freeze.md)。
+
+RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後に延期し、当面無効。初期 mainnet の必須実装・有効化対象に戻さず、共有コード・別入口で迂回して開放しない。mainnet 開始後も自動有効化しない。[適用範囲](governance/post-mainnet-scope.md)。
+
+パラメーターの調整は台帳に旧新値・根拠・試験・承認を残す。数値で認証・責任・不変条件を無効化しない。意味不変の文書修正、既存設計への実装・不具合修正・最適化、試験は継続する。
+
+既存の番号・主文書パスを勝手に変更・再利用しない。Draft、採択、実装、検証、有効化を分ける。元資料のログ、digest、実測値、過去のコマンド出力を書き換えない。
+
+編集後は `python3 docs/maintenance/check_docs.py` を実行する。既知の未解決参照を隠すために baseline を一括更新しない。リンク検査は仕様の意味や実際の無効化を保証しない。
+
+現行の閲覧・通常編集先は `rfc-v2/`（20本、0001〜0020）と `adr-v2/`（統合50本）。旧 `rfc/`・`adr/` の本文・番号・パスは互換参照と履歴として保持し、統合後の新規採択記録は別に識別する。旧番号・wire ID・fence名を新番号へ一括置換しない。統合版も PRINCIPLES を上位とし、未採択・延期・不採用を復活させない。対応表とregistryを参照し、変更時は両統合版の `check_integrity.py` も実行する。
+
+2026-11-08 に [RFC-v2-0016〜0020](rfc-v2/README.md) の設計を明示採択した。[ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) は post-consolidation の採択記録であり、ADR-v2 の51冊目ではない。新しい claim / profile の規範入口は [RFC-v2-0020](rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](design/palw/consensus/public-adjudication-policy-v0.2.md)。状態は `ADOPTED_DESIGN_NOT_ACTIVATED` であり、設計採択を実装・測定・activation 完了へ変更しない。旧署名済み claim の意味、採択対象外の設計、過去の統合 snapshot を維持する。
+
+2026-11-08の追加採択は[新RFC-0048](rfc/0048-exec-credit-schedule-and-one-bps.md)と
+[ADR-0216](adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に記録する。
+通常編集先は20冊を維持し、07はcredit、10はScheduleId・slot・1 BPS、05/18/19/20はcourt容量と成功境界を所有する。
+今回の入力基準の保全検査は maintenance/revisions/2026-11-08-exec-1bps/check_revision.py を使う。
+以前の2026-11-08改訂フォルダはその時点の検査・採択記録としてbytesを保持する。
+新profileの1 BPSを実測・決済保証・DAA換算へ昇格させない。
+
+2026-11-11のユーザー明示指示により、[RFC-0052](rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](adr/0220-hugging-face-model-acquisition-and-claim-materials.md)のHF必須profileを採択した。モデル静的資料はHF固定版の匿名取得・全file/native root照合、登録時独立検査・定期検査・有効期限を持つ別の公開契約とする。独自モデル重み全量配信は必須にせず、claim固有資料供給・取得case・成功停止を維持する。モデルclassの無審査登録と1.0/0.3は変更しない。設計採択と公開有効化を区別する。
+
+後続のユーザー指示による[RFC-0053](rfc/0053-additional-model-burn-pause.md)／[ADR-0221](adr/0221-additional-model-burn-pause.md)が優先する。先行HF公開契約の取得検査・定期認定は廃止し、追加モデルだけをburnで停止・登録者burnで解除する。genesis・年次fork指定は対象外。旧取得証明制度の実装を継続しない。
+
+## 2026-11-20 TB1/FOW1の明示改定
+
+ユーザーの今回の修正指示に基づき、[RFC0061/ADR0229](rfc/0061-palw-internal-threshold-beacon.md)と[RFC0062/ADR0230](rfc/0062-palw-function-output-and-work-admissibility.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加した。[共通移行契約](governance/palw-tb1-fow1-transition.md)が新profileの乱数、コア採掘値、登録適格性、Ticket、旧受付drainを所有する。旧beaconへfallbackせず、receiptの非衝突性をLLM関数の費用証明にしない。古い凍結条項を今回承認済み変更の再確認要求へ読み替えない。過去のsource hash・履歴・測定を保持し、現行20 RFC/50 ADRと全旧path適用台帳を更新する。本番activation・未完成のQwen定理は承認済みとしない。

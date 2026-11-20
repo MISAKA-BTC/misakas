@@ -1,5 +1,33 @@
 # RFC-v2-0011 — Bond予算・配分・Fee同意・決済会計
 
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — 報酬30%買付・20%永久LP・余剰Position burn
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)を新経済profile **MOE2** の正本とする。追加モデルの対象worker報酬Rから30%でPositionを購入し、その一部と20%BILIを同じ市場の永久流動性へ入れ、余剰Positionだけをburnする。残余は版付きworker配分に従う。
+
+永久LPは撤去・償還権のないnative receiptであり、外部流通LP tokenではない。整数dustは原有限期限内だけ保留し、未成立なら既定未成功終端へ進む。永久LPを記録したmodel ID及び同rootの再登録によるcore指定を禁止する。追加登録時の市場原子生成、coreのMiner=Rと別役務原資、通常AMM5%/3%、直接移転、TB1/FOW1は維持する。
+
+本書§3・§7〜§9をMOE2へ更新する。以下に保存するMOE1採択ブロック、旧50%取得・全量retire、永久LPを考慮しないcore winddownは、その旧版又は明示継承範囲の記録であり、新規MOE2のfallbackではない。wire、codec、ABI、activation位置は未割当。数学kernelの検査を本番実装・経済安全性の完了へ昇格させない。
+<!-- MOE2-ADOPTED-20261120-END -->
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — MisakaOptionは追加モデルだけ、core報酬は100%Miner
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0063](../rfc/0063-additional-model-option-economics.md)／[ADR0231](../adr/0231-additional-model-option-economics.md)を本書の新しい経済契約として採択する。MisakaOption / ModelPositionはADDITIONALに限り、買上げ50%、通常AMM売買burn5%・owner側総額3%、直接送受信・譲渡を適用する。GENESIS / FORK_DESIGNATEDではOption機能を無効とし、対象worker報酬Rの100%をMinerへ帰属させ、Panel等をRから控除しない。
+
+本書の§3および§7〜§9が新規経済profileの比率・原資・移行を所有する。以下のTB1/FOW1の「既存経済値を維持」という一般句と、旧付録の買上げ5%、owner5%/1%、非譲渡、core市場売却継続は、この経済範囲では後続採択に置き換わる。全実行検証、反証優先、TB1/FOW1適格性、資本・発行・成熟・hold/export上限は維持する。新経済規則の採択をnative実装・公開有効化へ昇格させない。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+資本・発行・報酬・Final容量の既存上限は維持し、FOW1の費用下界と区別する。正しいcache/外注/高速化にslashを課さず、費用定理へ含める。VSS・配信・certificate等の役務費用を既存同意・予約へ結合する。
+
+[TB1の正本](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
 <!-- AN1-DRAFT-20261118-BEGIN -->
 ## 2026-11-18 AN1追加草案の担当範囲
 
@@ -29,7 +57,7 @@ native資本台帳によるTrialSlot、実入口費、必要資金の分離lock�
 
 [採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。claim受理時に一人の合法な救済経路の有限費用と予約を確保し、算術不正・供給default・未検証終了の帰責を分ける。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+原統合: 2026-10-29 / 採択改訂: 2026-11-08・2026-11-20（MOE1/MOE2経済） / 原入力: `misakas-pre(5).zip`
 
 [20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
 
@@ -63,7 +91,92 @@ claim容量、報酬対象ブロック、報酬総額、Final weightを同じ拘
 
 二階層係数、超線形資本配分、V+による物理ブロック機会とcoinbaseへの接続を維持する。既存の採択記録ではα=1.5、平均期間は7日相当DAA（旧30日から改定）であり、原文中の30日を現行値として復活させない。
 
-κ等の値・分母・縮小分の扱いはパラメーター台帳とADRの採択範囲を照合する。台帳自身が記録する不整合は本編集で勝手に解決しない。値の再承認、実測値、推定値、有効化recordを区別する。
+κ等の値・分母・縮小分の扱いはパラメーター台帳とADRの採択範囲を照合する。台帳自身が記録する不整合は本改訂で勝手に解決しない。MOE2の30%/20%・5%/3%・core100%を、それらの配分係数へ二重に掛けない。
+
+### 3.1 対象とR
+
+`R`は、そのmodelに帰属する認証済みcanonical claimの、適用中の仕事価格付けと発行上限を反映した、買上げ・Panel分配前のworker報酬である。network全体の報酬、取引fee、provider/Court fee、返還金は含めない。Rは最小通貨単位の非負整数で、未成功claimへ成功報酬を与えない。
+
+モデルの経済分類は、nativeで認証したmodel ID、artifact root、有効catalogから判定する。genesisはGENESIS、正式なsoftfork・年次fork指定はFORK_DESIGNATED、それ以外の有効な追加登録はADDITIONALとする。未指定の係数、表示名、caller申告から推定せず、未知分類は拒否する。
+
+### 3.2 MisakaOptionの適用表
+
+| 項目 | ADDITIONAL | GENESIS / FORK_DESIGNATED |
+| --- | --- | --- |
+| Option市場・Position・送受信・allowance・membership | MOE2有効下の追加登録と同時に市場生成 | 無効 |
+| 対象worker報酬の買付 | `B=floor(300R/1000)` | 0 |
+| 対象worker報酬のLP用BILI | `A=floor(200R/1000)` | 0 |
+| 残余worker報酬 | `D=R-B-A`を版付きplanで配分 | `Miner=R` |
+| RからPanel・Verifier・prefix worker等への控除 | 指定planのD内、又は別原資のfee契約 | 0。必要役務は別原資 |
+| Rからownerへの直接配当 | 0 | 0 |
+| 通常AMMのBILI burn / owner側総額 | grossの50‰ / 30‰、netは残差 | 対象なし |
+| 内部買付・LPの追加BILI burn / owner直接支払 | 0 / 0 | 対象なし |
+| 取得Position | LPへellを戻し、余剰q−ellをburn | 対象なし |
+
+**coreの100%は、買上げだけを免除して旧Panel poolを引く意味ではない。Rの全額がMinerへ帰属する。** 別のreserve、手数料、役務名目でRを減らさない。一方、Final、成熟、vesting、liability hold、bond、export capと元期限は維持するため、即時・無条件支払を意味しない。
+
+**追加モデルの登録と市場の生成は同じnative原子遷移である。** `ModelRegistered(m, ADDITIONAL) ⇒ unique MarketExists(m)`を維持し、pair identity、初期virtual/実reserve、Position在庫とowner参照を登録時にそろえる。外部seedなしの初期実reserveは0でよく、規範virtual reserveと混同しない。登録失敗はmodelと市場の両方をrollbackする。後続市場作成・seed待ち・market-ready待機は設けない。旧pre-trade seedの条件は維持し、MOE2報酬LP追加をseed操作とは別に定義する。GENESIS/FORK_DESIGNATEDは市場を作らない。
+
+### 3.3 追加モデルの30%買付・20%永久LP
+
+\[
+B=\left\lfloor\frac{300R}{1000}\right\rfloor,\quad
+A=\left\lfloor\frac{200R}{1000}\right\rfloor,\quad D=R-B-A.
+\]
+
+B/A/Dは最小通貨単位で保存分割し、Dを独立floorしない。総50%を先に丸めてAを差額とする別式も使わない。常に`R=B+A+D`かつ`A≤B`である。
+
+認証された同じpairのvirtual reserve V、real reserve r、整数curve在庫Uに対し、`X=V+r>0, U≥1`として次を固定する。
+
+\[
+\begin{aligned}
+X_1&=X+B,& U_1&=\left\lceil\frac{XU}{X_1}\right\rceil,&q&=U-U_1,\\
+\ell&=\left\lfloor\frac{AU_1}{X_1}\right\rfloor,&d&=q-\ell,\\
+r_2&=r+B+A,& U_2&=U_1+\ell,& Z_2&=Z+d.
+\end{aligned}
+\]
+
+Zはretired/burned unitsである。Bで得たqを一時数量として扱い、ellをAとともにcurveへ戻し、余剰dだけをburnする。BとAを各一度だけ実reserveへ入れ、旧seed_lockedとVは変更しない。買付の時点でq全量をretireしてから復活させない。内部二legに通常AMMの5%/3%を追加せず、owner/contributorへ直接支払わない。
+
+`0≤ell≤q`が成り立ち、d=0も正規結果である。連続量の3:2から整数でell/q<2/3を要求しない。X=100、U=60、R=10ならq=ell=1、d=0となる。算術、上限、quote及び原子処理の正本は[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)とする。
+
+Dの分配は受理時snapshotの`reward_plan_id`に従う。他のworker legを持たない20% Panel pool版では`P=floor(200D/1000)`、`Miner=D-P`。R=1,000なら買付300、LP用BILI200、Panel100、Miner400となる。全profileへ20%を強制せず、他の適法なworker legと未使用poolは採択済みplanへ明示する。
+
+#### 3.3.1 永久LP receipt
+
+A>0かつell>0のLPを成功commitした場合に限り、非償還native `LockedLiquidityReceipt`を`PERMANENT_PROTOCOL_LOCK`へ記録する。撤去・償還・transfer・fee請求・owner/admin鍵・期限解除を設けず、外部流通LP tokenや公開LP入口を追加しない。
+
+永久lockはLPの撤去権がないことであり、Aとellは通常swap用のreserve/在庫に使える。receiptは拠出履歴であり、追加asset、現残高、担保価値、第四のPosition供給項ではない。累積A/ellと現在の市場残高をUIでも区別する。
+
+settlement IDはclaim/policy/model/pair等から事前決定する。receiptには前market参照と、receipt自身・集合を除いた後market値又はそのhashを入れ、global post-state rootの自己参照を作らない。完成receiptを通常のnative state rootで認証する。成功LPはmodel IDとcanonical artifact rootの履歴へ結び付け、§9のcore指定禁止を適用する。
+
+#### 3.3.2 小額・保留・元期限
+
+B>0かつq=0、又はA>0かつell=0は`LiquidityDust`として、買付・LP・burn・D支払の全操作を未commitにする。原有限決済期限内だけ所定のhold・再評価に進め、解消しなければ既定未成功終端と元原資精算へ進む。無期限Pending、期限reset、成功R/credit先行発行、Aだけのdonation、Position mint、fee版変更、Miner全額fallbackを認めない。
+
+B=A=0なら市場二legだけをno-opとし、D=Rの元worker配分は維持する。最小仕事条件や成功検証を免除しない。A=0かつB>0・q>0の成功はq全量burnであり、LP操作・receipt・永久LP属性の新設定を行わない。
+
+市場欠落は正常な小額・未準備状態ではなくstate invariant違反として拒否する。受理済み義務を市場のuser buy停止で免除しない。quote・slippage・上限等を満たせない場合も元期限内の有限処理と未成功終端に結合する。既に提供済みの正当な役務feeは、成功報酬とは別の元契約で精算する。
+
+whole PositionのU=1又は2では、A≤Bのまま報酬を増やしても正のellを確保できない。市場の存在又はまとめ払いから正常完了を保証せず、元期限を維持する。LiquidityDustだけで計算不正やslashを認定しない。
+
+### 3.4 coreの検証役務費
+
+GENESIS/FORK_DESIGNATEDでは`Buyback=LiquidityFromR=OwnerFromR=PanelFromR=VerifierFromR=PrefixWorkerFromR=0`、`Miner=R`とする。必要なPanel、資料、TB1、Court、prefix供給等の役務は、Rとは別の前払資金・同意・有限escrowへ接続する。
+
+新規発行、同じ未発行Rの二重担保化、Rを別口座へ回すだけの名目分離を認めない。payer/provider/scope/上限/原deadline/返還を受理前に固定し、資金不足なら新受付を止める。検証免除・Panel無報酬を資金不足の解決としない。未成功claimで発生した正当な役務費は元のfee契約で精算する。
+
+### 3.5 通常売買の整数計算
+
+\[
+b=\left\lfloor\frac{50g}{1000}\right\rfloor,\quad
+o=\left\lfloor\frac{30g}{1000}\right\rfloor,\quad
+n=g-b-o.
+\]
+
+ここでgは通常AMM売買のgross BILI額、bはburn、oはowner側総額、nはnetである。買いではnがreserveへの取引原資、売りではnが売却者受取額になる。g=1,000なら50/30/920。netを別のfloorで求めず、最小単位の端数を残額へ含める。乗算はcheckedかつ十分な幅で行う。
+
+owner側3%は、既存の適法なcontributor内部分配を含む総額である。owner3%にcontributor legを追加しない。全受取人と丸めを認証済みowner規則へ結び付け、不明な受取先を追加burnへ変換しない。通常取引は実行時に有効なpolicy/classを使う。buyのminOutはnet BILI投入から曲線計算したPosition受取量、sellのminOutはburn・owner控除後のBILI netで確認する。
 
 ## 4. 通常VerifierのFee
 
@@ -73,7 +186,7 @@ claim容量、報酬対象ブロック、報酬総額、Final weightを同じ拘
 
 ## 5. ProviderのFee-only契約
 
-採択対象はprovider自身の前払feeだけで、V1のservice、worker権利、replacement、材料保持、finalityは変更しない。providerと元sponsorが同意し、Hは元の`enrollment_until_daa`へ明示的に結び付ける。
+本節のfee-only契約はprovider自身の前払feeを対象とし、replacement、材料保持、finalityを変更しない。新規worker報酬の帰属と原資分離は§3のMOE2を優先する。providerと元sponsorが同意し、Hは元の`enrollment_until_daa`へ明示的に結び付ける。
 
 対象providerのdefaultが選択chain上で実際にH以内に処理された場合だけ返金し、それ以外はH後に支払う。challenge開始時刻とdefault処理時刻を混同しない。default記録をfee解除より先に評価する。旧cohort、既払fee、後任providerへ遡及しない。
 
@@ -82,6 +195,48 @@ claim容量、報酬対象ブロック、報酬総額、Final weightを同じ拘
 court固有の受付・役割同意・original escrow・終端効果は14が所有する。本RFCは共通money engine、保存則、二重支払防止を所有する。同じwireや判定を両方で別定義しない。
 
 正常支払、期限内返金、期限後default、H/H+1、無rootのenrollment、replacement、overflow、資金不足、支払と返金の競合、reorg／restart／IBD後の一致を確認する。
+
+---
+
+## 7. 直接送受信・譲渡とEVM
+
+有効なADDITIONALのModelPositionは、nativeの単一残高台帳でholder間の直接transfer、受取、譲渡を許し、approve/allowance/transferFromを追加する。AMMの5%/3%は適用せず、通常network feeのみとする。reserve、market在庫、retired量、Position総量、BILI供給、owner feeは直接移転で変化しない。
+
+認証された送信権限、model/pair、利用可能残高、注文等の既存lock、allowanceを検査する。移転はBILI bond、役務lease、署名責任を移さず、Positionを新しいconsensus weightにしない。モデルownerとPosition holderの権限を区別する。
+
+EVMはnative正本の同じtransaction journalで残高・allowance・logを原子更新し、revertとread-after-writeも一致させる。queueへ追加しただけで送金成功と返す実装は採らない。既存の旧非譲渡ABIや別残高のwrapperを新profileへfallbackしない。具体的な境界は[RFC0063 §7](../rfc/0063-additional-model-option-economics.md)と[ADR0089](../adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)に従う。
+
+membershipと保有量tierは新holderの認証済み残高へ結合する。旧残高証明やtransferによるquota resetで同一unitの権利を二重使用させず、既に完了したサービスを後の移転だけで巻き戻さない。GENESIS/FORK_DESIGNATEDではOptionのmembershipを発行しない。
+
+相対売買の対価を別送金しPositionを直接移す行為には、AMM売買手数料は発生しない。贈与と相対売買を自動識別して全取引へ8%を徴収できる仕様ではない。
+
+この移転可能性はholderのModelPositionだけを対象とする。永久LP receiptにtransfer・allowance・償還権を与えず、wrapperを新しい引出し入口にしない。
+
+## 8. Snapshot・原子的決済・全consumer
+
+claim受理時に、network、MOE2 policy、model ID/root、catalog、経済分類、価格付け、reward plan、pair、owner規則、原期限・予約を`EconomicsSnapshot`として認証する。curve/整数profile、R/B/A及び中間積の上限、quote参照と有効期間、整数qを対象とするminOut、価格影響/slippage条件、処理順序、再評価上限、receipt版を同じ契約へ固定する。未設定値を無制限と推測せず、新規受理を行わない。
+
+FOW1ではsnapshot参照をTB1 EXEC公開前のCへ固定する。現在の市場状態から規範quoteを再計算し、事前条件を満たすか確認する。通常取引の現在policyと旧claimの受理時snapshotを混同せず、抽選結果を見て型、pair、経済版やquote条件を選び直さない。
+
+`R=B+A+D`又はcoreの`R=Miner`、通常取引の`g=burn+owner+net`、Positionの`market+holders+retired=supply`を確認する。B入金、q取得、A入金、ell返却、d burn、receipt、型制約、Dのpayee/pool、消費を同じ原子遷移へ入れる。二leg間に他取引を入れず、一つ失敗すれば全て戻す。別carrier/API、再送、import/repair、reorg/restart/IBDで二重発行させない。
+
+B+Aのreserve流出も既存export capへ合算し、Dの支払と別枠で倍化しない。未Finalや保留中Rを市場へ先行流出させず、予約・期限・成熟・liabilityの制約を継承する。成熟後の不正claim責任もLPの特別引出しで精算せず、元のbond/holdを維持する。noncanonical reorgの巻戻しはreceiptを含む原子遷移全体の復元であり、canonical LPを私的に撤去する権限ではない。
+
+経済式だけでDAG収束、Final後取消、第三者取引の自動rollback、価格上昇、先回り取引の不採算を保証しない。quote・amount・slippage等の値と最悪ケースを実装・測定してから有効化する。
+
+## 9. Activation・既存残高・正式指定への移行
+
+MOE2のnetwork/policy/codec/ABI、通常取引の適用位置、新claimの受付境界を明示する。旧claimは受理時の署名・価格付け・配分・原期限でdrainする。旧MOE1の50%取得・全量retireを新30/20へ遡及変更せず、既存retired unitsをLP用へ復活させない。旧率や非譲渡規則を新規成功経路にしない。
+
+ADDITIONALの既存残高・reserve・retired・支払権利を保持し、全追加登録と一意市場の不変条件を移行時に確認する。欠落は有効化前の明示修復で解消し、通常の後付け市場作成待ちへ移さない。
+
+**永久LPを一度でも成功記録したmodel IDはGENESIS/FORK_DESIGNATEDへ指定できない。** 同じcanonical artifact rootを別ID・owner・名称で再登録する迂回も認めない。nativeのmodel ID/root双方の永久LP履歴を確認し、停止・burn表示・pruning・後継移植で解除しない。永久receiptを旧winddownへ入れて償還することもしない。
+
+永久LPを持たない旧cohortだけを元条件でdrainし、coreの旧pair/残高/allowance/役務・支払義務を明示的に解消してから該当変更を有効化する。恒久的なcore sell-only市場、無同意の没収、未知価格での強制償還、新規発行による穴埋めを許さない。異なる正規モデルをcoreへ採用しても旧市場・資産を自動移動しない。
+
+A=0経路とB=A=0のno-opは永久receiptを作らず、永久LP属性を新設しない。正規LP履歴は通常操作で消さず、pruning後も必要な認証summaryを保つ。canonical reorgではreceiptと属性を原子stateとともに復元し、孤立forkの履歴から制約を作らない。
+
+native/EVM原子実行、dustと元有限期限、receipt権限、同root迂回、別役務原資、全consumer、支払保留・上限、残高移行、故障・再起動・reorgを確認するまで未有効化である。旧文書の値・試験・実装記録を現行MOE2の完成証拠にしない。TB1/FOW1と全検証・Courtの未完了条件を維持する。
 
 ---
 

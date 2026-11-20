@@ -1,125 +1,73 @@
-# ADR-0114 — The owner's leg is five percent, and it arrives at a height
+# ADR-0114 — 通常AMMのburn 5%・owner総leg 3%と版付き適用
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+- 改訂日: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。MOE2の設計改訂であり、native/EVM実装、測定、移行又は公開有効化の完了ではない。
+- 共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)。
+- 直前MOE1版の完全原本: [改訂前の原本](../maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt)。さらに古い原本への参照も保存原本に保持する。
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
-> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
-> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
-> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+本書の現行決定をMOE2へ適用する。MOE1の「50%全額でPosition購入・全取得分retire」を「30%購入・20%BILIと必要Positionの永久LP・余剰Positionのみburn」へ置換する。通常5%/3%、追加モデル限定、登録と市場の原子生成、直接転送、coreのMiner100%は維持する。旧claim・署名・決済・過去の試験結果はその版の記録であり、新規範で遡及再解釈しない。TB1/FOW1の実行・登録・完全検証・責任条件を免除しない。
 
+## 1. 対象と正本
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+MOE2の追加モデル登録は、そのmodelの一意市場と初期reserve・在庫・owner参照を原子的に同時生成する。別の市場準備・外部seedを必要とせず、core登録では市場を生成しない。登録済み追加モデルの市場欠落はstate invariant違反として拒否する。
 
-* Status: PROPOSED 2026-09-11 at the operator's request ("追加で現在の売買の burn 5% 開発者への手数料 1% から
-  burn 5% 開発者への手数料 5% にあげて　つまり売って買うと 20% は fee として持ってかれるようにして").
-  **IMPLEMENTED the same day**, and **scheduled on testnet-11 at DAA 3,500** by the operator the same
-  day (asked with the chain at ≈3,399: "DAA 3,500 で有効化"): `PALW_RC_MODEL_LEG_V2_FENCE_DAA`. Every
-  other preset keeps `palw_model_leg_v2 = None`. testnet-11's printed fingerprint moves `ecbdbc22…` →
-  `02c7282b…`; the identity does not, so the fleet rolls one host at a time and builds with and without
-  the fence stay peers until 3,500 (`the_owner_leg_flag_day_keeps_every_current_node_until_3500`).
-  **3,500 is a flag day: every node must run a build carrying the fence before it.**
-* Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 4 (the split of
-  every BILI leg: 5 % burned, 1 % to the class's registrant), [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
-  Decision 8 (that leg is the line OWNER's, and an adopted contributor takes `contributor_permille_of_leg`
-  of it — of the five percent past the fence), [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
-  (the window's `quoteBuy`/`quoteSell` and `constants()`), and [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
-  §4's worked table (a second table beside it, §2).
-* Supersedes nothing. Leaves ADR-0091 (the reward's 5 % buys the pair, no leg) untouched.
+MOE2の通常protocol AMM売買は、ADDITIONALモデルだけで有効である。GENESIS/FORK_DESIGNATEDに市場や売買feeを設定しない。coreにownerが存在しないからowner legを追加burnする、という旧処理を新profileへ残さない。
 
-## 0. The sentence this ADR is
+手数料は売買の実行時に適用される認証済み経済policyとmodel分類から決める。RPC quote、CLI、EVM view、native実行は同じpolicy ID・state anchor・計算器を使う。未確定又は異なるpolicyによるquoteを約定保証として扱わない。
 
-**Past the fence every join and every leave splits its BILI leg 5 % burned, 5 % to the line's owner and
-90 % to the curve (a join) or to the seller (a leave), so a round trip leaves about a fifth of the BILI
-behind before the curve's own slippage; below the fence nothing changes, and because the fold writes the
-split into the state root, the change arrives at a height every node crosses together.**
+## 2. 決定
 
-## 1. Decisions
+### Decision 1 — 50/30/残差
 
-1. **The schedule is a value, chosen at the move's DAA and nowhere else.**
-   `PalwModelFeesV1 { burn_permille, leg_permille }` with `V1 = 50/10` (ADR-0087 D4 as shipped) and
-   `V2 = 50/50` (`PALW_MODEL_OWNER_LEG_PERMILLE_V2`), and `PalwModelFeesV1::at(leg_v2_active)`. The fold,
-   the EVM window, the RPC and the CLI each ask `at` — the fold with the block's
-   `PalwTransitionExtrasV1::model_leg_v2_active`, the window with `PalwEvmMarketFencesV1::leg_v2_active`,
-   the RPC at the node's virtual DAA — so no two readers can quote one move under two schedules. The
-   pre-existing entry points (`palw_model_fee_split_v1`, `palw_model_buy_quote_v1`,
-   `palw_model_sell_quote_v1`) keep their V1 meaning; the fenced paths call the `_with` variants.
-2. **The fence is a bare activation, `Params::palw_model_leg_v2`, read through
-   `palw_model_leg_v2_fence()`**, which folds in the market's own fence (a schedule for a market that
-   does not exist is meaningless). It joins every place a model fence is spelled: the fence list
-   (`palw_fences_v1`), the identity visitor and its never→None collapse, the Some-only write into
-   `consensus_params_id`, the processor's copy, and the four shipped presets (`None`).
-3. **The owner's leg is the whole change.** The burn stays 5 %. What the fold does with the leg is
-   unchanged: `pay_model_leg` pays it to the line's owner payload, splits `contributor_permille_of_leg`
-   of it to an adopted contributor, and burns it where a class has no registrant (M6). Rounding is
-   unchanged in kind: each leg is floored, the remainder stays on the net leg, and
-   `burn + registrant + net == gross` under both schedules.
-4. **The RPC says which schedule is in force, and when it changes.** `getPalwModelMarket` version 6
-   appends `burnPermille`, `legPermille` (at the virtual DAA) and `legV2ActivationDaa` (0 = not
-   scheduled); gRPC fields 22–24. A version-5 peer decodes as 50/10 with nothing scheduled, which is
-   what that peer's fold does. The CLI's previews quote with the schedule the node serves and print it;
-   the site reads the same fields.
+gross BILI額Gに対し、最小整数単位で次を計算する。
 
-## 2. The numbers (pinned in `palw_model_market_v1.rs`)
+\[
+\mathrm{burn}=\lfloor 50G/1000\rfloor,\qquad
+\mathrm{owner\_total}=\lfloor 30G/1000\rfloor,\qquad
+\mathrm{net}=G-\mathrm{burn}-\mathrm{owner\_total}.
+\]
 
-ADR-0090 §4's table again, from the least seed (100,000 BILI, 500,000 positions), under V2:
+`burnPermille=50`、`ownerPermille=30`、名目`netPermille=920`である。整数残差はnetへ帰属するため、netを別途`floor(920G/1000)`として差分を失わない。wide checked multiplication、amount上限、負値・overflow・未知asset拒否を必要とする。
 
-| move | burn | owner | net | positions | reserve after |
-|---|---|---|---|---|---|
-| join 1,000 BILI | 50 | 50 | 900 | 4,459 out (V1: 4,656) | 100,900 BILI (price 0.20361584) |
-| join 1,000 BILI | 50 | 50 | 900 | 4,381 out (V1: 4,570) | 101,800 BILI |
-| leave all 8,840 | 89.9912 | 89.9912 | 1,619.8416 | 8,840 in | 100,000.176 BILI |
+buyではnetをreserveへ投入し、sellではcurveのgrossから控除後のnetを売却者へ払う。正常売買は同一原子的遷移でreserve、burn、owner総leg、Position、支払権利を更新する。失敗したquote/minOut/署名/資金不足からfeeだけを残さない。
 
-A join of 100 BILI and the leave of what it bought return **80.892738 BILI** (V1: 88.25488168): 0.9² of the
-BILI less the slippage — the "20 % taken as fees" of the request. M2 holds exactly under both schedules.
+### Decision 2 — Ownerとcontributorの合計は3%
 
-## 3. Why a height and not an edit
+owner ruleが認めるcontributor分割はowner_totalの内部で行う。owner残額とcontributor支払の合計はowner_totalに等しく、3%を超えて請求しない。所有・contributor関係は認証された固定modelと実行時に有効なruleから解決する。
 
-The split is not a display value: the fold writes it into each market row (`msk_reserve`,
-`burned_sompi`, `registrant_paid_sompi`, `contributor_paid_sompi`) and into `pending_payouts`, all inside
-the state root. Editing the constant in place would re-fold every move of every node that syncs from
-genesis under the new split, write a different root for every block since the first trade, and split the
-network between nodes that re-folded and nodes that did not. An activation keeps every block below the
-height judged exactly as it was (ADR-0083 path (a); "consensus changes by activation, not regenesis").
+追加モデルの正規owner/payee規則が欠落・無効な場合は売買を拒否する。欠落を理由にowner分をさらにburn、Minerへ送付、別model ownerへ送付するfallbackを設けない。支払責任とowner変更の通知・版境界も認証する。
 
-## 4. What does not change
+### Decision 3 — 適用しない操作
 
-The burn, the seed floor and its lock, the supply, the curve and its rounding, the product that never
-falls, the refusals (a join that releases nothing, a leave that pays nothing), ADR-0091's buyback (no leg),
-ADR-0095's memberships (a position still pays its holder nothing), and the carrier and EVM mechanics of a
-move. A contributor's `contributor_permille_of_leg` is a share OF the leg, so past the fence the same
-permille pays five times the BILI.
+| 操作 | AMM burn | owner総leg |
+| --- | ---: | ---: |
+| 通常のprotocol AMM buy/sell | 5% | 3% |
+| protocolによる報酬購入B（Rの30%） | 0% | 0% |
+| protocolによる永久LP拠出A（Rの20%）＋ell | 0% | 0% |
+| 直接transfer/受取/譲渡 | 0% | 0% |
+| approve/transferFromの転送処理 | 0% | 0% |
+| GENESIS/FORK_DESIGNATED | 市場自体を無効 | 市場自体を無効 |
 
-## 5. Arming it on testnet-11 — done at DAA 3,500 (2026-09-11)
+network fee/gas、明示的なモデル停止・解除burn、その他署名済み役務契約の費用は別の原資と規則である。それらを通常AMM手数料へ合算したり、無断で無効化したりしない。
 
-1. Choose a DAA `H` far enough ahead for **every** node to be rebuilt — the fleet and the outside nodes
-   seen on the explorer (09-10's DAA 2,400 fence was crossed unannounced and the outside nodes forked off
-   at ≈2,241; that is the failure this step exists to avoid). The chain was advancing a few DAA an hour on
-   2026-09-11, so a day's notice is tens of DAA, not hundreds.
-2. In the testnet-11 builder beside `palw_model_benefits`:
-   `params.palw_model_leg_v2 = Some(ForkActivation::new(H));` — the printed `consensus_params_id` moves
-   (Some-only write), the fence-normalised identity does not, and builds with and without it stay peers
-   with a "schedules a FUTURE fence differently" warning until `H`; past `H` a node without it forks off.
-3. Re-pin `shipped_presets_have_pinned_fingerprints` for testnet-11 in the same commit, and announce `H`.
+MOE2ではB全額とA全額を実reserveへ一度ずつ入れ、購入qのうちellをLPへ戻し、余剰q−ellだけをPosition burnとする。Positionの余剰burnをBILIの追加5% burnと混ぜない。LP receiptにowner/contributorのfee請求権を設けない。`LiquidityDust`では購入・LP・burn・報酬支払を部分commitせず、原期限の有限保留を使う。
 
-Done with `H = 3,500`: the fence joins testnet-11's schedule (`1150, 1900, 2150, 2400, 3500, 2125000`) and
-its fork-id gate set, the fingerprint is re-pinned to `02c7282b7541011344eabb1ce6cbe6544987e7b6a7fc132413fbfff0a6a37cfd`,
-the tests that reconstruct the 2,400 flag day's builds set the new fence to `None` (it was not theirs), and
-README / testnet11-join-mining / testnet11-node-operator print the new startup lines and the notice.
+### Decision 4 — 旧率を遡及変更しない
 
-## 6. A gap this ADR inherits and names
+旧V1=50/10、旧V2=50/50は、その版で受理・実行した取引の再生用に保持する。新率はMOE2の新policy/activationへ割り当て、既存の`leg_v2`定数を置換してgenesisから再計算しない。旧receipt、旧nonce、旧署名の意味を同じ名前で変更しない。
 
-`consensus/src/processes/palw_state_v2_sync.rs` passes default extras for the model fences — its own
-comment calls that "a REAL gap the moment `palw_model_lines` or `palw_model_evm` is armed". The new field
-defaults to `false` there like its siblings. This ADR does not widen or close that gap; whoever closes it
-resolves `model_leg_v2_active` with the others.
+新旧境界でどの実行がどのpolicyを使うか、pending AMM requestのdrain、minOut・返金・owner snapshot、undo/restart/IBDを全consumerで同一にする。wire値・activation高さは、このADRが実装済みとして割り当てるものではない。
 
-## 7. Tests
+## 3. 金額例と端数
 
-* `the_v2_schedule_pays_the_owner_five_percent_and_leaves_the_v1_table_alone` — §2's table, V1 through
-  the new door is V1, the round trip, M2.
-* `past_the_leg_fence_the_owner_is_paid_five_percent_of_every_move` — the fold: the same buy on the same
-  parent pays 1 % below and 5 % past the fence, to the owner's payload; the leave's owner leg equals the
-  burn.
-* The fingerprint and fence-table tests run unchanged with the fence `None` everywhere (the shipped
-  fingerprints do not move).
+| gross G | burn | owner_total | net |
+| ---: | ---: | ---: | ---: |
+| 1,000 BILI | 50 BILI | 30 BILI | 920 BILI |
+| 1最小単位 | 0 | 0 | 1 |
+| 999最小単位 | 49 | 29 | 921 |
+
+曲線価格・Positionの整数丸め・slippage・gasは別である。往復取引を単純に「16%」と断言せず、各取引時のgross・netと実際のcurveを計算する。
+
+## 4. 受入と完成条件
+
+buyとsellの両方、owner/contributor分割、極小値、最大値、minOut、invalid payee、直接送金の無課税、報酬購入/永久LP両legの追加税なし、receiptのfee請求権不存在、dust無副作用、core全入口拒否、旧新boundary、queue/settlement、reorgと二重適用を検査する。旧の5% owner実装・実測・テストは保存原本の履歴であり、新率対応の証拠ではない。

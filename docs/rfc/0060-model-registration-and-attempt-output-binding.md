@@ -1,5 +1,15 @@
 # RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性
 
+<!-- FOW1-TB1-20261120-BEGIN -->
+## 現行の適用 — 認証出力と推論関数の採掘値を分離する
+
+2026-11-20のユーザー明示指示による新規採掘の設計は、[RFC-0062 PALW-FOW1](0062-palw-function-output-and-work-admissibility.md)／[ADR-0230](../adr/0230-palw-function-output-and-work-admissibility.md)を正本とする。乱数生成は[RFC-0061 PALW-TB1](0061-palw-internal-threshold-beacon.md)／[ADR-0229](../adr/0229-palw-internal-threshold-beacon.md)に固定する。新方針は**ADOPTED_DESIGN_NOT_ACTIVATED**であり、以下のMOR1独立草案の状態・数学的論証は旧版の記録として保持する。
+
+MOR1の`O=(y,s,rho)`と§8のhash非衝突性だけでは、ユーザーが要求した**LLM関数自体の採掘出力**の非衝突性・新規計算費用を満たさない。FOW1はコア推論`(y,z,tau)`、zの関数非衝突性、複数試行費用、全checker coverageを登録・採掘の必須gateにする。自然回答yの一致を許す条項は維持するが、それをコア採掘出力zの衝突を無条件に許す条項として使わない。
+
+FOW1では補助envelopeを`(y,z,s,rho)`とし、四Root TicketとTB1の独立EXEC/PANELを使う。旧三Root Ticket、未指定beacon、receiptのみの適合から新資格を得ることは禁止する。0062のactivation A以後の新規採掘はFOW1必須とし、旧MOR1をfallbackにしない。既存署名・旧claimのdrainと未完成の具体定理・本番実装は0062 §9/§10に従う。
+<!-- FOW1-TB1-20261120-END -->
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **DRAFT_NOT_ACTIVATED**
 - 提案系列: **PALW-MOR1**（Model Output Registration、設計上の名称。native wire IDの割当ではない）
@@ -10,15 +20,19 @@
 
 ## 0. 要求と適用状態
 
+本節以下はMOR1初版が保証した範囲を記録する。現在の新規採掘に必要な関数出力・費用条件は冒頭の0062に追加されており、本書の構造適合だけを新しい採掘適格性にしてはならない。
+
 **対象profileのモデル登録時に、別の採掘試行の認証出力が天文学的に小さい確率でしか重複しない構成を要求する。** この要件を、自然文の多様性に対する経験的な審査ではなく、固定入力adapter・決定論的実行・canonical trace・暗号学的な出力処理の共通構造として定義する。
 
-本RFCの「必須」「拒否」「してはならない」は、明示的に採択・有効化されるMOR1対応の新登録／新profileに対する規範である。ユーザーの今回の指示は設計記述の追加を認可するものであり、native実装、既存採択の上書き、稼働activation、費用定理の成立を意味しない。依存するAN1もDRAFTのまま保持する。
+以下の「必須」「拒否」「してはならない」は、初版が提案したMOR1対応の登録／profileに対する規範を記録する。初版への指示は設計記述の追加であり、その時点でnative実装、既存採択の上書き、稼働activation、費用定理の成立を認可したものではなかった。依存する旧AN1のDRAFT記録も保持する。今回明示された新規採掘の方針変更と旧受付の切替は、冒頭と0062 §9の採択記録に従う。
 
 モデル登録の自由は維持する。要件は、全対象登録へ同じ規則で適用する構造・形式・実行対応の検査であり、モデル品質、人気、保有人数、公開可用性、ownerの裁量による資格審査・昇格制度を復活させない。[RFC-0053](0053-additional-model-burn-pause.md)の追加モデルburn停止・解除、genesis／年次指定との区別、既存1.0/0.3等の経済条件を変更しない。HF取得検査・定期可用性認定の復活でもない。
 
 検証方式はPanelの完全再実行とモデル非保有Nodeの有界Courtである。ここでいう「非重複性の証明」は出力構成に対する数学的論証であり、Groth16、全推論のvalidity SNARK、新しい本番proof VMを導入しない。
 
 ## 1. 三つの性質を区別する
+
+以下の表の「出力」は旧MOR1のenvelopeである。FOW1ではこれに加えて、**コア推論の出力z**について0062 §4の非衝突性・費用定理を要求する。yの自然文が同じ場合もzを検証する。
 
 | 性質 | 要求 | 保証しないこと |
 | --- | --- | --- |
@@ -73,6 +87,8 @@ descriptorとその参照先の内容を、変更不能な実行profileへ結び
 
 ## 3. AN1の試行と実入力を維持する
 
+FOW1でこの実入力契約を継承する場合、`sigma`はTB1 EXECの認証済み値に限定し、PANELは別の秘密・RoundRef・freezeから得る。旧seal-reveal、block hash、BLS候補、任意schemeを新規用途に選べない。詳細な型・公開gate・曝露規則は0061に従う。
+
 ### 3.1 C・登録・freeze
 
 `C`はRFC-0059 §2.2の完全な正規登録文脈とする。chain、family/version、epoch、登録anchor、schedule、owner、beneficiary、model/profile/job、nonce、候補集合識別、beacon、target、資源・期限、会計・資料義務等を、そのprofileの型・順序・長さで固定する。receiptだけの都合でCを短縮しない。
@@ -81,7 +97,7 @@ descriptorとその参照先の内容を、変更不能な実行profileへ結び
 
 $$\mathrm{RegKey}=H_{\mathrm{reg}}(\operatorname{Enc}(C)),\qquad s=H_{\mathrm{attempt}}(\operatorname{Enc}(C,\sigma)).$$
 
-RegKeyごとの一意なslot割当、実beaconへの攻撃者の最初のアクセスより前の候補閉鎖、元claimをPanel選出より前に固定する二段階freezeに従う。slotや閉鎖集合rootをCへ戻さない。新しいbeacon、BFT委員会、future Ticket乱数を本RFCで追加しない。
+RegKeyごとの一意なslot割当、実beaconへの攻撃者の最初のアクセスより前の候補閉鎖、元claimをPanel選出より前に固定する二段階freezeに従う。slotや閉鎖集合rootをCへ戻さない。MOR1初版は具体的な乱数源を追加していなかったが、今回の新規対象では0061のTB1を使用する。BFT台帳finality又は第三のfuture Ticket乱数は追加しない。
 
 ### 3.2 実tokenへの結合
 
@@ -98,6 +114,8 @@ ByteTokenは有効token IDへの256要素の単射とし、特殊tokenとの区�
 ## 4. 回答と認証出力
 
 ### 4.1 実行対象
+
+以下は旧MOR1の`y,tau`とenvelopeの定義である。FOW1の規範実行には0062のzとReadout/End関係を追加し、関数出力`(y,z)`と補助receiptを分ける。旧MOR1式を新familyの完全な実行schemaと表示しない。
 
 $$\operatorname{Exec}_{M,P}(x)=(y,\tau).$$
 
@@ -137,7 +155,7 @@ OriginalIdまたは署名がrhoを含む新profileでも、そのOriginalIdや�
 
 ## 5. Ticketと会計を変更しない
 
-MOR1のrho追加によって、RFC-0059 §5のAN1 Ticket式を置換しない。
+MOR1初版でrhoを追加した際は、RFC-0059 §5のAN1 Ticket式を置換しなかった。以下はその旧式を記録する。現在の新規FOW1は0062 §5の四Root Ticketへ置換し、旧三Root式を新profileに適用しない。
 
 $$T=H_{\mathrm{ticket}}(\operatorname{Enc}(s,R_x,R_y,R_\tau)).$$
 
@@ -146,6 +164,8 @@ $$T=H_{\mathrm{ticket}}(\operatorname{Enc}(s,R_x,R_y,R_\tau)).$$
 別rho・別owner・別nonce・別表示形式を、新しい有用需要や新たな通常推論実費の証明とみなさない。rhoの非重複性は会計キーの意味的重複排除を代替しない。fork/reorgにおける消費・発行の原子性もAN1と既存native規則に従う。
 
 ## 6. 登録時の決定論的な適合検査
+
+以下のMOR1構造検査はFOW1では必要条件の一部である。0062 §2/§4のTheoremRule、全適合predicate、G-EXEC/G-COLL/G-COSTを満たさない登録から新しい採掘資格を発行してはならない。一般モデル登録とFOW1採掘適格性は別状態とする。
 
 ### 6.1 検査する内容
 
@@ -194,6 +214,8 @@ validator、Panel、miner、RPC／SDK、回答API、state storage、snapshot／I
 
 ## 8. 非重複性と再現性の証明
 
+この証明の対象は補助receiptのhashと旧MOR1のenvelopeである。FOW1のコア出力z又は複数試行費用の定理として転載しない。0062 §4の未完了gateを本節で代替しない。
+
 ### 8.1 前提
 
 - context codecは対象文脈上で単射であり、型・長さ・field順を含めcanonicalである。
@@ -233,6 +255,8 @@ rhoは誤ったRootでも生成できる。上の定理は、正当性、資料�
 
 ## 9. Qwen等への適用とモデル設計
 
+以下は旧MOR1への接続・研究候補であり、Qwen等がFOW1Admissibleであるという認定ではない。FOW1では適合する具体的関数系列と全定理が必要である。名前又はnonce入力だけでzの非衝突性と費用を保証した扱いにしない。
+
 既存Qwen等の特定の固定版を、共通MOR1入出力構造へ接続する。学習済み自然文headに暗号学的な非衝突性を期待しない。参照例のモデル名をallowlistへの自動登録、実行対応済み、性能認定済みの意味にしない。
 
 第一段階では、正確なweights/config/tokenizer/templateを固定し、AN1 challenge frameと規範的実行・trace・rho後処理を接続する。既存重みを維持しても、challenge追加により元job単独の回答と品質が変わり得る。新しい実入力について品質・資源・再現性を評価する。
@@ -244,6 +268,8 @@ rhoは誤ったRootでも生成できる。上の定理は、正当性、資料�
 これらの研究は、延期された自動モデル改善・line/head更新経路の有効化ではない。固定artifactの新規登録という範囲を超える機能は、既存の延期・変更管理に従う。
 
 ## 10. 計算費用・PoW適格性との境界
+
+旧MOR1が未解決とした費用定理は、現在の新規FOW1では採掘適格性の必須条件へ変更する。定理がないまま採掘し、後のslashや重いproof費用で不足を埋める方式にしない。本節の「通常推論費用を保証しない」という正確な限界は、未適格モデルを新profileで受理する許可ではない。
 
 MOR1は新しいモデル別の裁量的費用審査や品質資格を導入しない。登録構造適合、claimの実行検証、運用状態、報酬／合意用途の適格性を既存の担当規則に従って区別する。
 
@@ -278,6 +304,8 @@ MOR1は新しいモデル別の裁量的費用審査や品質資格を導入し�
 
 ## 12. 互換性・移行・activation
 
+以下はMOR1初版の互換条件である。新規採掘の置換・旧受付終了・legacy drainは0062 §9を優先し、旧MOR1だけを満たす新規claimを同じ報酬/credit/weight経路へ流さない。旧署名・不変ID・元期限は保持する。
+
 1. MOR1は新しい不変なmodel/profile bindingとして選択する。既存登録ID、AN1草案の意味、旧claim、旧署名を上書きしない。
 2. 対象の登録epoch／family／codec／OutputRule／全consumerを明示してから有効化する。文書番号や日付だけで優先・activationを決めない。
 3. rho後処理と新envelopeを導入しても、AN1のTicket式、difficulty、二段階freeze、Panel＋Court、元期限、negative優先、資料hold、一回消費を維持する。
@@ -286,6 +314,8 @@ MOR1は新しいモデル別の裁量的費用審査や品質資格を導入し�
 6. 有効化失敗時は既存の停止・保留・移行手順に従う。不適合なMOR1 claimを旧profileへ付け替えて成功させない。
 
 ## 13. 変更範囲と参考
+
+以下はMOR1初版の来歴である。今回の0061/0062による追加採択・優先・移行範囲は冒頭に明記したとおりであり、「既存原則を変更しない」という初版記録を新規採掘の置換拒否に使わない。
 
 本RFCとADRは、添付`misaka_docs_latest.zip`のモデル登録経路とAN1に対する設計追記である。現行の閲覧冊数20 RFC／50 ADR、過去の原文・実測・digest、既存原則、runtimeを変更しない。現行冊には本草案への適用範囲付き参照を追加する。
 

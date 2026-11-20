@@ -1,0 +1,586 @@
+{
+  "status": "PUBLIC_SECRET_FIXTURES_ONLY",
+  "active_crypto_backend": "BGWVSS_EXTERNAL_UNIMPLEMENTED",
+  "n": 7,
+  "f": 2,
+  "t_private_recovery": 3,
+  "q_public_certificate": 5,
+  "vectors": [
+    {
+      "warning": "ALL SECRETS AND SHARES ARE PUBLIC TEST FIXTURES; NOT PRODUCTION KEYS OR ENTROPY",
+      "purpose": "EXEC",
+      "round_descriptor_encoding_hex": "26b0b83e7281be3b117658b6f2636d0368cad3d74f22243428f5401a4b70897e00000000000000010100000000000000017ec2b1813fe81aae5fca3b8aad5ae7e8cb408685ed1cf76fc86f22e9fe9b7eeb6f4e7d5f0020d9b37a76aab20967655cad0308855950656ee741c4615fed07be9ff0128022a3794ef8476c5aab903cd743ae4cb7d2b524863cbdc58db53f0ea5",
+      "round_id_hex": "d3c7b429c3bc54bb01f38753cf340e14acf5a06a40b011b4ee332629574bccef",
+      "qualification_root_hex": "fba74f142a84050beea61bd39589c7cbb579e964b8bf1ee366fe31dd833b42ae",
+      "freeze_context_encoding_hex": "0106a7412a206010ea146d647ec3388fa5c1362f226f7c89658d37e6813c8fb7b118cd7d38f80b9e36c104ae76f3725f6f9635f9d69aa083e328e4f6cd7972cf3f",
+      "freeze_id_hex": "fd38559245346f96fee71a53e1d556010f35ebc2defd5ff489da4b6bdf199fe1",
+      "timeline": [
+        {
+          "step": 0,
+          "status": "SETUP"
+        },
+        {
+          "step": 12,
+          "status": "FROZEN"
+        },
+        {
+          "step": 15,
+          "status": "READY"
+        }
+      ],
+      "public_certificate_holder_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "ordered_dealer_secrets": [
+        {
+          "dealer_id": 1,
+          "secret_hex": "6b687efc03d9096318ab1153445d2bad"
+        },
+        {
+          "dealer_id": 2,
+          "secret_hex": "47080e4ea0031c7e8b2cb7c397ba8da4"
+        },
+        {
+          "dealer_id": 3,
+          "secret_hex": "50f9551e5d281e8971e16aaeca428928"
+        },
+        {
+          "dealer_id": 4,
+          "secret_hex": "72df83367a7f23d95bd9f4051b082d20"
+        },
+        {
+          "dealer_id": 5,
+          "secret_hex": "7f25ec56ea376466125dddfe02022ba1"
+        }
+      ],
+      "dealer_fixtures": [
+        {
+          "dealer_id": 1,
+          "qualification_id_hex": "589b76d7363513bc1f6dfe33849a5d3ed1b569465d08b45eb57f37cf50a2684a",
+          "salt_hex": "fea8e700469bb95d8626aeac484f6576f6b1d4f256525857eccea1994ab9ba56",
+          "placeholder_ciphertext_digest_hex": "6100c1356d1ca3398d722f074de8b6c6a141e083f475836fe44b178983a6ddc6",
+          "secret_commitment_hex": "4e1da421e30d81e617346b8776e618dca3906195d7c1dc7019d6920356c17c3e",
+          "share_commitments_hex": [
+            "3977cdb61f5ed85033d5709a9d922fc2dff926820a47af332bea6ddd780d796f",
+            "3360e8807142168f7a622134ff5530fdcff9eccc7e9f2d5ee42d7b52b32b66c7",
+            "0522b9eb027cef2ad30a3c086bfef26b1d3f7b6ed21c859fd380e7132eaced3f",
+            "83162d88b1a0cbff59c6a3b37306439915e7c11ec9c1addfee6b06295ea86cce",
+            "f6484348fdc8a0516948db90e83f38be9ebbc835b689fd6c61400e5be3828d30",
+            "1088f41d2b10ebd776180c363b2826f2ee94bfbbe3f4b8abae1287df449b4f57",
+            "fa649ce349cd76965bea73a22f1d4925ccc71f15dec407fb63368455ae6573e6"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "1505d970910a0a689e6b5aa5ab9f9ddb"
+            },
+            {
+              "index": 2,
+              "value_hex": "1f358125e6570569d661a5cefdfc4d82"
+            },
+            {
+              "index": 3,
+              "value_hex": "09f7761c03bffa66c08df2cf3b733aa3"
+            },
+            {
+              "index": 4,
+              "value_hex": "554bb852e944e95f5cf041a66404653d"
+            },
+            {
+              "index": 5,
+              "value_hex": "013247ca96e5d253ab88925477afcd52"
+            },
+            {
+              "index": 6,
+              "value_hex": "0dab24830ca2b543ac56e4d9767572e0"
+            },
+            {
+              "index": 7,
+              "value_hex": "7ab64e7c4a7b922f5f5b3935605555e7"
+            }
+          ]
+        },
+        {
+          "dealer_id": 2,
+          "qualification_id_hex": "1abb1e0579ca5aaa4449636b87f86ecde0072b9a48f4c5ca421fd4782b7d5a57",
+          "salt_hex": "9352a66eec157c23dfe79178da82aca727312977df34979415bd498c2f8f0ab4",
+          "placeholder_ciphertext_digest_hex": "4027e6947c37c18c89cd169be226d40f503944001e2e165f44d1e79f87c4abb7",
+          "secret_commitment_hex": "b062df533d7bef964f8e7723904bc75ef0bcd3b23e58b48fc7eeb0389f01459c",
+          "share_commitments_hex": [
+            "1b95bf8f9bedf3ff9327e67302aff97999f44bbf3fbef9f51bf4457f1719dbe0",
+            "defe85c935cd6445bb63db7a75660744473f44d605dd4247a74dfa64f7213aea",
+            "7aebf6d7f971b1967764f5c656377640faa9f426b76894c1214dab6bd41a3ffe",
+            "508eef6e2a850f66cb07f53fb9868885760cda1d5ad214fd5101149716ec5d04",
+            "45b9a97f1329abb0b71bb5a26b2251b8aa4582d64b588edbc0c79635d79a1783",
+            "fd5b9ddf9a06b17d64f065fb9b664c67c496afbdc814a518a7683cb9b2322e4f",
+            "f3a86170b1e58beb1d2e6b341f62b7b8c94f8dbaba6dc48bf15bcafb01cc0e32"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "7fa2765d3951cdba15840112421fd08f"
+            },
+            {
+              "index": 2,
+              "value_hex": "12a9392dee6c47ccba4c61518d1d3166"
+            },
+            {
+              "index": 3,
+              "value_hex": "001c56c0bf528ab67985d88178b2b027"
+            },
+            {
+              "index": 4,
+              "value_hex": "47fbcf15ac049677533066a204e04cd2"
+            },
+            {
+              "index": 5,
+              "value_hex": "6a47a22cb4826b0f474c0bb331a60768"
+            },
+            {
+              "index": 6,
+              "value_hex": "66ffd005d8cc087e55d8c7b4ff03dfe9"
+            },
+            {
+              "index": 7,
+              "value_hex": "3e2458a118e16ec47ed69aa76cf9d655"
+            }
+          ]
+        },
+        {
+          "dealer_id": 3,
+          "qualification_id_hex": "6d15b8be3badcf8dbb7b184ab0753d63bdd0cab221ef82d6766ba570c48789fb",
+          "salt_hex": "9510df7c02f84a2a7b2d07efc2549cf96ff990c3b4184f5f5fa6897a29cecabf",
+          "placeholder_ciphertext_digest_hex": "cef71401338cb84e1c02cd0592475124ba78a5a366a914ea83713120eb9bdded",
+          "secret_commitment_hex": "100ee6e3c33150a2bf6d8353ae9f3ea2ac87d4bf94024630b510ce33e273a89c",
+          "share_commitments_hex": [
+            "6e1fddd74cb813420cd3b860a68b003ebad0e478d55eaf97c0b455c76823e0ae",
+            "83de2f3a4b438ed094056bc5ecc633c5f07ff11b173cbd283463cc1c598d1bfc",
+            "cdec3260a3c99cf1e05d5b5f020c97935226e65fe332e422a29448b5a503302a",
+            "593e02659ff18da78735ec0344c08312747f2f3888a98939e4beed81cadc42cf",
+            "91dda2054b6781af87bdda32ed6d40f492d91aef25f951a70d30f9760fef9c76",
+            "a38bb078194cbf73b11f43ed58312f6b76f05f44f655ead5469229e43f0af945",
+            "cc654f1dedf9a3b5af52db72acdfa66928bc9c0e1e357a66bee9137e2e5a6c22"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "095fbd4f239fa840b5081bd13b66e5df"
+            },
+            {
+              "index": 2,
+              "value_hex": "5fb519d0f3600f1bab0481bd69e26136"
+            },
+            {
+              "index": 3,
+              "value_hex": "53f96aa3cc69531a53d69c7355b4fb2f"
+            },
+            {
+              "index": 4,
+              "value_hex": "662cafc7aebb743caf7e6bf2fedeb3c9"
+            },
+            {
+              "index": 5,
+              "value_hex": "164ee93c9a567282bdfbf03c655f8b05"
+            },
+            {
+              "index": 6,
+              "value_hex": "646017028f3a4dec7f4f294f893780e1"
+            },
+            {
+              "index": 7,
+              "value_hex": "506039198d670679f378172c6a66955f"
+            }
+          ]
+        },
+        {
+          "dealer_id": 4,
+          "qualification_id_hex": "b0381d873c71271f26f0ffc98f733c1b14c8aa81aacc6c254dd3a87733c363fc",
+          "salt_hex": "a45d966771b7e3dc56a0d1d84b9c479994e53907cecc68d31c30ec9cdc2abeae",
+          "placeholder_ciphertext_digest_hex": "77478fa990a52cf4eb92c1dab11087534bc9220c8452fe09c4c2c94715a35b4a",
+          "secret_commitment_hex": "66a1be0ecf81972a330a43d24b6f4fec78d303434dbe45c799f456a5d68af2d7",
+          "share_commitments_hex": [
+            "362899d2a9edefc75bed03a4e06bceb12e57c2c9ad74e2333424a5a97fe2cc3c",
+            "6e3e4271fad5d8f66bc496e33e3c6aa134bebf439564d0d27f62f282d9d8cd96",
+            "59f8b007ab72db8f99ebc9c31483bedf8c21eba4b3b22e3a140ea870c5509553",
+            "71023bcd680571216d8e97f510ce33c405d0f830580f65d5bbb4fde1d47d8687",
+            "43e7c6d5859ff4ae8a415b93722328aa62ff3c0d11868907b5a6ab1952abb466",
+            "848d832219356fd01249d0a3143cfe5cfd8799f99af1e828148afc82dfbab869",
+            "cc77b713aa93e38df1941fcb3afb9367f59a1f65f5be8b813d91ddd2245d92bd"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "4727e9bcaa93126f7e54720e510ec657"
+            },
+            {
+              "index": 2,
+              "value_hex": "4763e893795dd0aad9b7ed44d7797f79"
+            },
+            {
+              "index": 3,
+              "value_hex": "73937fbae6df5e8b6e0465a8ae485886"
+            },
+            {
+              "index": 4,
+              "value_hex": "4bb6af32f317bc113b39db39d57b517f"
+            },
+            {
+              "index": 5,
+              "value_hex": "4fcd76fb9e06e93c41584df84d126a63"
+            },
+            {
+              "index": 6,
+              "value_hex": "7fd7d714e7ace60c805fbde4150da332"
+            },
+            {
+              "index": 7,
+              "value_hex": "5bd5cf7ed009b281f8502afd2d6cfbed"
+            }
+          ]
+        },
+        {
+          "dealer_id": 5,
+          "qualification_id_hex": "5db6d3e85079656d76230e4abec3c22582933f8aedcbb3faf6bbc96fd4e8c80d",
+          "salt_hex": "2eacf6484d0462a2412efc0606c7326d06a7eeba2232bfa23717b1eb172a0b79",
+          "placeholder_ciphertext_digest_hex": "c1f477e6d92992b7c41727c08bc1370664ade2d3337e2d2d055b3df31099a023",
+          "secret_commitment_hex": "da9b38e4cceb68baf9c033c2c299b0762b0028182544f9cf26a701999b6613cb",
+          "share_commitments_hex": [
+            "9445faa0e7332011d6f801444357fb10e7d0e4209a27469cf2ca3b13ced23378",
+            "3d481df0e463349a97bb81af1707f016aa7a35d7c1e8e778f6923db04d41b5e5",
+            "a861273b71e3fb2bb97b540db6cadf38ab4e2bfdcd43d0e9e074df74a6ddf9bc",
+            "20d9c28256194264c7e38048b9109799b335210fac810ea7cd23a894d6416c06",
+            "e0b7dedf5cd954026138a18cf7c3b583921ec1ed234e4425f8ecd5f77e368194",
+            "98dca68249185e6124ffb058536eb2fc62cd8c1625cdec194c8b785b666b352c",
+            "719a98f24187344c0650df5fe5e72fb6cb14a5e94673cdd799f4123b0ab65429"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "15f4e4ba260daeae3f56185296f1cdf0"
+            },
+            {
+              "index": 2,
+              "value_hex": "4b2190c1092f84063d2d9b8d49212b00"
+            },
+            {
+              "index": 3,
+              "value_hex": "1eabf06b939ce46e0be467ae189042d3"
+            },
+            {
+              "index": 4,
+              "value_hex": "109403b9c555cfe5ab7a7cb5053f1568"
+            },
+            {
+              "index": 5,
+              "value_hex": "20d9caab9e5a466d1befdaa20f2da2bf"
+            },
+            {
+              "index": 6,
+              "value_hex": "4f7d45411eaa48045d448175365bead8"
+            },
+            {
+              "index": 7,
+              "value_hex": "1c7e737a4645d4ab6f78712e7ac9edb4"
+            }
+          ]
+        }
+      ],
+      "output_preimage_hex": "00000016544f592f424541434f4e2d534545442f564543544f52000101d3c7b429c3bc54bb01f38753cf340e14acf5a06a40b011b4ee332629574bcceffba74f142a84050beea61bd39589c7cbb579e964b8bf1ee366fe31dd833b42aefd38559245346f96fee71a53e1d556010f35ebc2defd5ff489da4b6bdf199fe10000002a544f592f5348414b453235362f4247575653535f45585445524e414c5f554e494d504c454d454e544544000500016b687efc03d9096318ab1153445d2bad000247080e4ea0031c7e8b2cb7c397ba8da4000350f9551e5d281e8971e16aaeca428928000472df83367a7f23d95bd9f4051b082d2000057f25ec56ea376466125dddfe02022ba1",
+      "output_algorithm": "SHAKE256(preimage,32)",
+      "seed_hex": "a626b3e62cf44b00a93bd03d6206d7aa6f960bfb2096577bfe1ad6681d15ca80",
+      "independently_recomputed_seed_hex": "a626b3e62cf44b00a93bd03d6206d7aa6f960bfb2096577bfe1ad6681d15ca80"
+    },
+    {
+      "warning": "ALL SECRETS AND SHARES ARE PUBLIC TEST FIXTURES; NOT PRODUCTION KEYS OR ENTROPY",
+      "purpose": "PANEL",
+      "round_descriptor_encoding_hex": "26b0b83e7281be3b117658b6f2636d0368cad3d74f22243428f5401a4b70897e00000000000000010200000000000000017ec2b1813fe81aae5fca3b8aad5ae7e8cb408685ed1cf76fc86f22e9fe9b7eeb6f4e7d5f0020d9b37a76aab20967655cad0308855950656ee741c4615fed07bee1c3a4fa2980518df631a32b17607c410ca73a8213a5037f3e91ed54168fa770",
+      "round_id_hex": "09bb3ea33f050fc7ab57361b102e5f62131508df8691d16f01027d5e8c5bf440",
+      "qualification_root_hex": "6815dd8499969abce599acf93b9759edb72e92fff79f0ff71c4dbee707bc1ce0",
+      "freeze_context_encoding_hex": "021f2cde0848bcce01dc8fe6cd9b465aaca19b9d90f0e69192bde9a424254eb1cb18cd7d38f80b9e36c104ae76f3725f6f9635f9d69aa083e328e4f6cd7972cf3f0f359e10a88054c3c91155025bf2d8c5b88ca23a5bdbaf100442ab3c27a9a7d7c210fccc59d2ad8e7c118ee19671ccb91f73851a6fa7ba665435335691ca4d70d3c7b429c3bc54bb01f38753cf340e14acf5a06a40b011b4ee332629574bccef000000000000000f",
+      "freeze_id_hex": "3df62196383f025c7b40e8e1eb2d14e39ad1a2fc4890425fbbef474bd2ec4d4a",
+      "timeline": [
+        {
+          "step": 0,
+          "status": "SETUP"
+        },
+        {
+          "step": 32,
+          "status": "FROZEN"
+        },
+        {
+          "step": 35,
+          "status": "READY"
+        }
+      ],
+      "public_certificate_holder_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "ordered_dealer_secrets": [
+        {
+          "dealer_id": 1,
+          "secret_hex": "093cbabe6b64d6a14209fe62924ab20b"
+        },
+        {
+          "dealer_id": 2,
+          "secret_hex": "74ebccecc6c769c54ea2f2f5bace2dcc"
+        },
+        {
+          "dealer_id": 3,
+          "secret_hex": "319c19e2b781835c2a23a84773bded62"
+        },
+        {
+          "dealer_id": 4,
+          "secret_hex": "2b7981ec574e8c9b6ab8697a1156b18b"
+        },
+        {
+          "dealer_id": 5,
+          "secret_hex": "2353daf8acfbeea74a6b2a76b62d0aa5"
+        }
+      ],
+      "dealer_fixtures": [
+        {
+          "dealer_id": 1,
+          "qualification_id_hex": "24c72c44451d2413fb5850aa329cb778a885437cd4d01f08e954ccec0505c03c",
+          "salt_hex": "d5c2a161a34bb8a751ef83319c045d240ffe91f7cbc495b604783f519e7efcab",
+          "placeholder_ciphertext_digest_hex": "b35ad9e2e3039e7b54c046e417d55f99d89b402c8b14e8070e17ce2931f6adb6",
+          "secret_commitment_hex": "0ae5131e01c8917bae33cdf5ff255097ab1016bdb83619f0a4f2599a1d7fd565",
+          "share_commitments_hex": [
+            "99d1aba11a5f0f73f4107652462a9a3525ec5955878c681126544e4f791117fc",
+            "c708727b948be828d741abdae4b283c1495679f7e0c11c2c358f53055637f8f7",
+            "30e266d8c8db03741f8c841919f6f779b011cf8cd2a6fdbd2afa9b083327c603",
+            "0523aa58d71df7a129e85b04b37cf65c183bbdea7dece188db600d22a14b1c11",
+            "77c07844c8825640f5acce5a92862b5f45a982ed42ba89cf721f647fa723730c",
+            "8f55ff1eb63edaa856231e0b5f57befe4fbc0253c9fd91ef42206f1b49eebdd9",
+            "27aaad385860d177905570ca9726c7d92ea95927af6b61d7c9b1d22db75caec2"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "2fa4227d3d79719091ae81bb23256bb5"
+            },
+            {
+              "index": 2,
+              "value_hex": "6b18536ec768b4ed904bec6f1c82049a"
+            },
+            {
+              "index": 3,
+              "value_hex": "3b994d930932a0b83de23e7e7e607cbb"
+            },
+            {
+              "index": 4,
+              "value_hex": "212710ea02d734f09a7177e948c0d417"
+            },
+            {
+              "index": 5,
+              "value_hex": "1bc19d73b4567196a5f998af7ba30aae"
+            },
+            {
+              "index": 6,
+              "value_hex": "2b68f3301db056aa607aa0d117072080"
+            },
+            {
+              "index": 7,
+              "value_hex": "501d121f3ee4e42bc9f4904e1aed158d"
+            }
+          ]
+        },
+        {
+          "dealer_id": 2,
+          "qualification_id_hex": "281858784945e044a288b5552dc4d670763c5f1f6e3a3c0310861abb1a342914",
+          "salt_hex": "4de7abf89b824f8be78d7d0e6452ca637bc739eab6faaf67a519107114397423",
+          "placeholder_ciphertext_digest_hex": "7e24a9628adb662e97ab04e535f923ffda0ac4b02f503a3830fe8dd766f2d505",
+          "secret_commitment_hex": "dfb965f9184f6fb3417e17b810b87ab382fdad8ad700b85048af2a8a37881e2c",
+          "share_commitments_hex": [
+            "cc0657267081d3628c29c861b898a1e368cafbae44bfe670594564744dbe7f7a",
+            "a448657b34af358956fb919066b695fbcf787e8d863fae7cbcaec50a5045e30f",
+            "df3f6699288646c58c69bc0bbac86b53a66fc01ae058fa4d40b33bce4235986b",
+            "db226308430dbae40406fa8aa5b38d01cf05b91857d3f5c7683da0e2629c86df",
+            "7ae09b1f92fa02b30fa3db3a3ef0aa6522493dd58c0a11f3ac3bed4b7a2abdc1",
+            "02381d1bcdc36dc7783fdb5b580e894cc3e598d2dc0267da06aaab16e367ac03",
+            "6a76af318cd2fe805c9a17f15deef1c0a1be9a99f1020174a9165745db50893b"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "5a7b28527bd886ef00bf55c45dfc7e4d"
+            },
+            {
+              "index": 2,
+              "value_hex": "0a3f61b5a940f8a26748b9e353a7a379"
+            },
+            {
+              "index": 3,
+              "value_hex": "043879164f00bedf823f1f529bcf9d4f"
+            },
+            {
+              "index": 4,
+              "value_hex": "48666e746d17d9a651a2861236746bcf"
+            },
+            {
+              "index": 5,
+              "value_hex": "56c941d0038648f6d572ee2223960efa"
+            },
+            {
+              "index": 6,
+              "value_hex": "2f60f329124c0cd10db05782633486d0"
+            },
+            {
+              "index": 7,
+              "value_hex": "522d827f99692534fa5ac232f54fd350"
+            }
+          ]
+        },
+        {
+          "dealer_id": 3,
+          "qualification_id_hex": "53c7a227d250ad71127c8b8777e02baa300b4f17dd9844dff89ec43bae0625d0",
+          "salt_hex": "f5821a2518a58f2e13ba5dab9bb49c45de81bd2a16e78d1415f5c22cbc9616e4",
+          "placeholder_ciphertext_digest_hex": "c594e891f3bf25f1097770687ac05c8b3b494860463c73d462bcb9346a9b15d3",
+          "secret_commitment_hex": "023214f1e5eea258bbce57b78da50fc4de793f332326c4ff1512818b8381015a",
+          "share_commitments_hex": [
+            "c5a2a482edf49a4541dc411d347be1c0dd9afbf242bf10c052217e6733316d6f",
+            "0492d07d5c7897f7afccff08f37700bc9fb3af664b5a291b64965b471ed1c217",
+            "041cef68c9dc3c60374bc5ca377720ae69d931319764458a040ebae3c523ef7f",
+            "162f4c82c4197c6773e0e136d0f665d23c7dc0e49f40fe1eac99803df9f5f446",
+            "b2786c2df54deaa555cfd747c77a5662b77658703e137cb31e6a8251e882ebf1",
+            "13b1db029c89d38452240ab45138df911d0e87e3a0d7480dfe12e22afa617bf4",
+            "1bd3473b75c2145cfdef90baac5bb3b82d53f466b7cd151745b1cc608f797ebc"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "3144ff674b555b28ab8b49a4479237e1"
+            },
+            {
+              "index": 2,
+              "value_hex": "2ee335af17448ef5ee80f8db5e8b5d03"
+            },
+            {
+              "index": 3,
+              "value_hex": "2a76bcba1b4f1ec3f304b5ecb8a95cc8"
+            },
+            {
+              "index": 4,
+              "value_hex": "23ff948857750a92b91680d855ec3730"
+            },
+            {
+              "index": 5,
+              "value_hex": "1b7dbd19cbb6526240b6599e3653ec3b"
+            },
+            {
+              "index": 6,
+              "value_hex": "10f1366e7812f63289e4403e59e07be9"
+            },
+            {
+              "index": 7,
+              "value_hex": "045a00865c8af60394a034b8c091e63a"
+            }
+          ]
+        },
+        {
+          "dealer_id": 4,
+          "qualification_id_hex": "14da8dd7388565d0781008bfe7a6aafb0118c847318f178ba2fbf3bc2e75fb6e",
+          "salt_hex": "0e5421d2223f2767ed74fce4846677fcf6aa10fef61a32662f0da65a3668aed2",
+          "placeholder_ciphertext_digest_hex": "7059f11f494bb92c6ad131995549e83a2d6232c79485615d41303f2620f1cd41",
+          "secret_commitment_hex": "1fb3b3c0b0fc6f19a3bf5f06d618eaa5377fbe11283fd57837b4662846cbe299",
+          "share_commitments_hex": [
+            "b5711e435836aac62c24789731e7eca6d41f23b183b815792b3aa870fa2f2186",
+            "d88286ce8be74cb89f558d9bf3d19ac26dba0f1a735604f0d624c2622f89c2f1",
+            "7f8d3ba86063798729c3ddb499465aeac269949a1a204efc5c78132534443af5",
+            "244231c0779f75de289fcb6af15adfa9490b2ab0fb6492da5a92307cde29174b",
+            "e46245b334531bceb6b4ab8db1a7be925602ea38f0b5e4c8761e7d31fe852e33",
+            "30caa452876a1fd25b22afa40238cb9f4fbf2f3dbac6e846fc67bb593f966167",
+            "5676e5b2359fadca3a3ca9fa96eca92e5fc3008782fc3ac29f19c2c3be60245f"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "3ee1f4f430d0e89552d7285966a79a1a"
+            },
+            {
+              "index": 2,
+              "value_hex": "2a6d15a1a2af7080139c89379fd2cc47"
+            },
+            {
+              "index": 3,
+              "value_hex": "6e1ae3f4acea245bad088c14bcd84811"
+            },
+            {
+              "index": 4,
+              "value_hex": "09eb5fed4f8104281f1b30f0bdb80d7a"
+            },
+            {
+              "index": 5,
+              "value_hex": "7dde898b8a740fe569d477cba2721c7f"
+            },
+            {
+              "index": 6,
+              "value_hex": "49f460cf5dc347938d3460a56b067523"
+            },
+            {
+              "index": 7,
+              "value_hex": "6e2ce5b8c96eab32893aeb7e17751764"
+            }
+          ]
+        },
+        {
+          "dealer_id": 5,
+          "qualification_id_hex": "40e82d440c03e884bb3b8e720b05f14c2e406a0b87b276b87f1b52bc24d9621d",
+          "salt_hex": "331387d0ab1901b74051f13d1f568d72787a702c1fbf354be30be308c03589f6",
+          "placeholder_ciphertext_digest_hex": "5e4d1bfadfff21aa286952f244f0463cf898233b2c8aec2789b73fff7d2046e9",
+          "secret_commitment_hex": "92ea524d21487f901f581fd875e9611348a365ea5fe1f2a091fe5d0cd5e9ca0a",
+          "share_commitments_hex": [
+            "ebd841096e7782c705e9b71e17b399ebaff90402c04d606c2e4d49ab2e063e19",
+            "18c614539583ea27ccabb70cbe45f20e918d75e148a1ed6572af41bc3b828447",
+            "78d936a256066d286d85bbe4138ce449a1468c747cdaf2dd82943f9c8969e2a2",
+            "7a24098fe35a1ffa997cd503660f70af74fc4511e2ee28959a201ec9e98f4ff6",
+            "76dc39c383b427651377f85e10e3e9e8f76df1b9572daeda7f3cdab9e9399413",
+            "466924f919a55f619284b0b156655055f72dee7a80969f9001b85de2ff1619ba",
+            "e55894e3c165bcd2a85caccb0486238729da91b38d8ad9cfd528d65c0ab3921f"
+          ],
+          "public_test_shares": [
+            {
+              "index": 1,
+              "value_hex": "2e5495e6a6de9a55458ce5893dfe3d3f"
+            },
+            {
+              "index": 2,
+              "value_hex": "2153dc542f6fbbdfc2498a877b926b4e"
+            },
+            {
+              "index": 3,
+              "value_hex": "7c51ae4146af5346c0a119716ee994d1"
+            },
+            {
+              "index": 4,
+              "value_hex": "3f4e0badec9d608a409392471803b9ca"
+            },
+            {
+              "index": 5,
+              "value_hex": "6a48f49a2139e3aa4220f50876e0da37"
+            },
+            {
+              "index": 6,
+              "value_hex": "7d426905e484dca6c54941b58b80f619"
+            },
+            {
+              "index": 7,
+              "value_hex": "783a68f1367e4b7fca0c784e55e40d70"
+            }
+          ]
+        }
+      ],
+      "output_preimage_hex": "00000016544f592f424541434f4e2d534545442f564543544f5200010209bb3ea33f050fc7ab57361b102e5f62131508df8691d16f01027d5e8c5bf4406815dd8499969abce599acf93b9759edb72e92fff79f0ff71c4dbee707bc1ce03df62196383f025c7b40e8e1eb2d14e39ad1a2fc4890425fbbef474bd2ec4d4a0000002a544f592f5348414b453235362f4247575653535f45585445524e414c5f554e494d504c454d454e54454400050001093cbabe6b64d6a14209fe62924ab20b000274ebccecc6c769c54ea2f2f5bace2dcc0003319c19e2b781835c2a23a84773bded6200042b7981ec574e8c9b6ab8697a1156b18b00052353daf8acfbeea74a6b2a76b62d0aa5",
+      "output_algorithm": "SHAKE256(preimage,32)",
+      "seed_hex": "533cdb2eb49ef53e8cb88f6b55b4d00b309d6ba78dd5964731fa9498cb8d9b00",
+      "independently_recomputed_seed_hex": "533cdb2eb49ef53e8cb88f6b55b4d00b309d6ba78dd5964731fa9498cb8d9b00"
+    }
+  ]
+}

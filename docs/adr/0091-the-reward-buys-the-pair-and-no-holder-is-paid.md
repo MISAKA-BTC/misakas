@@ -1,326 +1,107 @@
-# ADR-0091 — The reward buys the pair, and no holder is paid
+# ADR-0091 — 追加モデル報酬の30%購入・20%永久LP・余剰burn
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+- 改訂日: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。MOE2の設計改訂であり、native/EVM実装、測定、移行又は公開有効化の完了ではない。
+- 共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)。
+- 直前MOE1版の完全原本: [改訂前の原本](../maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt)。さらに古い原本への参照も保存原本に保持する。
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
-> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
-> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
-> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+本書の現行決定をMOE2へ適用する。MOE1の「50%全額でPosition購入・全取得分retire」を「30%購入・20%BILIと必要Positionの永久LP・余剰Positionのみburn」へ置換する。通常5%/3%、追加モデル限定、登録と市場の原子生成、直接転送、coreのMiner100%は維持する。旧claim・署名・決済・過去の試験結果はその版の記録であり、新規範で遡及再解釈しない。TB1/FOW1の実行・登録・完全検証・責任条件を免除しない。
 
 
-## 2026-10-09 改定 — Positionと市場の対象を固定する
+## 1. 報酬の基準とsnapshot
 
-[ADR-0175](0175-registered-models-are-permanently-immutable.md)を適用する。市場の`line_id`は固定されたmodel registration IDであり、Position、reserve、seed、reward buybackとEVMの参照先を改善版へ付け替えない。改善版は自身の登録・検証責任・報酬資格・独立AMMを持つ。既存市場の残高、価格、virtual reserveや実reserveを新登録へ継承・自動移動させない。新規登録が他モデルの市場を変更してはならない。以下に残るversion移行への期待は旧設計の記録であり、新規則では権利を与えない。
+Rは価格付けと既存発行枠を適用した、購入・LP・Panel配分前の認証済み対象worker報酬である。ネットワーク全体の報酬、別役務fee、通常AMM取引額、返還金とは区別する。
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+EconomicsSnapshotにはnativeのmodel ID/artifact root、catalog、GENESIS/FORK_DESIGNATED/ADDITIONAL分類、MOE2 policy、価格付け、reward plan、kernel版、pair、原資・原期限・予約を結合する。ADDITIONALのpairは登録時に同時生成した一意市場でNone不可、coreはNone。旧claimのMOE1 snapshotを新配分へ読み替えない。TB1 EXEC前の固定と整合させる。
 
-* Status: PROPOSED 2026-09-06 (design first, at the operator's word; the implementation follows
-  on `palw-adr0088-0089-impl` and is recorded in §8 when it lands)
-* Amends: [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) Decision 3 (a
-  move that is the chain's own, on no lane), Decision 4 (no leg on it) and Decision 8 (two more
-  words on the row); [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
-  §10's open item "a per-line service fee … a share of a claim's escrowed reward to the owner"
-  (decided: no — the reward's share goes to the pair, not to a person); [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)
-  Decision 2 (the AMM window's `market()` gains two words); [0090](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md)
-  Decision 2 (the reserve now grows by the reward as well as by buys) and §5's conservation
-  identity (a third source of BILI).
-* Builds on: [0042](0042-palw-mainnet-candidate-ruleset.md) Decision 10 (the worker reward is a
-  carve of the subsidy, ESCROWED at the accepting block and named as a payout at `Final`, never
-  minted before), 0088 Decision 4 (a claim is attributed to the version whose root it named),
-  0090 (the seeded pair, the whole position, the product that never falls).
-* Supersedes nothing.
+## 2. 三つの原資とcoreの例外
 
-> **Amended (2026-10-01, implemented the same day behind the dormant fence `palw_model_virtual_v1`).** [0162](0162-the-pair-opens-on-a-virtual-reserve.md): past the fence the reward buys only a pair that trades — a line whose class is `Active` (approved); before approval, or once a class is closed, the miner is named the whole reward, as for a line with no pair. ADR-0152 IMPL-15's lock bound reads the same answer.
+ADDITIONALは最小BILI整数単位で次に分割する。
 
-## 0. The sentence this ADR is
+\[
+B=\lfloor 300R/1000\rfloor,\qquad
+A=\lfloor 200R/1000\rfloor,\qquad
+D=R-B-A.
+\]
 
-Five percent of the worker reward a block earns with a model buys positions from that model's
-pair; the chain keeps what it buys, for good; the other ninety-five percent is paid to the miner
-as it always was; and **no holder is ever handed anything** — the only thing mining does for a
-holder is raise the price the curve will pay them when they sell.
+BはPosition購入用、Aは購入Positionの必要分と組み合わせる永久LP用、Dは残余worker報酬である。端数はDへ入り、Dを別途floorして未帰属原資を作らない。AとBを追加の支払としてRの外側へ増発しない。Dは版付きreward planのMiner/Panel等へ配分する。
 
-## 1. What the operator asked, in the operator's words
+GENESIS/FORK_DESIGNATEDではB=A=0で、対象Rの100%をMinerへ帰属させる。Rからowner、Panel、Verifier、prefix worker、TB1役務等を控除しない。必要な全検証・資料・Court役務は、受理前に同意と資金を確保した別の有限escrowを使う。資金不足の新claimを受理しない。認証・maturity・hold・export上限・責任は維持する。
 
-> 今の設計はそのモデルを使用したマイナー報酬の一部をモデルの position 保有者に分配する仕組みだけど、
-> それを分配からマイナー報酬でモデルと BILI のペア流動性から BILI で買い上げるようにして価格が上がる
-> 仕組みに変更して　そっちの方が証券などに近くなくなる
->
-> またそのモデルのマイナー報酬全体のうちの 5% で買い上げるとすること　95% はマイナーに支払うこと
->
-> ADR から記述して
+## 3. 同じ市場で購入してから永久LPへ入れる整数kernel
 
-The design had been read as "a part of the mining reward from using the model is *distributed* to
-the model's position holders". Change that: instead of a distribution, the mining reward **buys**
-from the model–BILI pair's liquidity with BILI, so that the price rises — that is further from a
-security. Of the model's whole mining reward, **5 % buys**; **95 % is paid to the miner**. Write
-the ADR first.
+決済直前の実reserveをr、固定virtual reserveをV、curve在庫をUとする。`X=V+r>0`、`U>=1`を必要条件とし、十分な整数幅とchecked演算を使う。
 
-## 2. What exists, and where the distribution did not fit
+\[
+\begin{aligned}
+X_1 &= X+B,\\
+U_1 &= \left\lceil\frac{XU}{X_1}\right\rceil,\\
+q &= U-U_1=\left\lfloor\frac{BU}{X_1}\right\rfloor,\\
+\ell &= \left\lfloor\frac{A U_1}{X_1}\right\rfloor,\\
+\operatorname{burn} &= q-\ell,\\
+r_2 &= r+B+A,\\
+U_2 &= U_1+\ell,\\
+\operatorname{retired}_2 &= \operatorname{retired}+\operatorname{burn}.
+\end{aligned}
+\]
 
-Nothing in ADR-0087–0090 distributes a reward to a holder; the fold has no such move. What exists
-is the channel the operator's first reading assumed and the one this ADR builds on:
+qはBで購入したPosition、ellは**購入後の**比率を用いてAと組み合わせる量、burnはLPに使用しなかった余剰である。A<=Bのためell<=qとなり、既存holderのPositionを補充に徴収せず、mintもretired復活もしない。整数丸めではell/qが連続近似の2/3を上回り得るため、「必ず購入量の1/3以上をburnする」とは主張しない。
 
-* **ADR-0042 Decision 10 — the worker reward is an escrow.** A chain block's attempt earns the
-  worker carve of its own subsidy (`⌊subsidy × worker_carve_permille / 1000⌋`, 620 ‰ on every
-  shipped preset, which is the network's whole §F worker BASE share — `subsidy_worker_base_bps =
-  6200`). The child's coinbase WITHHOLDS that carve from the block's reward output; the fold names
-  it as a `PalwPayoutV2` to the bond's payout payload only when the claim reaches `Final`, and the
-  next block's coinbase pays it. A claim that voids pays nobody — the carve was never minted.
-  Fees are not part of the carve: they are paid at once, to the miner, as the block's own.
-* **ADR-0090 Decision 2 — the pair.** A line's market is a reserve of real BILI (the seed and
-  every buy's net leg) against 500,000 whole positions on `reserve × units = K`, the product taken
-  from the row at every move so it never falls. BILI that enters the reserve leaves it only through
-  a holder's sell, at the curve's price, less the legs.
+Vと旧`seed_locked`は変えない。BとAはともに追加BILI burn・owner/contributor leg0%で全額を実reserveへ入れる。qを先に全量retireしない。ellはpool在庫へ戻し、q−ellだけをretiredへ入れる。BILIをburnする処理ではない。
 
-A distribution would have taken BILI out of the escrow and handed it, pro rata, to every holder —
-income that arrives without a sale, from the work of others, which is exactly the shape a
-security has. The operator withdrew it before it was built. What replaces it needs no new channel:
-the reward is already withheld and only *named* at `Final`, so a slice of it that is never named
-as a payout is a slice that was never minted; and the pair already turns BILI that enters it into a
-higher price for every position equally. Put the slice into the pair and nothing is distributed:
-nothing is owed to a holder, nothing is paid to one, and a holder who wants the value sells a
-position back to the curve like anyone else.
+同じnative遷移で購入→LP→余剰burnを計算し、途中に別swapを挟まない。受理時quoteではなく、規範順序の決済直前状態と署名済みkernel版を用いる。別model、別pool、別rootへの付替えは認めない。
 
-## 3. Decisions
+## 4. 永久LPの意味と記録
 
-**Decision 1 — the slice is five percent of the claim's escrowed worker reward, and the escrow
-prices it.** `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`; `slice = ⌊escrowed_reward × 50 / 1000⌋`. The
-escrow is the worker carve snapshotted when the claim was accepted (ADR-0042 Decision 10, the E3
-rule: a fact about the block that produced the claim), so the slice is priced there too, with no
-new field and no new collection. On every shipped preset the carve IS the miner's whole subsidy
-reward (620 ‰ against a 6200 bps base share), so "5 % of the model's whole mining reward" is
-exactly this; fees, which the carve never held, stay the block's and are untouched. A network that
-set its carve under its base share would be choosing that the difference is hash reward, not model
-reward — the slice follows the carve. The number is the operator's, set when the fences are armed;
-the tests carry 50 ‰.
+A>0かつell>0の成功時に、同じ原子決済で`LockedLiquidityReceipt(PERMANENT_PROTOCOL_LOCK)`を記録し、当該modelの`hasPermanentLP`を立てる。receiptはclaim、model/artifact、pair、policy/kernel、拠出A/ell、購入q、余剰burn、元の認証状態と決済operationへ結合する。前状態参照と決済後market値又は`post_market_values_hash`を使い、receipt自身を含む`post_state_root`をreceipt内へ入れる循環を作らない。receipt全体は外側のnative state rootで認証する。wireのfield/tagは別の実装gateで固定する。
 
-**Decision 2 — at `Final` the slice buys from the line's pair, and the chain keeps what it
-buys.** The line is the one the claim was attributed to when it was accepted (ADR-0088
-Decision 4, the root the fold recorded in `claim_roots`), resolved through EVERY version of the
-class's lines, in force or superseded — attribution was a fact of the accepting block and does
-not lapse with a version. If that line's market exists and is open to buys, the fold performs the
-chain's own move on the row: `reserve′ = reserve + slice`; `units′ = min(units, ⌈K / reserve′⌉)`
-with `K` the row's `reserve × units`; `retired_units += units − units′`;
-`buyback_sompi += slice`; `model_moves += 1`. **No leg and no burn** — the whole slice is
-liquidity, as the seed was — and **no holder**: the positions the curve gives up are *retired*,
-held by the chain for good; no object sells them, the EVM shows no balance for them, and the
-supply stays 500,000 with them counted (Decision 4). The payout the fold names for the claim is
-`escrowed_reward − slice`. A slice under one position's price gives up no position and still
-raises the price — the reserve rose and the product with it — which at the least seed and
-testnet-11's subsidy is every block (§4); the price rises by the reserve's growth, and positions
-retire when a single slice is worth one.
+receiptは**拠出履歴**であり、新しい流動資産残高、引出せるLP token又は供給保存式の第四項ではない。withdraw、償還、transfer、fee請求、owner/admin鍵を設けず、公開LP入口や外部流通LP tokenも増やさない。
 
-**Decision 3 — where there is no pair, the miner is paid in full; nothing is burned "for the
-model".** No market on the line (unseeded), a market closed to buys (the class left `Active`,
-ADR-0087 Decision 7), a claim the registry attributed to no version, or the fences below the
-claim: the fold names the whole escrow as before. The seed is what switches the buyback on; a
-model without a pair is a model whose miners keep everything, and a miner's reward never depends
-on which line of a class it ran except through the pair that line's people made.
+Aとellは、同じ市場の売買可能な実reserveと在庫へ一度だけ入る。後の通常swapでそれらが使用されることは、LP持分の引出しではない。特定のBILI又はPositionを売買でも永久固定する意味ではなく、Aを旧seed_lockedへ加算するものでもない。pool在庫やreceiptにmembership、holder配当、bond又は合意weightを与えない。
 
-**Decision 4 — retired positions are the chain's and never move.** ADR-0087's M1 becomes
-`position_units + Σ holders' units + retired_units = supply` for every line. There is no object
-whose effect is a change of `retired_units` but this move; the EVM facade's `totalSupply()` still
-answers the supply and its `balanceOf` answers no address for them. With every holder sold out,
-the curve holds `supply − retired` positions and the reserve is at or above
-`K / (supply − retired) ≥ seed`: the seed floor of ADR-0090 P1 holds and tightens.
+## 5. 小額・LiquidityDust・未成功
 
-**Decision 5 — nothing else changes at `Final`, and nothing changes for a claim that voids.**
-The escrow withheld at the accepting block is the same number; the payout is smaller by the
-slice; the coinbase renders the queue as before. A voided or retired claim buys nothing and pays
-nobody (don't-mint, as before). A merged blue's attempt (escrow 0, ADR-0058) and a free-prompt
-claim (escrow 0, ADR-0044) have no slice.
+- B>0かつq=0、又はA>0かつell=0なら`LiquidityDust`とし、購入・reserve・LP・receipt・retired・Dの支払を部分commitしない。署名済みの元有限期限内だけ保留し、解消しなければ既定の未成功終端と原資精算へ進む。
+- A=0ではLP操作、receipt生成、`hasPermanentLP`の新規設定を行わない。B>0でq>0なら購入qを全量burnする。
+- B=A=0は市場の二つのlegだけno-opであり、元の最小仕事・成功条件を満たす限りD=Rの報酬配分は存続する。receiptを作らない。
+- dustを理由にmint、retired復活、donation、owner/Minerへの原資振替、旧50%全burn、期限reset又は無期限待ちへfallbackしない。
 
-**Decision 6 — what a participant reads.** The row gains `buyback_sompi` (BILI the reward has put
-into the curve, cumulative) and `retired_units` (positions the chain holds for good).
-`getPalwModelMarket` carries both (wire version 4; proto fields 19–20); `misaka palw model-show`
-prints them; the AMM window's `market()` gains two words at its END — `buybackSompi`,
-`retiredUnits` — so every earlier word keeps its offset; the site shows "bought by mining" and
-"retired" on every market and states the rule on the add-model page; a claim's payout row shows
-the reduced amount. No event: the move is the fold's, on no lane, and the row is its record.
+MOE2の追加登録はmodelと一意市場を同じnative遷移で作る。初期実reserve0を許し、外部seed・後続open・市場準備待ちを必要としない。登録済み追加モデルの市場欠落はstate invariant違反として拒否し、LiquidityDustや正常なclaim終端の一種と混ぜない。
 
-**Decision 7 — same fences, no new one.** Under `palw_model_market` (the row) and
-`palw_model_lines` (the attribution); both are `None` on every shipped preset and the drill arms
-them. Where the fences are armed later, this is the move that runs at every `Final`.
+新規user buy停止は既受理の購入・LP・余剰burn義務を消さない。元の決済資源・役務予算・原期限を保持し、成功条件を満たせなければ既定の未成功終端へ進む。成功R/creditだけの先行発行は認めない。
 
-**Decision 8 — the emission identity.** ADR-0042 Decision 10's "never an addition to the
-schedule" holds unchanged: what the accepting block's coinbase withheld equals the payout named
-at `Final` plus the slice; the slice is never minted; what a later sell can mint from the reserve
-is bounded by the reserve; so, over a pair's life,
-`seed + Σ buys' net + Σ slices = reserve + Σ sells' gross` and every sompi ever minted from the
-market was first withheld or sunk.
+## 6. 一回決済と保存
 
-## 4. The arithmetic, worked
+全実行検証・異議・資料・成熟・hold/export条件を満たしてから、B/A、q/ell/burn、reserve、在庫、receipt、sticky属性、Dのpayee、claim消費と支払権利を原子的に確定する。void/未検証Abortに成功Rを発行しない。提供済み役務feeは元の別契約で精算する。
 
-From a market seeded with the least seed (100,000 BILI, `K = 10^13 × 500,000` sompi·positions), on
-testnet-11's pre-deflationary subsidy of 370,468,345 sompi a block and a 620 ‰ carve:
+BとAの両方をRの外部exportへ合算し、Miner payoutと同じ総上限・maturity・hold・取消条件へ接続する。LPだからcap外としない。後日の不正責任は元のbond等の契約に従い、永久LPからの特例引出しを制裁・補填手段にしない。noncanonical reorgでは市場・receipt・sticky属性・claim配分・消費を含む原子遷移全体を選択履歴へ戻す。これは正規履歴上のLP解約とは異なり、restart/IBDも同じ選択状態を復元する。
 
-| | sompi | BILI |
-|---|---|---|
-| the block's escrowed worker reward | 229,690,373 | 2.29690373 |
-| the slice (5 %) | 11,484,518 | 0.11484518 |
-| named for the miner at `Final` (95 %) | 218,205,855 | 2.18205855 |
+\[
+R=B+A+D,\qquad
+U+\sum\operatorname{holder}+\operatorname{retired}
+=\operatorname{registered\_supply}.
+\]
 
-| after | reserve (sompi) | positions in the curve | retired | price (sompi) | vs 0.2 BILI |
-|---|---|---|---|---|---|
-| the seed | 10,000,000,000,000 | 500,000 | 0 | 20,000,000 | — |
-| one block's `Final` | 10,000,011,484,518 | 500,000 | 0 | 20,000,022 | +0.0001 % |
-| a day of such blocks (720) | 10,008,268,852,960 | 500,000 | 0 | 20,016,537 | +0.083 % |
-| a month (21,600) | 10,248,065,588,800 | 500,000 | 0 | 20,496,131 | +2.48 % |
-| a year (262,800) | 13,018,131,330,400 | 500,000 | 0 | 26,036,262 | +30.2 % |
+LP receiptを加えて供給を二重計上せず、burn済み単位を別wrapperで復活させない。通常holder間transferはreserve、receipt、retiredを変えない。receiptの詳細をpruneする場合も、永久LP既記録という認証された属性を削除しない。
 
-A slice of 0.11 BILI is under the 0.2 BILI a position costs, so at this size the curve gives up no
-position: the reserve rises, the product rises, the price rises. On a network whose subsidy were
-100 BILI a block (escrow 62 BILI, slice 3.1 BILI) one block retires 15 positions and lifts the price
-to 20,001,220. And the holder of ADR-0090 §4's first buy (4,656 positions for 1,000 BILI at
-20,377,757 after) who holds through a year of such blocks sells them all at 26,470,758 a position:
-1,221.00166948 BILI gross, 1,147.74156932 BILI net after the legs — and the reserve after that sale
-is 129,900.31 BILI on 500,000 positions, above the seed by everything the reward put in. Nothing
-was paid to that holder while they held; the price was.
+## 7. 金額とwhole-unitの例
 
-## 5. Security — the four principles, checked
+| 分類・plan | R | 購入B | LP用BILI A | 残余D | Panel pool | Miner |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ADDITIONAL、他worker legなし・残余20%poolの版 | 1,000 | 300 | 200 | 500 | 100 | 400 |
+| GENESIS | 1,000 | 0 | 0 | 1,000 | Rから0 | 1,000 |
+| FORK_DESIGNATED | 1,000 | 0 | 0 | 1,000 | Rから0 | 1,000 |
 
-* **Nothing is minted.** The slice is a part of an escrow the coinbase already withheld; it
-  becomes a reserve entry, never an output; the identity of Decision 8 is a test (B2). The four
-  ways BILI reaches a market — seed, buy, slice, and nothing else — are each a sink or a withhold.
-* **Nothing is distributed.** No object moves BILI to a holder by virtue of holding; the payout
-  table of the fold has one payee for the reward, the bond's payload, and its amount is smaller.
-  The word "holder" does not appear in the move (B4).
-* **Nobody steers it.** The line is the claim's (attribution at accept, the same rule the court
-  replays against); the amount is the escrow's; the miner cannot pick a richer pair, the owner
-  cannot take a fee from it (ADR-0088 §10's service fee is decided *no*), the seeder gets nothing.
-  Two lines of one class sharing a root resolve to the first in the registry's order, as
-  attribution already does (ADR-0088 A10).
-* **Determinism and reorgs.** The move is a fold write with delta entries (`ModelMarket`) like a
-  buy; the reorg-equivalence suite covers it because it runs at `Final`, which that suite already
-  drives through both a chain and a rewind (B6).
+**Rの20%を使うLPと、Dの20%を使うPanel poolは別の項目**である。20%poolはその版の例だけであり、全profileへ強制しない。
 
-Attacks considered:
+whole-unit例は`V=0,r=X=1000,U=10000,R=1000`とする。B=300、A=200、U1=7693、q=2307、ell=1183、余剰burn=1124、r2=1500、U2=8876となる。実際の通貨表示と整数最小単位はprofileに従う。
 
-| | threat | why it is not one |
-|---|---|---|
-| A1 | a miner mines a line to pump positions they hold | they forgo 5 % of their reward to raise a price they share with every holder — identical to buying 5 % of their reward's worth from the curve, which they could do anyway, minus the legs they would have paid; there is no lever here that a buy did not already give them |
-| A2 | a line's people seed a pair to capture the whole class's reward | the slice follows the LINE the claim ran, not the class; a miner who runs another line's version feeds that line's pair (or none) |
-| A3 | a frozen class's pair keeps taking reward | a frozen class produces no chain blocks and its market is closed to buys; the claims accepted before the freeze pay their miners in full (Decision 3) |
-| A4 | a reward slice makes the reserve fall under the seed | it adds; the product never falls; the seed floor tightens (Decision 4) |
-| A5 | a node that finalizes a claim without the lines fence pays the whole escrow, another with it pays 95 % | a `claim_roots` entry exists only where the fence was armed at accept, so both nodes read the same record and name the same amount; the fence enters the fingerprint (ADR-0088 Decision 11) |
+連続量の2307.69購入・1183.43LP・1124.26burnは比較用近似にすぎず、合意値ではない。また`X=100,U=60,R=10`ではB=3、A=2、q=1、ell=1、burn=0が正常に成立する。LPを必ず購入量の2/3以下とする整数規則は採用しない。
 
-## 6. Invariants the tests must hold
+## 8. 移行・表示・受入
 
-* **B1 (the split).** With a seeded, open pair on the claim's line, `Final` names
-  `escrow − ⌊escrow × 50 / 1000⌋` for the miner and adds exactly `⌊escrow × 50 / 1000⌋` to the
-  reserve; `buyback_sompi` and `model_moves` advance. `palw_state_v2::tests::model_market::the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest`.
-* **B2 (conservation).** ADR-0090 P2 with the slice as a source: `seed + paid_in + Σ slices =
-  reserve + paid_out + burned + legs` at every state the fold reaches. `model_market::invariants`.
-* **B3 (no pair, no slice).** An unseeded line, a closed market, an unattributed claim: the whole
-  escrow is named; the market (if any) is unchanged. `…_and_a_miner_of_an_unseeded_line_is_paid_in_full`.
-* **B4 (no holder).** After the move no position row changed and no payout row but the miner's
-  was written. Asserted in B1.
-* **B5 (retired, M1).** With a slice worth positions, `retired_units` rises by exactly the
-  positions the curve gave up, `position_units + Σ holders + retired_units = supply`, and no
-  object can move them. `…_and_what_the_reward_buys_is_retired`.
-* **B6 (arithmetic).** `palw_model_market_v1::tests::the_reward_slice_is_worked_as_the_adr_table`
-  pins §4's numbers; `the_product_never_falls_under_the_reward_too` extends P1 to the new move.
-* **B7 (the window).** `market()`'s two new words are the row's, and every earlier word keeps its
-  offset. `kaspa_evm::model_market::tests::adr0091_market_words`.
-* **B8 (the drill).** On the armed devnet the seeded founding line's `buyback_sompi` rises on
-  every node with no buy, `retired_units` stays consistent with M1, and every node agrees.
+実際に永久LPを記録したmodel IDはGENESIS/FORK_DESIGNATEDへ指定不可とする。winddown解除、owner/admin回収、後継移植、同rootの別ID再登録、receipt削除を例外にしない。永久LP未記録モデル又は既存core市場の移行は、元の権利・claim・残高・allowanceを明示winddownしてから行う。旧core sell-only継続、自動没収、無原資補償は認めない。
 
-## 7. Order of work
+RPC/CLI/explorerはB、A、D、q、ell、余剰burn、retired、receipt、hasPermanentLP、LiquidityDustと元期限、Panel別原資を区別する。A/ellの累積は拠出履歴であり、現在reserve残高又は担保価値ではないと表示する。「50%を全額買ってburn」「LP receiptは売れる資産」「価格上昇保証」と表示しない。
 
-1. This text; the README rows; banners on 0087, 0089 and 0090.
-2. The constant, the row's two fields, the buyback quote and its goldens (B6).
-3. The fold: the attribution lookup that ignores in-force, the move at `Final`, the smaller
-   payout (B1–B5); the consistency re-derivation of M1 with `retired_units`.
-4. RPC (wire v4, proto 19–20, both converters, the service), CLI, the AMM window's two words and
-   the Solidity interface (B7), the site's row, market panel and add-model text.
-5. The devnet drill: a check that the reward alone moved the reserve (B8).
-6. Arming on testnet-11 with ADR-0090's release (§7 item 6 there): the same three fences, one
-   fingerprint.
-
-## 8. Implementation record (2026-09-06, `palw-adr0088-0089-impl`)
-
-Items 1–5 landed the same day; item 6 is the operator's release, shared with ADR-0090's.
-
-* `consensus/core/src/palw_model_market_v1.rs` — `PALW_MODEL_BUYBACK_PERMILLE_V1 = 50`, the row's
-  `buyback_sompi` and `retired_units`, `palw_model_buyback_slice_v1`, `palw_model_buyback_quote_v1`
-  (the whole slice into the reserve, what the curve gives up retired, `None` where no pair takes
-  it), and the sell quote's new bound — the curve holds at most `supply − retired`. Two tests with
-  §4's numbers: `the_reward_slice_is_worked_as_the_adr_table` (B6),
-  `the_product_never_falls_under_the_reward_too` (B6/P1, buys and buybacks interleaved).
-* `consensus/core/src/palw_state_v2.rs` — `PalwChainStateV2::model_line_of_root` (attribution that
-  does not lapse with a version), `TransitionBuilder::model_buyback_at_final`, and `finalize_claim`
-  naming `escrow − slice` for the miner. M1 and M2 in the market tests now count the retired
-  positions and the slices. Three tests: `the_reward_buys_the_pair_at_final_and_the_miner_is_paid_the_rest`
-  (B1/B4), `a_miner_of_an_unseeded_line_is_paid_in_full` (B3),
-  `what_the_reward_buys_is_retired_and_the_supply_stays_whole` (B5).
-* RPC: `buybackSompi` / `retiredUnits` on `getPalwModelMarket` (wire version 4, backward-loading;
-  proto fields 19–20; both gRPC converters; the service reads them off the row). CLI: `model-show`
-  prints "mining bought" with the positions retired, and the JSON carries both.
-* `misaka/evm/core/src/model_market.rs` — `market()` answers eleven words, the two appended so every
-  earlier offset holds; an unknown line is eleven zeros. `adr0091_market_words` (B7).
-  `misaka/evm/contracts/misaka-model/IMisakaModelAMM.sol` and the README say the same.
-* `web/misaka-options/` — `curve.buybackSlice` / `curve.buyback` (the chain's arithmetic, for the
-  self-test and the mock only), the two words read from both lanes (a pre-ADR-0091 node serves
-  neither and the site shows a dash, never a zero), "Bought by mining" on the market bar, the line
-  page and the leaderboard (sortable), the docs page's "Mining buys the pair" section and fee-table
-  row, the add-model step 3 text, nine self-test checks against these goldens, and a mock world
-  whose seeded pairs have been mined on.
-* `scripts/drills/misaka-palw-model-market-devnet-e2e.sh` — step 9b/9c: with no trade in flight the
-  reward alone moves the pair, and the reserve carries the seed and the whole buyback (B8). The
-  node-agreement row now compares `traded = reserve − buyback`, which the reward's own move leaves
-  alone; the reserve, the buyback and the retired count are logged for the reader.
-
-**Run 12 (2026-09-06), 20 of 20.** Six bonded producers, the three fences armed from genesis, the
-panels seated. The founding line seeded with the least seed at 0.2 MSK a position; a carrier buy
-and an EVM buy, a refused buy refunded, an EVM sell debiting one whole position; every node on one
-row before a partition and after the heal. Then, with **nothing trading**, the reward's own buys:
-
-| | |
-|---|---|
-| bought by mining | 275.62844868 MSK |
-| reserve | 100,284.82841924 MSK (the seed, the buys' net legs and every slice) |
-| retired | 1,373 positions — the chain's, held by nobody |
-| price | 0.20114009 MSK, up 0.57 % from the seed's 0.2, with no buyer |
-| supply | 498,581 in the curve + 1,373 retired + 46 held = 500,000 (M1) |
-
-The reward slice is larger here than on testnet-11 because this devnet's subsidy is: the rule is
-the same five percent of whatever the block escrowed.
-
-**What the drill's own runs taught, which was not about the market (2026-09-06).** Two defects in
-the drill itself surfaced the moment a step depended on the reward being *paid*, and both had been
-there for ten runs:
-
-* **`misaka evm wallet` lives behind a non-default feature** (`--features evm-send`). A CLI built
-  without it has no such subcommand, and run 10 died three steps in — six nodes up, the founding
-  line already passed — on clap's "unrecognized subcommand", which names neither the feature nor
-  the build. The script now asks the binary for the subcommand before it starts anything, and its
-  header carries both cargo lines.
-* **The nodes never passed `--palw-panel`, so no claim had ever reached `Final`.** Nothing verified
-  material, signed a receipt or submitted a quorum; `final_claims=0` while `unresolved` climbed.
-  Every escrow this drill ever withheld was released to nobody, and ten green runs said nothing
-  about the reward path because they never walked it. With the flag on (run 11) the panels file
-  receipts within two minutes and license claims steadily.
-* **A claim is `Final` 180 DAA after it is accepted** (bind 40 + receipt 40 + challenge 100), and
-  this devnet grows about two DAA a minute — an hour and a half before the first reward is paid to
-  anyone, against every other step's few minutes. The check therefore runs LAST, after the rest of
-  the drill has grown the chain, on its own clock (`BUYBACK_WAIT`, default 5,400 s). Run 11 with
-  the check placed early failed it for exactly this reason and passed the other thirteen.
-
-## 9. What is deliberately not decided
-
-* The permille. 50 is the operator's number of 2026-09-06; it is a constant the operator sets
-  when the fences are armed.
-* Whether small slices should accrue in a per-line pot until they buy a whole position. Not here:
-  the product rule already turns every sompi into price, and a pot is a balance somebody would
-  ask to withdraw.
-* A service fee to the line's owner from the reward (ADR-0088 §10). Decided *no* for the reward;
-  the owner's income is the 1 % leg on trades (ADR-0088 Decision 8), which this ADR leaves alone.
-* Whether the slice should be taken from a network whose carve is under its base share
-  differently. The slice follows the carve; a network that wants it to follow the base share sets
-  its carve to the base share, as every shipped preset does.
-
-## 10. Number hygiene
-
-0091 was the README's next free number on 2026-09-06 (0090 was taken on 2026-09-05 by this
-branch's own ADR-0090); the next free number is 0092.
+受入には丸め、overflow、極小値、zero/no-op、dust期限、model/pair不一致、swap介在拒否、原子rollback、B+Aのexport合算、旧claim境界、永久LPの権限不存在、core指定・同root迂回拒否、reorg/IBDを含める。先回り・循環売買・価格操作が新配分だけで解消されたとはしない。実装・測定・公開activationは未完了である。

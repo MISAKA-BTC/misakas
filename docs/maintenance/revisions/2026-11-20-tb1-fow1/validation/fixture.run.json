@@ -1,0 +1,8 @@
+{
+  "name": "fixture",
+  "args": [
+    "python3",
+    "test_beacon_model.py"
+  ],
+  "exit_code": 0
+}

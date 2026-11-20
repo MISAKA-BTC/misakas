@@ -11,6 +11,7 @@ def clean(t):
 def title(p):
  return next((clean(l[2:]) for l in p.read_text().splitlines() if l.startswith('# ')),p.stem)
 def topic(n):
+ if 'additional-model-option-economics' in n:return 'Economics / budgets'
  if any(k in n for k in ['design-freeze','post-mainnet','defer-media','token-name','network-isolation']):return 'Governance / release scope'
  if any(k in n for k in ['mldsa','hash64','lthash','utxo','signature','sighash']):return 'PQ / identity / UTXO'
  if any(k in n for k in ['evm','prea','wallet','deposit']):return 'EVM / wallet'
@@ -36,6 +37,21 @@ status[('rfc','0057')]='Proposed design / Court nonce・Panel固有challenge・�
 status[('adr','0225')]='Proposed design / CPN1の判断案・未有効化'
 status[('rfc','0058')]='Proposed design / 実行commit・段階抽選・合意資格、未有効化'
 status[('adr','0226')]='Proposed design / SWC1判断案、未有効化'
+status[('rfc','0059')]='旧AN1記録 / 新規採掘はRFC61/62へ置換、未有効化'
+status[('rfc','0060')]='旧MOR1記録 / receiptとコアzを分離、新規採掘はRFC62'
+status[('adr','0227')]='AN1の履歴と今回の置換 / ADR229/230優先'
+status[('adr','0228')]='MOR1の履歴と今回の置換 / ADR230のコアz条件優先'
+status[('rfc','0061')]='ADOPTED_DESIGN_NOT_ACTIVATED / TB1用途別乱数'
+status[('rfc','0062')]='ADOPTED_DESIGN_NOT_ACTIVATED / FOW1コア出力・費用適格性'
+status[('adr','0229')]='ADOPTED_DESIGN_NOT_ACTIVATED / TB1選択・移行'
+status[('adr','0230')]='ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計'
+status[('rfc','0063')]='旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化'
+status[('adr','0231')]='旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化'
+status[('rfc','0064')]='ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn'
+status[('adr','0232')]='ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約'
+for n in ['0087','0089','0091','0095','0101','0114','0124','0177','0179']:
+ status[('adr',n)]='ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存'
+moe2_notice='> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。\n\n'
 existing_catalog=D/'maintenance/decision-catalog.json'
 if existing_catalog.exists():
  for row in json.loads(existing_catalog.read_text()).get('records',[]):
@@ -44,7 +60,8 @@ records=[]
 for kind in ['adr','rfc']:
  files=sorted(p for p in (D/kind).glob('*.md') if re.match(r'^\d{4}-',p.name));groups=defaultdict(list)
  index='# '+kind.upper()+' 番号順索引\n\n[入口](README.md) / [トピック別](TOPICS.md) / [番号台帳](../maintenance/numbering.md)。自動生成の探索用索引です。原文の過去のStatusを現在の稼働保証へ昇格させません。\n\n'
- index+='> **旧番号の履歴索引。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。\n\n'
+ index+='> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。新規採掘の後続正本は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md)。RFC61/62・ADR229/230は設計採択済み・未有効化であり、旧sourceを新規受付へfallbackしない。\n\n'
+ index+=moe2_notice
  index+='**画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。\n\n| 番号 | 文書 | 状態の入口 |\n| --- | --- | --- |\n'
  for p in files:
   n=p.name[:4];t=title(p);short=re.sub(r'^(?:ADR|RFC)[- ]?\d+\s*[:—-]?\s*','',t);st=status.get((kind,n),'原文と後続改定を参照');top=topic(p.name)
@@ -52,7 +69,8 @@ for kind in ['adr','rfc']:
   index+='| '+kind.upper()+'-'+n+' | '+ref('docs/'+kind+'/INDEX.md',p,short[:90]+('…' if len(short)>90 else ''))+' | '+st+' |\n'
  (D/kind/'INDEX.md').write_text(index)
  text='# '+kind.upper()+' トピック別索引\n\n[番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。\n\n'
- text+='> **旧番号の履歴索引。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。\n\n'
+ text+='> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。\n\n'
+ text+=moe2_notice
  for top,items in sorted(groups.items()):
   text+='## '+top+'\n\n'+'\n'.join('- '+ref('docs/'+kind+'/TOPICS.md',p,kind.upper()+'-'+n+' — '+short[:100]) for p,n,short in items)+'\n\n'
  (D/kind/'TOPICS.md').write_text(text)
@@ -60,7 +78,8 @@ for kind in ['adr','rfc']:
 files=sorted(p for p in D.rglob('*.md') if p.name!='catalog.md');groups=defaultdict(list)
 for p in files:
  rel=p.relative_to(D);groups[rel.parts[0] if len(rel.parts)>1 else '(root)'].append(p)
-t='# 全文書カタログ\n\n通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。\n\n'
+t='# 全文書カタログ\n\n通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。新規採掘の後続採択は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) に従います。旧記録の掲載は新profileでの有効性を意味しません。\n\n'
+t+=moe2_notice
 for top,items in sorted(groups.items()):t+='## '+top+'\n\n'+'\n'.join('- '+ref('docs/maintenance/catalog.md',p,p.relative_to(D).as_posix()) for p in items)+'\n\n'
 (D/'maintenance/catalog.md').write_text(t.rstrip()+'\n')
 print('primary records',len(records),'markdown catalog',len(files))

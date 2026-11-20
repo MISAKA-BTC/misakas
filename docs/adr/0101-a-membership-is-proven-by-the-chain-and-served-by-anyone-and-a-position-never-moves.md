@@ -1,207 +1,64 @@
-# ADR-0101 — A membership is proven by the chain and served by anyone, and a Position never moves between holders
+# ADR-0101 — chain認証membershipとPositionの直接送受信
 
-> **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
+- 改訂日: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。MOE2の設計改訂であり、native/EVM実装、測定、移行又は公開有効化の完了ではない。
+- 共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)。
+- 直前MOE1版の完全原本: [改訂前の原本](../maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt)。さらに古い原本への参照も保存原本に保持する。
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
-> モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
-> 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
-> 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
+本書の現行決定をMOE2へ適用する。MOE1の「50%全額でPosition購入・全取得分retire」を「30%購入・20%BILIと必要Positionの永久LP・余剰Positionのみburn」へ置換する。通常5%/3%、追加モデル限定、登録と市場の原子生成、直接転送、coreのMiner100%は維持する。旧claim・署名・決済・過去の試験結果はその版の記録であり、新規範で遡及再解釈しない。TB1/FOW1の実行・登録・完全検証・責任条件を免除しない。
 
+## 1. 責務の分離
 
-* Status: PROPOSED 2026-09-10. **Decisions 2, 3 and 5 IMPLEMENTED the same day, consensus-inert**
-  (§9): which grant needs whom, the signed service descriptor and the check a client runs
-  against chain facts, and three pins that a Position moves only between a holder and the
-  curve. Decisions 4 and 7 are stated, not built. Nothing moves on any preset: no rule verifies a
-  descriptor, no fold reads one, no fence exists.
-* **ADR-0144 alignment (2026-09-21).** Unimplemented D4 / D6 / D7 steps 2–4 (anyone-serves
-  discovery and public serving) are withdrawn as PALW-reward work. See the end section.
-* **2026-10-04 (the operator):** `PRIORITY_INFERENCE` and `INFERENCE_QUOTA` are retired (ADR-0095's amendment):
-  every job is self-ordered and nobody serves inference to holders, so Decision 2's "any provider" row no longer
-  includes them; a descriptor offering them describes nothing MISAKA has.
-* Builds on: [0095](0095-a-position-is-a-membership-not-an-income.md) (a Position is a
-  membership: the line declares, the chain computes the tier, a gateway reads it; §8's "a bond
-  behind the promise" rejected; the reference check of §7 step 6),
-  [0087](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) (bought from the curve,
-  sold back to it, no transfer), [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md)
-  (a line's owner, developer and maintainer; anyone founds a competing line),
-  [0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) (the EVM is the
-  fold's window and hand, never a second market), [0091](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md)
-  (use reaches the curve; no holder is paid), [0067](0067-classes-are-chain-data-kernels-are-the-build.md)
-  Decision 6 (the chain carries kilobytes and no URL), [0100](0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md)
-  (the boundary "permissionless" means, of which this is the membership half).
-* Amends: nothing. Supersedes nothing. Records, as a decision, what the operator settled on
-  2026-09-10: **a Position has no payment or settlement role, and therefore no transfer.**
+MOE2の追加モデル登録は一意のMisakaOption市場を原子的に同時生成する。別のmarket-ready待機や外部seedを要求せず、core登録からは市場を生成しない。登録済み追加モデルの市場欠落を正常状態へ扱わない。
 
-## 0. The sentence this ADR is
+chainは固定モデル、現在のPosition残高、適用中のbenefit宣言、tier、署名・状態anchorを認証する。外部サービスは必要なmembershipを検査して提供する。Position transferはnative/EVMの資産遷移であり、外部サービスの支払や履行確認を推定する処理ではない。
 
-**The line controls the PRODUCT, providers control the SERVING, and the chain proves the
-MEMBERSHIP.** Anyone may serve a line's holders; a client checks a provider's signed statement
-against what the chain says about the line — the grants it declares, the roots it names, the keys
-its own bonds hold — and needs nobody's word; and a Position, bought from the curve and sold back
-to it, never moves from one holder to another and never pays for anything, here or anywhere a
-later decision adds.
+MOE2対象はADDITIONALのみ。GENESIS/FORK_DESIGNATEDのMisakaOption・Position・市場・転送・承認を無効とする。モデル自体のPALW実行・Panel検証・Courtは維持し、coreの対象worker報酬RはMinerへ100%帰属する。
 
-## 1. What was read
+## 2. 現行決定
 
-### 1.1 The permissionless map, and its one gap
+### Decision 1 — Membershipは現在保有に結合する
 
-A review of `main` and testnet-11's fences (2026-09-10) mapped every path into the PALW economy.
-Adopted, with the review's verdicts: a node syncs and verifies without a bond, production needs
-an Active bond and nothing else (ADR-0061); a class registers with no allowlist, vote or identity
-(ADR-0056); anyone certifies, and the court grades (ADR-0075); the chain draws the attempt
-(ADR-0074); a bonded party challenges (ADR-0027) and accuses (ADR-0062, armed on testnet-11 at
-DAA 1,900); anyone founds a line, posts a proposal or an evaluation, and a line's versions are
-its developer's and its roles its owner's — ownership of a line is not permission over the chain
-(ADR-0088); anyone seeds, anyone buys, a holder sells (ADR-0087, ADR-0094); a claim's Final
-reward buys the line's pair with nobody's hand on it (ADR-0091); the tier is the chain's and the
-early-access window is the fold's (ADR-0095).
+Positionを取得したrecipientは、新しいcanonical残高と[ADR0095](0095-a-position-is-a-membership-not-an-income.md)のtier・保有期間条件で資格を得る。senderは減少した残高で再判定される。過去のholder mark、署名責任、claim liability、bond、モデルowner権は移さない。
 
-Two corrections. **The reference gateway check exists** — `misaka/palw/gateway/src/membership.rs`
-(`773f6e7c`) on `feat/adr-0095-membership-serving`, ADR-0095 §7 step 6 "done 2026-09-10" — and
-is not on `main` (`a60f78e7` is not an ancestor of `main`'s tip), which is why a review of `main`
-saw it missing. And **it is already provider-neutral**: its configuration is a line id and a
-network domain, it reads the chain's tier, and it asks the line's owner nothing — any operator
-can run it for any line today. What is missing is the rest of "anyone serves": a statement of
-WHICH grant a stranger can serve, a provider's statement a client can CHECK, and a way to FIND
-providers that does not put a URL on the chain.
+### Decision 2 — 認証済みの実行・サービスcontextを確認する
 
-### 1.2 A Position's movement, read off the fold
+署名済みdescriptorを使う機能では、model ID/artifact root、grant、provider identity、認証domain、state anchor、期限を照合する。unknown/expired/別モデル/未宣言grantを拒否する。現在保有を必要とする操作へ古い保有証拠をそのまま再利用しない。
 
-| path | what it does to a holding | where |
-|---|---|---|
-| buy | credits the buyer, from the curve | `model_buy_v1`, the ONE of two writers |
-| sell | debits the seller, to the curve | `model_sell_v1`, the other |
-| the reward's buyback (ADR-0091) | retires units into the market row's `retired_units`; credits no holder | `model_buyback_at_final` |
-| a line's owner transfer (ADR-0088) | moves the LINE's ownership; writes no holding | `ModelLineOwnerTransferred` |
-| the EVM facade (ADR-0089) | `transfer`, `transferFrom`, `approve`, `allowance` answer `NonTransferable()` | `misaka/evm/core/src/model_market.rs` |
-| the CLI | `palw model-buy`, `model-sell`, their EVM twins, `model-seed`; no transfer command | `misaka-cli` |
+外部descriptorやmirrorの発見をPALW work、model登録審査、claim Finalの新しい投票へしない。従来撤回されたinference marketplaceやpriority/quotaの機能は復活させない。
 
-No object names two holders. That is the settled rule, and §5 pins it three ways.
+### Decision 3 — 直接transfer・受取・譲渡を許可する
 
-## 2. The requirement
+旧Decision 5の「Positionはholder間を移動しない」を、MOE2について明示的に置換する。正しい送信者署名又は承認されたspender権限により、同じモデルのavailable Positionを直接送受信・譲渡できる。AMMでの売り直しを条件にしない。
 
-> **R-serve — anyone may serve a line's holders, and a client can check it.** Which grant a
-> provider may serve is a function of the grant, not of anyone's approval; a provider's offer is
-> a signed statement checked against the chain; the chain holds no provider and no URL; and no
-> path of the serving side moves, escrows or is paid in a Position.
+直接送金にAMM burn 5%・owner 3%を課さず、通常のnetwork fee/gasのみを適用する。第三者が別途対価を支払う相対取引と無償譲渡を合意が自動的に区別するとはしない。Position移転によってBILIの法定又はprotocol決済単位を変更するわけではない。
 
-## 3. Decisions
+### Decision 4 — EVMのtransfer・承認を実装する
 
-**Decision 1 — the product, the serving and the membership are three parties' business.** The
-line declares what each tier grants (ADR-0095 §4); the chain computes a holder's tier at the tip
-and enforces what it can see (the early-access window); a provider serves. A membership whose only
-server is the line's own machine dies with that machine; one any provider can serve does not.
+旧`NonTransferable()`の一律拒否と「holdingのwriterはbuy/sellだけ」という受入条件を廃止する。`transfer`、`approve`、`allowance`、`transferFrom`及び対応eventは[ADR0089](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md)の同一tx journal契約を満たす。`ActionQueued`を転送成功と表示しない。
 
-**Decision 2 — which grant needs whom** (`palw_benefit_server_v1`, one spelling for every client
-and provider):
+### Decision 5 — 資産を動かす権限だけを移す
 
-| grant | needs | why |
-|---|---|---|
-| `HOLDER_VOICE` | the chain | the fold writes the mark (ADR-0095 §4.9) |
-| `PRIORITY_INFERENCE`, `INFERENCE_QUOTA`, `EXPERIMENTAL`, `PRIVATE_BETA`, `EARLY_VERSION` | any provider holding bytes under a root the chain names for the line | the class's artifact or a version's; a client checks the root, and nobody's permission is involved |
-| `DEVELOPER_ACCESS`, `SUPPORT` | the line's origin — a key of its owner, developer or maintainer bond | a relation with the line's own people, which a stranger's server cannot provide |
+allowanceはrecipient、model登録者、第三者serverへの包括権限ではない。spender/model/network/ownerごとにscopeを固定し、実行時の残高・lock・予約・allowanceを検査する。retired units、locked units、予約済みの単位を移さない。永久LP receiptは転送可能なPosition又はLP tokenではなく、allowanceを設定できず、withdraw/transfer/fee請求・owner/admin権限も持たない。LPへ戻したellはpool在庫だけへ計上し、receiptとholder残高へ重複加算しない。transferに成功してもsenderの過去のslash責任は残る。
 
-A bit this build does not know needs nobody it can name, and a descriptor offering it is refused.
+### Decision 6 — サービス提供の未完成部分を有効化しない
 
-**Decision 3 — the signed service descriptor, and the check a client runs.**
-`PalwServiceDescriptorV1 { version, line_id, grants, roots, endpoints, valid_from_daa,
-expires_daa, provider_pubkey, signature }`, its id keyed over the network domain and every field
-but the signature, signed under `misaka-palw/service-descriptor/mldsa87/v1` — a context in no
-committed set, on purpose: no consensus rule verifies it. `palw_service_descriptor_check_v1`
-takes what the chain says about the line (`PalwLineServiceFactsV1`: the grants declared IN EFFECT
-now — a lapsed promise offers nothing to serve — the class's and the versions' roots, the line's
-bond keys, the tip's DAA) and refuses by name: another line, a window that does not hold, no
-grant, an unknown bit, a grant the line does not declare, the chain's own grant, a served-by-root
-grant with no root, a root the chain does not name for the line, an origin grant under a
-stranger's key, a signature that does not verify. The verdict says `Origin` or `Open`.
+membership機能と原資・資産転送の正確性を分ける。chainはoff-chainの実提供を自動裁定しない。今回の送金可能化から、撤回・延期されていたpublic marketplace、モデル改善、強制資料取得監査等の採用を導かない。
 
-**Decision 4 — discovery is not chain state (withdrawn).** 公開 descriptor・mirror・directory の発見基盤は PALW work として実装しない。第三者 inference marketplace は [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1 の対象外だからである。
+## 3. 置換表
 
-**Decision 5 — a Position is a membership and never money** (settled by the operator,
-2026-09-10). A Position is bought from the curve and sold back to it; it does not move from one
-holder to another; it is never a means of payment or settlement — on the carrier lane, in the
-EVM facade, and in any serving layer this ADR admits. A provider READS a holding through the
-proof the holder signs (ADR-0095 §4.8's challenge) and receives nothing from it; a descriptor has
-no price in Positions, no escrow, no holder to credit; no benefit may be priced, paid or
-collateralised in Positions. The three pins of §5 fail on a third writer of a holding, on an
-object that moves a Position between holders, and on a facade that answers `transfer`. A proposal
-to the contrary is a new ADR that supersedes this decision by name, never an edit to a pin.
+| 旧条件 | MOE2での条件 |
+| --- | --- |
+| holder間転送が存在しない | 認証されたavailable残高の直接転送・受取・譲渡を許可 |
+| EVM transfer/approve等は必ずNonTransferable | 新profileの原子的なtransfer/allowance経路を実装 |
+| holderの唯一の出口はcurveへのsell | sellと直接転送を別操作として許可 |
+| 保有期間は売却だけで変化する | tier別に、確定残高が閾値を継続して満たした期間を扱う |
+| 古い署名だけで現在membershipを示す | scope・期限・現在必要なstate anchorと残高を照合 |
 
-**Decision 6 — serving stays unadjudicated (withdrawn).** marketplace の serving・執行モデルは実装しない。ADR-0144 P1 のローカル推論という目的から外れるため。
+## 4. 検査と移行
 
-**Decision 7 — order of work.** 公開 serving 用 gateway・site・directory（旧 steps 2–4）は実装しない。Decision 4/6 と同じ理由による。実装済み membership check と holder mark は ADR-0095 に従う。
+永久LP記録済みmodelはcore指定不可であり、withdrawをwinddown例外にしない。後継移植、同rootの別ID再登録又はreceipt削除で制約を解除しない。永久LP未記録モデルの旧権利処理は既存の明示移行へ従い、holder資産を自動没収しない。
 
-## 4. What this costs
+転送による残高保存、sender/recipient tier、spender権限、locked/retired拒否、zero/self、replay、revert、event、同tx read、cross-domain、reorg/IBDを検査する。旧のno-transferテスト成功は履歴に残し、変更後の成功証拠へ書き換えない。
 
-Nothing on chain. One module of pure functions and types in `consensus-core`; three pins.
-
-## 5. Invariants the tests hold
-
-```
-1  Every known grant names who serves it; an unknown bit names nobody.
-2  A stranger serves by root, the origin serves its own, and every refusal of Decision 3 is by
-   name.
-3  A real ML-DSA-87 signature verifies; a field changed after signing, or another network, does
-   not; a stranger's key cannot claim an origin grant, signed or not.
-4  A descriptor survives its JSON transport with its id.
-5  A holding has exactly two writers — the buy and the sell — and no object moves a Position
-   between holders (the one "Transferred" object moves a line's ownership).
-6  The EVM facade answers transfer, transferFrom, approve and allowance with NonTransferable(),
-   whatever the arguments.
-```
-
-1–2 are `palw_service_descriptor_v1`'s; 3 `misaka/palw/sdk/tests/service_descriptor_signed.rs`;
-4–5 `consensus/core/tests/palw_adr0101_membership.rs`; 6 `kaspa-evm`'s
-`a_position_has_no_transfer_door_on_the_evm`.
-
-## 6. Order of work
-
-Decisions 2, 3 and 5's pins — **done** (§9); the rest is Decision 7's list.
-
-## 7. Supersession
-
-| what | this ADR |
-|---|---|
-| ADR-0095 §7 step 6 (a reference gateway check) | kept; it is the membership half a provider runs, and it is provider-neutral already |
-| ADR-0095 §8 (no chain URL; no bond behind the promise) | kept; Decisions 4 and 6 |
-| ADR-0087 (no transfer) / ADR-0089 (the facade refuses `transfer`) | kept; named as Decision 5 and pinned |
-| ADR-0100 Decision 6 (the permissionless boundary) | this is its membership half |
-
-## 8. What is deliberately not decided
-
-* **The directory's transport** (Decision 4).
-* **The units of `INFERENCE_QUOTA`** — ADR-0095 §8: a serving decision is not a consensus one.
-* **Whether an origin may delegate its grants to a named provider.** A line that wants that
-  declares the provider's key as a maintainer (ADR-0088 roles) — the mechanism exists; a
-  dedicated delegation object would be a new ADR.
-
-## 9. Number hygiene and implementation record
-
-0101 is the next free number after ADR-0100. Claimed on `feat/adr-0099-sharded-seat` on
-2026-09-10. **The next free number is 0102.**
-
-* **2026-09-10** — written and implemented the same day:
-  * `consensus/core/src/palw_service_descriptor_v1.rs` — Decisions 2 and 3, with their tests;
-    registered in `lib.rs`, its domains in `palw_derived_v1`'s uniqueness sweep.
-  * `consensus/core/tests/palw_adr0101_membership.rs` — Invariants 4 and 5.
-  * `misaka/palw/sdk/tests/service_descriptor_signed.rs` — Invariant 3, with real keys.
-  * `misaka/evm/core/src/model_market.rs` — Invariant 6.
-
-## ADR-0144 alignment (2026-09-21)
-
-[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1: third-party
-inference serving is a non-goal. R-serve ("anyone may serve a line's holders") is a GPU marketplace
-in all but name.
-
-* **Kept.** Decisions 2, 3 and 5 as already implemented: which grant needs whom, the signed
-  descriptor a client can check against chain facts, and a Position that never moves and never
-  pays. Those pins do not require anyone to serve inference.
-* **Withdrawn as unimplemented PALW work.** Decision 4 (discovery is not chain state — well-known
-  path, mirrors, a directory). Decision 6 (serving stays unadjudicated — the marketplace's
-  enforcement model). Decision 7 steps 2–4 (the gateway serves a public descriptor, the site
-  renders checked descriptors, a directory of any transport). Step 1 (merge the 0095 membership
-  check) and step 5 (the holder mark at its own activation) are membership, not serving, and stay
-  with ADR-0095.
-* A later product that wants a marketplace is a new ADR that supersedes this alignment by name,
-  and it is not paid in PALW.
+新分類・policy・ABI・native状態・全consumerを同じactivation境界へ結合する。旧claim・サービス契約は元scopeと原期限でdrainし、coreの旧Position市場をsell-onlyのまま新profileへ残さない。全gate未完の間は設計採択のみである。

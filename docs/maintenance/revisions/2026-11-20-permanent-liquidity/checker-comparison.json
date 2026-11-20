@@ -1,0 +1,90 @@
+{
+  "scope": "Unmodified historical checkers compared with the immediately preceding MOE1 revision",
+  "old_checkers_or_their_baselines_modified": false,
+  "checkers": {
+    "docs": {
+      "baseline_failures": 947,
+      "after_failures": 947,
+      "added_failures": [],
+      "removed_failures": [],
+      "global_checker_passed": false
+    },
+    "rfc": {
+      "baseline_failures": 7,
+      "after_failures": 7,
+      "added_failures": [],
+      "removed_failures": [],
+      "global_checker_passed": false
+    },
+    "adr": {
+      "baseline_failures": 150,
+      "after_failures": 162,
+      "added_failures": [
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0015-permissionless-model-registration.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0026-canonical-work-and-answer-accounting.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0035-bond-budget-and-shared-reservations.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0036-capacity-scaling-and-emission-budget.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0047-funded-original-and-role-authorization.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0049-authenticated-state-map-and-row-stream.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Authored-section checksum mismatch: 0050-freeze-deferred-rejected-and-governance.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current authored-section revision; historical payloads are preserved separately."
+        },
+        {
+          "diagnostic": "Original source bytes changed: 0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current source revision; exact preceding bytes are in before/ and historical embedded sources remain unchanged."
+        },
+        {
+          "diagnostic": "Incomplete source line range: 0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current source revision; exact preceding bytes are in before/ and historical embedded sources remain unchanged."
+        },
+        {
+          "diagnostic": "Status declaration mismatch: 0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current source revision; exact preceding bytes are in before/ and historical embedded sources remain unchanged."
+        },
+        {
+          "diagnostic": "Original appendix bytes changed: 0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current source revision; exact preceding bytes are in before/ and historical embedded sources remain unchanged."
+        },
+        {
+          "diagnostic": "Unchanged baseline files modified or missing: docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+          "authorized_historical_comparison": true,
+          "reason": "Authorized current document or index revision with exact before copy and digest trail."
+        }
+      ],
+      "removed_failures": [],
+      "global_checker_passed": false
+    }
+  },
+  "unexplained_new_failures": [],
+  "no_unexplained_new_failures": true
+}
