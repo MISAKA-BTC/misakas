@@ -19,3 +19,9 @@ DAA 323 で抽選された seat 7 が、実行者の seat 0 とは別のピア�
 この claim は RFC-0054 の protected TFO3 として受理された。以後の Panel、異議、Final、Gate C と receipt quantum は受付時の識別子と期限で追跡する。RFC-0054 は同一 claim の権利消費と対応ブロック受理までを通し確認に含める。[RFC-0054](../../../rfc/0054-public-t12-original-admission-profile.md)
 
 追加マージの CAD1 ゲートは既存 TFO3 に新しい受付 Ticket を要求できる構造だった。また SWC1 用の決済変換は既存の work identity の先頭 32 byte を OriginalId として使っていた。RFC-0058 §2.4 の OriginalId は専用の入力から導出する。両者の native 接続を追加マージ前の実装に戻した。AN1 と MOR1 の規範は新しい family／profile に適用する。分離した草案モジュールはこの実行の合意経路に入らない。[RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)・[RFC-0059 §0](../../../rfc/0059-palw-an1-input-binding-and-panel-court.md)・[RFC-0060 §0](../../../rfc/0060-model-registration-and-attempt-output-binding.md)
+
+## 回帰確認
+
+追加マージ後の `kaspa-consensus-core --lib` は 5,946 件成功、126 件失敗、22 件 ignore。失敗した126件を追加マージ直前の `f721bc681` で個別に再実行し、全件で失敗を再現した。公開設定・DAA・認証を対象にした選択テスト205件は成功した。
+
+受付済みの TFO3 から異議申立て側が PublicDA の入力を取得する修正（`875d1f6aa`）は、上記の実取引の公開 prompt ID 17 個を使って検査した。対象の Rust テスト8件と、同じ claim の再開・観測を含む Python テスト54件が成功した。関連する履歴読み取りテスト全15件では1件が DAA 100 の状態再読込比較で失敗し、この失敗も修正前のバイナリで再現した。
