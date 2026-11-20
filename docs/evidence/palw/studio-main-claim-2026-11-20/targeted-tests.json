@@ -273,6 +273,40 @@
         "Overflow": 29,
         "accepted": 385
       }
+    },
+    "nativeRegistrationProjection": {
+      "scope": "Isolated economic projection after apply_palw_transition_v2 registers core and additional classes. The two priced claims and their funding terms are fixture inputs, not submitted transactions.",
+      "registrationDaa": 100,
+      "additionalActivationDaa": 200,
+      "economicPositionDaa": 201,
+      "additionalInitialRealReserve": 0,
+      "virtualSompi": 1000000000000000,
+      "firstSettlement": {
+        "reward": 100000000000000,
+        "purchase": 30000000000000,
+        "liquidity": 20000000000000,
+        "purchasedUnits": 14563,
+        "liquidityUnits": 9425,
+        "retiredUnits": 5138,
+        "miner": 40000000000000,
+        "panel": 10000000000000,
+        "finalInventory": 494862
+      },
+      "secondSettlement": "Same original reference, zero tolerated output slippage. OutsideQuote; current market, receipt history and entitlement state preserved.",
+      "coreAllocation": "Core; no market"
+    },
+    "nativePassedByFilter": {
+      "moe2": 6,
+      "palw_model_market_v1::": 26,
+      "palw_state_v2::tests::model_market_virtual::": 8,
+      "palw_settlement_liability_v1::": 4
+    },
+    "rewardAdmissionSourceCheck": {
+      "guard": "every_construction_of_the_admission_fences_names_the_canonical_work_height",
+      "finalSourceCheckedSeparately": true,
+      "actualFoldAndProcessor": "pass",
+      "removedCanonicalWorkFromFold": "refused",
+      "removedCanonicalWorkFromProcessor": "refused"
     }
   },
   "tb1PreparationCut": {

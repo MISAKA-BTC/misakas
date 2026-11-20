@@ -1646,17 +1646,21 @@ fn the_price_unit_stays_raw_because_it_is_a_denominator() {
 /// every production construction of it must name `canonical_work_daa` rather than inherit it.
 #[test]
 fn every_construction_of_the_admission_fences_names_the_canonical_work_height() {
-    let sources = [
-        ("palw_state_v2.rs", crate::palw_state_v2::palw_state_v2_fold_source_v1()),
-        ("processor.rs", crate::palw_source_guard_v1::palw_processor_source_v1()),
-    ];
-    let mut checked = 0;
-    for (name, source) in sources {
-        let body = source.find("\n#[cfg(test)]").map(|at| &source[..at]).unwrap_or(source);
-        if name == "palw_state_v2.rs" {
-            assert!(body.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
-        }
+    let (fold, _) = crate::palw_state_v2::palw_state_v2_fold_source_v1()
+        .split_once("\n#[cfg(test)]\npub(crate) mod tests;")
+        .expect("the fold and its split modules precede the main test module");
+    // Individual test-only imports occur among production items. A cfg(test)
+    // on one item cannot mark the end of the fold or of another processor file.
+    let sources = [("palw_state_v2.rs", fold), ("processor.rs", crate::palw_source_guard_v1::palw_processor_source_v1())];
+    for (name, body) in sources {
+        let mut checked = 0;
         for (at, _) in body.match_indices("PalwEpochBudgetFencesV1 {") {
+            // A function returning the struct also has its name followed by a
+            // brace. Its actual construction is checked at the literal inside.
+            let prefix = body[..at].trim_end_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == ':');
+            if prefix.trim_end().ends_with("->") {
+                continue;
+            }
             // The literal runs from its opening brace to the one that balances it. Cutting on an
             // indentation guess is what the first draft of this test did, and it read the wrong
             // span — the same class of mistake the test is about.
@@ -1685,6 +1689,6 @@ fn every_construction_of_the_admission_fences_names_the_canonical_work_height() 
             );
             checked += 1;
         }
+        assert!(checked > 0, "{name}: expected at least one production construction of the admission fences");
     }
-    assert!(checked >= 2, "both the fold's re-check and the processor's pre-check are still here (found {checked})");
 }
