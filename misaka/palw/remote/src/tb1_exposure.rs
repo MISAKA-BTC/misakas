@@ -2,8 +2,8 @@
 //! fresh round material in the holder's durable directory outside chain undo.
 //! Reopening never provisions. This local reservation precedes the signature
 //! and transport. This isolated policy checks the native finalized head for
-//! the accepting block on every reservation. Its caller must still resolve
-//! the actual FreezeRecord and its original release window from native state.
+//! the accepting block on every reservation. The private close block commits to the
+//! round, fixed consumer set, policy and qualification at the scheduled score.
 use crate::monetary_material::try_exclusive_lease;
 use kaspa_consensus_core::palw_tb1::{qualification::Tb1Qualification, releases::Tb1HolderRelease};
 use kaspa_consensus_core::{Hash64, api::ConsensusApi, palw_native_settlement_v1::SettlementStopV1};
@@ -61,13 +61,50 @@ fn options() -> OpenOptions {
 /// DAA is the release clock for this isolated profile.
 #[derive(Clone, Copy)]
 pub struct Tb1HolderFreeze {
-    pub accepting_block: Hash64,
-    pub freeze_id: [u8; 64],
-    pub release_from_daa: u64,
-    pub deadline_exclusive_daa: u64,
+    accepting_block: Hash64,
+    qual_root: [u8; 64],
+    freeze_id: [u8; 64],
+    release_from_daa: u64,
+    deadline_exclusive_daa: u64,
 }
 
 impl Tb1HolderFreeze {
+    /// Resolve a published closure at the unique selected-chain score fixed by
+    /// the round. The finality and tip-window checks run again just before signing.
+    pub fn resolve(
+        native: &dyn ConsensusApi,
+        accepting_block: Hash64,
+        closure: &kaspa_consensus_core::palw_tb1::freeze::Tb1MiningClosure,
+        qualified: &Tb1Qualification<'_>,
+    ) -> io::Result<Self> {
+        let round = &closure.round;
+        if qualified.round_ref() != round.id()
+            || qualified.root() != closure.qual_root
+            || qualified.roster().root().ok() != Some(round.roster_root)
+        {
+            return Err(invalid("TB1 closure differs from the prepared round"));
+        }
+        let header = native.get_header(accepting_block).map_err(Error::other)?;
+        if header.blue_score != round.close_blue_score
+            || header.daa_score >= round.release_from_daa
+            || round.release_from_daa >= round.deadline_exclusive_daa
+        {
+            return Err(invalid("TB1 close block outside its original schedule"));
+        }
+        let parent = native.get_ghostdag_data(accepting_block).map_err(Error::other)?.selected_parent;
+        let freeze_id = closure.commitment(parent);
+        if !native.palw_coinbase_commits_to(round.chain_id, accepting_block, &freeze_id).map_err(Error::other)? {
+            return Err(invalid("TB1 close block does not commit to the supplied closure"));
+        }
+        Ok(Self {
+            accepting_block,
+            qual_root: qualified.root(),
+            freeze_id,
+            release_from_daa: round.release_from_daa,
+            deadline_exclusive_daa: round.deadline_exclusive_daa,
+        })
+    }
+
     fn check_window(self, daa: u64) -> io::Result<()> {
         if !(self.release_from_daa..self.deadline_exclusive_daa).contains(&daa) {
             return Err(invalid("native tip outside original TB1 release window"));
@@ -242,7 +279,8 @@ impl Tb1ExposureJournal {
         let message = qualified
             .holder_release_message(row, &self.key, byte_limit)
             .map_err(|_| invalid("TB1 release differs from qualification, signing key or size limit"))?;
-        if row.context.freeze_id != freeze.freeze_id
+        if row.context.qual_root != freeze.qual_root
+            || row.context.freeze_id != freeze.freeze_id
             || row.holder_slot != self.slot as usize
             || binding(row.context.round_ref, &self.key)? != self.id
         {

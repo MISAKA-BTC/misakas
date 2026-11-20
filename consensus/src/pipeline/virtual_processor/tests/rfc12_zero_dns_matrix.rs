@@ -299,10 +299,14 @@ impl Rig {
     }
 
     pub fn beat_with(&mut self, txs: Vec<Transaction>) -> MutableBlock {
+        self.beat_with_miner(new_miner_data(), txs)
+    }
+
+    fn beat_with_miner(&mut self, miner: MinerData, txs: Vec<Transaction>) -> MutableBlock {
         self.nonce += 1;
         let mut t = self
             .api()
-            .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
+            .build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
             .expect("a template");
         t.block.header.nonce = self.nonce;
         t.block.header.finalize();

@@ -1,10 +1,11 @@
 //! RFC-0061 §5. Resolve Q from the entire canonical preparation cut. The
 //! owning reader supplies the VSS outcomes and signed Ready rows
-//! at that cut, and authenticates the recorded Q and its root. This projection
+//! at that cut, and resolves the reserved resources. This projection
 //! verifies the holder signatures but does not implement the private VSS protocol.
 use super::signatures;
 use super::{Tb1Field, Tb1PolynomialError, check_qualified, check_roster};
 use libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey;
+use sha3::{Digest, Sha3_512};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +52,25 @@ pub struct Tb1Roster<'a> {
     pub f: usize,
 }
 
+impl Tb1Roster<'_> {
+    pub fn root(self) -> Result<[u8; 64], Tb1PolynomialError> {
+        check_roster(self.coordinates, self.f)?;
+        if self.holder_keys.len() != self.coordinates.len()
+            || self.holder_keys.iter().map(|key| key.as_ref()).collect::<BTreeSet<_>>().len() != self.coordinates.len()
+        {
+            return Err(Tb1PolynomialError::Roster);
+        }
+        let mut hash = Sha3_512::new();
+        hash.update(b"MISAKA/private/TB1/roster/v1");
+        hash.update(u32::try_from(self.coordinates.len()).map_err(|_| Tb1PolynomialError::Roster)?.to_be_bytes());
+        for (x, key) in self.coordinates.iter().zip(self.holder_keys) {
+            hash.update(x.to_bytes());
+            hash.update(key.as_slice());
+        }
+        Ok(hash.finalize().into())
+    }
+}
+
 pub struct Tb1Qualification<'a> {
     pub(super) round_ref: &'a [u8],
     pub(super) qual_root: [u8; 64],
@@ -65,7 +85,7 @@ impl<'a> Tb1Qualification<'a> {
     pub fn resolve(
         roster: Tb1Roster<'a>,
         round_ref: &'a [u8],
-        qual_root: [u8; 64],
+        resources_ref: [u8; 64],
         dealers: &'a [usize],
         cut: &Tb1PreparationCut<'_>,
         max_ready_records: usize,
@@ -76,13 +96,8 @@ impl<'a> Tb1Qualification<'a> {
             return Err(PreparationBudget);
         }
         let Tb1Roster { coordinates, holder_keys, f } = roster;
-        check_roster(coordinates, f)?;
+        let roster_root = roster.root()?;
         check_qualified(coordinates, f, dealers)?;
-        if holder_keys.len() != coordinates.len()
-            || holder_keys.iter().map(|k| k.as_ref()).collect::<BTreeSet<_>>().len() != coordinates.len()
-        {
-            return Err(Roster);
-        }
         if round_ref.is_empty()
             || cut.round_ref != round_ref
             || cut.observed_through < cut.deadline_position
@@ -113,6 +128,49 @@ impl<'a> Tb1Qualification<'a> {
         if !complete.eq(dealers.iter().copied()) {
             return Err(QualifiedSet);
         }
+        // Hash the semantic preparation records in native slot order. Retransmissions
+        // and ML-DSA signing randomness do not give the sender another beacon.
+        let width = |n: usize| u32::try_from(n).map(u32::to_be_bytes).map_err(|_| PreparationBudget);
+        let mut digest = Sha3_512::new();
+        digest.update(b"MISAKA/private/TB1/Qualification/v1");
+        digest.update(width(round_ref.len())?);
+        digest.update(round_ref);
+        digest.update(resources_ref);
+        digest.update(cut.deadline_position.to_be_bytes());
+        digest.update(roster_root);
+        for end in cut.dealer_ends {
+            match end.filter(|end| end.position <= cut.deadline_position) {
+                Some(end) => {
+                    digest.update([1]);
+                    digest.update(end.position.to_be_bytes());
+                    digest.update(end.end.transcript_root);
+                    digest.update(end.end.end_anchor);
+                }
+                None => digest.update([0]),
+            }
+        }
+        digest.update(width(supporters.len())?);
+        for (dealer, holder) in supporters {
+            digest.update(width(dealer)?);
+            digest.update(width(holder)?);
+        }
+        digest.update(width(dealers.len())?);
+        for &dealer in dealers {
+            digest.update(width(dealer)?);
+        }
+        let qual_root = digest.finalize().into();
         Ok(Self { round_ref, qual_root, roster, preparation_deadline: cut.deadline_position, dealers })
+    }
+
+    pub fn roster(&self) -> Tb1Roster<'_> {
+        self.roster
+    }
+
+    pub fn round_ref(&self) -> &[u8] {
+        self.round_ref
+    }
+
+    pub fn root(&self) -> [u8; 64] {
+        self.qual_root
     }
 }

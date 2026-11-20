@@ -859,6 +859,10 @@ impl CoinbaseManager {
         if anchored { Ok(()) } else { Err(CoinbaseError::PayloadLenAboveMax(payload.len(), self.max_coinbase_payload_len)) }
     }
 
+    pub fn coinbase_extra_data<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<&'a [u8]> {
+        self.parse_coinbase_payload_v2(payload).map(|(_, _, _, _, extra)| extra)
+    }
+
     pub fn deserialize_coinbase_payload<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<CoinbaseData<&'a [u8]>> {
         let (blue_score, subsidy, version, script, extra_data) = self.parse_coinbase_payload_v2(payload)?;
         let script_public_key = ScriptPublicKey::new(version, ScriptVec::from_slice(script));

@@ -11,8 +11,10 @@ use tempfile::tempdir;
 
 const ROUND: &[u8] = b"private custody EXEC";
 const Q: [usize; 3] = [0, 1, 2];
-const ORIGINAL: Tb1ReleaseContext<'static> = Tb1ReleaseContext { round_ref: ROUND, qual_root: [21; 64], freeze_id: [31; 64] };
-const SIBLING: Tb1ReleaseContext<'static> = Tb1ReleaseContext { freeze_id: [32; 64], ..ORIGINAL };
+static QUALIFIED: LazyLock<Tb1Qualification<'static>> = LazyLock::new(qualified);
+fn original() -> Tb1ReleaseContext<'static> {
+    Tb1ReleaseContext { round_ref: ROUND, qual_root: QUALIFIED.root(), freeze_id: [31; 64] }
+}
 const LIMIT: usize = 2048;
 const CHILD_DIR: &str = "MISAKA_PRIVATE_TB1_CUSTODY_TEST_DIRECTORY";
 static KEYS: LazyLock<Vec<MLDSA65KeyPair>> = LazyLock::new(|| (0..4).map(|slot| ml_dsa_65::generate_key_pair([slot; 32])).collect());
@@ -31,7 +33,13 @@ fn block(n: u64) -> Hash64 {
     Hash64::from_u64_word(n)
 }
 fn freeze(context: Tb1ReleaseContext<'_>) -> Tb1HolderFreeze {
-    Tb1HolderFreeze { accepting_block: block(2), freeze_id: context.freeze_id, release_from_daa: 17, deadline_exclusive_daa: 25 }
+    Tb1HolderFreeze {
+        accepting_block: block(2),
+        qual_root: context.qual_root,
+        freeze_id: context.freeze_id,
+        release_from_daa: 17,
+        deadline_exclusive_daa: 25,
+    }
 }
 impl ConsensusApi for Branch {
     fn get_header(&self, hash: Hash64) -> ConsensusResult<std::sync::Arc<kaspa_consensus_core::header::Header>> {
@@ -100,7 +108,7 @@ fn qualified() -> Tb1Qualification<'static> {
     Tb1Qualification::resolve(
         Tb1Roster { coordinates: &COORDINATES, holder_keys: &PUBLIC, f: 1 },
         ROUND,
-        ORIGINAL.qual_root,
+        [21; 64], // reserved resources reference
         &Q,
         &cut,
         12,
@@ -118,7 +126,7 @@ fn custody_process() {
     let Some(dir) = std::env::var_os(CHILD_DIR) else { return };
     let slot: usize = std::env::var("MISAKA_TB1_TEST_SLOT").unwrap().parse().unwrap();
     let mode = std::env::var("MISAKA_TB1_TEST_MODE").unwrap();
-    let context = if mode == "competing-freeze" { SIBLING } else { ORIGINAL };
+    let context = if mode == "competing-freeze" { Tb1ReleaseContext { freeze_id: [32; 64], ..original() } } else { original() };
     let shares = shares(slot);
     let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
     let dir = Path::new(&dir);
@@ -177,7 +185,7 @@ fn three_holders_killed_before_signing_recover_only_the_original_release() {
             (
                 slot,
                 Tb1SignedRelease {
-                    row: Tb1HolderRelease { context: ORIGINAL, holder_slot: slot, shares: &shares[slot] },
+                    row: Tb1HolderRelease { context: original(), holder_slot: slot, shares: &shares[slot] },
                     accepted_position: 18,
                     signature: &signatures[slot],
                 },
@@ -186,7 +194,7 @@ fn three_holders_killed_before_signing_recover_only_the_original_release() {
         .collect();
     let qualified = qualified();
     let cut = Tb1ReleaseCut {
-        context: ORIGINAL,
+        context: original(),
         closed_at: 14,
         stable_at: 16,
         release_from: 17,
@@ -197,7 +205,8 @@ fn three_holders_killed_before_signing_recover_only_the_original_release() {
     let cert = set.assemble(100).unwrap();
     assert_eq!(set.verify(&cert).unwrap(), Q.map(|d| (d, field(10 + d as u8))));
     let seed = set.verify_seed(&cert).unwrap();
-    assert_eq!(faster_hex::hex_string(seed.as_bytes()), "d654a9ce18d8738a2ca407cbe74d2c5d354a58d1b888937c442328ed3bcc6c77");
+    eprintln!("qualification {}", faster_hex::hex_string(&qualified.root()));
+    assert_eq!(faster_hex::hex_string(seed.as_bytes()), "99df6ee58636a43cf174f09e4f60eac5c81ac8e5e7addcc21b7b00de72a06f4e");
     eprintln!("recovered 3/3 original holder signatures, seed {}", faster_hex::hex_string(seed.as_bytes()));
 }
 
@@ -208,7 +217,7 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     let key = &PUBLIC[0];
     let qualified = qualified();
     let shares = shares(0);
-    let row = Tb1HolderRelease { context: ORIGINAL, holder_slot: 0, shares: &shares };
+    let row = Tb1HolderRelease { context: original(), holder_slot: 0, shares: &shares };
     assert!(Tb1ExposureJournal::resume(dir, ROUND, key, 0).is_err());
     Tb1ExposureJournal::provision(dir, ROUND, key, 0).unwrap();
     assert!(Tb1ExposureJournal::resume(dir, ROUND, key, 1).is_err());
@@ -216,17 +225,17 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     assert!(matches!(Tb1ExposureJournal::resume(dir, ROUND, key, 0), Err(e) if e.kind() == ErrorKind::WouldBlock));
     assert!(
         journal
-            .reserve_signing_message(&A, freeze(ORIGINAL), &qualified, &Tb1HolderRelease { shares: &shares[..2], ..row }, LIMIT)
+            .reserve_signing_message(&A, freeze(original()), &qualified, &Tb1HolderRelease { shares: &shares[..2], ..row }, LIMIT)
             .is_err()
     );
-    assert!(journal.reserve_signing_message(&A, freeze(ORIGINAL), &qualified, &row, 4).is_err());
-    let expected = journal.reserve_signing_message(&A, freeze(ORIGINAL), &qualified, &row, LIMIT).unwrap();
+    assert!(journal.reserve_signing_message(&A, freeze(original()), &qualified, &row, 4).is_err());
+    let expected = journal.reserve_signing_message(&A, freeze(original()), &qualified, &row, LIMIT).unwrap();
     drop(journal);
     let file = location(dir, &binding(ROUND, key).unwrap());
     let bytes = fs::read(&file).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir, ROUND, key, 0).unwrap();
-    assert_eq!(expected, journal.reserve_signing_message(&A, freeze(ORIGINAL), &qualified, &row, LIMIT).unwrap());
-    let extended = Tb1HolderFreeze { deadline_exclusive_daa: 26, ..freeze(ORIGINAL) };
+    assert_eq!(expected, journal.reserve_signing_message(&A, freeze(original()), &qualified, &row, LIMIT).unwrap());
+    let extended = Tb1HolderFreeze { deadline_exclusive_daa: 26, ..freeze(original()) };
     assert!(
         journal.reserve_signing_message(&A, extended, &qualified, &row, LIMIT).unwrap_err().to_string().contains("different exposure")
     );
@@ -234,7 +243,7 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     changed[0].1 = field(73);
     assert!(
         journal
-            .reserve_signing_message(&A, freeze(ORIGINAL), &qualified, &Tb1HolderRelease { shares: &changed, ..row }, LIMIT)
+            .reserve_signing_message(&A, freeze(original()), &qualified, &Tb1HolderRelease { shares: &changed, ..row }, LIMIT)
             .is_err()
     );
     drop(journal);
@@ -254,30 +263,30 @@ fn observed_finality_loss_halts_across_branch_return_and_restart() {
     let key = &PUBLIC[0];
     let q = qualified();
     let shares = shares(0);
-    let row = Tb1HolderRelease { context: ORIGINAL, holder_slot: 0, shares: &shares };
+    let row = Tb1HolderRelease { context: original(), holder_slot: 0, shares: &shares };
     let pending = Branch { tip: 3, finalized: Some(1) };
     let unavailable = Branch { tip: 3, finalized: None };
     Tb1ExposureJournal::provision(dir.path(), ROUND, key, 0).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0).unwrap();
-    assert!(journal.reserve_signing_message(&pending, freeze(ORIGINAL), &q, &row, LIMIT).is_err());
-    assert!(journal.reserve_signing_message(&B, freeze(ORIGINAL), &q, &row, LIMIT).is_err());
+    assert!(journal.reserve_signing_message(&pending, freeze(original()), &q, &row, LIMIT).is_err());
+    assert!(journal.reserve_signing_message(&B, freeze(original()), &q, &row, LIMIT).is_err());
     for closed in [
-        Tb1HolderFreeze { release_from_daa: 20, ..freeze(ORIGINAL) },
-        Tb1HolderFreeze { deadline_exclusive_daa: 19, ..freeze(ORIGINAL) },
+        Tb1HolderFreeze { release_from_daa: 20, ..freeze(original()) },
+        Tb1HolderFreeze { deadline_exclusive_daa: 19, ..freeze(original()) },
     ] {
         assert!(journal.reserve_signing_message(&A, closed, &q, &row, LIMIT).is_err());
     }
     assert!(journal.read_record().unwrap().is_none());
-    journal.reserve_signing_message(&A, freeze(ORIGINAL), &q, &row, LIMIT).unwrap();
+    journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap();
     assert!(journal.observe_branch(&unavailable).is_err());
     journal.observe_branch(&A).unwrap();
     assert!(
         journal
-            .reserve_signing_message(&A, Tb1HolderFreeze { accepting_block: block(1), ..freeze(ORIGINAL) }, &q, &row, LIMIT)
+            .reserve_signing_message(&A, Tb1HolderFreeze { accepting_block: block(1), ..freeze(original()) }, &q, &row, LIMIT)
             .is_err()
     );
     assert!(journal.observe_branch(&B).unwrap_err().to_string().contains("halted"));
-    assert!(journal.reserve_signing_message(&A, freeze(ORIGINAL), &q, &row, LIMIT).unwrap_err().to_string().contains("halted"));
+    assert!(journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap_err().to_string().contains("halted"));
     drop(journal);
     assert!(matches!(Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0), Err(e) if e.to_string().contains("halted")));
 }
@@ -312,13 +321,16 @@ fn generation_change_during_read_neither_reserves_nor_halts() {
     let key = &PUBLIC[0];
     let q = qualified();
     let values = shares(0);
-    let row = Tb1HolderRelease { context: ORIGINAL, holder_slot: 0, shares: &values };
+    let row = Tb1HolderRelease { context: original(), holder_slot: 0, shares: &values };
     Tb1ExposureJournal::provision(dir.path(), ROUND, key, 0).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0).unwrap();
     let moved = MovingView { first: &A, next: &B, calls: AtomicUsize::new(0) };
-    assert_eq!(journal.reserve_signing_message(&moved, freeze(ORIGINAL), &q, &row, LIMIT).unwrap_err().kind(), ErrorKind::WouldBlock);
+    assert_eq!(
+        journal.reserve_signing_message(&moved, freeze(original()), &q, &row, LIMIT).unwrap_err().kind(),
+        ErrorKind::WouldBlock
+    );
     assert!(journal.read_record().unwrap().is_none());
-    journal.reserve_signing_message(&A, freeze(ORIGINAL), &q, &row, LIMIT).unwrap();
+    journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap();
     let saved = journal.read_record().unwrap().unwrap();
     let moved = MovingView { first: &B, next: &A, calls: AtomicUsize::new(0) };
     assert_eq!(journal.observe_branch(&moved).unwrap_err().kind(), ErrorKind::WouldBlock);

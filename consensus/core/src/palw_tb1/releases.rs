@@ -375,7 +375,7 @@ mod tests {
             Tb1Qualification::resolve(
                 Tb1Roster { coordinates: &roster, holder_keys: &PUBLIC, f: 2 },
                 EXEC.round_ref,
-                EXEC.qual_root,
+                [17; 64], // reserved resources reference
                 dealers,
                 snapshot,
                 budget,
@@ -392,7 +392,7 @@ mod tests {
             Tb1Qualification::resolve(
                 Tb1Roster { coordinates: &roster, holder_keys: &duplicates, f: 2 },
                 EXEC.round_ref,
-                EXEC.qual_root,
+                [17; 64], // reserved resources reference
                 &Q,
                 &cut,
                 ready.len(),
@@ -401,9 +401,21 @@ mod tests {
             Err(Roster)
         ));
         let qualified = resolve(&Q, &cut, ready.len()).unwrap();
+        let context = Tb1ReleaseContext { qual_root: qualified.root(), ..EXEC };
+        let mut reordered = ready.clone();
+        reordered.reverse();
+        reordered.push(reordered[0]);
+        let reordered_cut = Tb1PreparationCut { ready: &reordered, ..cut };
+        assert_eq!(resolve(&Q, &reordered_cut, reordered.len()).unwrap().root(), qualified.root());
+        let reduced: Vec<_> = ready.iter().copied().filter(|r| !(r.dealer_slot == 3 && r.holder_slot == 2)).collect();
+        let reduced_cut = Tb1PreparationCut { ready: &reduced, ..cut };
+        assert_ne!(resolve(&Q, &reduced_cut, reduced.len()).unwrap().root(), qualified.root());
         let values = rows();
-        let released = resolved(&values);
-        let set = signed_set(CUT, &qualified, &released, 7).unwrap();
+        let mut released = resolved(&values);
+        for row in released.values_mut() {
+            row.context = context;
+        }
+        let set = signed_set(Tb1ReleaseCut { context, ..CUT }, &qualified, &released, 7).unwrap();
         assert_eq!(set.verify(&set.assemble(336).unwrap()).unwrap(), Q.map(|d| (d, field(100 + d))));
         assert!(matches!(
             signed_set(Tb1ReleaseCut { context: Tb1ReleaseContext { qual_root: [3; 64], ..EXEC }, ..CUT }, &qualified, &released, 7),

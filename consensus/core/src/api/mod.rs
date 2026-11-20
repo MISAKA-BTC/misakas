@@ -1318,6 +1318,12 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Check the configured PALW network domain and read the miner's original extra data using the native coinbase codec.
+    /// Private off-chain consumers must separately verify chain membership and stability.
+    fn palw_coinbase_commits_to(&self, _network_domain: [u8; 64], _block: BlockHash, _commitment: &[u8; 64]) -> ConsensusResult<bool> {
+        Err(crate::errors::consensus::ConsensusError::General("native coinbase read unavailable"))
+    }
+
     fn modify_coinbase_payload(&self, payload: Vec<u8>, miner_data: &MinerData) -> CoinbaseResult<Vec<u8>> {
         unimplemented!()
     }
