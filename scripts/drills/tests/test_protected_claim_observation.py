@@ -30,7 +30,8 @@ class Rpc:
                          acceptedTxOrdinal=0, eventOrdinal=0, acceptedDaa=100, acceptedBlueScore=100,
                          observedTip=h(10), observedTipDaa=200,
                          fullReplayApprovalRecorded=True, publicRefutationRecorded=False)
-        self.detail = dict(version=1, kind='palwClaimDetail', claim=dict(claimId=h(4), phase='final', phaseDaa=150),
+        self.detail = dict(version=1, kind='palwClaimDetail',
+                           claim=dict(claimId=h(4), phase='final', phaseDaa=150, executorBond=h(20), seats=[h(21)]),
                            protectedOriginal=self.read, tipBlock=h(10), tipDaa=200)
         self.blocks = {}
         for n in (8, 9, 10):
@@ -137,7 +138,7 @@ class ObservationTests(unittest.TestCase):
 
     def test_second_peer_must_confirm_same_final_receipt_and_consumption(self):
         rpc = Rpc()
-        approval = dict(carrierTransaction=h(22), acceptingBlock=h(9), carrierBlock=h(8),
+        approval = dict(bond=h(21), carrierTransaction=h(22), acceptingBlock=h(9), carrierBlock=h(8),
                         acceptedTxOrdinal=1, acceptedDaa=100)
         rpc.detail['protectedReplayApprovals'] = [approval]
         rpc.entry['acceptedTransactionIds'].append(h(22))
@@ -194,7 +195,7 @@ class ObservationTests(unittest.TestCase):
     def test_panel_txid_requires_the_matching_stored_approval(self):
         rpc = Rpc()
         rpc.detail['protectedReplayApprovals'] = [dict(
-            carrierTransaction=h(22), acceptingBlock=h(9), carrierBlock=h(8),
+            bond=h(21), carrierTransaction=h(22), acceptingBlock=h(9), carrierBlock=h(8),
             acceptedTxOrdinal=1, acceptedDaa=100)]
         rpc.entry['acceptedTransactionIds'] += [h(22), h(23)]
         rpc.blocks[h(8)]['transactions'].append(dict(verboseData=dict(transactionId=h(22))))
@@ -232,6 +233,14 @@ class ObservationTests(unittest.TestCase):
             log.write_text(prefix + h(22) + '\n' + prefix + h(23) + '\n')
             result = observe(rpc, rpc.expected, panel_logs=[log], excluded_panel_bond=h(20))
             self.assertEqual(result['panelApprovalAcceptance']['carrierTransaction'], h(23))
+            # A retransmission can pay its fee on-chain while only one
+            # carrier supplies the stored native approval.
+            rpc.detail['protectedReplayApprovals'] = rpc.detail['protectedReplayApprovals'][1:]
+            via_cli = observe(rpc, rpc.expected, panel_log=log)
+            self.assertEqual(via_cli['panelApprovalAcceptance'], result['panelApprovalAcceptance'])
+            rpc.detail['claim']['seats'] = [h(24)]
+            with self.assertRaisesRegex(ValueError, 'independently selected'):
+                observe(rpc, rpc.expected, panel_approval=h(23))
 
     def test_receipt_log_skips_side_dag_candidate(self):
         rpc = Rpc()

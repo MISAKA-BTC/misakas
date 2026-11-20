@@ -184,16 +184,18 @@ def observe(rpc, expected, *, previous=None, receipt=None, panel_approval=None, 
     require(len(matching) == 1, 'exact claim carrier body unavailable')
 
     if panel_log is not None:
-        require(panel_approval is None, 'choose one Panel approval source')
-        panel_approval = approval_from_panel_log(panel_log, origin, chain['acceptedTransactionIds'])
+        require(panel_logs is None, 'choose one Panel log source')
+        panel_logs = [panel_log]
 
     if panel_logs is not None:
-        require(panel_log is None and panel_approval is None, 'choose one Panel approval source')
+        require(panel_approval is None, 'choose one Panel approval source')
+        executor = detail['claim']['executorBond']
+        require(excluded_panel_bond in (None, executor), 'configured executor differs from the native claim')
         accepted_rows = detail.get('protectedReplayApprovals', [])
         logged = panel_approval_candidates(panel_logs, origin)
         candidates = [
             row['carrierTransaction'] for row in accepted_rows
-            if row['bond'] != excluded_panel_bond and row['carrierTransaction'] in logged
+            if row['bond'] != executor and row['carrierTransaction'] in logged
         ]
         if not candidates:
             raise ContextMoved('awaiting a matching accepted approval from an independent Panel seat')
@@ -216,6 +218,9 @@ def observe(rpc, expected, *, previous=None, receipt=None, panel_approval=None, 
         require(len(stored) == 1 and stored[0]['acceptingBlock'] == approval_block,
                 'Panel transaction does not match the stored approval for this original')
         approval_entry = stored[0]
+        require(approval_entry['bond'] in detail['claim']['seats']
+                and approval_entry['bond'] != detail['claim']['executorBond'],
+                'approval signer is not an independently selected Panel seat')
         ordinal = unsigned(approval_entry['acceptedTxOrdinal'], 32)
         require(ordinal < len(approvals[0]['acceptedTransactionIds'])
                 and approvals[0]['acceptedTransactionIds'][ordinal] == panel_approval,
@@ -272,13 +277,6 @@ def panel_approval_candidates(paths, origin):
                 if match:
                     matches.add(match[1])
     return matches
-
-
-def approval_from_panel_log(path, origin, accepted):
-    accepted_ids = {txid for row in accepted for txid in row['acceptedTransactionIds']}
-    matches = panel_approval_candidates([path], origin) & accepted_ids
-    require(len(matches) == 1, 'expected one accepted Panel approval from this log for the exact original')
-    return matches.pop()
 
 
 def receipt_from_producer_log(path, claim, *, rpc=None, spent_indices=None):
