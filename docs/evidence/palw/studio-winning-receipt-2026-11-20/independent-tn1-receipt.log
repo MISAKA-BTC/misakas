@@ -1,0 +1,9 @@
+[service-tir-frame] owner-open door until DAA 1741 (now 1729)
+2026-11-20 19:59:04.926+09:00 [INFO ] [palw-panel] event work=e6770642a88b066e lane=prompt stage=QUORUM_REACHED phase_daa=1733 deadline_daa=2324
+[service-tir-frame] honest attempt 7765d18443669d877a8e8e4cf7d4bad2c1999443db53f0fd4040eb2c7fab8faa0090463a456208a801d2375f5ed8edbde75d4d4f41f7554b122aafea1341f2d7 supplies receipt beacon slots {2725} at DAA 2725
+[service-tir-frame] spendable quanta of e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791: [(0, true, 3325)]
+[service-tir-frame] reader 1 accepted receipt 7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147 and child 64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd
+[service-tir-frame] reader 2 accepted receipt 7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147 and child 64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd
+[service-tir-frame] honest: claim e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791 Final and paid in receipt block 7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147 at DAA 2726
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 2013.77s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 2013.83s

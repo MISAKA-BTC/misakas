@@ -79,3 +79,9 @@ cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- \
 MOE2 ではネイティブの登録ブロックに含まれる2クラスのうち、追加登録モデルだけに市場が開いた。1件の登録 root が一致しないと同じバッチをすべて棄却する。報酬 1,000 の RFC 例では、購入に 300、永久 LP に 200 を充て、残り 500 を報酬として記帳した。購入した 2,307 Position のうち 1,183 を LP に戻し、1,124 を burn した。支払・公開有効化は行っていない。
 
 TB1 の有限体検査では、固定した全 qualified dealer に対して同じ凍結 roster の相異なる支持点を検査した。dealer の欠落・重複・差替えを拒否し、到着順を変えても定数を凍結順に取り出せた。MOE2 と TB1 のネイティブテスト計8件が成功した。新しい FOW1 claim の本番 checker、TB1 の VSS 通信からの統合、および3ピアでの新版決済は未検証。[テスト名と結果](native-regressions.log)
+
+## 別の当選 claim による受賞ブロック生成
+
+同じ日に T‑N1 の既存ローカル試験で、producer service が別の TFP1 claim `e6770642…f8934791` を投入した。DAA 1733 で署名が定足数に達し、Final 後の DAA 2725 に実行済み attempt が抽選 beacon を供給した。index 0 は当選し、使用期限は DAA 3325 だった。通常のテンプレートに署名済み PFS3 を載せて受賞ブロック `7cb8b072…56e5a147` を生成した。直接の子 `64525d97…457388fd` が生成者へ 320,084,650,080 sompi を割り当てた。生成側と、新しい DB に genesis から全ブロックを入れた2つの reader が、同じ index の消費と子の coinbase UTXO を検証した。初回のこの3台帳は1つのテストプロセス内にあった。[当選と3台帳の実行ログ](independent-tn1-receipt.log)
+
+この試験は T‑N1 の固定 genesis、試験用の期間・価格、PoW を省略するネイティブテスト設定を使う。Studio が追加した冒頭の TFO3 claim とは識別子も規則も異なる。
