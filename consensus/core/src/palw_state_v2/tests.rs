@@ -28922,9 +28922,6 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
-            cad1_route_gate_v1: None,
-            swc1_eligibility_engine_v1: None,
-            an1_ledger_state_v1: None,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
@@ -29248,9 +29245,6 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
-            cad1_route_gate_v1: None,
-            swc1_eligibility_engine_v1: None,
-            an1_ledger_state_v1: None,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,

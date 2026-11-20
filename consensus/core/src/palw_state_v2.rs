@@ -21656,19 +21656,6 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
-    /// RFC-0055 / RFC-0056 / RFC-0058 (`UAI1` / `CAD1` / `SWC1`): Optional pre-admission compact
-    /// `Preseal` / `WorkTicket <= T(D)` gate evaluated at the front of `Attempt`, `FreePrompt`,
-    /// `TFP1 Plain`, `TFO1/TFO2/TFO3`, `EvaluationClaim`, and `Quote RPC` before heavy decode/planning.
-    /// `None` by `Default` (every shipped preset while dormant).
-    pub cad1_route_gate_v1: Option<crate::palw_claim_admission_difficulty_v1::Cad1RouteGateContextV1>,
-    /// RFC-0048 / 0049 / 0050 / 0055 / 0058: Optional unified consensus eligibility engine
-    /// (`MatureEligible` / `Swc1EligibilitySnapshotV1` / `UnifiedCarrierV1` 1 BPS permit book).
-    /// `None` by `Default` (every shipped preset while dormant).
-    pub swc1_eligibility_engine_v1: Option<crate::palw_unified_carrier_and_eligibility_v1::UnifiedConsensusEligibilityEngineV1>,
-    /// RFC-0059 / ADR-0227 / RFC-0056 §17 / RFC-0057 §17 / RFC-0058 §16 (`PALW-AN1`): Optional
-    /// input-bound execution, Panel full re-execution, and model-free Node local Court ledger state.
-    /// `None` by `Default` (every shipped preset while dormant).
-    pub an1_ledger_state_v1: Option<crate::palw_an1_input_binding_and_panel_court_v1::An1LedgerStateV1>,
     /// Node-owned planning declaration selected at this block's inclusion DAA.
     /// Archive replay resolves it at the original point, never today's tip.
     pub protected_planning_v3: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,
@@ -23541,14 +23528,6 @@ fn apply_attempt(
 ) -> Result<(), PalwStateV2Error> {
     let attempt = &envelope.attempt;
     let claim_id = attempt_id_v2(attempt);
-    if let Some(gate) = &builder.extras.cad1_route_gate_v1 {
-        use crate::palw_claim_admission_difficulty_v1::{Cad1IngressRouteFamilyV1, Cad1IngressRouteKindV1};
-        gate.check_route_entry_v1(
-            Cad1IngressRouteKindV1::NewOriginalCandidate(Cad1IngressRouteFamilyV1::AttemptPav3),
-            Some(claim_id),
-        )
-        .map_err(PalwStateV2Error::CarriageInconsistent)?;
-    }
     if builder.state.claims.contains_key(&claim_id) {
         return Err(PalwStateV2Error::DuplicateClaim(claim_id));
     }

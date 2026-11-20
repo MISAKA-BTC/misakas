@@ -4197,9 +4197,6 @@ impl VirtualStateProcessor {
             _ => None,
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-            cad1_route_gate_v1: None,
-            swc1_eligibility_engine_v1: None,
-            an1_ledger_state_v1: None,
             protected_planning_v3: self.palw_protected_planning_v3
                 .filter(|fence| fence.active_at(daa_score)).map(|fence| fence.declaration),
             // Base rule extras: transaction-local metadata is attached after accepted extraction.

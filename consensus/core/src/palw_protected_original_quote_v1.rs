@@ -311,13 +311,6 @@ pub fn quote_protected_original_v1(
     if daa < point.daa_score || blue < point.blue_score {
         return Err("protected quote clock precedes its parent".into());
     }
-    if let Some(gate) = &extras.cad1_route_gate_v1 {
-        use crate::palw_claim_admission_difficulty_v1::{Cad1IngressRouteFamilyV1, Cad1IngressRouteKindV1};
-        gate.check_route_entry_v1(
-            Cad1IngressRouteKindV1::NewOriginalCandidate(Cad1IngressRouteFamilyV1::QuoteRpcDetailed),
-            Some(fp_claim_id_v3(original)),
-        )?;
-    }
     let form = extras.prompt_ids_form_v1();
     let schedules = crate::palw_positive_contract_v2::tfp1_original::public_policy::ProtectedPlanningSchedulesV3::selected_v3(
         extras.protected_planning_v3,

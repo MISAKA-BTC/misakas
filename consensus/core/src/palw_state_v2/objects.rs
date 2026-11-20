@@ -74,26 +74,6 @@ fn apply_object_observed_v2(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    if let Some(gate) = &builder.extras.cad1_route_gate_v1 {
-        use crate::palw_claim_admission_difficulty_v1::{Cad1IngressRouteFamilyV1, Cad1IngressRouteKindV1};
-        let (route_kind, candidate_id) = match object {
-            PalwConsensusObjectV2::FreePromptCommitted { claim, eval, .. } => {
-                let family = if eval.is_some() {
-                    Cad1IngressRouteFamilyV1::EvaluationClaim
-                } else if builder.extras.tir_funded_originals.contains_key(claim) {
-                    Cad1IngressRouteFamilyV1::TfoFundedOriginal
-                } else if builder.extras.tir_public_originals.contains_key(claim) {
-                    Cad1IngressRouteFamilyV1::Tfp1PlainOriginal
-                } else {
-                    Cad1IngressRouteFamilyV1::FreePromptPlain
-                };
-                (Cad1IngressRouteKindV1::NewOriginalCandidate(family), Some(*claim))
-            }
-            _ => (Cad1IngressRouteKindV1::ContinuationOfAcceptedClaim, None),
-        };
-        gate.check_route_entry_v1(route_kind, candidate_id)
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
-    }
     let observes_court = builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty());
     let (has_frame, paired) = match object {
         PalwConsensusObjectV2::FreePromptCommitted { claim, .. } => {
