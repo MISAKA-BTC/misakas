@@ -2,7 +2,7 @@
 //! is only one part of TB1. The caller authenticates the frozen roster, signed
 //! releases, VSS qualification, purpose, position and limits before using them.
 use kaspa_math::{Uint576, Uint3072};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Tb1Field(Uint576);
@@ -52,6 +52,7 @@ pub enum Tb1PolynomialError {
     Roster,
     Support,
     InconsistentPoint,
+    QualifiedSet,
 }
 
 /// Check the disclosed candidate polynomial at every signed supporting point.
@@ -63,20 +64,35 @@ pub fn check_dealer_polynomial(
     coefficients: &[Tb1Field],
     support: &[Tb1DealerPoint],
 ) -> Result<(), Tb1PolynomialError> {
+    check_roster(roster, f)?;
+    check_points(roster, f, coefficients, support)
+}
+
+fn check_roster(roster: &[Tb1Field], f: usize) -> Result<(), Tb1PolynomialError> {
     use Tb1PolynomialError::*;
     let n = f.checked_mul(3).and_then(|m| m.checked_add(1)).ok_or(Threshold)?;
     if roster.len() != n {
         return Err(Threshold);
     }
-    if coefficients.len() != f + 1 {
-        return Err(Coefficients);
-    }
-    if support.len() < n - f || support.len() > n {
-        return Err(Support);
-    }
     let mut coordinates = BTreeSet::new();
     if roster.iter().any(|x| x.0 == Uint576::ZERO || !coordinates.insert(*x)) {
         return Err(Roster);
+    }
+    Ok(())
+}
+
+fn check_points(
+    roster: &[Tb1Field],
+    f: usize,
+    coefficients: &[Tb1Field],
+    support: &[Tb1DealerPoint],
+) -> Result<(), Tb1PolynomialError> {
+    use Tb1PolynomialError::*;
+    if coefficients.len() != f + 1 {
+        return Err(Coefficients);
+    }
+    if support.len() < roster.len() - f || support.len() > roster.len() {
+        return Err(Support);
     }
     let mut slots = BTreeSet::new();
     for point in support {
@@ -90,6 +106,47 @@ pub fn check_dealer_polynomial(
         }
     }
     Ok(())
+}
+
+pub struct Tb1DealerPolynomial<'a> {
+    pub dealer_slot: usize,
+    pub coefficients: &'a [Tb1Field],
+    pub support: &'a [Tb1DealerPoint],
+}
+
+/// Project the constants for the entire previously qualified dealer set.
+/// The caller resolves Q and each point from authenticated releases at the
+/// same native freeze. Arrival order and supporting subsets do not enter the output.
+pub fn qualified_constants(
+    roster: &[Tb1Field],
+    f: usize,
+    qualified: &[usize],
+    dealers: &[Tb1DealerPolynomial<'_>],
+) -> Result<Vec<(usize, Tb1Field)>, Tb1PolynomialError> {
+    use Tb1PolynomialError::QualifiedSet;
+    check_roster(roster, f)?;
+    if qualified.len() < roster.len() - f
+        || qualified.len() > roster.len()
+        || dealers.len() != qualified.len()
+        || !qualified.is_sorted_by(|a, b| a < b)
+        || qualified.last().is_none_or(|&slot| slot >= roster.len())
+    {
+        return Err(QualifiedSet);
+    }
+    let mut by_slot = BTreeMap::new();
+    for dealer in dealers {
+        if by_slot.insert(dealer.dealer_slot, dealer).is_some() {
+            return Err(QualifiedSet);
+        }
+    }
+    qualified
+        .iter()
+        .map(|slot| {
+            let dealer = by_slot.get(slot).ok_or(QualifiedSet)?;
+            check_points(roster, f, dealer.coefficients, dealer.support)?;
+            Ok((*slot, dealer.coefficients[0]))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -111,6 +168,23 @@ mod tests {
         assert_eq!(minus_one.mul_add(minus_one, minus_one), small(0));
         bytes[0] = 2;
         assert!(Tb1Field::from_bytes(&bytes).is_none());
+    }
+
+    #[test]
+    fn whole_qualified_set_is_bound_once_in_frozen_order() {
+        let roster: Vec<_> = (1..=4).map(small).collect();
+        let coefficients = [small(7), small(2)];
+        let points: Vec<_> = (0..4).map(|slot| Tb1DealerPoint { holder_slot: slot, value: small(9 + 2 * slot as u64) }).collect();
+        let dealer = |slot, skip| Tb1DealerPolynomial { dealer_slot: slot, coefficients: &coefficients, support: &points[skip..] };
+        let fixed = [0, 2, 3];
+        let reversed = [dealer(3, 0), dealer(2, 1), dealer(0, 0)];
+        assert_eq!(qualified_constants(&roster, 1, &fixed, &reversed).unwrap(), fixed.map(|slot| (slot, small(7))));
+        assert_eq!(qualified_constants(&roster, 1, &fixed, &reversed[..2]), Err(Tb1PolynomialError::QualifiedSet));
+        for invalid in [[0, 0, 3], [0, 2, 4], [2, 0, 3], [0, 1, 3]] {
+            assert_eq!(qualified_constants(&roster, 1, &invalid, &reversed), Err(Tb1PolynomialError::QualifiedSet));
+        }
+        let duplicate = [dealer(0, 1), dealer(0, 0), dealer(3, 1)];
+        assert_eq!(qualified_constants(&roster, 1, &fixed, &duplicate), Err(Tb1PolynomialError::QualifiedSet));
     }
 
     #[test]
