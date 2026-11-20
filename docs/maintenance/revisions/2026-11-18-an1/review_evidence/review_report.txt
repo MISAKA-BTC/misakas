@@ -1,0 +1,75 @@
+# PALW-AN1 独立コード査読
+
+状態: 修正後の独立再実行完了。52 checks PASS、0 failures、例外なし。2026-11-18。
+
+## 対象と方法
+
+対象は今回作成された `docs/maintenance/revisions/2026-11-18-an1/reference_impl/an1_reference.py` である。ユーザーがリンクした元実装の取得・再実行ではない。設計説明から作られた独立toy実装を通読し、既存のテストPASSとは独立に、悪意あるclaim・traceを構成してnative受付、Panel、Node Court、同batch Finalの接続を調べた。
+
+特に、native由来の期待Root、固定program、重みindex、入力位置、opening認証と構造違反の分類、実入力束縛、一回消費、Final前の反証・資料holdを確認した。実装ファイルの編集は別担当が行い、この査読では外部scratchに反例・回帰検査を作成した。
+
+## 初回に確認した二つの反例
+
+初回対象コードSHA-256:
+
+`7d2c30f01f6708e9f38410c5a74e9a782212f233b6b0cb24370d3941ae297f3e`
+
+初回script: `tmp/an1_review_counterexamples.py`。
+初回結果の保全コピー: `tmp/an1_review_counterexamples_results_before_fix.json`。
+
+### R01: nativeとCourtの整数型不一致
+
+正規traceの最初のCONST 0を1へ変更し、実bytesから正しくMerkle Rootを作り直した。元claimの `trace_count` を整数6153と等値比較されるfloat `6153.0` に変えた。
+
+初回nativeはこのclaimを受理した。Panelは全再実行で相違を発見し `Refuted` とCourtを返したが、Courtのopening検査だけが厳密な整数型を要求したため、裁定は `InvalidEvidence` となった。四人の虚偽承認と、検査・包含機会を与えたclosure fixtureの下で、同batchのFinalが成功しcreditが一単位発行された。
+
+これは認証・ネットワークのfixtureとは別の型不整合である。元claim受付、native context、Courtが同じcanonical整数型・幅・範囲を検査する必要がある。floatだけでなくboolean・文字列・暗黙castも拒否し、canonicalな整数countの誤traceは有効に反証できなければならない。
+
+### R02: 有界Courtに入らない過大leaf
+
+traceの最初のrecordを513 byteへ変更し、実bytesを含む正しいMerkle Rootを作った。Courtのleaf上限は512 byteである。初回nativeはRootを受理し、Panelは `Refuted` とCourtを返したが、Nodeはbyte上限でopeningを拒否して `InvalidEvidence` とした。同じclosure fixtureではFinalが成功した。
+
+この結果は、boundedなCourtへ入らない資料を、Panelが反証成立と報告してしまうinterface不整合を示す。構造違反の局所反証が上限内で認証できない場合は、元claim・期待Root・期待indexへ結び付く適格な資料caseを作り、未解決holdで成功を止める必要がある。正規Tree生成器が過大recordを拒否するだけでは、悪意ある生成器によるRoot構成を防げない。
+
+R02を実ネットワークの無条件の攻撃成功と解釈してはいけない。初回再現ではclosure条件をfixtureで真に設定した。真の構造検証・異議処理を行うネットワークの仕様では、この未検証状態がclosureを満たしてはならない。修正では、その条件をtoyでも明示的なnative holdへ接続する。
+
+## 改訂した規範
+
+RFC-0056 §17.3 / A56-09へ、受付とCourtのstrict整数型・幅・範囲の一致を追加した。RFC-0057 §17.4 / A57-11・12へ、過大leafの資料case、native hold、適格notice、整数型不一致の拒否を追加した。新RFC-0059にも同じ要件が反映されている。
+
+無効なpacketの到着だけでMinerを有罪とせず、他actorの資料caseを勝手に解消しない。holdは既存の資格・有限scope・責任・費用条件を満たすnoticeから作る。反証成立・無効証拠・資料未解決の三者を区別する。
+
+## 修正後の独立検査結果
+
+独立回帰scriptは `tmp/an1_independent_postfix_check.py`。初回反例script/resultを上書きしない。悪意あるRootは正規Tree constructorを経ず、公開preimage規則で直接hashして構成する。
+
+検査対象は、claimのfloat/bool等のseal/context拒否、有効intの誤trace反証、上限内の不正record、Court indexの型、過大leafの正しいscopeへの資料noticeと同batch hold、元期限、noticeの資格、malformed padding、model/output資料scope、別重みindex・別token位置・別nonceのCourt、正常実行の一回creditである。
+
+実行結果は `tmp/an1_independent_postfix_results.json` に保存した。52 checks PASS、0 failures、例外なし。検査対象と検査scriptは次のhashへ結合する。
+
+| 対象 | SHA-256 |
+| --- | --- |
+| 修正後 `an1_reference.py` | `e5cca83dbbfc16cd39ccc23000573e84504a6a092d61af971570f193841cec4e` |
+| 独立postfix script | `428afd8ded32eab62dff02483ede50e5510755ab6b8d463fc2565a9881e71fa4` |
+
+R01では、float/bool/数値文字列/負数/u64 overflowのcountをsealとnative contextの両方で拒否した。canonicalな整数countの誤traceは、Panelから有効なCourtが返り、Nodeが `ComputationRefuted` と裁定して同batchのFinalを止めた。上限内の配列record、float/bool値、空recordも、実Rootへ認証された形式違反として反証できた。
+
+R02では、正規Treeを使わず513 byteのleafをhashしたRootをsealした後、Panelが `MaterialsUnauthenticated` と正しい `trace:0` scopeを返した。選出された正直Panelの資料noticeをFinalと同じbatchへ入れると、pending holdが先に設置され、四承認と真のclosure fixtureがあってもFinalはfalse、creditはゼロとなった。元期限後も成功しなかった。この検査は本番DAの証明ではなく、受理された適格noticeとnative成功停止の接続を確かめたものである。
+
+無資格actor、別original ID、float scope indexのnoticeは拒否され、pending集合を変えなかった。不正padding transportでも例外停止せず資料reportを返し、output/modelの異常は各scopeを返した。正しい別indexの重み、別token位置、別nonceへのCourt付替えは拒否された。正常な全再実行は承認され、一回だけcreditが発行され、二回目のFinalは拒否された。
+
+既存scriptのテストグループ数、今回のRFC受入要件の行数、独立査読チェック数を合算しない。初回結果は別ファイルのまま保全し、修正後PASSで初回の攻撃成功記録を上書きしていない。
+
+## コードから確認できた健全な接続
+
+- native contextは登録と元claimから実入力・固定programを再構成し、Court payloadがmodel/program Rootや出力位置を選び直す経路を持たない。
+- Courtはprogram openingを固定Rootへ認証し、その命令・入力token・過去値から期待重みindexを導く。単に同じモデルのどこかの重みを認証するだけではない。
+- NodeのCourtContextは全モデル・全program配列・全trace配列を持たず、認証された局所資料を検査する。
+- 型とscopeが正しい局所反証は、同batchのFinalより先に適用され、多数の承認で覆されない。
+- input/output/traceのtreeは試行IDへ束縛され、model/programの固定scopeは別に扱われる。共通model/program treeを各試行で全て再hashするとは主張していない。
+
+## この査読の限界
+
+署名・beacon・後続Panelイベント・時計・選出poolの真正性、実ネットワークの取得・包含、資料caseの客観的な応答・終結、全consumerのnative統合、DB並行性、forkの安定性、本番LLMの実行はこのtoy検査の外である。closureや材料可用性を任意に真へ変更できるfixtureそのものを本番の合意実装とは扱わない。
+
+一人の正直Panelによる安全性は、全scope検査と、有効反証又は資料holdの期限前包含・裁定を条件とする。正しい別アルゴリズム、cache、外注を排除しない。入力の相違、完全な正しいtrace、Merkle Root、今回のPASSから通常LLMと同額のGPU費用・電力・金銭費用を導かない。

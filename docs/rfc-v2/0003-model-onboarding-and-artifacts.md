@@ -1,5 +1,14 @@
 # RFC-v2-0003 — モデル登録・変換・Artifact
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1のmodel資料は実weight bytesと登録rootを照合する。Root属性の自己申告を信用しない。モデル無審査登録や既存burn停止を別の品質・取得審査へ変更しない。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
 2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 ## 2026-11-09公開資料・一人前提の追加境界
@@ -55,6 +64,15 @@
 header-only preflight、変換の再現性、壊れたartifactの拒否、identity不一致、既存ID上書きの拒否、低メモリ環境、登録からclaim検証までの結合を確認する。裁判可能性の判定と反証の完遂条件は14から参照し、登録側で緩い別基準を作らない。
 
 ---
+
+
+<!-- MOR1-DRAFT-20261120-BEGIN -->
+## 2026-11-20 MOR1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。MOR1対応の新しい登録profileについて、試行ごとの実入力・決定論的実行・完全trace・認証出力形式を固定し、異なる試行の識別値の衝突確率を構造から抑える。permissionless登録とburn停止・解除を維持し、品質・取得可否・通常推論費用の裁量的資格審査を復活させない。
+
+[RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)／[ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)／[変更・検証](../maintenance/revisions/2026-11-20-model-output-binding/README.md)。この参照追記は既存の採択・履歴原文・runtime・activationを変更しない。
+<!-- MOR1-DRAFT-20261120-END -->
 
 ## 原条文の統合収録
 

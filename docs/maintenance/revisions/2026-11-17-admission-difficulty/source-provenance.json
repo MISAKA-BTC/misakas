@@ -1,0 +1,24 @@
+{
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "source_tree": "d99e8148554f04b7f53a19d4717a1f9b4796d3f3",
+  "archive_name": "misakas-main(1).zip",
+  "archive_comment_matches_commit": true,
+  "archive_sha256": "b44ed278833008aee46c4be00dcb26349545e8f7797f0be069d18f4e5fa5ea20",
+  "github_tree_truncated": false,
+  "verified_scopes": [
+    "docs/",
+    "consensus/core/src/",
+    "consensus/src/",
+    "AGENTS.md"
+  ],
+  "verified_blob_count": 3582,
+  "mismatches": [],
+  "verification_manifest_sha256": "1813bb07aa63cd759bb905577c70fc52a934fdc52e46ce37eb532f83d8fe78a9",
+  "additional_verified_blobs": [
+    {
+      "path": "rpc/service/src/service.rs",
+      "sha": "cff6e380055ae300f301e7217ccee4dc861b1b97"
+    }
+  ],
+  "runtime_tests_executed": false
+}

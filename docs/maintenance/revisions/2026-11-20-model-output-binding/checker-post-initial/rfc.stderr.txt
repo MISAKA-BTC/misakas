@@ -1,0 +1,9 @@
+FAIL: Changed source fragment: ('docs/rfc-v2/0001-inference-and-generative-jobs.md', 'source-v1-0003-L02290')
+FAIL: Original bytes changed or missing: RFC-0009
+FAIL: Original bytes changed or missing: RFC-0011
+FAIL: Changed source fragment: ('docs/rfc-v2/0003-model-onboarding-and-artifacts.md', 'source-v1-0013-L00001')
+FAIL: Original bytes changed or missing: RFC-0014
+FAIL: Original bytes changed or missing: RFC-0023
+FAIL: Original bytes changed or missing: RFC-0026
+FAIL: Original bytes changed or missing: RFC-0037
+FAIL: Original bytes changed or missing: RFC-0041

@@ -1,5 +1,26 @@
 # RFC-v2-0017 — 非対話positiveと独立再実行の承認
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1 positiveは全scopeの完全再実行責務を持つ。Panel nonceは元実行の入力nonceと分離し、正しい局所Courtの共有やACKだけを全体承認へ昇格させない。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CPN1-PROPOSAL-BEGIN -->
+## 2026-11-17 Court nonce CPN1の設計案
+
+全体肯定の個別challengeと、既存のclaim共通coverageを分ける案。本人の追加条件が未完ならその承認を数えないが、他Panel全員の提出をFinal条件へ追加しない。正しい局所資料の共有と、独立再実行を証明できない境界を維持する。
+
+本追記は **PROPOSED_DESIGN_NOT_ACTIVATED** への参照であり、既存採択・署名・runtime・activationを変更しない。[RFC-0057](../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md)。
+<!-- CPN1-PROPOSAL-END -->
+
 2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 | 欄 | 内容 |

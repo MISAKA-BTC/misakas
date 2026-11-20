@@ -1,5 +1,12 @@
 # MISAKA ドキュメント
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 PALW-AN1 — Panel＋Courtを維持する草案
+
+**DRAFT_NOT_ACTIVATED**。アドレス・nonceを実入力tokenへ結合し、登録と元claimの二段階固定、完全再実行、局所反証、一回性を具体化した。計算validity proofは導入せず、通常LLM実費の下界を成立済みとしない。[RFC-0059](rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](adr/0227-palw-an1-input-binding-and-panel-court.md) / [変更・検証](maintenance/revisions/2026-11-18-an1/README.md)。0056〜0058の追補と現行20冊の担当案内を追加し、旧採択・過去証拠・50 ADRの統合構成を保持する。
+<!-- AN1-DRAFT-20261118-END -->
+
+
 > **未完gate:** 大きな資料の供給・取得後検査を有界なnative根拠で客観終結するprofile別手順は、具体化できていない場合 **PROFILE PROCEDURE NOT ESTABLISHED** として有効化不可である。最低承認数1や公開方針だけでは、この手順の成立を証明しない。実装・実測の未完と区別し、18 §2.4／20 §4.3のgateを維持する。
 
 ## 2026-11-09追加採択 — 公開資料とモデル未保有の一人検証

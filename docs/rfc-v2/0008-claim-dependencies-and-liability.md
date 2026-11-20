@@ -1,5 +1,14 @@
 # RFC-v2-0008 — Claim依存・Prefix生成元・未解決責任
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1の同batchでは適格notice/資料caseのhold、有効反証、失効・依存取消を成功・mint・reserve・consumeより先に適用する。古い認証snapshotで現在適格性を代替しない。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
 ## 2026-11-09公開資料・一人前提の追加境界
 
 [採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。資料要求、InspectionPending、計算反証、供給違反、未検証終了のscopeを依存先へ結ぶ。batchの共通資料とleaf固有の失効を20の規則で帰属させ、無関係なcase終了で未解決依存を消さない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

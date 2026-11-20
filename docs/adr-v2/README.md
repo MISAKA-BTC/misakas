@@ -1,5 +1,44 @@
 # ADR-v2 — 現行の閲覧・更新先50本
 
+<!-- MOR1-DRAFT-20261120-BEGIN -->
+## 2026-11-20 PALW-MOR1 — モデル登録時の試行別認証出力
+
+**DRAFT_NOT_ACTIVATED**。対象profileの登録時に、別の採掘試行の認証出力が天文学的に小さい確率でしか重複しない構成を要求する。正式出力は回答y・試行ID・256bit実行識別値。完全context・実beacon・三Rootへ結合し、同一試行の再現性と別試行の非重複性を定義する。AN1の実入力・Ticket・Panel＋Court・一回会計を維持し、通常LLM費用の下界を成立済みとしない。
+
+[RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)／[ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)／[変更・検証](../maintenance/revisions/2026-11-20-model-output-binding/README.md)。新しい不変profileへの適用草案であり、旧登録・過去claim・稼働ルールへ遡及適用しない。現行20 RFC／50 ADRの統合構造を維持する。
+<!-- MOR1-DRAFT-20261120-END -->
+
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 PALW-AN1 — Panel＋Courtを維持する草案
+
+**DRAFT_NOT_ACTIVATED**。アドレス・nonceを実入力tokenへ結合し、登録と元claimの二段階固定、完全再実行、局所反証、一回性を具体化した。計算validity proofは導入せず、通常LLM実費の下界を成立済みとしない。[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [変更・検証](../maintenance/revisions/2026-11-18-an1/README.md)。0056〜0058の追補と現行20冊の担当案内を追加し、旧採択・過去証拠・50 ADRの統合構成を保持する。
+<!-- AN1-DRAFT-20261118-END -->
+
+
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CPN1-PROPOSAL-BEGIN -->
+## 2026-11-17 Court nonceとPanel固有チャレンジ — 設計案
+
+本追記は **PROPOSED_DESIGN_NOT_ACTIVATED** への参照であり、既存採択・署名・runtime・activationを変更しない。[RFC-0057](../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md)。
+
+nonceはnativeなclaim/actor/義務へ結合し、共有する局所証拠・本人の完全承認・支払い一回性を分ける。前回0055/0056の資源・受付難易度と接続する。個別challengeは本人の承認条件であり、全員待ち・sample外反証の拒否・独立全体再実行の証明へ変更しない。
+
+[改訂記録](../maintenance/revisions/2026-11-17-court-nonce/README.md) / [ソース監査](../maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md) / [検証記録](../maintenance/revisions/2026-11-17-court-nonce/VALIDATION.md)。20 RFC／50 ADRと旧資料を保持する。
+<!-- CPN1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 全claim共通の受付難易度 — 設計案
+
+[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md) は、新originalの高コスト処理前に全model共通Dを適用する具体案である。原子予約・courtのhard容量は前回提供した [RFC-0055](../rfc/0055-global-admission-court-calendar-and-one-bps.md) / [ADR-0223](../adr/0223-global-admission-court-calendar-and-one-bps.md) を参照する。採択される新profileでは55§6のDをCAD1へ詳細化し、二重に掛けない。
+
+基準はmain@2d8212b634880b0967fbf24b00b41936c2322c14。0055関連13ファイルは同会話の先行提供物をbytesのまま併録したもので、元mainに存在した/実装済みという意味ではない。通常編集先20 RFC／50 ADRと旧原文を保持する。今回の0056/0224は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存採択状態、runtime、wire、fenceを変更しない。
+
+[改訂記録](../maintenance/revisions/2026-11-17-admission-difficulty/README.md) / [ソース監査](../maintenance/revisions/2026-11-17-admission-difficulty/SOURCE_AUDIT.md) / [検証記録](../maintenance/revisions/2026-11-17-admission-difficulty/VALIDATION.md)。以前のrevisionはその時点のsnapshotに対する記録であり、現在mainの完成証拠へ読み替えない。
+<!-- CAD1-PROPOSAL-END -->
+
 ## 2026-11-09追加採択 — 公開資料とモデル未保有の一人検証
 
 独立選出Panelに少なくとも一人の能動的な正直者がいることを前提とし、その人がモデルを事前保有せずに全必要資料を取得・全体検証できる新profileを採択した。Minerの有限な公開供給、owner許可に依存しない認証付きcache・再配布、cold取得からの異議権、Nodeの小さなcourtを接続する。最低完全承認数はlogicalに **k_min=1** とするが、一件の署名直後にFinalへ進めず、全検査・異議機会、Qの解消、依存・資金・原期限を[20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の単一gateで確認する。

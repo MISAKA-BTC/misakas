@@ -1,0 +1,691 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{space}{xeCJK}
+%
+\documentclass[
+  10pt,
+]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+  \setmainfont[]{DejaVu Serif}
+  \ifXeTeX
+    \usepackage{xeCJK}
+    \setCJKmainfont[]{Noto Serif CJK JP}
+          \fi
+  \ifLuaTeX
+    \usepackage[]{luatexja-fontspec}
+    \setmainjfont[]{Noto Serif CJK JP}
+  \fi
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage[margin=22mm]{geometry}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\ifLuaTeX
+  \usepackage{selnolig}  % disable illegal ligatures
+\fi
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={PALW-AN1 Whitepaper 改訂統合稿 v0.4},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{PALW-AN1 Whitepaper 改訂統合稿 v0.4}
+\usepackage{etoolbox}
+\makeatletter
+\providecommand{\subtitle}[1]{% add subtitle to \maketitle
+  \apptocmd{\@title}{\par {\large #1 \par}}{}{}
+}
+\makeatother
+\subtitle{アドレス・nonceに依存する実入力と、Panel＋Courtによる検証}
+\author{}
+\date{2026年11月18日}
+
+\begin{document}
+\maketitle
+
+\section{1.
+結論と改訂の範囲}\label{ux7d50ux8ad6ux3068ux6539ux8a02ux306eux7bc4ux56f2}
+
+\textbf{PALW-AN1は、登録したownerとnonceを実際のモデル入力へ結び付け、固定試行に一つの正しい実行とTicketを対応させる設計である。検証はPanelによる完全再実行と、Nodeによる認証付き局所Courtで行う。能動的な正直Panel、資料取得または未取得時の成功停止、反証の包含・裁定を条件に、不正な実行の成功Finalを防ぐ。通常LLMと同額以上のGPU時間・電力・金銭費用は保証しない。}
+
+本稿は、2026年11月18日のユーザー指示「PALW-AN1へ変更し、Panel
+Court方式を維持する」に基づき、前回のFULL1/VF1費用監査統合稿を組み直したものである。Groth16、全関係validity
+proof、setup、検証鍵をAN1の採用方式・必須Final条件・代替候補にしない。ハッシュ、署名、Merkle
+openingはデータの同一性・帰属・局所証拠の認証に用いる。
+
+状態は
+\textbf{DRAFT\_NOT\_ACTIVATED}。文書改訂、条件付きの論証、独立参照実装を、native実装・本番LLMでの測定・公開有効化と区別する。
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+対象
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+本改訂で行ったこと
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+前回の29ページ統合補完稿 &
+AN1を主方式とする本文へ全面更新。VF1の必須化を取り下げた \\
+ユーザー提供AN1説明 &
+全8節の設計・命題・検証報告を照合し、前提と規範を補強した \\
+添付RFC一式 &
+RFC-0056〜0058を改訂し、新RFC-0059とADR-0227へAN1を具体化した \\
+元whitepaper v0.3の原PDF・TeX &
+原文は未取得。本稿は元ファイルの逐語差分ではなく、取得済み統合稿の改訂である \\
+提供リンク先のAN1実装ZIP・HTML &
+本文未取得。報告された11群の試験や7,226レコードを再実行したとは扱わない \\
+\end{longtable}
+
+本稿の数学的証明は、プロトコルが送信する暗号学的な計算証明ではない。Panelの検査責任と、その正直性・取得可能性・裁定機会の仮定を明示する設計上の論証である。
+
+\section{2.
+登録文脈と四つの識別子}\label{ux767bux9332ux6587ux8108ux3068ux56dbux3064ux306eux8b58ux5225ux5b50}
+
+登録文脈を \(C\)、認証された実行用beacon値を
+\(\sigma\)、モデルと実行規則を \(M,P\)、登録jobを \(J\) とする。
+
+\[s=H_{\mathrm{attempt}}(\operatorname{Enc}(C,\sigma)).\]
+
+\[x=\operatorname{InputDerive}_P(s,J),\qquad (y,\tau)=\operatorname{Exec}_{M,P}(x).\]
+
+\[T=H_{\mathrm{ticket}}(\operatorname{Enc}(s,R_x,R_y,R_\tau)).\]
+
+各hashは用途別domainを持つ。\(\operatorname{Enc}\)
+は型・長さ・順序が一意に復号できる符号化であり、曖昧な文字列連結ではない。\(s\)
+と各Rootは32 byteの研究用参照値とするが、既存native
+wireの数値IDを新設・再解釈したとは扱わない。
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+登録する項目
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+固定する内容
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+native文脈 &
+chain、epoch、安定した登録anchor、schedule、family/version \\
+帰属と試行 & canonical
+owner、beneficiary、nonce、候補集合と上限。資金・slotは別のnative登録管理値 \\
+計算 & model root、program/profileの固定版、job
+root、token化規則、生成上限・RNG規則 \\
+実行用乱数 &
+beaconのscheme・鍵・round・出力導出規則。実値は登録後に認証する \\
+当選条件 & difficulty
+snapshot、唯一のtarget、受付開始・終了、再試行・失効の扱い \\
+検証と会計 &
+Panel選出予定、全検査scope、資料責任、会計版、credit用途、資源上限 \\
+\end{longtable}
+
+登録時には未知の実 \(\sigma\)、出力・trace Root、Panel結果を \(C\)
+へ循環的に含めない。入力 \(x\) は \(s\) の後に導出するため、\(R_x\) を
+\(C\) の必須構成要素にして循環を作ることも避ける。job rootは元の \(J\)
+のcommitmentであり、実入力Rootとは別物である。
+
+\textbf{slot\_id} は登録時の一回限りの試行資格、\textbf{s}
+はbeacon確定後の実行識別子、\textbf{OriginalId}
+は署名前の正規claim本文を識別する値、\textbf{BaseWorkKey}
+は元の有用需要・計算記述を識別する値である。四者を一つのhashへ潰さない。署名bytes、Courtの再包装、relay
+metadataは新しい試行資格を作らない。
+
+同一のcanonical登録文脈Cは、資金・carrier・再送を変えても一つのslotにだけ対応させる。登録を原子的に重複排除し、Finalではslotと試行ID
+s、実計算キーを同時に消費する。slot単独の消費だけでは、同一Cを別slotへ再包装する経路が残るためである。RegKeyから割り当てるslot\_idをCへ戻さず、登録文脈と資金・slotの管理envelopeを分ける。候補集合識別は事前割当IDとし、そのC自身を含むfreeze集合RootをCへ逆流させない。
+
+同じ元jobへ別nonceを付けたAN1実行は、別の採掘試行になり得るが、新しい利用者需要を自動的には意味しない。有用成果creditの重複防止は、slot消費とは別に、事前固定したBaseWorkKey・用途別の消費規則で扱う。
+
+\section{3.
+nonceを実tokenへ結合する}\label{nonceux3092ux5b9ftokenux3078ux7d50ux5408ux3059ux308b}
+
+256個のbyte値を256個の相異なる有効token IDへ写す固定表 \(b_P\)
+を使う。BOS、POW、SEPも固定し、byte tokenとの衝突を認めない。
+
+\[x=[\mathrm{BOS},\mathrm{POW}]\Vert[b_P(s_0),\ldots,b_P(s_{31})]\Vert[\mathrm{SEP}]\Vert\operatorname{JobTokens}_P(J).\]
+
+入力長は \(35+|\operatorname{JobTokens}_P(J)|\)
+である。challengeを一度文字列へ戻してtokenizerへ渡す実装、自動切り詰め、UNKへの置換、challengeを削るchat
+templateを許さない。最大context長に収まらなければ、その登録を規定どおり拒否・終了する。都合のよい部分だけ残して同じ試行として続行しない。
+
+jobのtokenizer・template・特殊token・position・attention
+maskもprofileへ固定する。実際にモデルへ渡したtoken列が正規 \(x\)
+であることを、traceの入力読出し関係で確認する。外側のメタデータにnonceを書くことだけでは満たさない。
+
+\textbf{入力の単射性。} \(b_P\) が単射で、32
+byte全部を固定位置に保持するなら、\(s\ne s'\) から \(x\ne x'\)
+が従う。owner・nonceの変更から \(s\)
+の相違を導く部分にはhashのbinding条件が必要である。同じ生成文 \(y\)
+が出ることは禁止されず、モデルの内部状態が常に異なるとも結論しない。
+
+challengeを先頭に置くと、長い共通job
+prefixの後ろへnonceを置く場合に比べ、直接再利用できる同一prefixの範囲を限定できる。KV
+cacheは既計算の状態を再利用する仕組みである［1］。ただし、AN1が全てのbatch化・cache・代数的簡約・外注を排除するという主張にはしない。
+
+\textbf{サービス意味論。} challenge
+tokenを加えると、元jobだけを実行した場合と出力や品質が変わり得る。AN1入力の実行を、無変更の通常promptへの推論と同一視しない。profileと利用者向け契約は、実際の入力変換、生成条件、料金・納品対象を明示する。無審査モデル登録を、品質審査やモデル別の費用保証へ変更しない。
+
+\section{4.
+二つの固定時点と受付順序}\label{ux4e8cux3064ux306eux56faux5b9aux6642ux70b9ux3068ux53d7ux4ed8ux9806ux5e8f}
+
+AN1の順序を次のとおり固定する。
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+段階
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+必須の処理
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+登録閉鎖 &
+owner・nonce・model・job・profile・target・会計版・全候補を、攻撃者が実行用beaconへ最初にアクセスする前に固定する \\
+実行 & 登録済みroundの \(\sigma\) を認証し、\(s,x,y,\tau\)
+とcanonicalなRoot・Ticketを導出する \\
+元claim固定 &
+Minerの署名済み元claimを一回だけ固定し、受付対象集合を閉じる。後でRootを交換しない \\
+Panel選出 &
+元claimと選出poolが閉じた後の選出イベントを使う。同じ既知seedのhashし直しを未来の未知性とみなさない \\
+検査・裁定 &
+完全再実行、資料要求、局所Court、未解決caseの終結を元の期限と予約で処理する \\
+Final・消費 &
+現在の適格性を再検査し、反証・取消を先に反映して、一回だけ成功・権利発行を行う \\
+\end{longtable}
+
+一般公開前でも、攻撃者がbeaconへ早期アクセスできるなら登録閉鎖は遅すぎる。鍵・round認証、偏り・先取り・公開停止、安定anchorとreorgの扱いは具体beaconの別の要件である。異常時に別roundへ自動差替えして無料の再試行を与えない。
+
+事前登録した多数候補のうち一部だけを計算する行為は残る。nonce候補を事前固定しただけで、費用の非償却性を示したことにはならない。有限な登録容量、資金、候補数、受付窓を規定し、登録spamへの費用とLLM評価費用を区別する。
+
+旧RFC-0058のSWC1は、Original固定後の未来 \(R_{\mathrm{ticket}}\)
+による別の受付方式である。AN1では上の \(T\) を使い、同じcodecへ未来
+\(R_{\mathrm{ticket}}\)
+を混ぜない。新familyの入力・順序・署名domainを固定し、全model共通difficulty
+controllerを一回だけ接続する。
+
+\section{5.
+決定論的な実行と完全trace}\label{ux6c7aux5b9aux8ad6ux7684ux306aux5b9fux884cux3068ux5b8cux5168trace}
+
+profile \(P\)
+は、命令、重み配置、token読出し、整数幅、符号、丸め、飽和またはoverflow拒否、非線形関数、attention、生成停止、tie-break、RNGを一意に定める。実行結果がGPUやlibraryの未指定挙動に依存してはならない。
+
+実行traceを \(\tau=(v_0,\ldots,v_{V-1})\)
+とし、位置ごとの関係を次で表す。
+
+\[v_i=f_{P,i}(\{v_j:j<i\},x,M).\]
+
+これは算術値だけの列ではない。正規なrecordには命令位置・型・参照先・必要な状態・値が結び付く。全ての入力読出し、weight
+index、分岐・状態更新、全依存辺、Init、End、出力Rootとの接続を検査対象に含める。算術部分だけが合っていても、別の重みや別のtokenを使うtraceを受理しない。
+
+program
+rootは固定profileと正規compiler/configurationへ認証される。Minerが選んだ任意の「常に受理する命令列」へ差し替えない。全モデルを審査することと、実行する命令・意味論をすり替えないことは別である。
+
+局所CourtをNodeの有界な仕事にするため、各命令のfan-in、整数幅、opening数、証拠byte数、checkerの最悪実行量を上限内にする。巨大な行列積や全attentionを無制限の一命令へ隠さない。必要なら有界な基本関係へ展開する。対応するlocal
+checkerと完全な展開がないprofileは、AN1の保証対象として有効化しない。
+
+\section{6.
+commitmentとcanonicalな木}\label{commitmentux3068canonicalux306aux6728}
+
+入力・出力・traceは別の用途domainを使う。全leaf、padding、内部nodeに試行ID
+\(s\)、木の種別、論理長、位置または高さ・範囲を結合する。値・添字・長さ・signed表現は一意なbytesへ変換し、別表現をmod演算や文字列正規化で黙って受理しない。
+
+AN1の参照形では、論理レコード数を \(D>0\)
+として、\(L=2^{\lceil\log_2D\rceil}\)
+leavesへpaddingする。実recordとpaddingは別tagを持ち、padding bytesは
+\(s\)、木種別、\(D\)、位置から一意に導出する。左右の順序と完全二分木の形を固定し、各padding
+leafも個別にhashする。
+
+本参照shapeは入力・出力・traceの論理長を1以上とし、空出力を受理しない。空shapeを許す変更には、専用のcanonical
+empty rootと終端規則の版更新が必要である。
+
+model rootとprogram rootは試行前に固定するため、未知の \(s\)
+をその定義へ入れない。Courtの外側contextが期待するmodel/program
+rootと試行を結合する。入力・出力・traceの木とは役割が異なる。
+
+NodeはOpeningが「どこかのleaf」であるだけでは受理しない。native元claimと命令から、木、論理長、期待位置、record型、重みindexを導き、その位置への認証を確認する。重みオブジェクトのRoot属性を信用するのでなく、供給された実weight
+bytes・正規形から計算したRootとの対応を、資料取得とPanel再実行で確認する。
+
+受付とCourtの論理長・件数・index・値は、同じ厳密な型と範囲で検査する。整数6153と小数6153.0を同一視するような型のaliasを拒否し、受付済みclaimの全openingが後で型不一致になる経路を閉じる。
+
+正しく認証された自由paddingや型違反は計算・構造の反証になり得る。変更した値に古いpathを付けただけの証拠は認証に失敗しており、Minerの元claimの不正を示さない。この二つを区別する。
+
+\section{7.
+一意性・直接付け替え防止の条件付き証明}\label{ux4e00ux610fux6027ux76f4ux63a5ux4ed8ux3051ux66ffux3048ux9632ux6b62ux306eux6761ux4ef6ux4ed8ux304dux8a3cux660e}
+
+\subsection{7.1
+一試行の正しいTicketは一つ}\label{ux4e00ux8a66ux884cux306eux6b63ux3057ux3044ticketux306fux4e00ux3064}
+
+\textbf{命題1。} 有効な登録 \(C\)、一意に認証された
+\(\sigma\)、決定論的な \(P\)
+と実modelを固定すると、正しい実行に対応するTicket入力は一つに定まる。
+
+\textbf{証明。} \(C,\sigma\) から \(s\) が一意、入力規則から \(x\)
+が一意、実行規則から \(y,\tau\)
+が一意になる。正規化と木の規則から三つのRootも一意である。従ってTicket入力は一つである。再署名、コメント、Panelの変更、Courtの再包装はその入力を変えない。
+
+この命題は、任意の偽Rootに対するhash照会を禁止しない。Minerが多くの安価な偽Rootを試す経路はあり、その成功FinalをPanel＋Courtの条件付き検証で止める。受付負荷は別の容量契約で制御する。
+
+\subsection{7.2
+別owner・nonceへの直接転用}\label{ux5225ownernonceux3078ux306eux76f4ux63a5ux8ee2ux7528}
+
+\textbf{命題2。}
+hash・署名・Merkleの認証条件のもとで、固定済みのclaim・openingを、別ownerまたは別nonceの正規実行へそのまま付け替えて受理させることはできない。
+
+\textbf{証明。} ownerまたはnonceが変わるとcanonical \(C\)
+が変わる。hashのbinding失敗以外では \(s\) が変わり、単射な入力表現により
+\(x\) が変わる。元claimの帰属照合、期待 \(R_x\)、\(s\)
+を含む各木の認証が一致しない。IDだけを変更すると古いopeningは期待する木のopeningではなくなる。
+
+これは直接転用の防止である。外注、第三者による正しい再計算、過去の値を使った別の正しいtraceの構成は、同じ費用を要するという定理ではない。署名を検査しても、署名者本人がGPUを動かしたことまでは証明しない。
+
+\section{8.
+局所関係から全体正当性を導く}\label{ux5c40ux6240ux95a2ux4fc2ux304bux3089ux5168ux4f53ux6b63ux5f53ux6027ux3092ux5c0eux304f}
+
+\textbf{命題3。}
+認証された初期入力・model・programのもとで、全ての必要な局所関係と境界条件が成立すれば、traceと出力は正規実行に一致する。
+
+\textbf{証明。} Initが正しい最初の状態を固定する。\(j<i\)
+の全参照値が正しいと仮定する。位置 \(i\)
+の命令・型・参照先・重みindexが正規で、その関係が成立するなら、決定論性により
+\(v_i\)
+は正規値である。命令順の帰納法とEnd・出力結合により全体が一致する。
+
+形式の整った完全traceが正規実行と異なるなら、最初に異なる位置がある。その直前までの値が正しいため、その位置の認証された被演算値を使う再計算と、記録値の不一致を示せる。これが局所反証になる。
+
+ただし、全関係が成立することを、少数の正しい局所Courtから推定してはいけない。関係の欠落、未認証のindex、未検査の終端があれば帰納法の前提が失われる。記録の欠落・取得不能には、構造検査・資料要求・成功停止の経路も必要である。
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Nodeが照合する値
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+認証先と期待値の導出
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+命令・位置・型 & 固定profileのprogram rootと期待する命令番号 \\
+過去の計算値 & Minerの元trace root、命令が参照する位置 \\
+入力token & 正規input root。challenge部分は \(s\)
+から、job部分は登録jobから導出 \\
+重み & 登録model root。命令・token・座標からNodeが導くindex \\
+問題の計算結果 & 同じ元trace rootの期待位置 \\
+最終出力 & 元output rootと、終端命令が参照するtrace値 \\
+\end{longtable}
+
+本改訂の具体参照profileは、Nodeが正規入力とinput
+rootを直接再計算できる予算内の長さに限定する。より長いjobのadapterは、入力位置と登録jobへの認証、全入力結合の検査を別に定義してから有効化する。未実装adapterを理由にpayloadのinput
+rootを正規値として採用しない。
+
+Courtの分類は、認証に失敗した
+\texttt{InvalidEvidence}、認証された記録の関係・構造違反を示す
+\texttt{ComputationRefuted}、その局所関係に矛盾がない結果を分ける。局所的に矛盾がないことは、全実行が正しいという認証ではない。Courtのサイズ上限を超えるrecordは、元claim・期待位置に結合した有限の資料/構造caseへ送る。局所判定できない証拠を捨てただけで未充足を解消せず、規定内の正しい応答が得られなければ成功を止める。
+
+\section{9.
+Panel＋Courtによる不正Finalの阻止}\label{panelcourtux306bux3088ux308bux4e0dux6b63finalux306eux963bux6b62}
+
+\textbf{命題4。}
+以下を全て満たす対象claimについて、算術・構造・入力・終端のいずれかが不正な実行は成功Finalにできない。ただし暗号認証や規範どおりのnative処理の失敗は除く。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  選出されたPanelに少なくとも一人、能動的で正直な検査者がいる。
+\item
+  その検査者は元claimを知り、必要資料を取得して全実行を再現・比較できる。取得不能なら、有限な資料caseを有効に起こし、未充足のまま成功にならない。
+\item
+  元claimはPanel選出より前に固定され、Panelの結果を見てRootを書き換えられない。
+\item
+  正直な反証・資料caseがFinal前に包含・裁定され、対応する異議機会を短縮されない。
+\item
+  一つの有効反証が承認数より優先し、構造不正、資料不足、未解決の適格caseを時間経過で成功に変えない。
+\end{enumerate}
+
+\textbf{証明。}
+資料が揃っていて実行が違えば、命題3から局所反証が存在し、正直Panelが提出し、Nodeが確認する。Finalの反証なし条件に矛盾する。資料や構造を確認できなければ、その未充足を成功停止へ結合する条件に反する。従って不正成功は起こらない。
+
+一人の正直者という前提は、Panel人数を一人へ固定すること、各Panelが必ず独立した物理労働をしたこと、任意のネットワークでも反証が届くことを意味しない。複数の悪意Panelが正しい局所Courtをコピーして署名しても、正直者の有効反証を覆せないという条件付きの性質である。
+
+能動的な正直者がいない場合、全員が不正承認し、適格反証も起きない履歴を、この方式だけで排除できない。抽選の独立性、攻撃者のpool占有、候補選別、資料供給、検閲耐性、実際の裁定容量を別々に評価する。未評価の失敗確率を自動的にnegligibleと置かない。
+
+\section{10.
+Final・一回性・現在状態の再検査}\label{finalux4e00ux56deux6027ux73feux5728ux72b6ux614bux306eux518dux691cux67fb}
+
+成功Finalの条件は、概念上次の論理積とする。
+
+\[\operatorname{CanFinal}_{\mathrm{AN1}}=E\land T_{\mathrm{ok}}\land A\land O\land\neg Q\land\neg F\land\neg U.\]
+
+\(E\)
+は登録・帰属・profile・期限・依存・資金・現在状態、\(T_{\mathrm{ok}}\)
+は固定targetのTicket、\(A\) はprofile所定の完全承認、\(O\)
+は必要資料と実効的な検査・異議機会、\(Q\) は未解決の適格case、\(F\)
+は受理済み反証・失効、\(U\)
+はslot・試行ID・実計算キー・用途上必要なBaseWorkKeyのいずれかが消費済みであることを表す。
+
+これらはMinerが自由に設定するboolean欄ではない。native状態と、当該claimに結び付いた受付・義務・裁定記録から導出する。ACKだけで
+\(O\) を真にせず、少数の局所positiveだけで \(A\)
+を作らない。承認数とscopeは旧profileから無断で推測せず、AN1の公開profileへ固定する。
+
+同batchの適格notice・資料caseによるhold、有効反証・取消を、成功・mint・reserve・consumeより先に適用する。成功Final、slot・試行ID・実計算キーの未消費検査と消費、用途に応じたBaseWorkKey消費、credit・報酬の発行、依存index更新を一つの原子的遷移にする。後続のEXEC予約や合意weight消費も現在の認証・成熟・失効を再検査する。
+
+古いsnapshotの承認、期限切れの資料記録、profile停止前のcacheを使って現在の適格性を代替しない。snapshot/import/repair/別API/legacy経路でも、AN1の成功済み状態を未検証のまま作らない。
+
+reorg時はclaim・消費集合・発行・予約・依存を同じjournalに従って整合的に戻す。これは一つのcanonical履歴の二重発行を防ぐ仕様であり、fork間の安定性、DAG
+common-prefix、外部決済の不可逆性を証明しない。成熟とsettlementを区別する。
+
+\section{11.
+Ticketの確率と未証明の費用下界}\label{ticketux306eux78baux7387ux3068ux672aux8a3cux660eux306eux8cbbux7528ux4e0bux754c}
+
+256 bit Ticketを、登録時に固定した整数 \(0\le\theta\le2^{256}\)
+と比較し、\(T<\theta\) を当選とする。\(p=\theta/2^{256}\)
+と置く。\(\theta=2^{256}\) を256 bit型で0へwraparoundさせない。
+
+正しいcanonical Ticket入力に対する初回照会数が、全実行で事前に定めた上限
+\(q\)
+以下であるとする。照会には協力者と外注先、miner未照会候補をNodeが初めて検査する場合も含める。独立なTicket
+RO、固定 \(p\)、返値を見る前に正しさが定まる条件下で、
+
+\[\Pr[\text{correct win}]\le 1-(1-p)^q\le\min(1,pq).\]
+
+証明は、未照会の正しい入力に対し一様な返値を順に与え、\(q\)
+回で停止する比較実験による。将来の当選集合を見て選んだ事後的な \(q\)
+を代入しない。期待照会数だけから固定回数の式をそのまま使わない。異なるshape・閾値なら候補別の
+\(p_a\) と資源予算へ分ける。
+
+さらに、総予算の各実行上限を \(B\)
+とし、cache、前処理、batch、外注、特殊モデル、入力選別を許した全生成方法について、正しい初回Ticket照会までに、
+
+\[q\le\left\lfloor B/c_{\min}\right\rfloor\]
+
+が成立する費用定理を別に得た場合に限り、
+
+\[\Pr[\text{success Final}]\le\min\left(1,p\left\lfloor B/c_{\min}\right\rfloor+\varepsilon_{\mathrm{cost}}+\varepsilon_{\mathrm{crypto}}+\varepsilon_{\mathrm{gate}}\right)\]
+
+へ接続できる。\(\varepsilon_{\mathrm{gate}}\)
+は正直Panel・資料・包含・裁定・Final条件の対象期間全体の失敗を扱う。Node実装不備や契約欠落を、根拠なしに小さな確率へ置き換えない。
+
+\textbf{本稿は \(c_{\min}\) を得ていない。}
+正しいFinalから過去の実費は直接導けず、最終的な再実行で正しいtraceを知ったことからTicket照会前の生成も自動的には従わない。生成時点と費用境界を追加で証明する必要がある。
+
+AN1の実入力は \(\sigma\) に依存する。従って、固定 \(A,B\)
+を前提とした旧FULL1の \(bC\ge KN\)、\(18N\) の算術上界、費用比
+\(\alpha b\)
+をAN1のLLM推論へ転用しない。新しい入力が生じることと、高い評価費用が避けられないことは異なる性質である。
+
+\section{12.
+正当な最適化とhash会計}\label{ux6b63ux5f53ux306aux6700ux9069ux5316ux3068hashux4f1aux8a08}
+
+同じ正しい公開記録を、cacheや別アルゴリズムで安く作れたとしても、それ自体は算術不正ではない。支払判断に使う全観測記録が同じ分布で、同じ支払規則なら期待受取額も同じである。待機・外注・担保拘束等まで含む総費用差は、公開記録に基づくslashでは消せない。
+
+過去の実行値を再利用して別nonceの正しいtraceを作る方法、challengeを無視するモデル、定数・零重みモデル、入力選別、共有計算を攻撃モデルへ含める。元入力を毎回変えるだけで、この費用分析を省略しない。
+
+完全木のhash数は、木の仕様が固定されていれば計数できる。論理長 \(D\)
+のpaddingなし二分木は \(2D-1\)、AN1参照形の2冪padding木は \(2L-1\)
+回である。出力・入力・traceの三木を数える場合は、別用途domainによる入力集合の分離も確認する。
+
+古典ROで、正しいRootの初回Ticket照会より前の\textbf{実際の全生成履歴}から完全木を抽出でき、scope/位置の分離と先取り条件が成立するなら、複数試行のtree-hash照会数を各木のnode数の合計で下から評価する方向はある。ただし本稿は、そのAN1全体への抽出定理・具体hashとの合成を完成済みにせず、protocolが照会回数を直接観測する仕組みとも扱わない。
+
+hashの回数は通常LLM算術の費用ではない。異なる操作の下界を共通費用へ換算する場合は、機械モデル、単位、重なり、前処理境界を定義する。根拠のないFLOPs・GPU秒・金銭額をAN1の認定量に加えない。
+
+\section{13.
+容量・報酬・サービス}\label{ux5bb9ux91cfux5831ux916cux30b5ux30fcux30d3ux30b9}
+
+全model共通の受付difficultyは、資源予約や検証を代替しない。偽Rootを安価にhashする攻撃者が存在し得るため、資金付き登録、byte/候補数上限、安い構文検査、既受理caseの保護、完全再実行・Courtの予約を別々に規定する。
+
+既存CAD1が \(T\le t(D)\) なら、AN1は \(\theta=t(D)+1\)
+とし、数学的に同じ集合を受理する。difficulty
+snapshotを登録へ束縛し、当選後により易しいtargetへ持ち越さない。新旧の抽選を二重に掛けない。
+
+120秒はdifficultyの制御epochであり、AN1の登録・実行・Panel・資料case・成熟を含む完了時間の保証ではない。全carrier合計1
+BPSは既存の外側搬送目標であり、1秒で全Courtやsettlementが終わるという主張に変えない。モデルごとの別枠や固定court件数を勝手に追加しない。
+
+Panelの完全再実行・資料取得・保存・通信・Node裁定の費用を、Minerの実行費用と分けて測定する。通常の推論結果をnonce注入後も同じ価値で販売できるとは仮定しない。検証を意図的に重くして相対的な高速化の利得を薄めることは、費用下界の代替ではない。
+
+報酬規則がmodel係数1.0/0.3を用いることと、1.0/0.3倍の実費を強制したことは別である。既存の係数・総上限・無審査登録を維持しつつ、AN1の会計版に認定単位・用途・重複防止・移行を明記する。数学的なPoW費用保証がない段階では、全体系についてProof
+of LLMが完成したと宣言しない。
+
+\section{14.
+移行と方針の整合}\label{ux79fbux884cux3068ux65b9ux91ddux306eux6574ux5408}
+
+AN1は新familyとして提出し、旧claimの署名domain、nonce、Ticket、期限、Court、認証・成熟の意味を変更しない。旧profileからAN1への自動的な再解釈や、同じ受付を新old双方で消費する経路を作らない。
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+状況
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+AN1の扱い
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+未採択・未実装 &
+研究・参照検査に限定。nativeの有効化済みflagを作らない \\
+新規登録 &
+有効化条件が満たされたprofileだけを、その固定版・target・scheduleで受理する \\
+profile改訂・停止 &
+既存pendingの元版・原期限と、事前に定めた終了・移行規則を使う \\
+既成功・既消費 &
+別版への移行だけで同じslotを再発行しない。取消は既存の客観的根拠と手続による \\
+seed停止・資料不足・混雑 &
+保留または未検証終端。異議不在やtimeoutだけで成功へ変更しない \\
+\end{longtable}
+
+Panel＋Courtを維持するため、添付AGENTS/PRINCIPLESの計算validity
+proof不使用方針を変更しない。モデル非保有Node、局所裁定、単独反証、モデル無審査登録、1.0/0.3の条件を保つ。外側の耐量子署名から、古典ROによるTicket確率分析まで耐量子保証が得られるとは記述しない。
+
+\section{15.
+独立参照実装と検証範囲}\label{ux72ecux7acbux53c2ux7167ux5b9fux88c5ux3068ux691cux8a3cux7bc4ux56f2}
+
+提供されたAN1説明は、小さな決定論的モデルについて11テスト群・失敗0を報告している。しかし、リンク先の実コード・results・vectorは今回取得していない。以下は本改訂のために作成した\textbf{別の独立参照実装}の結果であり、元ZIPの再実行やwire互換を意味しない。
+
+独立profileはvocabulary
+259、内部次元2、重み1,060個、2token生成の小整数causal
+modelである。embedding、Q/K/V、最後の位置でのattention、residual、FFN、全vocabularyのlogitと固定tie-breakを実装した。attentionは正の整数scoreの和で正規化し、checked
+signed-64整数を使う。学習済みLLMの数値互換は主張しない。
+
+\begin{longtable}[]{@{}lr@{}}
+\toprule\noalign{}
+項目 & 本改訂の独立参照値 \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+基準jobの入力長 & 37 token \\
+実model重み & 1,060 個 \\
+出力長 & 2 token \\
+trace論理長 & 6,153 record \\
+trace木のpadding後 & 8,192 leaves \\
+trace木のhash呼出 & 16,383 回 \\
+\end{longtable}
+
+最終検査は\textbf{15グループ・229項目がすべてPASS}となった。さらに、別に作成した独立査読用scriptの\textbf{52項目もすべてPASS}した。両者を一つのテスト件数として合算しない。owner/nonce転用、異なる重みindex、認証された算術・構造・End・padding不正、偽opening、資料hold、二重credit、rollback、前提を外すと偽Finalが通る境界例を含む。検査対象のコードhash、profile、公開vector、実行結果を同梱する。
+
+追加査読で、受付が整数件数の小数表現を受理するとCourtが認証できなくなる型不一致と、有界Courtに載らない過大recordを反証成立と誤表示する問題を発見し、修正した。前者は同じ厳密型検査へ統一した。後者は期待位置への資料/構造noticeとnative
+holdへ接続し、正規生成器を使わずraw
+hashで作った過大leafのRootでも、同batchのFinalとcreditが止まることを確認した。初回反例の実行結果と修正後の結果は別に保全する。初回実装本体は保存されていないため、修正前については記録されたhashと実行結果までを監査証跡とする。
+
+署名・beacon・native登録の認証は、明示したfixture/抽象境界を使う。実際の鍵管理、ネットワーク、資料配布、Court包含、DBの並行性、reorg、最低Nodeや本番モデルの性能を実証したとは扱わない。資料noticeは成功停止までを実装し、取得応答・客観的なcase終結・pending解除は未実装である。正常claimの活性を完成したことにはならない。テストが成功しても、正直Panelと実効的な異議機会の仮定は残る。
+
+\section{16.
+攻撃経路と残る境界}\label{ux653bux6483ux7d4cux8defux3068ux6b8bux308bux5883ux754c}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+経路
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+規範上の対処と限界
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+owner・nonceだけ変更して旧claimを転用 &
+登録・\(s\)・期待入力・元Root・署名の照合。新しい正しい再計算の費用は別問題 \\
+tokenizerがchallengeを落とす & token
+IDへの固定単射写像と実入力読出し。切詰め・UNK・template変更を拒否 \\
+beaconを見てmodel/job/nonceを選ぶ &
+全候補の早期freeze。早期漏洩を無視しない \\
+Panelの結果を見てRootを埋める &
+元claimを未来のPanel選出前に固定。後から成功用のRootへ交換不可 \\
+別model・別indexの重みを出す & 期待indexをNodeが導出し、登録model
+rootへopeningを検証 \\
+正しい局所Courtだけコピー &
+正しい局所関係と全体承認を分離。一人の有効反証を優先 \\
+元traceの算術・型・padding・End不正 &
+認証された局所・構造反証で成功を阻止 \\
+偽openingで正直Minerを攻撃 &
+InvalidEvidenceとして拒否。認証されない値をslash根拠にしない \\
+資料を隠してtimeout成功 &
+元期限・有限資料case・予約を維持し、未充足で成功しない \\
+同じslotを別APIから二重発行 &
+原子的な成功・消費・発行と全consumerの現在状態再検査 \\
+正しいcheap trace・cache・外注 &
+正しい最適化として許容。費用下界を別に要求 \\
+全Panel悪意・正直者検閲 &
+本稿の正当性条件外。pool・活性・包含の別評価が必要 \\
+\end{longtable}
+
+\section{17.
+RFCへの反映と履歴}\label{rfcux3078ux306eux53cdux6620ux3068ux5c65ux6b74}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+文書
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+本改訂の所有範囲
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+RFC-0056 &
+AN1の共通difficulty接続、target固定、資金・受付・資源予約、旧Ticketとの分離 \\
+RFC-0057 &
+元claimへ結び付くCourt、期待index、証拠の分類、Panel完全再実行と救済経路 \\
+RFC-0058 &
+AN1の二つのfreeze、識別子対応、一回性、全consumer、移行と保証の限界 \\
+RFC-0059 &
+AN1の登録・入力・trace・Court・Final・会計・有効化条件を定める新規仕様 \\
+ADR-0227 &
+Panel＋Courtを維持しAN1へ切り替える理由と、採択・実装・有効化の区別 \\
+RFC-v2の担当冊・入口 &
+新提案への導線と担当範囲。既存20冊・ADR-v2の50冊を維持 \\
+\end{longtable}
+
+添付一式の元文書、過去の検証結果、source
+digestを保全する。新たな検査結果は改訂対象のbytesへ結び付ける。既存の文書検査に失敗がある場合は、元入力の失敗と新規回帰を分け、baselineを書き換えて隠さない。
+
+\section{18.
+有効化条件と未完了項目}\label{ux6709ux52b9ux5316ux6761ux4ef6ux3068ux672aux5b8cux4e86ux9805ux76ee}
+
+AN1を実ネットワークへ有効化するには、少なくとも次を具体化し、別々に確認する。
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  native登録、全候補freeze、beacon、元claim固定、未来Panel抽選の実装と署名・再送・reorgの境界。
+\item
+  本番modelのtoken表、実入力導出、決定論的実行、全trace schema、全local
+  checker、End結合の完全性。
+\item
+  正直Panelがcold状態から資料を取得・再実行し、反証・資料caseを原期限内に包含・裁定できる実手順。
+\item
+  全Final・報酬・credit・weight・import/repair経路のgate、原子性、取消・依存・成熟の接続。
+\item
+  完全再実行・hash・資料保持・通信・裁定を含む最悪資源量と、最小Node・モデル規模での実測。
+\item
+  採掘費用を安全性の根拠にする場合の独立な費用定理。\(c_{\min}\)、予算単位、前処理・共有条件、Ticket前の生成条件を明示する。
+\item
+  合意・DAG・stable
+  freeze・settlementの証明と、旧profileを含む移行時のシステム全体評価。
+\end{enumerate}
+
+現時点の結論は、\textbf{実入力への束縛、正しいTicketの一意性、直接付け替えの排除、Panel＋Courtによる条件付き実行正当性を具体化できる}ということである。通常LLMと同額以上の実費、全最適化の排除、無条件な合意安全性を成立済みにしない。
+
+\newpage
+
+\section{参考資料と出典の範囲}\label{ux53c2ux8003ux8cc7ux6599ux3068ux51faux5178ux306eux7bc4ux56f2}
+
+［入力1］ユーザー提供のPALW-AN1説明（2026年11月18日、全8節）。設計・式・命題・元実装の報告値を参照した。リンク先HTML/ZIPは未取得である。
+
+［入力2］MISAKA\_RFC\_0056-0058\_AuditRevision\_20261117(2).zip。今回実際に展開したRFC・ADR・統合book・原則・過去検証記録。native
+runtimeコードの提供物ではない。
+
+［入力3］本会話で作成済みのPALW-FULL1/VF1費用監査統合補完稿v0.3。費用・正当最適化・観測記録の限界を参照したが、AN1に固定入力の費用定理を流用していない。
+
+［1］Hugging Face, Transformers公式文書, Cache strategies。KV
+cacheが既計算状態を再利用することの一次資料。本文のAN1への費用評価は本稿の推論である。https://huggingface.co/docs/transformers/en/kv\_cache
+
+［再現］同梱のAN1独立参照実装、テスト結果、公開vector、profile仕様、文書回帰記録。元AN1コードの追試、実暗号・本番LLM・ネットワーク性能の証明ではない。
+
+\end{document}

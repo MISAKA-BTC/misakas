@@ -1,0 +1,141 @@
+{
+  "status": "NO_NEW_REPORTED_FAILURES",
+  "no_new_reported_failures": true,
+  "scope": "Multiset comparison of saved official checker outputs; not protocol/runtime verification.",
+  "baseline_official_checks_passed": {
+    "check_docs": false,
+    "rfc_v2_integrity": false,
+    "adr_v2_integrity": false
+  },
+  "post_official_checks_passed": {
+    "check_docs": false,
+    "rfc_v2_integrity": false,
+    "adr_v2_integrity": false
+  },
+  "comparisons": {
+    "docs_failure_entries": {
+      "baseline_occurrences": 947,
+      "post_occurrences": 947,
+      "baseline_unique_items": 911,
+      "post_unique_items": 911,
+      "added_occurrences": 0,
+      "removed_occurrences": 0,
+      "added": [],
+      "removed": []
+    },
+    "docs_new_link_occurrences": {
+      "baseline_occurrences": 930,
+      "post_occurrences": 930,
+      "baseline_unique_items": 906,
+      "post_unique_items": 906,
+      "added_occurrences": 0,
+      "removed_occurrences": 0,
+      "added": [],
+      "removed": []
+    },
+    "rfc_v2_failure_lines": {
+      "baseline_occurrences": 7,
+      "post_occurrences": 7,
+      "baseline_unique_items": 7,
+      "post_unique_items": 7,
+      "added_occurrences": 0,
+      "removed_occurrences": 0,
+      "added": [],
+      "removed": []
+    },
+    "adr_v2_errors": {
+      "baseline_occurrences": 86,
+      "post_occurrences": 86,
+      "baseline_unique_items": 86,
+      "post_unique_items": 86,
+      "added_occurrences": 0,
+      "removed_occurrences": 0,
+      "added": [],
+      "removed": []
+    }
+  },
+  "count_consistency": {
+    "baseline_link_weights_match_summary": true,
+    "post_link_weights_match_summary": true
+  },
+  "checker_identity": {
+    "check_docs": {
+      "baseline_sha256": "93a35c58b98fd23a8c83b5c67a6a478f574f32451000720cdcc0d0360ca5b41a",
+      "current_sha256": "93a35c58b98fd23a8c83b5c67a6a478f574f32451000720cdcc0d0360ca5b41a",
+      "unchanged": true
+    },
+    "rfc_v2_integrity": {
+      "baseline_sha256": "e3afa007d57506ec02920e8c2aeac9b05c9b755d7c3ea57e5ce603c057388880",
+      "current_sha256": "e3afa007d57506ec02920e8c2aeac9b05c9b755d7c3ea57e5ce603c057388880",
+      "unchanged": true
+    },
+    "adr_v2_integrity": {
+      "baseline_sha256": "d8acbba7ab785cd89e8d715623feacc820294d744860dd1f2732f16e93a4f0c9",
+      "current_sha256": "d8acbba7ab785cd89e8d715623feacc820294d744860dd1f2732f16e93a4f0c9",
+      "unchanged": true
+    }
+  },
+  "document_metrics": {
+    "baseline": {
+      "markdown_files": 1068,
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 930,
+      "targets": {
+        "ok": 12544,
+        "missing-doc-file": 971,
+        "outside-package-unchecked": 481,
+        "external-unchecked": 438,
+        "missing-heading": 2
+      }
+    },
+    "post": {
+      "markdown_files": 1077,
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 930,
+      "targets": {
+        "ok": 12693,
+        "missing-doc-file": 971,
+        "outside-package-unchecked": 481,
+        "external-unchecked": 439,
+        "missing-heading": 2
+      }
+    }
+  },
+  "inputs": {
+    "baseline": {
+      "check_docs.json": {
+        "bytes": 160358,
+        "sha256": "44a8112b320bffe344f6250e62a3c11b442d5b3b968f8b8a7960362357a7973d"
+      },
+      "rfc_v2_integrity.log": {
+        "bytes": 722,
+        "sha256": "4f61ff427a8a8af186be5acff219a45db46c8a1813ba02d0a5c66249c76d4b1b"
+      },
+      "adr_v2_integrity.json": {
+        "bytes": 8907,
+        "sha256": "5cdf19e4302f7f5c94f6ab2f2fe8d1fdc28479a098f164278195a8b2d81410d8"
+      }
+    },
+    "post": {
+      "check_docs.json": {
+        "bytes": 160358,
+        "sha256": "d908d67f1f3ee6e6f9d31d385d8677fadf9c095b121e638b2644152d4fe985de"
+      },
+      "rfc_v2_integrity.log": {
+        "bytes": 528,
+        "sha256": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa"
+      },
+      "adr_v2_integrity.json": {
+        "bytes": 8907,
+        "sha256": "de3d4a4ed3d10245c4ae25ea7743bd58e9932c7cde5685067cbbb11e23621105"
+      }
+    }
+  },
+  "limitations": [
+    "Existing failures remain; zero added failures is not an overall PASS.",
+    "Link occurrence keys come from reported 'new link issue xN' failure entries. Known-issue summaries are retained as aggregate counts.",
+    "The official checker does not validate external URLs, runtime correctness, consensus, or network service.",
+    "Rerun the official checks after further document edits, then rerun this comparison."
+  ],
+  "script_sha256": "f37775fdb3254aec15755b8357176c5f147e7ecafc74e18c18214bbc392ebaf8"
+}

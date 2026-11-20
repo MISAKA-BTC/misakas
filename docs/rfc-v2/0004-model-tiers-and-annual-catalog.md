@@ -1,5 +1,14 @@
 # RFC-v2-0004 — モデル二階層・年次カタログ
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1は既存の1.0/0.3と経済上限を維持する。その係数を、通常LLM費用が証明された倍率と扱わない。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
 ## 2026-11-09公開資料・一人前提の追加境界
 
 [採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。モデル二階層と既存配分係数を維持する。モデル保有者が多いことやtierを、cold取得・一人の完全検証・公開反証の代わりにしない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

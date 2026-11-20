@@ -1,0 +1,85 @@
+{
+  "description": "Independent AN1 review evidence; original scripts/results retained byte for byte.",
+  "date": "2026-11-18",
+  "status": "PORTABLE_RERUN_PASS",
+  "preserved_copies": [
+    {
+      "copy": "initial_counterexamples.py",
+      "source_workspace_path": "tmp/an1_review_counterexamples.py",
+      "sha256": "7bff21ffe159a4a708ea0a35fc1708ccd68056caf8484ced11fb2d4d8a423e94",
+      "bytes": 1965,
+      "byte_identical": true
+    },
+    {
+      "copy": "initial_counterexamples_results.json",
+      "source_workspace_path": "tmp/an1_review_counterexamples_results_before_fix.json",
+      "sha256": "21535fd0536e38bab1bd62e0945b5fc34c493019a517cf641dcd39d7ea763424",
+      "bytes": 882,
+      "byte_identical": true
+    },
+    {
+      "copy": "original_postfix_check.py",
+      "source_workspace_path": "tmp/an1_independent_postfix_check.py",
+      "sha256": "428afd8ded32eab62dff02483ede50e5510755ab6b8d463fc2565a9881e71fa4",
+      "bytes": 9907,
+      "byte_identical": true
+    },
+    {
+      "copy": "original_postfix_results.json",
+      "source_workspace_path": "tmp/an1_independent_postfix_results.json",
+      "sha256": "3ce8343dcd79e05944d9d035708f5253c858e1703b19c40f109af93e15bfd739",
+      "bytes": 8588,
+      "byte_identical": true
+    },
+    {
+      "copy": "review_report.txt",
+      "source_workspace_path": "rfc_work/validation/an1_independent_code_review.md",
+      "sha256": "a3b53873e152b582ed13cf18350afc0a3b90d4c956c39c5cdd11a574e48485b6",
+      "bytes": 8350,
+      "byte_identical": true
+    }
+  ],
+  "initial_implementation": {
+    "sha256": "7d2c30f01f6708e9f38410c5a74e9a782212f233b6b0cb24370d3941ae297f3e",
+    "source_snapshot_preserved": false,
+    "limit": "The initial implementation body was not archived. Its recorded hash, original counterexample script and observed output are preserved; this bundle cannot independently rerun the initial version. Do not rerun initial_counterexamples.py against the fixed implementation and label that an initial-version reproduction."
+  },
+  "fixed_implementation": {
+    "relative_path": "../reference_impl/an1_reference.py",
+    "sha256": "e5cca83dbbfc16cd39ccc23000573e84504a6a092d61af971570f193841cec4e"
+  },
+  "portable_adaptation": {
+    "file": "postfix_check.py",
+    "sha256": "22527dd42191c4f229b07c58e946eeeaaee359f6649946bc918dd16e32daa6bf",
+    "original_file": "original_postfix_check.py",
+    "original_sha256": "428afd8ded32eab62dff02483ede50e5510755ab6b8d463fc2565a9881e71fa4",
+    "changes": [
+      "Resolve implementation through adjacent ../reference_impl, independent of current working directory.",
+      "Set sys.dont_write_bytecode before importing the implementation.",
+      "Write results inside review_evidence as portable_postfix_results.json, selecting a new numbered filename on later runs to preserve previous outputs."
+    ],
+    "check_and_helper_function_ast_identical": true,
+    "function_ast_sha256": "f1d23cc5e8a021323c25c79ea4b7a73aeffd40453669c9e781589e7d8851a8ea",
+    "test_criteria_modified": false,
+    "run_command": "python3 postfix_check.py",
+    "result_file": "portable_postfix_results.json",
+    "only_declared_bootstrap_and_output_path_changes": true
+  },
+  "limitations": [
+    "Independent toy implementation only; no original linked implementation was obtained.",
+    "Tests do not establish production signatures, beacon, DA, inclusion, material-case closure, DB concurrency, consensus safety, full LLM execution or LLM cost lower bounds."
+  ],
+  "portable_rerun": {
+    "result_file": "portable_postfix_results.json",
+    "result_sha256": "0005a43fbae5c9979c55cdd800ab06f348ff6903c9d99487b738fcf6481e5794",
+    "command_from_package_root": "python3 docs/maintenance/revisions/2026-11-18-an1/review_evidence/postfix_check.py",
+    "passed": 52,
+    "failed": 0,
+    "error": null,
+    "exit_code": 0,
+    "checks_array_identical_to_original": true,
+    "implementation_hash_unchanged": true,
+    "preexisting_evidence_unchanged": true,
+    "future_runs": "Existing result files are retained. The next run selects portable_postfix_results_run2.json, then the next free numbered filename."
+  }
+}

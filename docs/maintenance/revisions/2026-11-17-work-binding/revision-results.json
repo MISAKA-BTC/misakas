@@ -1,0 +1,147 @@
+{
+  "schema": "misaka-swc1-input-preservation-and-integration-v1",
+  "scope": "INPUT-PRESERVATION-AND-INTEGRATION-ONLY",
+  "checked_at_utc": "2026-11-17T13:51:17.221416+00:00",
+  "passed": true,
+  "integration_passed": true,
+  "source_baseline_sha256": "19f63c1fcbbd9fc0a9f503dd962a59c4c64bd1746e55c3a2b35c2bf405431b42",
+  "baseline_checks_sha256": "d0658df6aed4de59c007a482018446355e4105e5d93c1bc00b2138311cdb82c5",
+  "stats": {
+    "uploaded_files": 2483,
+    "previous_only_import_files": 44,
+    "source_files": 2527,
+    "current_files": 2549,
+    "exact_source_files": 2488,
+    "source_files_with_only_marked_additions": 24,
+    "adrs_with_only_marked_amendments": 2,
+    "changed_source_files": [
+      "docs/PRINCIPLES.md",
+      "docs/adr-v2/README.md",
+      "docs/adr-v2/registry.json",
+      "docs/adr/0224-global-claim-admission-difficulty.md",
+      "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "docs/adr/INDEX.md",
+      "docs/adr/TOPICS.md",
+      "docs/architecture/palw-specification.md",
+      "docs/design/palw/integration/public-one-honest-implementation-ledger.md",
+      "docs/governance/parameter-register.md",
+      "docs/governance/parameters.json",
+      "docs/maintenance/catalog.md",
+      "docs/maintenance/decision-catalog.json",
+      "docs/maintenance/generate_indexes.py",
+      "docs/maintenance/number-registry.json",
+      "docs/maintenance/numbering.md",
+      "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "docs/rfc-v2/0014-court-master-contract.md",
+      "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+      "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+      "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "docs/rfc-v2/MIGRATION.md",
+      "docs/rfc-v2/README.md",
+      "docs/rfc-v2/registry.json",
+      "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "docs/rfc/INDEX.md",
+      "docs/rfc/TOPICS.md"
+    ],
+    "added_files": [
+      "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "docs/design/palw/integration/staged-work-implementation-plan-2026-11-17.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/README.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/REVIEW.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/SOURCE_AUDIT.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/VALIDATION.md",
+      "docs/maintenance/revisions/2026-11-17-work-binding/baseline-checks.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/changes.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/check_revision.py",
+      "docs/maintenance/revisions/2026-11-17-work-binding/check_work_model.py",
+      "docs/maintenance/revisions/2026-11-17-work-binding/legacy-adr.log",
+      "docs/maintenance/revisions/2026-11-17-work-binding/legacy-docs.log",
+      "docs/maintenance/revisions/2026-11-17-work-binding/legacy-rfc.log",
+      "docs/maintenance/revisions/2026-11-17-work-binding/model-results.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0056.source.txt",
+      "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0057.source.txt",
+      "docs/maintenance/revisions/2026-11-17-work-binding/revision-results.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/source-baseline.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/source-provenance.json",
+      "docs/maintenance/revisions/2026-11-17-work-binding/validation-results.json",
+      "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md"
+    ],
+    "deleted_source_files": 0,
+    "protected_inherited_revision_files": 35,
+    "current_rfc_books": 20,
+    "current_adr_books": 50,
+    "preserved_input_parameters": 56,
+    "links": {
+      "scope": "offline docs-local targets and Markdown fragments; compared with factual combined input",
+      "changed_or_added_markdown_files": 41,
+      "input_error_occurrences": 973,
+      "current_error_occurrences": 973,
+      "new_error_occurrences": 0,
+      "resolved_input_error_occurrences": 0,
+      "remaining_input_error_occurrences": 973,
+      "status_counts": {
+        "external-unchecked": 438,
+        "missing-doc-file": 971,
+        "missing-heading": 2,
+        "ok": 12544,
+        "outside-package-unchecked": 481
+      },
+      "new_issues": []
+    },
+    "abstract_model": {
+      "scope": "abstract-model-only",
+      "case_count": 12,
+      "passed": true,
+      "source_hashes": {
+        "docs/rfc/0056-global-claim-admission-difficulty.md": "a4b05f802d0d1cfd42e40c602eb93c5cff9b417230ac58a63f6e7cea13d06702",
+        "docs/rfc/0057-court-nonce-and-panel-challenges.md": "c18a160c26cbf7665ff7796061d43249e86486d6bef33819b53fbe00d0e8f03a",
+        "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md": "854ea306551434bbcff6d81702f60636de3842aae198aecb88e97970bbbc7d80"
+      },
+      "model_script_sha256": "2653679f7938bc3349022395792d64ec83535faa1cddb7fa167623a360f71060"
+    }
+  },
+  "legacy_input_check_status": {
+    "input_all_reported_passed": false,
+    "input_checks": [
+      {
+        "id": "docs",
+        "reported_passed": false,
+        "log_sha256": "c6fbe8c80151f7b587f3c4c59ad96533b87fe32549fa783111836b97c5ec6e4c"
+      },
+      {
+        "id": "rfc",
+        "reported_passed": false,
+        "log_sha256": "5361c5b268c2705e7ddc89115263f56883178f11d4b6f26d8d2b3ac7918b1bed"
+      },
+      {
+        "id": "adr",
+        "reported_passed": false,
+        "log_sha256": "1d224bdadd983ba93bc987e66ca98a3967b26389500d436fa5976b05102c0249"
+      }
+    ],
+    "current_official_checks": "NOT_RUN_BY_THIS_CHECKER; run and report them separately",
+    "baseline_rewritten": false
+  },
+  "errors": [],
+  "runtime_executed": false,
+  "activation_changed": false,
+  "limitations": [
+    "Passing means this revision preserves its pinned inputs and metadata contracts; it does not make the legacy integrity checks pass.",
+    "The factual input contains missing references. They remain visible and are not added to the official known-link-issues baseline.",
+    "External URLs and targets outside docs are not fetched or validated.",
+    "Model results are bound to current documents and script; this checker does not prove native execution, node capacity, cost lower bounds, data availability, or DAG consensus safety."
+  ]
+}

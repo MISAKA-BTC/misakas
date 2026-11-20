@@ -1,5 +1,15 @@
 # MISAKA Architecture Specification
 
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 受付難易度の設計案
+
+新規originalの受付DとREALのW・Final後receipt・搬送1 BPSの役割分離は [RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) を参照する。court資源上限・全工程予約は [RFC-0055](../rfc/0055-global-admission-court-calendar-and-one-bps.md)。状態は0056/0224がPROPOSED_DESIGN_NOT_ACTIVATEDであり、この注記で現行仕様・署名・activationを変更しない。
+<!-- CAD1-PROPOSAL-END -->
+
 > **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
 
 > **2026-11-08 の適用範囲:** 下の本文・状態表は2026-11-03の統合仕様と、その時点の照合範囲を保持します。今回採択した新しい claim / profile には [RFC-v2-0016〜0020](../rfc-v2/README.md)、[ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) の明示改定を適用します。状態は **ADOPTED_DESIGN_NOT_ACTIVATED** であり、実装・測定・activation の完了を示しません。

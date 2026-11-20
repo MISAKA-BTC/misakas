@@ -1714,6 +1714,70 @@
       "status": "Accepted design / 一人前提・最低一件承認の追加採択、未有効化"
     },
     {
+      "kind": "adr",
+      "number": "0219",
+      "path": "docs/adr/0219-funded-preclaim-tokenizer-registration.md",
+      "title": "ADR-0219 — 受付前 tokenizer 資料の有料 native 登録案",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0220",
+      "path": "docs/adr/0220-hugging-face-model-acquisition-and-claim-materials.md",
+      "title": "ADR-0220 — Hugging Face取得とclaim固有の資料供給を分離する",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0221",
+      "path": "docs/adr/0221-additional-model-burn-pause.md",
+      "title": "ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0222",
+      "path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "title": "ADR-0222 — 公開T12 original受付profileの提案を分離する",
+      "topic": "Consensus / architecture",
+      "status": "Draft / 未採択・未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0223",
+      "path": "docs/adr/0223-global-admission-court-calendar-and-one-bps.md",
+      "title": "ADR-0223 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS",
+      "topic": "Verification / court",
+      "status": "前回提供の判断記録 / 未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0224",
+      "path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "title": "ADR-0224 — 全claim共通の受付難易度とcanonical負荷観測",
+      "topic": "Consensus / architecture",
+      "status": "Proposed design / CAD1の判断案・未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0225",
+      "path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "title": "ADR-0225 — Court nonceとPanel固有チャレンジを役務・承認へ束縛する",
+      "topic": "Verification / court",
+      "status": "Proposed design / CPN1の判断案・未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0226",
+      "path": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "title": "ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する",
+      "topic": "Consensus / architecture",
+      "status": "Proposed design / SWC1判断案、未有効化"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -2123,6 +2187,30 @@
     },
     {
       "kind": "rfc",
+      "number": "0051",
+      "path": "docs/rfc/0051-funded-preclaim-tokenizer-registration.md",
+      "title": "RFC-0051 — 受付前 tokenizer 資料の有料搬送と native 登録",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0052",
+      "path": "docs/rfc/0052-hugging-face-model-acquisition-and-claim-materials.md",
+      "title": "RFC-0052 — Hugging Face 固定モデル取得と claim 固有資料の分離",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0053",
+      "path": "docs/rfc/0053-additional-model-burn-pause.md",
+      "title": "RFC-0053 — 追加モデルのburnによる停止・登録者による解除",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
       "number": "0054",
       "path": "docs/rfc/0054-public-t12-original-admission-profile.md",
       "title": "RFC-0054 — 公開T12 original受付profileの具体案",
@@ -2130,12 +2218,68 @@
       "status": "Draft / 未採択・未有効化"
     },
     {
-      "kind": "adr",
-      "number": "0222",
-      "path": "docs/adr/0222-public-t12-original-admission-profile.md",
-      "title": "ADR-0222 — 公開T12 original受付profileの提案を分離する",
+      "kind": "rfc",
+      "number": "0055",
+      "path": "docs/rfc/0055-global-admission-court-calendar-and-one-bps.md",
+      "title": "RFC-0055 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS",
+      "topic": "Verification / court",
+      "status": "前回提供の設計 / 資源保護・未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0056",
+      "path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "title": "RFC-0056 — 全claim共通の受付難易度とcourt負荷連動制御",
       "topic": "Consensus / architecture",
-      "status": "Draft / 未採択・未有効化"
+      "status": "Proposed design / 全claim受付難易度・未実装未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0057",
+      "path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "title": "RFC-0057 — Court nonce・Panel固有チャレンジと提出の一回性",
+      "topic": "Verification / court",
+      "status": "Proposed design / Court nonce・Panel固有challenge・未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0058",
+      "path": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "title": "RFC-0058 — 実行commit・段階別抽選・仕事の一回性と合意資格",
+      "topic": "Consensus / architecture",
+      "status": "Proposed design / 実行commit・段階抽選・合意資格、未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0059",
+      "path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "title": "RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court",
+      "topic": "Verification / court",
+      "status": "DRAFT_NOT_ACTIVATED / Panel＋Court維持、費用下界未証明"
+    },
+    {
+      "kind": "adr",
+      "number": "0227",
+      "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "title": "ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する",
+      "topic": "Verification / court",
+      "status": "DRAFT_NOT_ACTIVATED / AN1変更草案"
+    },
+    {
+      "kind": "rfc",
+      "number": "0060",
+      "path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "title": "RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性",
+      "topic": "Models / execution / onboarding",
+      "status": "DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別"
+    },
+    {
+      "kind": "adr",
+      "number": "0228",
+      "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "title": "ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する",
+      "topic": "Models / execution / onboarding",
+      "status": "DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別"
     }
   ]
 }

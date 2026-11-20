@@ -28,6 +28,18 @@ status[('rfc','0049')]='Accepted design / PALW実行整合性・単独反証、�
 status[('adr','0217')]='Accepted design / PALW条件付き保証の追加採択、未有効化'
 status[('rfc','0050')]='Accepted design / 公開資料・モデル未保有の一人検証、未有効化'
 status[('adr','0218')]='Accepted design / 一人前提・最低一件承認の追加採択、未有効化'
+status[('rfc','0055')]='前回提供の設計 / 資源保護・未有効化'
+status[('adr','0223')]='前回提供の判断記録 / 未有効化'
+status[('rfc','0056')]='Proposed design / 全claim受付難易度・未実装未有効化'
+status[('adr','0224')]='Proposed design / CAD1の判断案・未有効化'
+status[('rfc','0057')]='Proposed design / Court nonce・Panel固有challenge・未有効化'
+status[('adr','0225')]='Proposed design / CPN1の判断案・未有効化'
+status[('rfc','0058')]='Proposed design / 実行commit・段階抽選・合意資格、未有効化'
+status[('adr','0226')]='Proposed design / SWC1判断案、未有効化'
+existing_catalog=D/'maintenance/decision-catalog.json'
+if existing_catalog.exists():
+ for row in json.loads(existing_catalog.read_text()).get('records',[]):
+  status.setdefault((row['kind'],row['number']),row['status'])
 records=[]
 for kind in ['adr','rfc']:
  files=sorted(p for p in (D/kind).glob('*.md') if re.match(r'^\d{4}-',p.name));groups=defaultdict(list)

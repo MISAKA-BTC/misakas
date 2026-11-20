@@ -6,7 +6,6 @@
 
 ## Consensus / architecture
 
-- [RFC-0054 — 公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md)
 - [RFC-0001 — PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計](0001-palw-inference-surface-gaps.md)
 - [RFC-0005 — PALW VM（不採用）](0005-palw-ml-vm.md)
 - [RFC-0008 — PALW EXEC lane — claim-backed work slices and transaction execution](0008-palw-claim-backed-consensus-blocks.md)
@@ -22,6 +21,10 @@
 - [RFC-0046 — Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md)
 - [RFC-0048 — EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約](0048-exec-credit-schedule-and-one-bps.md)
 - [RFC-0049 — PALW実行整合性と一人による反証の完結契約](0049-palw-execution-integrity-and-unilateral-refutation.md)
+- [RFC-0051 — 受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md)
+- [RFC-0054 — 公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md)
+- [RFC-0056 — 全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md)
+- [RFC-0058 — 実行commit・段階別抽選・仕事の一回性と合意資格](0058-staged-work-commitments-and-consensus-eligibility.md)
 
 ## EVM / wallet
 
@@ -41,6 +44,7 @@
 
 ## Models / execution / onboarding
 
+- [RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md)
 - [RFC-0002 — PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the cons](0002-palw-tensor-ir.md)
 - [RFC-0003 — PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top](0003-palw-generative-model-classes.md)
 - [RFC-0004 — PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR](0004-palw-model-improvement.md)
@@ -51,6 +55,8 @@
 - [RFC-0020 — 長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md)
 - [RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court](0025-scalable-objective-court-many-models-mass-disputes.md)
 - [RFC-0042 — (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md)
+- [RFC-0052 — Hugging Face 固定モデル取得と claim 固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md)
+- [RFC-0053 — 追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md)
 
 ## Operations / interfaces / recovery
 
@@ -76,4 +82,10 @@
 - [RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md)
 - [RFC-0047 — Batch court time contract: one door, separate retention, public 6,880](0047-batch-court-time-contract.md)
 - [RFC-0050 — 公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md)
+- [RFC-0055 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS](0055-global-admission-court-calendar-and-one-bps.md)
+- [RFC-0057 — Court nonce・Panel固有チャレンジと提出の一回性](0057-court-nonce-and-panel-challenges.md)
 
+
+## 2026-11-18 追加草案
+
+- [RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。

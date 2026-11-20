@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "revision": "2026-11-17-work-binding",
+  "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+  "basis": "docs(3).zip plus 44 prior-only files; source-baseline.json",
+  "modified": [
+    {
+      "path": "docs/PRINCIPLES.md",
+      "before_sha256": "0284f9cdec1d877edb1b8b9112e60d6549db4a631f46b1a2a07be966abbc3a3e",
+      "after_sha256": "33433c083b22141c4054cd665cdf25c6093265df069f2fe73c0d0b204a80863e",
+      "after_bytes": 60474
+    },
+    {
+      "path": "docs/adr-v2/README.md",
+      "before_sha256": "700cdee723bd708239d813373204c47066859a6c085cc762ee52a91c14190b5d",
+      "after_sha256": "b92bd47f196e09975b91beb5ec3600070a16a74ccd3b3180c7ca9d608e174f77",
+      "after_bytes": 23061
+    },
+    {
+      "path": "docs/adr-v2/registry.json",
+      "before_sha256": "bbea084b57b42c130fb5f3ab309657417f24763b04eb0affb78d54db4f4da8a0",
+      "after_sha256": "f583bddc91d65d4117cfb160609129f0571e185143db4eac88ef5bcdcea605db",
+      "after_bytes": 43310
+    },
+    {
+      "path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "before_sha256": "f13b227bcfd9dc68a45fc4a5aeda3d9e56ce47c1b0b8b577291d28b9d26e0b4e",
+      "after_sha256": "4d436bccab1ef006040672fec3fcf6ff8b98b635155703dce043b711a56c109f",
+      "after_bytes": 14970
+    },
+    {
+      "path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "before_sha256": "04bfc773f9e3f1f40613d98605355a16e32df896db3c12c6237d8d355193ea57",
+      "after_sha256": "f70bda5dc27a13ee85cf2e09526172709ad98c66a02804cc3a2f966d9b7eb567",
+      "after_bytes": 8326
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "before_sha256": "162d13a06e43017e67a87ac739143e6a6a40d25a519259fc349636c7ac9951b9",
+      "after_sha256": "577977882dd01c10276ece1686499e517d19bebb1728c3dcf3dec3a76c000fc5",
+      "after_bytes": 39794
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "before_sha256": "31d2fad329948dc76c3cd9a21e72cfaf8be1f117207bf73ba30890c70b95ffe3",
+      "after_sha256": "9a464e2130860af603cc0cb98264cfcac125fdf2832421cc3af1a0b40e5773d4",
+      "after_bytes": 32392
+    },
+    {
+      "path": "docs/architecture/palw-specification.md",
+      "before_sha256": "8ff819754bf61ccff4ec9efca04e725dcc168e2873b2d6b44f3025ca39d1ad91",
+      "after_sha256": "12e1e22f5d5f5d3897f1e1ca91b16d8fb45a498cdef5bef84694a522263d517d",
+      "after_bytes": 65384
+    },
+    {
+      "path": "docs/design/palw/integration/public-one-honest-implementation-ledger.md",
+      "before_sha256": "6cacd0f4ef00c197a0bff8e7ccb3fe0a8ae8ce1cb2d42105027f4bbc58ffbfb1",
+      "after_sha256": "bb37601e5060b3bc7982f6e748f30e814f69ea03761720f2c26c85c7c8cafc27",
+      "after_bytes": 116619
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "before_sha256": "d2cdd78e13e08d882843784d02256853b8be6a25e64ac2209c936e0a25b64727",
+      "after_sha256": "e39cb1a9b5afb220d5905bb9af5b030eb6e9d610aab7b5a822aed2d94e04acf4",
+      "after_bytes": 58769
+    },
+    {
+      "path": "docs/governance/parameters.json",
+      "before_sha256": "8bea0cedcb9dac953689f3869cdb7f96fd08275abc376581c4e560dec0546272",
+      "after_sha256": "862b888af1a02cb521d0f7b1a31acff166b6117e6f76cba9b28d23078e743021",
+      "after_bytes": 49952
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "before_sha256": "3a8f2fe316b2934c0842572f04bf60a9a6f47d43a44b0aa820f463115b6ab763",
+      "after_sha256": "4e0443cbc2d578af8fd12c1c579c08deaf003e9ee6e6c0d17c635765af4223f2",
+      "after_bytes": 119855
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "before_sha256": "50453d86f82b2a7afd148fa50dccb96417eabb092d4b23c1db6dd10c6869e116",
+      "after_sha256": "8e7292a43385dec814e8fd2571f171c80b9b63db436a5f2c9e1f909c8906da44",
+      "after_bytes": 94516
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "before_sha256": "7a862cb3a920f80747a1a21287bb0d2aa179a0c947c5cf61bf154b85f0350af2",
+      "after_sha256": "747eecbc0ed836098977470995c003bea357b205ab86c4ceee820c836dd4ff75",
+      "after_bytes": 6365
+    },
+    {
+      "path": "docs/maintenance/number-registry.json",
+      "before_sha256": "780f503d47df344abdb52960f5e29eff89ba5f3268e7dff0153bfb5cf13b6556",
+      "after_sha256": "40c7666957989a39a3d9023ab270cb303f80715af673f0cd714ad41429ac909a",
+      "after_bytes": 7758
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "before_sha256": "6158a2157708e2b44c366b3c07c9e803ca41c953ad8fe4f33e9d75b03db78967",
+      "after_sha256": "58b04cd7bc38bd080a2557332e0341fe3a501eb3df7bddf6650ae54bcfc4103f",
+      "after_bytes": 9731
+    },
+    {
+      "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "before_sha256": "60e6aae5735193f16e3056696a3c3a7f9626e1fd4d4fbcf1ee7be237b5f7cd91",
+      "after_sha256": "622f785939ce905d4b3b635c949e28faa53532611af2ada36fc91ef521d77bdb",
+      "after_bytes": 290565
+    },
+    {
+      "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "before_sha256": "b3d2f5ece9423c3e3b812673862d76d472786cd80b2e73c82683f9447842a591",
+      "after_sha256": "7ff0e067778ee580711b139c5548afafe206be8b23bfe05a1db8962148c13944",
+      "after_bytes": 55497
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "before_sha256": "5ee4851288a34ce2f34147482670257d47a42aabaec04ce4a0ff568b7f6f6b4f",
+      "after_sha256": "d697846f93a000670297795f7f295c1572f6302db67bd4867186982ba968c570",
+      "after_bytes": 291732
+    },
+    {
+      "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "before_sha256": "f11c4f64d35f1e671694b57524e643434382dd53044fb1e3b4eb58fefdc87c0a",
+      "after_sha256": "02c2e11eccce05f4f735f9677ce5cf635a0698b746480e7a09a707ab5c88eb4c",
+      "after_bytes": 82891
+    },
+    {
+      "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "before_sha256": "a783ce9b7ed21ec40693a1c759c1ee39e71be03d73f4603ecf57b47248bf6524",
+      "after_sha256": "ae0db6b8680f8facfbe28ab8ff7657c8aaf9735b2c9ae09ab1275f7d22112270",
+      "after_bytes": 55710
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "before_sha256": "efb471f7491026dec0191c259c2e7f9efac35e4c479e3aad2d2067a50d0167e3",
+      "after_sha256": "a65569c1b58aa8c0c37318c91f523928da402771fa3efd1b2d2d8dacda96bafe",
+      "after_bytes": 149973
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "before_sha256": "fcf35e9a938db28011f17fbc7f7468791d71d8b464f68e1d069d78cd63747851",
+      "after_sha256": "d143b914a9b854c0be0d8dada750efcd02dbd4300eada3bce11702d084ae2784",
+      "after_bytes": 122141
+    },
+    {
+      "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "before_sha256": "bb9281daaac3e1adfaaf2a8bc78c15eb4d6d5afeb8b94620bfa57b3a45ce8914",
+      "after_sha256": "514ba31313f1d423793d594471aaf564d76e1f365ff51380d6db9fff63784d35",
+      "after_bytes": 33821
+    },
+    {
+      "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "before_sha256": "e5ae37a5e3dbe5e57c2a90cd4141d0e8aab82f48ff5537e355303fd60ce67772",
+      "after_sha256": "d4173b3dde252dcf2e9f8504d9a2db4331d344ea2150975eb55b3ee08cdbb734",
+      "after_bytes": 13491
+    },
+    {
+      "path": "docs/rfc-v2/0014-court-master-contract.md",
+      "before_sha256": "8bb068550d55869deea8d47645cbdca365ac55ca7d188ee6ca3e47b18d78c570",
+      "after_sha256": "78dd8b8170f45f3fc3644e17594242ca5b90e8f319e04912ee4d45856a73b49f",
+      "after_bytes": 391824
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "before_sha256": "a204d3d31264e33bbf399cff2cacf0a7e253c771522d5c0b4d63cd40cdb53038",
+      "after_sha256": "ca14d075d977ec7b9af9d850517936c099600f15ab96ff967825565e8276b301",
+      "after_bytes": 297450
+    },
+    {
+      "path": "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+      "before_sha256": "a7f41af55cb632a4a1a9632da393a5375ca628d85c24b2699a7d1e7b6b378014",
+      "after_sha256": "3f00950d1c831601d54ad948e5e6105d026e7a488ba2a63cd33c8d359d205574",
+      "after_bytes": 38285
+    },
+    {
+      "path": "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "before_sha256": "42909b4ee0f7b24ef89b1d0a85b97bf1b0173fa1c706e758b3dc8ad8b8c74cf2",
+      "after_sha256": "1e367f8f425965cf64fc8eebc5d34cbc0414d15ff6dbdff61182e3956bbf961a",
+      "after_bytes": 32933
+    },
+    {
+      "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "before_sha256": "5b24e2321add89abd1166cb8d90bbd25ccbc8359f9fbb91060813fb24b466e6d",
+      "after_sha256": "a32b29c038726eab911a0c759f91648d54e9f956f91ec978e0ff346ba70c79a9",
+      "after_bytes": 58991
+    },
+    {
+      "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+      "before_sha256": "86835517211c1e5909c6ee23ee5a69185a210a81b7fb678ebfff388ecb79e7df",
+      "after_sha256": "2addfd551a62348b12ead968bdc8aa0d0a9211c9a985eea452bbfbef574b4ff9",
+      "after_bytes": 44481
+    },
+    {
+      "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "before_sha256": "233d7876b41e0db319331d8a3bad0410189e1cd765f639bbe1c48c5e92ea6aa5",
+      "after_sha256": "9524ad510bc1b6042209c382b08379be27ec452d392f220fd2c299441d1fb1be",
+      "after_bytes": 57494
+    },
+    {
+      "path": "docs/rfc-v2/MIGRATION.md",
+      "before_sha256": "8aee949048d2d52fbf5252d9db81244f8f5b54a2fbe2bccf8ca517485bce2c81",
+      "after_sha256": "cc34cb2d1c4fe137f72b28aab3c8ac91b65124132891161a74ff1c915492c779",
+      "after_bytes": 12205
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "before_sha256": "f1d16f2a3079c624cfaad1751aa2584621eb3c40034984888ab3c415f9090192",
+      "after_sha256": "c2015289d74ee61bba728d8911f5b356f1ae4def0ee859338e978a04bdffe49d",
+      "after_bytes": 17805
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "before_sha256": "6104adc6d53edc2e2ce5079aaec1af6476b84ee825b7e58c34a53ee56289c94c",
+      "after_sha256": "268a2dcc0c8f1d8fc109cd6f8cb5688470e441ab14bba3f6b63ad408c512b658",
+      "after_bytes": 14386
+    },
+    {
+      "path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "before_sha256": "13f2b9afb1d5476c89768b6dc11c069008fa388fa93a7e97e56c9b4be219a2ca",
+      "after_sha256": "a4b05f802d0d1cfd42e40c602eb93c5cff9b417230ac58a63f6e7cea13d06702",
+      "after_bytes": 41338
+    },
+    {
+      "path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "before_sha256": "4dac02f381f65d467cfad39d3bd061093eafd5c949895f5f24b93d96fd301875",
+      "after_sha256": "c18a160c26cbf7665ff7796061d43249e86486d6bef33819b53fbe00d0e8f03a",
+      "after_bytes": 37629
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "before_sha256": "6af4c42df34ad750d90443179eb7adf0704a85c82320652a49170dec63d3d8a4",
+      "after_sha256": "9b33ba30544362831c8ce1502f446c0d5cf26a5bd9de77afb9a9ffeaece7ef3c",
+      "after_bytes": 11123
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "before_sha256": "d32151754100cf85eb0142bacfa3e7374d00049a8c89aaaad9a6706dc4c4904d",
+      "after_sha256": "3c487085fbcb557189fe5e3edcd4776103c8650b5cf76801c3633e82898923a9",
+      "after_bytes": 8830
+    }
+  ],
+  "added": [
+    "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+    "docs/design/palw/integration/staged-work-implementation-plan-2026-11-17.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/README.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/REVIEW.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/SOURCE_AUDIT.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/VALIDATION.md",
+    "docs/maintenance/revisions/2026-11-17-work-binding/baseline-checks.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/changes.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/check_revision.py",
+    "docs/maintenance/revisions/2026-11-17-work-binding/check_work_model.py",
+    "docs/maintenance/revisions/2026-11-17-work-binding/legacy-adr.log",
+    "docs/maintenance/revisions/2026-11-17-work-binding/legacy-docs.log",
+    "docs/maintenance/revisions/2026-11-17-work-binding/legacy-rfc.log",
+    "docs/maintenance/revisions/2026-11-17-work-binding/model-results.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0056.source.txt",
+    "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0057.source.txt",
+    "docs/maintenance/revisions/2026-11-17-work-binding/revision-results.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/source-baseline.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/source-provenance.json",
+    "docs/maintenance/revisions/2026-11-17-work-binding/validation-results.json",
+    "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md"
+  ],
+  "deleted": [],
+  "runtime_changed": false,
+  "activation_changed": false,
+  "note": "Hashes for new generated result files are in the external package manifest, avoiding self-referential results. Legacy source/evidence and old revision results are preserved."
+}

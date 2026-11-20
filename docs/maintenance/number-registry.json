@@ -146,6 +146,51 @@
       "adr_path": "docs/adr/0222-public-t12-original-admission-profile.md",
       "status": "DRAFT_NOT_ADOPTED",
       "audit": "Current checkout and git log --all path audit found no previous RFC0054/ADR0222; unfetched refs not audited."
+    },
+    {
+      "date": "2026-11-17",
+      "rfc": "0055",
+      "rfc_path": "docs/rfc/0055-global-admission-court-calendar-and-one-bps.md",
+      "adr": "0223",
+      "adr_path": "docs/adr/0223-global-admission-court-calendar-and-one-bps.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "Imported unchanged from the previous delivery in this conversation; source basis was pre@c3da7c6e. Not present in the supplied main snapshot."
+    },
+    {
+      "date": "2026-11-17",
+      "rfc": "0056",
+      "rfc_path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "adr": "0224",
+      "adr_path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "audit": "No path collision in pinned main2d8212b6 and the previous in-conversation pre-based delivery. Earlier pre allocations and RFC0055/ADR0223 are not reused; unexamined remote refs are not globally audited."
+    },
+    {
+      "date": "2026-11-17",
+      "rfc": "0057",
+      "rfc_path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "adr": "0225",
+      "adr_path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "audit": "Additive to fixed main and prior in-conversation RFC0055/0056 delivery; no existing number or wire ID reused."
+    },
+    {
+      "date": "2026-11-17",
+      "rfc": "0058",
+      "rfc_path": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "adr": "0226",
+      "adr_path": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "audit": "No collision in supplied docs(3).zip, prior in-conversation RFC0055-0057, and pinned main. Unexamined remote refs are not globally audited. Existing historical next_local is retained."
+    },
+    {
+      "date": "2026-11-18",
+      "rfc": "0059",
+      "rfc_path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "adr": "0227",
+      "adr_path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "audit": "Unused numbers checked in the supplied RFC AuditRevision archive only. Explicit user instruction switches to PALW-AN1 with Panel and Court; no Groth16. Historical next_local and adopted states retained; unexamined remote branches not audited."
     }
   ]
 }

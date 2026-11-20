@@ -6,7 +6,6 @@
 
 ## Consensus / architecture
 
-- [ADR-0222 — 公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md)
 - [ADR-0005 — Mass / DoS policy for ML-DSA P2PKH transactions](0005-mass-policy.md)
 - [ADR-0007 — Layered PoW (Layer 0 quantum-resistant finalizer + Layer 1 ASIC-hard tag)](0007-layered-pow.md)
 - [ADR-0009 — DNS Probabilistic Finality Overlay](0009-dns-probabilistic-finality.md)
@@ -118,6 +117,10 @@
 - [ADR-0211 — 学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md)
 - [ADR-0214 — Positive原資へ先行relay資料・custodyを追加する判断案](0214-positive-native-funded-relay.md)
 - [ADR-0217 — PALW実行整合性と一人による反証の完結契約](0217-palw-execution-integrity-and-unilateral-refutation.md)
+- [ADR-0219 — 受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md)
+- [ADR-0222 — 公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md)
+- [ADR-0224 — 全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md)
+- [ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する](0226-staged-work-commitments-and-consensus-eligibility.md)
 
 ## EVM / wallet
 
@@ -155,6 +158,7 @@
 
 ## Models / execution / onboarding
 
+- [ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md)
 - [ADR-0034 — PALW re-verification routing — four execution-class families, five model bands, one deciding binding](0034-palw-execution-class-model-band-routing.md)
 - [ADR-0036 — PALW mainnet activation — lineage reconciliation and the model that governs](0036-palw-mainnet-activation-model.md)
 - [ADR-0045 — The class economy is chain state — derived PWU, block-denominated epoch budgets, and the registratio](0045-palw-class-economy-on-chain.md)
@@ -193,6 +197,8 @@
 - [ADR-0210 — (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
 - [ADR-0212 — Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md)
 - [ADR-0215 — モデル非保有Node・非対話positive・対話negative・検証先行Final](0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)
+- [ADR-0220 — Hugging Face取得とclaim固有の資料供給を分離する](0220-hugging-face-model-acquisition-and-claim-materials.md)
+- [ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md)
 
 ## Operations / interfaces / recovery
 
@@ -242,4 +248,10 @@
 - [ADR-0213 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する](0213-positive-court-canonical-assignment.md)
 - [ADR-0216 — EXEC credit・事前公開schedule・1 BPSとcourt容量](0216-exec-credit-schedule-one-bps-and-court-capacity.md)
 - [ADR-0218 — 公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md)
+- [ADR-0223 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS](0223-global-admission-court-calendar-and-one-bps.md)
+- [ADR-0225 — Court nonceとPanel固有チャレンジを役務・承認へ束縛する](0225-court-nonce-and-panel-challenges.md)
 
+
+## 2026-11-18 追加草案
+
+- [ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する](0227-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。

@@ -1,5 +1,13 @@
 # MISAKAの設計前提 — 不可侵原則
 
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+> **2026-11-17の設計案:** 全claim共通の受付難易度は [RFC-0056](rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](adr/0224-global-claim-admission-difficulty.md)。前回の [RFC-0055](rfc/0055-global-admission-court-calendar-and-one-bps.md) の容量契約と組み合わせる提案であり、既存の不可侵原則・採択状態・runtime・有効化条件をこの入口注記で変更しない。
+<!-- CAD1-PROPOSAL-END -->
+
 > **2026-11-08追加採択:** EXEC credit・future schedule・1 BPSとcourt容量の規範は[§14](#exec-credit-one-bps-and-court-capacity)を参照する。§13のNode非保有・検証先行Finalを維持する。
 
 > **2026-11-08 採択:** 新しいclaim版では [§13 モデル非保有Node・敵対的なモデル秘匿・非対話positive](#model-free-adversarial-verification) を優先する。Nodeはモデル本体を持たず、モデル内Miner／Panelの寡占を想定し、独立検証が成立した後に成功Finalを置く。旧claim・旧profile・model-epoch配分は従来の意味を保持する。

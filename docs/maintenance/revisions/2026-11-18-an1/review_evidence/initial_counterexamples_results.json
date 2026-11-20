@@ -1,0 +1,35 @@
+{
+  "script_under_review_sha256": "7d2c30f01f6708e9f38410c5a74e9a782212f233b6b0cb24370d3941ae297f3e",
+  "cases": [
+    {
+      "case": "authenticated wrong trace with float count",
+      "seal": "ACCEPTED",
+      "trace_count_type": "float",
+      "panel_review": "Refuted",
+      "batch": {
+        "court_results": [
+          "InvalidEvidence"
+        ],
+        "final": true
+      },
+      "credits": {
+        "1111111111111111111111111111111111111111111111111111111111111111": 1
+      }
+    },
+    {
+      "case": "authenticated oversized trace leaf",
+      "seal": "ACCEPTED",
+      "trace_count_type": "int",
+      "panel_review": "Refuted",
+      "batch": {
+        "court_results": [
+          "InvalidEvidence"
+        ],
+        "final": true
+      },
+      "credits": {
+        "1111111111111111111111111111111111111111111111111111111111111111": 1
+      }
+    }
+  ]
+}

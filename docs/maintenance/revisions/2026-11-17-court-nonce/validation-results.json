@@ -1,0 +1,471 @@
+{
+  "schema": "misaka-cpn1-validation-summary-v1",
+  "generated_at_utc": "2026-11-17T12:37:20.994600+00:00",
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "comparison_basis": "previous delivered RFC-0056 docs-only overlay",
+  "scope": "docs-only preservation and abstract contract, not native/performance/activation",
+  "proposal_status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+  "new_standard_checker_failures": 0,
+  "all_standard_checkers_passed": false,
+  "standard_checker_comparison": {
+    "docs": {
+      "baseline_exit_code": 1,
+      "after_exit_code": 1,
+      "baseline": {
+        "mode": "no-new-regressions",
+        "passed": false,
+        "markdown_files": 984,
+        "targets": {
+          "ok": 11794,
+          "missing-doc-file": 971,
+          "outside-package-unchecked": 319,
+          "external-unchecked": 357,
+          "missing-heading": 2
+        },
+        "primary_documents": {
+          "adr": 216,
+          "rfc": 53
+        },
+        "known_issue_occurrences": 43,
+        "new_issue_occurrences": 930,
+        "limitations": [
+          "Offline, limited Markdown parser; not a full CommonMark renderer.",
+          "External URLs, code outside docs, protocol semantics and actual runtime/activation are not verified.",
+          "Release-scope checks validate documentation only, not node disablement."
+        ]
+      },
+      "after": {
+        "mode": "no-new-regressions",
+        "passed": false,
+        "markdown_files": 991,
+        "targets": {
+          "ok": 11897,
+          "missing-doc-file": 971,
+          "outside-package-unchecked": 319,
+          "external-unchecked": 391,
+          "missing-heading": 2
+        },
+        "primary_documents": {
+          "adr": 217,
+          "rfc": 54
+        },
+        "known_issue_occurrences": 43,
+        "new_issue_occurrences": 930,
+        "limitations": [
+          "Offline, limited Markdown parser; not a full CommonMark renderer.",
+          "External URLs, code outside docs, protocol semantics and actual runtime/activation are not verified.",
+          "Release-scope checks validate documentation only, not node disablement."
+        ]
+      },
+      "baseline_failure_count": 947,
+      "after_failure_count": 947,
+      "baseline_failure_fingerprint_sha256": "f15595da6d1b72b9a210bfc456179a02a925d610c2393d74050eb7bb194ad7f6",
+      "after_failure_fingerprint_sha256": "f15595da6d1b72b9a210bfc456179a02a925d610c2393d74050eb7bb194ad7f6",
+      "added_failures": [],
+      "removed_failures": []
+    },
+    "adr": {
+      "baseline_exit_code": 1,
+      "after_exit_code": 1,
+      "baseline": {
+        "passed": false,
+        "scope": "documentation-integrity-only",
+        "stats": {
+          "current_adr_documents": 50,
+          "post_consolidation_documents": 29,
+          "legacy_source_files": 204,
+          "legacy_distinct_numbers": 201,
+          "legacy_duplicate_numbers": [
+            "0026",
+            "0173",
+            "0193"
+          ],
+          "legacy_missing_numbers": [
+            "0048",
+            "0104",
+            "0113",
+            "0156",
+            "0157",
+            "0158",
+            "0159",
+            "0164"
+          ],
+          "legacy_lines": 48257,
+          "legacy_bytes": 3984256,
+          "verified_full_appendices": 201,
+          "verified_status_declarations": 209,
+          "verified_existing_rfc_files": 129,
+          "verified_unchanged_baseline_files": 363,
+          "verified_post_integration_metadata_changes": 0,
+          "current_rfc_documents": 20,
+          "legacy_rfc_documents": 53,
+          "repository_readme_scope": "Not supplied in docs-only overlay; not checked.",
+          "checked_new_local_link_occurrences": 2822,
+          "checked_explicit_fragment_links": 204,
+          "runtime_executed": false
+        }
+      },
+      "after": {
+        "passed": false,
+        "scope": "documentation-integrity-only",
+        "stats": {
+          "current_adr_documents": 50,
+          "post_consolidation_documents": 31,
+          "legacy_source_files": 204,
+          "legacy_distinct_numbers": 201,
+          "legacy_duplicate_numbers": [
+            "0026",
+            "0173",
+            "0193"
+          ],
+          "legacy_missing_numbers": [
+            "0048",
+            "0104",
+            "0113",
+            "0156",
+            "0157",
+            "0158",
+            "0159",
+            "0164"
+          ],
+          "legacy_lines": 48257,
+          "legacy_bytes": 3984256,
+          "verified_full_appendices": 201,
+          "verified_status_declarations": 209,
+          "verified_existing_rfc_files": 129,
+          "verified_unchanged_baseline_files": 363,
+          "verified_post_integration_metadata_changes": 0,
+          "current_rfc_documents": 20,
+          "legacy_rfc_documents": 54,
+          "repository_readme_scope": "Not supplied in docs-only overlay; not checked.",
+          "checked_new_local_link_occurrences": 2827,
+          "checked_explicit_fragment_links": 204,
+          "runtime_executed": false
+        }
+      },
+      "baseline_failure_count": 86,
+      "after_failure_count": 86,
+      "baseline_failure_fingerprint_sha256": "97201ca5d49e5d8768fd12d25965c18bac28cfb2f185061288caf05aa5a858dd",
+      "after_failure_fingerprint_sha256": "97201ca5d49e5d8768fd12d25965c18bac28cfb2f185061288caf05aa5a858dd",
+      "added_failures": [],
+      "removed_failures": []
+    },
+    "rfc": {
+      "baseline_exit_code": 1,
+      "after_exit_code": 1,
+      "baseline_failure_count": 7,
+      "after_failure_count": 7,
+      "baseline_failures": [
+        "FAIL: Original bytes changed or missing: RFC-0009",
+        "FAIL: Original bytes changed or missing: RFC-0011",
+        "FAIL: Original bytes changed or missing: RFC-0014",
+        "FAIL: Original bytes changed or missing: RFC-0023",
+        "FAIL: Original bytes changed or missing: RFC-0026",
+        "FAIL: Original bytes changed or missing: RFC-0037",
+        "FAIL: Original bytes changed or missing: RFC-0041"
+      ],
+      "after_failures": [
+        "FAIL: Original bytes changed or missing: RFC-0009",
+        "FAIL: Original bytes changed or missing: RFC-0011",
+        "FAIL: Original bytes changed or missing: RFC-0014",
+        "FAIL: Original bytes changed or missing: RFC-0023",
+        "FAIL: Original bytes changed or missing: RFC-0026",
+        "FAIL: Original bytes changed or missing: RFC-0037",
+        "FAIL: Original bytes changed or missing: RFC-0041"
+      ],
+      "baseline_failure_fingerprint_sha256": "8b372c6fec12fbe1fb24988a166de6aa91d4a8e473367ca191a3200106a23ca4",
+      "after_failure_fingerprint_sha256": "8b372c6fec12fbe1fb24988a166de6aa91d4a8e473367ca191a3200106a23ca4",
+      "added_failures": [],
+      "removed_failures": []
+    }
+  },
+  "abstract_model_result": {
+    "schema": "misaka-cpn1-abstract-model-results-v1",
+    "generated_at_utc": "2026-11-17T12:31:12.896445+00:00",
+    "scope": "ABSTRACT CONTRACT MODEL ONLY; NOT native, E2E, hardware, beacon-security, independent-labor, or activation evidence",
+    "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+    "rfc_path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+    "rfc_sha256": "4dac02f381f65d467cfad39d3bd061093eafd5c949895f5f24b93d96fd301875",
+    "script_path": "docs/maintenance/revisions/2026-11-17-court-nonce/check_nonce_model.py",
+    "script_sha256": "8038b9e3be5f77ce26751c7695353ad6a490a2386dd5c5c69888efdb4d0ba5c6",
+    "tests_run": 49,
+    "passed": 49,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "success": true,
+    "tests": [
+      {
+        "name": "test_01_typed_context_roundtrip_preserves_native_width_and_absence",
+        "result": "PASS",
+        "contract": "Native ID/seed widths and canonical route absence are preserved."
+      },
+      {
+        "name": "test_02_context_codec_rejects_noncanonical_truncation_trailing_and_version",
+        "result": "PASS",
+        "contract": "Bounds and expected field order precede decoding native content."
+      },
+      {
+        "name": "test_03_obligation_changes_only_with_native_duty_coordinates",
+        "result": "PASS",
+        "contract": "Each native scope dimension changes O; changing result/seed does not."
+      },
+      {
+        "name": "test_04_all_pinned_context_dimensions_bind_without_minting_new_obligation",
+        "result": "PASS",
+        "contract": "Root/profile/role/fee/plan changes cannot buy a new native duty."
+      },
+      {
+        "name": "test_05_native_seed_tail_is_bound_and_truncation_rejected",
+        "result": "PASS",
+        "contract": "The 64-byte native beacon tail affects nonce; 32-byte truncation fails."
+      },
+      {
+        "name": "test_06_plan_spec_is_preselection_and_not_a_circular_target_commit",
+        "result": "PASS",
+        "contract": "Context PlanSpec is fixed before seed and target derivation."
+      },
+      {
+        "name": "test_07_subject_excludes_signature_bytes_but_native_auth_remains_required",
+        "result": "PASS",
+        "contract": "Re-signing changes neither submission identity nor obligations."
+      },
+      {
+        "name": "test_08_wrong_panel_or_key_cannot_relabel_a_completed_envelope",
+        "result": "PASS",
+        "contract": "Copying A's whole Court to B fails before B's duty is consumed."
+      },
+      {
+        "name": "test_09_client_nonce_round_step_anchor_or_seed_cannot_reroll",
+        "result": "PASS",
+        "contract": "The packet cannot change the native slot or fixed challenge."
+      },
+      {
+        "name": "test_10_seed_order_and_ready_cut_are_strict_without_guilt_or_clock_reset",
+        "result": "PASS",
+        "contract": "Precommit or late seed is unavailable, not computational guilt."
+      },
+      {
+        "name": "test_11_negative_nonce_does_not_wait_for_seed_or_new_admission_difficulty",
+        "result": "PASS",
+        "contract": "An existing protected native notice uses ActionNonce without CAD1."
+      },
+      {
+        "name": "test_12_sparse_selector_is_deterministic_unique_sorted_and_bounded",
+        "result": "PASS",
+        "contract": "Actual SHA-256 selection uses at most kR hashes and O(k) entries."
+      },
+      {
+        "name": "test_13_large_target_space_does_not_require_full_enumeration",
+        "result": "PASS",
+        "contract": "A u64-sized abstract target space uses only the small sample map."
+      },
+      {
+        "name": "test_14_forced_bounded_rejection_exhausts_and_has_no_nonce_fallback",
+        "result": "PASS",
+        "contract": "Finite hash rejection reaches SelectionUnavailable at the bound."
+      },
+      {
+        "name": "test_15_selector_edge_cases_and_invalid_parameters",
+        "result": "PASS",
+        "contract": "N=1 and k=N work, invalid widths/counts are rejected."
+      },
+      {
+        "name": "test_16_countable_record_survives_consumption_and_cannot_exist_without_once",
+        "result": "PASS",
+        "contract": "Consumed once is required for the accepted approval, not its negation."
+      },
+      {
+        "name": "test_17_same_bond_positions_or_key_rotation_do_not_add_votes",
+        "result": "PASS",
+        "contract": "Native actor normalization and re-signing cannot multiply principals."
+      },
+      {
+        "name": "test_18_one_full_approval_does_not_wait_for_nonresponders_or_shorten_window",
+        "result": "PASS",
+        "contract": "One eligible completed actor can satisfy the existing minimum after all other conditions."
+      },
+      {
+        "name": "test_19_individual_samples_do_not_replace_common_coverage",
+        "result": "PASS",
+        "contract": "Personal sample completion cannot fill absent mandatory common targets."
+      },
+      {
+        "name": "test_20_local_scope_is_not_promoted_to_full_replay",
+        "result": "PASS",
+        "contract": "LocalHolds contributes no full-replay approval."
+      },
+      {
+        "name": "test_21_same_slot_different_signed_body_is_conflict_not_automatic_slash",
+        "result": "PASS",
+        "contract": "Byte/body disagreement alone does not prove equivocation or copying."
+      },
+      {
+        "name": "test_22_invalid_signature_or_opening_does_not_poison_the_honest_slot",
+        "result": "PASS",
+        "contract": "Invalid traffic cannot consume another actor's duty, funds or Q."
+      },
+      {
+        "name": "test_23_flat_body_digest_target_digest_length_and_chunk_root_are_all_bound",
+        "result": "PASS",
+        "contract": "A valid header is not a substitute for authenticated body contents."
+      },
+      {
+        "name": "test_24_expected_targets_reject_missing_extra_duplicate_and_wrong_order",
+        "result": "PASS",
+        "contract": "Challenge positions cannot be substituted or counted twice."
+      },
+      {
+        "name": "test_25_own_context_can_use_shared_public_openings_without_proving_labor",
+        "result": "PASS",
+        "contract": "Re-authenticated correct public witnesses may pass; physical replay is not inferred."
+      },
+      {
+        "name": "test_26_nonce_salted_trace_is_not_the_original_miner_root",
+        "result": "PASS",
+        "contract": "Outer nonce never changes the canonical integer trace leaf."
+      },
+      {
+        "name": "test_27_chunk_tree_empty_single_padded_and_exact_merkle_openings",
+        "result": "PASS",
+        "contract": "The specified chunk domains, index directions and padding authenticate bytes."
+      },
+      {
+        "name": "test_28_partial_bundle_missing_or_mixed_chunks_never_counts_as_complete",
+        "result": "PASS",
+        "contract": "Partial transport is authenticated staging, not an approval or receipt."
+      },
+      {
+        "name": "test_29_chunk_retries_and_restart_are_idempotent_and_completion_checks_flat_digest",
+        "result": "PASS",
+        "contract": "Canonical fragments share one body and one native submission."
+      },
+      {
+        "name": "test_30_staging_qualification_capacity_and_deadline_are_finite",
+        "result": "PASS",
+        "contract": "Staging headers cannot mint votes, restart clocks or allocate unbounded parts."
+      },
+      {
+        "name": "test_31_sample_external_refutation_after_positive_needs_no_new_seed_or_ticket",
+        "result": "PASS",
+        "contract": "A selected actor may correct a full affirmation with an off-sample negative."
+      },
+      {
+        "name": "test_32_qualified_third_party_refutation_and_negative_budget_survive_positive_work",
+        "result": "PASS",
+        "contract": "Public qualification and the protected negative reserve are separate from positive nonces."
+      },
+      {
+        "name": "test_33_positive_retries_do_not_clear_pending_cases_or_infer_computation_guilt",
+        "result": "PASS",
+        "contract": "An unresolved qualified notice blocks success even with valid positives."
+      },
+      {
+        "name": "test_34_invalid_counterevidence_does_not_close_q_or_consume_negative_duty",
+        "result": "PASS",
+        "contract": "A bad response or non-refuting witness only rejects that packet."
+      },
+      {
+        "name": "test_35_refutation_wins_over_all_positive_records_and_same_batch_final",
+        "result": "PASS",
+        "contract": "A valid local counterexample cannot be overturned by positive count."
+      },
+      {
+        "name": "test_36_local_holds_does_not_inherit_full_claim_false_affirmation_liability",
+        "result": "PASS",
+        "contract": "A local true relation is not a claim-wide affirmation."
+      },
+      {
+        "name": "test_37_objective_liability_and_repeat_refutation_settle_once",
+        "result": "PASS",
+        "contract": "Native finite liability needs an accepted full subject and exact root refutation."
+      },
+      {
+        "name": "test_38_liability_backing_cannot_be_released_while_window_or_case_remains",
+        "result": "PASS",
+        "contract": "Collateral stays through the finite native liability period and unresolved due."
+      },
+      {
+        "name": "test_39_nonce_completion_mints_no_entitlement_and_native_reward_once_is_separate",
+        "result": "PASS",
+        "contract": "A new submission identifier cannot create or redirect an economic right."
+      },
+      {
+        "name": "test_40_success_payment_requires_final_and_keeps_full_replay_scope",
+        "result": "PASS",
+        "contract": "Existing success entitlement cannot be redeemed from nonce/local completion alone."
+      },
+      {
+        "name": "test_41_cancel_prune_and_missing_restore_do_not_revive_consumed_obligation",
+        "result": "PASS",
+        "contract": "Raw evidence removal is separate from canonical once/tombstone state."
+      },
+      {
+        "name": "test_42_restart_preserves_context_once_pending_and_economic_state",
+        "result": "PASS",
+        "contract": "A fresh local process preserves native state rather than inferring it from cache."
+      },
+      {
+        "name": "test_43_reorg_undo_is_atomic_and_old_worker_generation_is_stale",
+        "result": "PASS",
+        "contract": "Canonical rollback undoes once/funds/coverage together without a permanent local spent file."
+      },
+      {
+        "name": "test_44_batch_failure_rolls_back_all_canonical_effects_but_not_real_ingress_cost",
+        "result": "PASS",
+        "contract": "Atomic batch semantics do not leave partial approval/receipt effects."
+      },
+      {
+        "name": "test_45_old_claim_profile_remains_pinned_and_new_route_cannot_downgrade",
+        "result": "PASS",
+        "contract": "Activation/config changes do not reinterpret an accepted claim's scope."
+      },
+      {
+        "name": "test_46_missing_funding_or_finite_liability_prevents_countable_full_approval",
+        "result": "PASS",
+        "contract": "Hash agreement alone does not establish native funds or responsibility."
+      },
+      {
+        "name": "test_47_global_capacity_and_ingress_do_not_expand_with_model_aliases",
+        "result": "PASS",
+        "contract": "Opaque model names grant neither new duty nor private capacity."
+      },
+      {
+        "name": "test_48_local_sampling_can_miss_corruption_so_no_independent_labor_or_unconditional_safety_claim",
+        "result": "PASS",
+        "contract": "The model explicitly exhibits the nonce-only guarantee limit."
+      },
+      {
+        "name": "test_49_response_phase_step_uses_the_fixed_case_budget_and_no_new_seed",
+        "result": "PASS",
+        "contract": "A finite native response has its own action nonce without clearing Q or minting another trial."
+      }
+    ],
+    "assumptions": [
+      "All limits, clocks, funds, amounts, fees and capacities are synthetic fixture values, not protocol defaults or measurements.",
+      "Native identity/inner codec/absence/authentication/selection/actor eligibility/actual capital provenance are trusted adapters.",
+      "The 64-byte native-seed fixture preserves width and bytes; actual beacon unpredictability, bias resistance and anchoring are not established.",
+      "The toy integer relation and trace Merkle codec are not native LLM kernels; only outer CPN1 framing, SHA-256, selector and chunk commitment are direct RFC constructions.",
+      "The model keeps qualified native duties, cost/funding and finite liability fixtures; full RFC-0055 actor/service/deadline planner and actual coin/journal primitives are external.",
+      "Shared-material bytes and local target coverage are separate from full-replay attestations and native payment/once records.",
+      "The model-alias test checks pinned original identity and shared ingress capacity, not real registry throughput or storage performance."
+    ],
+    "not_verified": [
+      "Native route coverage, production codecs/signature domains, RPC/UI/Studio, DB/snapshot/IBD and native atomic persistence.",
+      "Actual full LLM replay, truthful independent Panel work, physical labor, non-collusion or an active-honest-party guarantee.",
+      "Native beacon/assignment security, real canonical clock/service/censorship and carrier inclusion.",
+      "Minimum-node CPU/RAM/I/O, model registry scale, actual hostile network throughput, calibrated cost reservations or sustained 1 BPS.",
+      "Native economic sanctions, amounts, distribution and activation: liability and entitlement events here are explicit synthetic adapters."
+    ]
+  },
+  "revision_result_reference": "revision-results.json",
+  "runtime_changed": false,
+  "runtime_executed": false,
+  "activation_changed": false,
+  "limitations": [
+    "No historical baseline or checker was updated to hide pre-existing failures.",
+    "Abstract native identity/cryptography/finance/clock/qualification are explicit fixture adapters.",
+    "Passing local samples and nonce binding do not establish independent full replay, active honest coverage, non-collusion, or physical labor.",
+    "No native end-to-end, minimum-node/registry/IBD performance, or sustained 1 BPS test was run."
+  ]
+}

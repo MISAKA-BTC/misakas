@@ -222,7 +222,16 @@
 | ADR-0216 | [EXEC credit・事前公開schedule・1 BPSとcourt容量](0216-exec-credit-schedule-one-bps-and-court-capacity.md) | Accepted design / EXEC・1 BPS追加採択、未有効化 |
 | ADR-0217 | [PALW実行整合性と一人による反証の完結契約](0217-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW条件付き保証の追加採択、未有効化 |
 | ADR-0218 | [公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md) | Accepted design / 一人前提・最低一件承認の追加採択、未有効化 |
-| ADR-0219 | [受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md) | Accepted / 有料 tokenizer 登録、未有効化 |
-| ADR-0220 | [Hugging Face固定モデル取得とclaim固有資料の分離](0220-hugging-face-model-acquisition-and-claim-materials.md) | 取得認定はADR-0221で置換、資料分離は維持／未有効化 |
-| ADR-0221 | [取得可否認定を追加モデルのburn停止へ置換](0221-additional-model-burn-pause.md) | Accepted design / 未有効化 |
+| ADR-0219 | [受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md) | 原文と後続改定を参照 |
+| ADR-0220 | [Hugging Face取得とclaim固有の資料供給を分離する](0220-hugging-face-model-acquisition-and-claim-materials.md) | 原文と後続改定を参照 |
+| ADR-0221 | [追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md) | 原文と後続改定を参照 |
 | ADR-0222 | [公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |
+| ADR-0223 | [全モデル共通の受付難易度・資源予約・総搬送1 BPS](0223-global-admission-court-calendar-and-one-bps.md) | 前回提供の判断記録 / 未有効化 |
+| ADR-0224 | [全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md) | Proposed design / CAD1の判断案・未有効化 |
+| ADR-0225 | [Court nonceとPanel固有チャレンジを役務・承認へ束縛する](0225-court-nonce-and-panel-challenges.md) | Proposed design / CPN1の判断案・未有効化 |
+| ADR-0226 | [実行commit・段階別抽選・仕事の一回性を設計案として分離する](0226-staged-work-commitments-and-consensus-eligibility.md) | Proposed design / SWC1判断案、未有効化 |
+
+## 2026-11-18 追加草案
+
+- [ADR-0227 — PALW-AN1の実入力束縛をPanel＋Courtへ接続する](0227-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。
+| ADR-0228 | [モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md) | DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別 |

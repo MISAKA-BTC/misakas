@@ -76,3 +76,36 @@ CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042
 ## 2026-11-07 Batch court time contract
 
 [RFC-0047](../rfc/0047-batch-court-time-contract.md) は、Panel 発行の期限証明を受理経路にする案を不採用としたあとの再検討である。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) である。Batch の新しい版だけが、一つの時間契約、収集と保持の分離、6,880 DAA の公開予算を始める。完了 receipt から 10,000 を始めない。306,108 DAA の局所化は代替経路ではない。G14 の batch 予算は測定したモデルではない。`DISPUTE_WINDOW_DAA` は 10,000 のまま。`NOTICE_WINDOW_DAA` は 3,120 のまま。P0–P3 には試験がある。debug の局所 door 27 は class の受理ではない。条件 2–4 を完了とは書かない。出荷 preset は武装しない。main へは push していない。未 fetch remote や将来 branch の未使用は保証しない。
+
+<!-- CAD1-NUMBERING-BEGIN -->
+## 2026-11-17 受付難易度の独立RFC
+
+[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md) はPROPOSED_DESIGN_NOT_ACTIVATEDとして登録する。先行の[RFC-0055](../rfc/0055-global-admission-court-calendar-and-one-bps.md) / [ADR-0223](../adr/0223-global-admission-court-calendar-and-one-bps.md)は同会話で提供した資源保護の設計記録を併録する。
+
+今回のmainに0051〜0054/0219〜0222がないことを未使用の根拠にしない。先行pre側の割当と0055/0223提供を保持し、番号を再利用しない。照合対象はpinned main2d8212b6と会話内の先行成果物であり、全remote refの一意性保証ではない。次候補はRFC-0057 / ADR-0225。runtime・wire IDを今回割り当てない。
+<!-- CAD1-NUMBERING-END -->
+
+<!-- CPN1-NUMBERING-BEGIN -->
+## 2026-11-17 Court nonceの独立RFC
+
+[RFC-0057](../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md) をPROPOSED_DESIGN_NOT_ACTIVATEDとして追加する。既存0055/0056/0223/0224および別枝の過去割当を再利用しない。新wire IDは割り当てない。今回の照合範囲は固定mainと会話内成果物。次候補はRFC-0058 / ADR-0226。
+<!-- CPN1-NUMBERING-END -->
+
+<!-- SWC1-NUMBERING-BEGIN -->
+## 2026-11-17 監査対応の提案番号
+
+[RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) と [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) を、添付docsと前回0055〜0057の後続提案として登録する。今回の範囲で衝突はなく、未取得の全remote refまでの空き番号を保証しない。0056／0057は同じ主pathでSWC1追補を記し、元bytesと過去試験は新revisionの記録で区別する。
+
+旧next_localは当時の割当snapshotであり現行の未使用番号案内ではない。次の提案は少なくとも0059／0227以降について新たに番号監査する。20 RFC／50 ADRと旧番号・wireは維持する。
+<!-- SWC1-NUMBERING-END -->
+
+## 2026-11-18 AN1草案のローカル割当
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md)。添付AuditRevision内で未使用を確認した番号であり、未取得remote/branchの予約まで保証しない。状態はDRAFT_NOT_ACTIVATED。現行20 RFC・統合50 ADRを維持し、旧next_localは当時の履歴として書き換えない。
+
+## 2026-11-20 MOR1草案のローカル割当
+
+- RFC-0060: [モデル登録時の試行別出力束縛と暗号学的非重複性](../rfc/0060-model-registration-and-attempt-output-binding.md)。
+- ADR-0228: [モデル登録時の試行別出力束縛](../adr/0228-model-registration-and-attempt-output-binding.md)。
+- 状態は`DRAFT_NOT_ACTIVATED`。添付の最新docsで未使用の番号を使用した。別branchとの番号競合が存在しないことや、本番採択・有効化を証明する割当ではない。
+- 現行の閲覧冊数20 RFC／50 ADRは維持し、両registryのpost_consolidation_documentsに草案を登録する。[変更記録](revisions/2026-11-20-model-output-binding/README.md)。

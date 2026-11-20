@@ -1,0 +1,16 @@
+{
+  "docs_failure_entries": 947,
+  "docs_new_link_keys": 906,
+  "docs_new_link_occurrences": 930,
+  "docs_nonlink_failure_entries": 41,
+  "docs_known_issue_occurrences": 43,
+  "docs_targets": {
+    "ok": 12693,
+    "missing-doc-file": 971,
+    "outside-package-unchecked": 481,
+    "external-unchecked": 439,
+    "missing-heading": 2
+  },
+  "rfc_failure_entries": 7,
+  "adr_error_entries": 86
+}

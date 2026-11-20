@@ -1,0 +1,33 @@
+{
+  "docs": {
+    "command": [
+      "python3",
+      "docs/maintenance/check_docs.py",
+      "--json-out",
+      "/workspace/scratch/a3438b5a601e/model_registration_work/post/docs.json"
+    ],
+    "exit_code": 1,
+    "stdout": "docs.stdout.txt",
+    "stderr": "docs.stderr.txt"
+  },
+  "rfc": {
+    "command": [
+      "python3",
+      "docs/rfc-v2/check_integrity.py"
+    ],
+    "exit_code": 1,
+    "stdout": "rfc.stdout.txt",
+    "stderr": "rfc.stderr.txt"
+  },
+  "adr": {
+    "command": [
+      "python3",
+      "docs/adr-v2/check_integrity.py",
+      "--json",
+      "/workspace/scratch/a3438b5a601e/model_registration_work/post/adr.json"
+    ],
+    "exit_code": 1,
+    "stdout": "adr.stdout.txt",
+    "stderr": "adr.stderr.txt"
+  }
+}

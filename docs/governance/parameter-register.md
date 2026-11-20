@@ -339,3 +339,51 @@ courtの実供給率、1 DAA＝1秒を意味しない。仕事量→credit量の
 本改訂は、model tier、`R = 0.25 × bond/日`、既存担保・報酬・fee・配分係数を変更しない。上記κ_registeredのpinとADR0179の発行扱いの不整合は未解決のまま明示し、新profileに接続する決済式、丸め・ゼロ分母の規範を一意に確定するgateを残す。beaconの初回起動からcommit後seed、最初の検証・creditへの接続も同一実装で確認する。公開化・最低承認1の採択だけで、これらを解決済みや本番有効として扱わない。
 
 `k_min`は新profileの`minimum_full_replay_approvals`の略記である。機械可読台帳`parameters.json`の同名行も設計記録であり、runtime key・wire値の割当ではない。
+
+<!-- CAD1-PARAMETERS-BEGIN -->
+## 2026-11-17 全claim受付難易度CAD1 — 設計案
+
+[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md)。PROPOSED_DESIGN_NOT_ACTIVATED。前RFC0055 §6のDを採択新profileで詳細化する提案で、二重Dは作らない。旧W、receipt、tier、既存runtime値は維持する。下記の制御係数は性能測定値ではない。
+
+| key / 記号 | 提案値・導出規則 | 単位 | 外さない条件 |
+| --- | --- | --- | --- |
+| `cad1_planning_epoch_ms` / E | 120000 | ms/epoch | RateClockの計画区間。DAA/受理block数へ置換しない |
+| `cad1_difficulty_range` / D_admit | [1, 2^120-1] | 整数 | u128容器、checked u256中間。旧Wやreceipt targetと別state |
+| `cad1_utilization_scale` / S_U | 1024 | 整数比率基数 | C_A=C−固定Sへ正規化。host使用率を使わない |
+| `cad1_high_watermark` / U_high | 768/1024 | 予約/消費/stock比率 | native適格・有資金需要が必要。正規NoCapacityもhigh |
+| `cad1_low_watermark` / U_low | 256/1024 | 予約/消費/stock比率 | 観測completeかつ非混雑/非停止の場合のみ |
+| `cad1_increase_ratio` / g_up | ceil(9D/8) | 整数更新 | D_maxでsaturate。D=1なら2であり実倍率12.5%上限とはしない |
+| `cad1_decrease_ratio` / g_down | floor(8D/9) | 整数更新 | 連続low後のみ。D>=1 |
+| `cad1_low_epochs` / K_low | 3 | 連続完了epoch | bootstrap/不完全/中間/停止でreset。court件数の定数ではない |
+| `cad1_publication_offset` / Δtarget | 2 | epoch | boundary bのcollection前にb+2へ公表。既公表b/b+1は不変 |
+| `cad1_seed_ready_guard_ms` / G_ready | 共通profile必須、0<G_ready<120000 | ms | seed cut=Start(e)−G_ready。payload検査/伝播/包含に足りないprofileは不可 |
+| `cad1_initial_difficulty` / D_initial | activation必須、D範囲内 | 整数 | epoch0/1をlowに数えない。移行時に既公表Dを無条件resetしない |
+| `cad1_pressure_aggregation` / U | max(U_future,U_spent,U_stock) | 合意観測規則 | 現在の残責任・消費flow・live stock peak。未実行未来予約の過去peakは使わない |
+| `cad1_incomplete_observation` / coverage | low禁止。有効highまたは保持 | 更新規則 | 未処理尾部・省略・未観測epochを空需要にしない |
+| `cad1_trial_identity` / TrialSlot | native資本outpoint/既存機会sequence | 一回性規則 | 結果/route/model aliasで再抽選不可。世代/rolloverでも元経済機会の消費は維持 |
+<!-- CAD1-PARAMETERS-END -->
+
+<!-- CPN1-PARAMETERS-BEGIN -->
+## 2026-11-17 Court nonce CPN1 — 設計案
+
+[RFC-0057](../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md)。PROPOSED_DESIGN_NOT_ACTIVATED。既存70項目を変更せず8項目を追加する。k/R/B等は共通profileの有限費用と実測により設定し、未測定既定値や全model別の枠を作らない。
+
+| key / 記号 | 提案値・導出規則 | 単位 | 外さない条件 |
+| --- | --- | --- | --- |
+| `cpn1_binding_schema` / typed codec | H256 / LP / NR | 新署名・nonce仕様 | native IDと64-byte seedを切り詰めない。旧wire/runtimeを変更しない |
+| `cpn1_positive_seed_rule` / seed binding | 唯一のnative postcommit anchor/seed | 導出規則 | local乱数fallback・無料reroll不可。negativeは新seed待ちなし |
+| `cpn1_samples_per_actor` / k | 共通profile必須、1<=k<=Nかつ有限費用上限 | 対象数 | 未測定既定値を置かない。全員提出待ちFinalへ変更しない |
+| `cpn1_range_attempt_limit` / R | 共通profile必須、有限正整数 | 各draw hash試行数 | 最大kR hash。超過はSelectionUnavailableで再抽選・有罪にしない |
+| `cpn1_chunk_staging_limits` / B / staging | 共通profile必須の有限bytes/parts/header/期限 | 輸送・保持上界 | 署名ChunkRootと完成BodyDigestを両方検査。未認証fragmentで義務消費不可 |
+| `cpn1_role_duty_limits` / duty/round/step | nativeに認証された有限状態機械 | 義務上界 | 任意nonce・別roleラベル・再送で新しい枠を作らない |
+| `cpn1_liability_terms` / liability | 事前profileの有限額・期間・担保・offence once | 責任条件 | 客観的な同scope虚偽肯定と手抜きの推定を区別する |
+| `cpn1_retention_contract` / once retention | native認証状態・有限保持/復旧/GC予算 | 保存規則 | 通常pruneで義務を復活せず、正規reorgは同checkpoint undo |
+<!-- CPN1-PARAMETERS-END -->
+
+<!-- SWC1-PARAMETERS-BEGIN -->
+## 2026-11-17 SWC1 — 数値変更ではなく状態契約の追加
+
+[RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)は、既存CAD1／CPN1の数値を変更せず、三つのstage、実行意味のWorkKey、元Original、一回性、用途別成熟を接続する。BFTのn=3f+1等はDISABLEDな参照候補の仮定であり、本台帳の稼働パラメーターではない。
+
+各stageの有限cut、codec／集合上界、JobForSeedの有界変換、exact nullifier、責任終端とmaturity、方式／key／anchorは新profileの必須欄である。未設定を既定値で埋めず、未成立なら新profileを有効化しない。非償却性やDAG安全性を数値調整で成立扱いにしない。入力の56項目と、前回CAD1／CPN1の22項目を保全する。
+<!-- SWC1-PARAMETERS-END -->

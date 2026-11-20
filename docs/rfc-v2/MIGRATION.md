@@ -1,5 +1,25 @@
 # 現行20本への移行と版の境界
 
+<!-- CPN1-PROPOSAL-BEGIN -->
+## 2026-11-17 Court nonceとPanel固有チャレンジ — 設計案
+
+本追記は **PROPOSED_DESIGN_NOT_ACTIVATED** への参照であり、既存採択・署名・runtime・activationを変更しない。[RFC-0057](../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md)。
+
+nonceはnativeなclaim/actor/義務へ結合し、共有する局所証拠・本人の完全承認・支払い一回性を分ける。前回0055/0056の資源・受付難易度と接続する。個別challengeは本人の承認条件であり、全員待ち・sample外反証の拒否・独立全体再実行の証明へ変更しない。
+
+[改訂記録](../maintenance/revisions/2026-11-17-court-nonce/README.md) / [ソース監査](../maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md) / [検証記録](../maintenance/revisions/2026-11-17-court-nonce/VALIDATION.md)。20 RFC／50 ADRと旧資料を保持する。
+<!-- CPN1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 全claim共通の受付難易度 — 設計案
+
+[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md) は、新originalの高コスト処理前に全model共通Dを適用する具体案である。原子予約・courtのhard容量は前回提供した [RFC-0055](../rfc/0055-global-admission-court-calendar-and-one-bps.md) / [ADR-0223](../adr/0223-global-admission-court-calendar-and-one-bps.md) を参照する。採択される新profileでは55§6のDをCAD1へ詳細化し、二重に掛けない。
+
+基準はmain@2d8212b634880b0967fbf24b00b41936c2322c14。0055関連13ファイルは同会話の先行提供物をbytesのまま併録したもので、元mainに存在した/実装済みという意味ではない。通常編集先20 RFC／50 ADRと旧原文を保持する。今回の0056/0224は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存採択状態、runtime、wire、fenceを変更しない。
+
+[改訂記録](../maintenance/revisions/2026-11-17-admission-difficulty/README.md) / [ソース監査](../maintenance/revisions/2026-11-17-admission-difficulty/SOURCE_AUDIT.md) / [検証記録](../maintenance/revisions/2026-11-17-admission-difficulty/VALIDATION.md)。以前のrevisionはその時点のsnapshotに対する記録であり、現在mainの完成証拠へ読み替えない。
+<!-- CAD1-PROPOSAL-END -->
+
 ## 2026-11-09公開資料・一人前提の限定移行
 
 [0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[0218](../adr/0218-public-materials-and-one-honest-panel.md)により、公開資料を選出後に取得するPanel、一人の全体検証、k_min=1と全検査・異議窓、正常claimの条件付き完了を新profileへ追加する。入口は[20](0020-verification-gated-final-and-adversarial-models.md)と[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。旧75／41・旧claim・旧PositiveChecked・wire・fence・runtime設定を変更しない。

@@ -1,0 +1,52 @@
+{
+  "schema": "misaka-cpn1-revision-preservation-v1",
+  "generated_at_utc": "2026-11-17T12:37:23.251044+00:00",
+  "scope": "DOCS-ONLY REVISION PRESERVATION; NOT native, E2E, performance, or activation evidence",
+  "revision": "2026-11-17-court-nonce",
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "source_baseline_sha256": "f2ba0f3159facc201abd8db778072c517d010fe3e8c23cbc7da40359a2f060d5",
+  "comparison_basis": "previous delivered RFC-0056 overlay; pinned 1975-file inventory",
+  "passed": true,
+  "errors": [],
+  "stats": {
+    "authenticated_integration_preimages": 5,
+    "adr-v2_books": 50,
+    "adr-v2_previous_post_records_preserved": 29,
+    "original_parameters_preserved": 70,
+    "proposed_parameters": 8,
+    "rfc-v2_books": 20,
+    "rfc-v2_previous_post_records_preserved": 24,
+    "source_documents": 1975,
+    "byte_identical_source_documents": 1950,
+    "front_pointer_files": 12,
+    "historical_checkers_and_appendices_editable": false,
+    "prior_revision_files_exact": 103,
+    "deleted_source_files": 0,
+    "generated_files_verified_in_memory": 6,
+    "modified_files": 25,
+    "added_files_in_manifest": 13,
+    "self_referential_hash_exclusions": [
+      "docs/maintenance/revisions/2026-11-17-court-nonce/changes.json",
+      "docs/maintenance/revisions/2026-11-17-court-nonce/revision-results.json",
+      "docs/maintenance/revisions/2026-11-17-court-nonce/validation-results.json"
+    ],
+    "abstract_model_tests": 49,
+    "abstract_model_success": true,
+    "new_markdown_links": {
+      "checked_local": 103,
+      "external_unchecked": 34,
+      "outside_docs_unchecked": 0,
+      "deferred_self_output": 0
+    }
+  },
+  "runtime_executed": false,
+  "native_code_audited_by_this_checker": false,
+  "limitations": [
+    "The documentation package and change manifest are checked; unrelated native files and live runtime are not audited.",
+    "Historical numbered RFC/ADR, appendices, prior revisions/checkers, and prior 0055/0056 deliverables are preserved, not re-certified.",
+    "New/marked Markdown and newly generated target links use a pinned limited parser; external URLs and paths outside docs are not re-verified.",
+    "Six generated files are compared with the authenticated generator's output captured in memory; no generated file is rewritten.",
+    "Fresh passing abstract-model records are checked, not re-run. Native integration, hardware capacity, beacon security, independent labor, and activation are outside this checker.",
+    "The pinned source and historical checker/link baselines are never rewritten."
+  ]
+}

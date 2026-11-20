@@ -1,0 +1,46 @@
+{
+  "schema": "misaka-cad1-revision-preservation-v1",
+  "generated_at_utc": "2026-11-17T06:54:53.335362+00:00",
+  "scope": "DOCS-ONLY REVISION PRESERVATION; NOT native, E2E, performance, or activation evidence",
+  "revision": "2026-11-17-admission-difficulty",
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "source_baseline_sha256": "c14469bd26ff6eb45daedd2ea78b8100a266be593497dae8ef85aaa40b0318d8",
+  "passed": true,
+  "errors": [],
+  "stats": {
+    "adr-v2_books": 50,
+    "original_parameters_preserved": 56,
+    "proposed_parameters": 14,
+    "rfc-v2_books": 20,
+    "source_documents": 1946,
+    "byte_identical_source_documents": 1916,
+    "previous_companions_exact": 13,
+    "front_pointer_files": 17,
+    "historical_checkers_and_appendices_editable": false,
+    "deleted_source_files": 0,
+    "modified_files": 30,
+    "added_files_in_manifest": 26,
+    "self_referential_hash_exclusions": [
+      "docs/maintenance/revisions/2026-11-17-admission-difficulty/changes.json",
+      "docs/maintenance/revisions/2026-11-17-admission-difficulty/revision-results.json",
+      "docs/maintenance/revisions/2026-11-17-admission-difficulty/validation-results.json"
+    ],
+    "abstract_model_tests": 46,
+    "abstract_model_success": true,
+    "new_markdown_links": {
+      "checked_local": 1648,
+      "external_unchecked": 33,
+      "outside_docs_unchecked": 0,
+      "deferred_self_output": 0
+    }
+  },
+  "runtime_executed": false,
+  "native_code_audited_by_this_checker": false,
+  "limitations": [
+    "The change manifest and docs package are checked; unrelated working-tree/native changes and live runtime are not audited.",
+    "Historical numbered RFC/ADR, appendices, prior revisions/checkers and prior 0055 companions are byte-preserved, not re-certified.",
+    "New authored Markdown and marked additions are link-checked with the pinned limited parser; frozen companion links, external URLs and paths outside docs are not re-verified.",
+    "Fresh hashes and passing abstract-model records are checked; this script does not run or prove native integration, hardware capacity, closed-loop stability, or activation.",
+    "The immutable source baseline and global historical checker/link baselines are never rewritten."
+  ]
+}

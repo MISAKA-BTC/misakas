@@ -1,5 +1,9 @@
 # PublicOneHonest 実装台帳
 
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../../../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../../../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
 [実装方針書](public-one-honest-vertical-implementation-plan-2026-11-10.md) の I0 作業記録。出荷設定と公開ネットワークでの有効化はこの台帳の対象外。以下の既存コードは接続先であり、新 profile の検証結果は未取得。
 
 ## 2026-11-12: 受付の一往復を優先する

@@ -1,0 +1,264 @@
+{
+  "schema": "misaka-cad1-abstract-model-results-v1",
+  "generated_at_utc": "2026-11-17T06:43:14.068759+00:00",
+  "scope": "ABSTRACT CONTRACT MODEL ONLY; NOT native, E2E, hardware qualification, stability, or activation evidence",
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "rfc_path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+  "rfc_sha256": "13f2b9afb1d5476c89768b6dc11c069008fa388fa93a7e97e56c9b4be219a2ca",
+  "script_path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/check_difficulty_model.py",
+  "script_sha256": "e73c68c3716f737f28b91361af77092481bca242493fc15a31dfc7af6be10269",
+  "tests_run": 46,
+  "passed": 46,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "success": true,
+  "tests": [
+    {
+      "name": "test_01_codec_roundtrip_retains_native_width_and_rejects_ambiguous_fields",
+      "result": "PASS",
+      "contract": "Outer typed LP keeps 64-byte legacy IDs intact and rejects alternate fields."
+    },
+    {
+      "name": "test_02_ticket_known_bytes_and_domain_network_policy_epoch_binding",
+      "result": "PASS",
+      "contract": "Exact ticket bytes/endian and all contextual bindings are checked independently."
+    },
+    {
+      "name": "test_03_threshold_inclusive_boundaries_and_integer_domain",
+      "result": "PASS",
+      "contract": "Ticket equal to T passes; T+1 fails, including D limits and type rejection."
+    },
+    {
+      "name": "test_04_complete_paid_pipeline_reaches_observed_difficulty_without_minting_rights",
+      "result": "PASS",
+      "contract": "A real hash ticket drives acceptance, measured synthetic pressure, and D_5."
+    },
+    {
+      "name": "test_05_trial_slot_blocks_result_route_model_target_and_nonce_rerolls",
+      "result": "PASS",
+      "contract": "One funded slot binds the first result; aliases cannot buy another free seed."
+    },
+    {
+      "name": "test_06_distinct_funded_slots_allow_legitimate_same_input_without_worldwide_dedup",
+      "result": "PASS",
+      "contract": "Two paid opportunities for the same input remain legitimate independent trials."
+    },
+    {
+      "name": "test_07_actual_capital_lock_and_preseal_fee_are_required_before_ticket",
+      "result": "PASS",
+      "contract": "Insufficient funds and capital reuse fail without partial fees or slot state."
+    },
+    {
+      "name": "test_08_global_preseal_budget_does_not_expand_for_models_or_principals",
+      "result": "PASS",
+      "contract": "Nonzero per-preseal worst-case control reserves bound all identities together."
+    },
+    {
+      "name": "test_09_freeze_seed_and_readiness_use_canonical_half_open_windows",
+      "result": "PASS",
+      "contract": "Seed-after additions, changed anchors, second seeds and late material fail."
+    },
+    {
+      "name": "test_10_seed_failure_stops_new_responsibility_and_no_free_next_seed",
+      "result": "PASS",
+      "contract": "A missing designated seed disables its target without changing a protected claim."
+    },
+    {
+      "name": "test_11_ineligible_never_decodes_heavy_material_or_calls_planner",
+      "result": "PASS",
+      "contract": "An actual D_max ticket is rejected before heavy payload handling."
+    },
+    {
+      "name": "test_12_missing_or_mismatched_material_is_not_qualified_congestion",
+      "result": "PASS",
+      "contract": "Missing canonical readiness is terminal without forging NoCapacity."
+    },
+    {
+      "name": "test_13_paid_false_commit_can_qualify_but_does_not_prove_computation",
+      "result": "PASS",
+      "contract": "Residual paid manipulation is explicit: the gate cannot establish output truth."
+    },
+    {
+      "name": "test_14_rank_is_independent_of_ingress_order_and_legal_batch_partition",
+      "result": "PASS",
+      "contract": "Same closed set/canonical clock/service cut/external state gives partition-invariant results."
+    },
+    {
+      "name": "test_15_prefix_skips_reorder_and_duplicate_batch_cannot_spend_twice",
+      "result": "PASS",
+      "contract": "A native advance must visit the exact next prefix; replay returns one receipt."
+    },
+    {
+      "name": "test_16_whole_batch_rolls_back_planner_exception_without_forged_congestion",
+      "result": "PASS",
+      "contract": "Failure after an earlier candidate discards its funds/book/cursor/cost changes."
+    },
+    {
+      "name": "test_17_dynamic_fit_uses_vectors_and_can_admit_multiple_small_candidates",
+      "result": "PASS",
+      "contract": "No fixed count or winner: two small candidates fit while a large one fails intrinsically."
+    },
+    {
+      "name": "test_18_valid_all_refused_candidates_still_create_known_congestion",
+      "result": "PASS",
+      "contract": "A funded candidate fitting the empty residual book produces high on real conflict."
+    },
+    {
+      "name": "test_19_invalid_qualification_funding_and_deadline_do_not_manufacture_high",
+      "result": "PASS",
+      "contract": "High existing reservations do not turn disqualified candidates into valid demand."
+    },
+    {
+      "name": "test_20_raw_invalid_ingress_never_changes_canonical_pressure_or_difficulty",
+      "result": "PASS",
+      "contract": "RPC noise stays in finite local ingress; only authenticated canonical observations count."
+    },
+    {
+      "name": "test_21_spent_work_and_peak_live_stock_survive_completion_before_boundary",
+      "result": "PASS",
+      "contract": "Closed-epoch charges and stock peaks prevent a false low after actual release."
+    },
+    {
+      "name": "test_22_released_unexecuted_future_peak_is_not_permanent_pressure",
+      "result": "PASS",
+      "contract": "Only present obligations, actual cost/live peak, and recorded congestion survive."
+    },
+    {
+      "name": "test_23_far_future_obligations_and_fixed_system_subtraction_are_observed",
+      "result": "PASS",
+      "contract": "All bounded future intervals use C_A, preserving fixed system reservations."
+    },
+    {
+      "name": "test_24_outer_one_bps_is_separate_from_copacked_payload_capacity",
+      "result": "PASS",
+      "contract": "120 outer permits do not subtract 120 from the residual inner payload dimension."
+    },
+    {
+      "name": "test_25_zero_supply_and_book_overflow_stop_instead_of_clipping_or_easing",
+      "result": "PASS",
+      "contract": "Positive unavailable supply or an overfull book is a stop signal, never wrapped low."
+    },
+    {
+      "name": "test_26_incomplete_tail_prevents_low_but_preserves_valid_known_high",
+      "result": "PASS",
+      "contract": "Incomplete coverage may increase D on sound evidence; it can never idle-decay."
+    },
+    {
+      "name": "test_27_complete_empty_and_zero_eligible_epochs_allow_intended_idle_decay",
+      "result": "PASS",
+      "contract": "Three complete low observations ease D; an explicitly missing service resets it."
+    },
+    {
+      "name": "test_28_exact_controller_thresholds_rounding_and_unavailable_precedence",
+      "result": "PASS",
+      "contract": "Independent boundary vectors cover 256/768, gains, clamps and priority."
+    },
+    {
+      "name": "test_29_bootstrap_schedule_and_boundary_order_do_not_rewrite_frozen_difficulty",
+      "result": "PASS",
+      "contract": "D_2 precedes collection; later boundaries publish only b+2 and reject gaps/replay."
+    },
+    {
+      "name": "test_30_all_routes_use_the_gate_and_future_or_disabled_routes_default_deny",
+      "result": "PASS",
+      "contract": "Every connected new responsibility requires the same funded preseal path."
+    },
+    {
+      "name": "test_31_existing_remedies_are_exempt_but_original_expansion_is_not",
+      "result": "PASS",
+      "contract": "New D, unavailable seed/profile and entry noise cannot revoke prior actor rights."
+    },
+    {
+      "name": "test_32_failed_and_expired_trials_refund_once_without_free_reroll",
+      "result": "PASS",
+      "contract": "Finite settlement conserves funds, preserves consumed slots, and does not slash."
+    },
+    {
+      "name": "test_33_pruning_does_not_resurrect_a_used_trial",
+      "result": "PASS",
+      "contract": "Compact highwater/nullifier state survives finite record retention."
+    },
+    {
+      "name": "test_34_cancel_preserves_closed_set_paid_cost_and_finalized_observation",
+      "result": "PASS",
+      "contract": "Cancellation does not erase a closed root, spent money or a previous congestion fact."
+    },
+    {
+      "name": "test_35_canonical_snapshot_restores_schedule_cursor_funds_slots_and_book",
+      "result": "PASS",
+      "contract": "Reorg restores one checkpoint; stale worker generations cannot mutate the new branch."
+    },
+    {
+      "name": "test_36_missing_snapshot_is_local_hold_not_consensus_unavailability_vote",
+      "result": "PASS",
+      "contract": "An incomplete local host abstains; it cannot manufacture controller observations."
+    },
+    {
+      "name": "test_37_unknown_ten_thousand_and_fifty_thousand_model_ids_do_not_create_budget",
+      "result": "PASS",
+      "contract": "Identifier invariance only: NOT a benchmark or a real registry/load test."
+    },
+    {
+      "name": "test_38_detailed_quotes_cannot_bypass_eligibility_or_run_free_on_changed_basis",
+      "result": "PASS",
+      "contract": "Cheap quote is header-only; detailed quote needs an eligible paid trial and cache key."
+    },
+    {
+      "name": "test_39_batch_visit_cost_caps_apply_even_to_ineligible_or_rejected_records",
+      "result": "PASS",
+      "contract": "Cheap failures cannot create zero-cost unbounded cursor visits."
+    },
+    {
+      "name": "test_40_difficulty_never_overrides_hard_resource_capacity",
+      "result": "PASS",
+      "contract": "All tickets can pass at D=1 without admitting an over-capacity original."
+    },
+    {
+      "name": "test_41_seed_guard_cut_is_strict_and_late_seed_is_not_missing_material_fault",
+      "result": "PASS",
+      "contract": "The designated seed must finalize after freeze and before cut, with guard remaining."
+    },
+    {
+      "name": "test_42_policy_generation_and_capital_rollover_cannot_resurrect_original_opportunity",
+      "result": "PASS",
+      "contract": "TrialUse keeps the underlying native opportunity across policy hashes and outpoint aliases."
+    },
+    {
+      "name": "test_43_genuine_reorg_undoes_preseal_fees_and_slot_in_one_checkpoint",
+      "result": "PASS",
+      "contract": "Canonical undo may remove a preseal; ordinary cancel/prune cannot imitate that undo."
+    },
+    {
+      "name": "test_44_executed_flow_cannot_be_reused_within_the_same_epoch",
+      "result": "PASS",
+      "contract": "Finishing and releasing a claim does not refund already-debited interval capacity."
+    },
+    {
+      "name": "test_45_every_connected_route_reaches_the_same_actual_ticket_gate",
+      "result": "PASS",
+      "contract": "Plain, funded, evaluation and batch originals all fail the same real D_max ticket."
+    },
+    {
+      "name": "test_46_unsupported_or_zero_capacity_candidate_does_not_vote_global_unavailable",
+      "result": "PASS",
+      "contract": "Candidate-local impossibility is rejected without forging an active-policy service fault."
+    }
+  ],
+  "assumptions": [
+    "All costs, capacities, fees, timing fixtures and native reference bytes are synthetic, not measured values.",
+    "Native inner codecs/signature verification/capital provenance/common cost derivation are trusted fixture inputs.",
+    "Seed/closed/ready-root derivations prefixed TEST are deterministic test adapters, not allocated wire formats or beacon security proofs.",
+    "The reservation adapter aggregates bounded current/future vectors and stock; full RFC-0055 actor graph, ClockBridge and court planner are external.",
+    "Qualified demand is derived from candidate outcomes; output truth is deliberately not an admission input.",
+    "Local ingress and restoration readiness are excluded from canonical difficulty observations.",
+    "10,000/50,000 model-ID loops check identifier invariance only; no real registry/model/load benchmark was run."
+  ],
+  "not_verified": [
+    "Native route integration, actual native inner codecs, signatures, DB/index/reorg implementation and production allocator.",
+    "Beacon unpredictability/bias resistance, real carrier service/inclusion/fairness and off-chain censorship.",
+    "Actual LLM/Panel/provider cold acquisition, full rerun, public court, Final, P_m and finite credit/right issuance.",
+    "Hardware performance, CPU/RAM/I/O/retention limits, hostile network throughput, 50,000-model registry/IBD scale.",
+    "Closed-loop stability, utilization/latency target achievement, actual sustained 1 BPS, deployment or activation."
+  ]
+}

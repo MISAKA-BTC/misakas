@@ -2017,3 +2017,11 @@ Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配�
 
 </details>
 
+
+<!-- MOR1-DRAFT-20261120-BEGIN -->
+## 2026-11-20 MOR1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。モデル登録時の非重複性要件は、対象profile共通の構造適合条件とする。登録の自由、不変Model ID、既存burn制度、資格審査の廃止を維持する。新しい入出力規則を既存登録IDへ上書きしない。
+
+[RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)／[ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)／[変更・検証](../maintenance/revisions/2026-11-20-model-output-binding/README.md)。この参照追記は既存の採択・履歴原文・runtime・activationを変更しない。
+<!-- MOR1-DRAFT-20261120-END -->

@@ -1,0 +1,64 @@
+{
+  "source_commit": "2d8212b634880b0967fbf24b00b41936c2322c14",
+  "source_branch_read": "main",
+  "git_tree": "d99e8148554f04b7f53a19d4717a1f9b4796d3f3",
+  "additional_verified_files": [
+    {
+      "path": "misaka/palw/challenge/src/beacon.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b324f0b92fb8c409a04b3a63e630e726f860d704",
+      "size": 23650,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/b324f0b92fb8c409a04b3a63e630e726f860d704",
+      "matches_attached_source": true
+    },
+    {
+      "path": "misaka/palw/challenge/src/hash.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "45c3b01721bf40820d74622021812313812d6038",
+      "size": 4471,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/45c3b01721bf40820d74622021812313812d6038",
+      "matches_attached_source": true
+    },
+    {
+      "path": "misaka/palw/challenge/src/seed.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "fbd0059cf3026edbba471e7f0c48017e1fbaecac",
+      "size": 10208,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/fbd0059cf3026edbba471e7f0c48017e1fbaecac",
+      "matches_attached_source": true
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/assignment.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ce39630a822c134eb3111b522733bd9ff74ee91c",
+      "size": 10510,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/ce39630a822c134eb3111b522733bd9ff74ee91c",
+      "matches_attached_source": true
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/messages.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "c4d5ce6db183470931a841ebbd443caa5bc57a1b",
+      "size": 11611,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/c4d5ce6db183470931a841ebbd443caa5bc57a1b",
+      "matches_attached_source": true
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/native.rs",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "a89d0b316575e7dc744b1a04d4f8357e3d6b45ae",
+      "size": 3274,
+      "url": "https://api.github.com/repos/MISAKA-BTC/misakas/git/blobs/a89d0b316575e7dc744b1a04d4f8357e3d6b45ae",
+      "matches_attached_source": true
+    }
+  ],
+  "previous_verification": "../2026-11-17-admission-difficulty/source-provenance.json",
+  "previous_verification_scope": "3582 docs/consensus/root blobs and one additional RPC blob; preserved record from previous turn",
+  "no_runtime_changes": true
+}

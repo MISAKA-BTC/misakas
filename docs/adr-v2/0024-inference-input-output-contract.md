@@ -1371,3 +1371,11 @@ mapping is written down.
 
 </details>
 
+
+<!-- MOR1-DRAFT-20261120-BEGIN -->
+## 2026-11-20 MOR1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。新profileの認証出力envelopeとコア回答yを分け、完全context・実beacon・実入力Root・回答Root・trace Rootへ実行識別値を結合する。同じ試行は同じ認証出力、別試行は暗号学的に衝突しにくい認証出力とする。自然文の非重複や通常LLM費用下界は要求から導かない。
+
+[RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)／[ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)／[変更・検証](../maintenance/revisions/2026-11-20-model-output-binding/README.md)。この参照追記は既存の採択・履歴原文・runtime・activationを変更しない。
+<!-- MOR1-DRAFT-20261120-END -->

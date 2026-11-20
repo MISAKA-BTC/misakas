@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>PALW-AN1 Whitepaper 改訂統合稿 v0.4</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+  <style>body{max-width:850px;margin:40px auto;padding:0 22px;color:#21303c;font-family:"Noto Serif CJK JP",serif;line-height:1.85}h1,h2{font-family:"Noto Sans CJK JP",sans-serif;color:#17354b;line-height:1.4}h1{margin-top:2.3em}h2{color:#177b86}table{border-collapse:collapse;width:100%;font-size:.94em;margin:1em 0}th,td{border-bottom:1px solid #d7e2e7;padding:.6em;vertical-align:top}th{background:#eef4f6}tr:nth-child(even){background:#f8fafb}a{color:#177b86}math{font-family:"Latin Modern Math","STIX Two Math",math}math[display=block]{overflow-x:auto;padding:12px 0}code{overflow-wrap:anywhere}header{border-bottom:3px solid #177b86;padding-bottom:1em}.subtitle,.date{color:#5c6a76}@media print{body{margin:0;max-width:none}h1,h2{break-after:avoid}tr,math{break-inside:avoid}}</style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">PALW-AN1 Whitepaper 改訂統合稿 v0.4</h1>
+<p class="subtitle">アドレス・nonceに依存する実入力と、Panel＋Courtによる検証</p>
+<p class="date">2026年11月18日</p>
+</header>
+<h1 id="結論と改訂の範囲">1. 結論と改訂の範囲</h1>
+<p><strong>PALW-AN1は、登録したownerとnonceを実際のモデル入力へ結び付け、固定試行に一つの正しい実行とTicketを対応させる設計である。検証はPanelによる完全再実行と、Nodeによる認証付き局所Courtで行う。能動的な正直Panel、資料取得または未取得時の成功停止、反証の包含・裁定を条件に、不正な実行の成功Finalを防ぐ。通常LLMと同額以上のGPU時間・電力・金銭費用は保証しない。</strong></p>
+<p>本稿は、2026年11月18日のユーザー指示「PALW-AN1へ変更し、Panel
+Court方式を維持する」に基づき、前回のFULL1/VF1費用監査統合稿を組み直したものである。Groth16、全関係validity
+proof、setup、検証鍵をAN1の採用方式・必須Final条件・代替候補にしない。ハッシュ、署名、Merkle
+openingはデータの同一性・帰属・局所証拠の認証に用いる。</p>
+<p>状態は
+<strong>DRAFT_NOT_ACTIVATED</strong>。文書改訂、条件付きの論証、独立参照実装を、native実装・本番LLMでの測定・公開有効化と区別する。</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>対象</th>
+<th>本改訂で行ったこと</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>前回の29ページ統合補完稿</td>
+<td>AN1を主方式とする本文へ全面更新。VF1の必須化を取り下げた</td>
+</tr>
+<tr class="even">
+<td>ユーザー提供AN1説明</td>
+<td>全8節の設計・命題・検証報告を照合し、前提と規範を補強した</td>
+</tr>
+<tr class="odd">
+<td>添付RFC一式</td>
+<td>RFC-0056〜0058を改訂し、新RFC-0059とADR-0227へAN1を具体化した</td>
+</tr>
+<tr class="even">
+<td>元whitepaper v0.3の原PDF・TeX</td>
+<td>原文は未取得。本稿は元ファイルの逐語差分ではなく、取得済み統合稿の改訂である</td>
+</tr>
+<tr class="odd">
+<td>提供リンク先のAN1実装ZIP・HTML</td>
+<td>本文未取得。報告された11群の試験や7,226レコードを再実行したとは扱わない</td>
+</tr>
+</tbody>
+</table>
+<p>本稿の数学的証明は、プロトコルが送信する暗号学的な計算証明ではない。Panelの検査責任と、その正直性・取得可能性・裁定機会の仮定を明示する設計上の論証である。</p>
+<h1 id="登録文脈と四つの識別子">2. 登録文脈と四つの識別子</h1>
+<p>登録文脈を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>C</mi><annotation encoding="application/x-tex">C</annotation></semantics></math>、認証された実行用beacon値を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>σ</mi><annotation encoding="application/x-tex">\sigma</annotation></semantics></math>、モデルと実行規則を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>M</mi><mo>,</mo><mi>P</mi></mrow><annotation encoding="application/x-tex">M,P</annotation></semantics></math>、登録jobを
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>J</mi><annotation encoding="application/x-tex">J</annotation></semantics></math>
+とする。</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi><mo>=</mo><msub><mi>H</mi><mrow><mi mathvariant="normal">a</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">m</mi><mi mathvariant="normal">p</mi><mi mathvariant="normal">t</mi></mrow></msub><mrow><mo stretchy="true" form="prefix">(</mo><mo>Enc</mo><mrow><mo stretchy="true" form="prefix">(</mo><mi>C</mi><mo>,</mo><mi>σ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">s=H_{\mathrm{attempt}}(\operatorname{Enc}(C,\sigma)).</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi><mo>=</mo><msub><mo>InputDerive</mo><mi>P</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><mi>s</mi><mo>,</mo><mi>J</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>,</mo><mspace width="2.0em"></mspace><mrow><mo stretchy="true" form="prefix">(</mo><mi>y</mi><mo>,</mo><mi>τ</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>=</mo><msub><mo>Exec</mo><mrow><mi>M</mi><mo>,</mo><mi>P</mi></mrow></msub><mrow><mo stretchy="true" form="prefix">(</mo><mi>x</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">x=\operatorname{InputDerive}_P(s,J),\qquad (y,\tau)=\operatorname{Exec}_{M,P}(x).</annotation></semantics></math></p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi><mo>=</mo><msub><mi>H</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">k</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">t</mi></mrow></msub><mrow><mo stretchy="true" form="prefix">(</mo><mo>Enc</mo><mrow><mo stretchy="true" form="prefix">(</mo><mi>s</mi><mo>,</mo><msub><mi>R</mi><mi>x</mi></msub><mo>,</mo><msub><mi>R</mi><mi>y</mi></msub><mo>,</mo><msub><mi>R</mi><mi>τ</mi></msub><mo stretchy="true" form="postfix">)</mo></mrow><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">T=H_{\mathrm{ticket}}(\operatorname{Enc}(s,R_x,R_y,R_\tau)).</annotation></semantics></math></p>
+<p>各hashは用途別domainを持つ。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mo>Enc</mo><annotation encoding="application/x-tex">\operatorname{Enc}</annotation></semantics></math>
+は型・長さ・順序が一意に復号できる符号化であり、曖昧な文字列連結ではない。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+と各Rootは32 byteの研究用参照値とするが、既存native
+wireの数値IDを新設・再解釈したとは扱わない。</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>登録する項目</th>
+<th>固定する内容</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>native文脈</td>
+<td>chain、epoch、安定した登録anchor、schedule、family/version</td>
+</tr>
+<tr class="even">
+<td>帰属と試行</td>
+<td>canonical
+owner、beneficiary、nonce、候補集合と上限。資金・slotは別のnative登録管理値</td>
+</tr>
+<tr class="odd">
+<td>計算</td>
+<td>model root、program/profileの固定版、job
+root、token化規則、生成上限・RNG規則</td>
+</tr>
+<tr class="even">
+<td>実行用乱数</td>
+<td>beaconのscheme・鍵・round・出力導出規則。実値は登録後に認証する</td>
+</tr>
+<tr class="odd">
+<td>当選条件</td>
+<td>difficulty
+snapshot、唯一のtarget、受付開始・終了、再試行・失効の扱い</td>
+</tr>
+<tr class="even">
+<td>検証と会計</td>
+<td>Panel選出予定、全検査scope、資料責任、会計版、credit用途、資源上限</td>
+</tr>
+</tbody>
+</table>
+<p>登録時には未知の実
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>σ</mi><annotation encoding="application/x-tex">\sigma</annotation></semantics></math>、出力・trace
+Root、Panel結果を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>C</mi><annotation encoding="application/x-tex">C</annotation></semantics></math>
+へ循環的に含めない。入力
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>
+は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+の後に導出するため、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>R</mi><mi>x</mi></msub><annotation encoding="application/x-tex">R_x</annotation></semantics></math>
+を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>C</mi><annotation encoding="application/x-tex">C</annotation></semantics></math>
+の必須構成要素にして循環を作ることも避ける。job rootは元の
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>J</mi><annotation encoding="application/x-tex">J</annotation></semantics></math>
+のcommitmentであり、実入力Rootとは別物である。</p>
+<p><strong>slot_id</strong>
+は登録時の一回限りの試行資格、<strong>s</strong>
+はbeacon確定後の実行識別子、<strong>OriginalId</strong>
+は署名前の正規claim本文を識別する値、<strong>BaseWorkKey</strong>
+は元の有用需要・計算記述を識別する値である。四者を一つのhashへ潰さない。署名bytes、Courtの再包装、relay
+metadataは新しい試行資格を作らない。</p>
+<p>同一のcanonical登録文脈Cは、資金・carrier・再送を変えても一つのslotにだけ対応させる。登録を原子的に重複排除し、Finalではslotと試行ID
+s、実計算キーを同時に消費する。slot単独の消費だけでは、同一Cを別slotへ再包装する経路が残るためである。RegKeyから割り当てるslot_idをCへ戻さず、登録文脈と資金・slotの管理envelopeを分ける。候補集合識別は事前割当IDとし、そのC自身を含むfreeze集合RootをCへ逆流させない。</p>
+<p>同じ元jobへ別nonceを付けたAN1実行は、別の採掘試行になり得るが、新しい利用者需要を自動的には意味しない。有用成果creditの重複防止は、slot消費とは別に、事前固定したBaseWorkKey・用途別の消費規則で扱う。</p>
+<h1 id="nonceを実tokenへ結合する">3. nonceを実tokenへ結合する</h1>
+<p>256個のbyte値を256個の相異なる有効token IDへ写す固定表
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>b</mi><mi>P</mi></msub><annotation encoding="application/x-tex">b_P</annotation></semantics></math>
+を使う。BOS、POW、SEPも固定し、byte tokenとの衝突を認めない。</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi><mo>=</mo><mrow><mo stretchy="true" form="prefix">[</mo><mrow><mi mathvariant="normal">B</mi><mi mathvariant="normal">O</mi><mi mathvariant="normal">S</mi></mrow><mo>,</mo><mrow><mi mathvariant="normal">P</mi><mi mathvariant="normal">O</mi><mi mathvariant="normal">W</mi></mrow><mo stretchy="true" form="postfix">]</mo></mrow><mo stretchy="false" form="postfix">‖</mo><mrow><mo stretchy="true" form="prefix">[</mo><msub><mi>b</mi><mi>P</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>s</mi><mn>0</mn></msub><mo stretchy="true" form="postfix">)</mo></mrow><mo>,</mo><mi>…</mi><mo>,</mo><msub><mi>b</mi><mi>P</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>s</mi><mn>31</mn></msub><mo stretchy="true" form="postfix">)</mo></mrow><mo stretchy="true" form="postfix">]</mo></mrow><mo stretchy="false" form="postfix">‖</mo><mrow><mo stretchy="true" form="prefix">[</mo><mrow><mi mathvariant="normal">S</mi><mi mathvariant="normal">E</mi><mi mathvariant="normal">P</mi></mrow><mo stretchy="true" form="postfix">]</mo></mrow><mo stretchy="false" form="postfix">‖</mo><msub><mo>JobTokens</mo><mi>P</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><mi>J</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">x=[\mathrm{BOS},\mathrm{POW}]\Vert[b_P(s_0),\ldots,b_P(s_{31})]\Vert[\mathrm{SEP}]\Vert\operatorname{JobTokens}_P(J).</annotation></semantics></math></p>
+<p>入力長は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>35</mn><mo>+</mo><mrow><mo stretchy="true" form="prefix">|</mo><msub><mo>JobTokens</mo><mi>P</mi></msub><mrow><mo stretchy="true" form="prefix">(</mo><mi>J</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo stretchy="true" form="postfix">|</mo></mrow></mrow><annotation encoding="application/x-tex">35+|\operatorname{JobTokens}_P(J)|</annotation></semantics></math>
+である。challengeを一度文字列へ戻してtokenizerへ渡す実装、自動切り詰め、UNKへの置換、challengeを削るchat
+templateを許さない。最大context長に収まらなければ、その登録を規定どおり拒否・終了する。都合のよい部分だけ残して同じ試行として続行しない。</p>
+<p>jobのtokenizer・template・特殊token・position・attention
+maskもprofileへ固定する。実際にモデルへ渡したtoken列が正規
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>
+であることを、traceの入力読出し関係で確認する。外側のメタデータにnonceを書くことだけでは満たさない。</p>
+<p><strong>入力の単射性。</strong>
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>b</mi><mi>P</mi></msub><annotation encoding="application/x-tex">b_P</annotation></semantics></math>
+が単射で、32
+byte全部を固定位置に保持するなら、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi><mo>≠</mo><mi>s</mi><mi>′</mi></mrow><annotation encoding="application/x-tex">s\ne s&#39;</annotation></semantics></math>
+から
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>x</mi><mo>≠</mo><mi>x</mi><mi>′</mi></mrow><annotation encoding="application/x-tex">x\ne x&#39;</annotation></semantics></math>
+が従う。owner・nonceの変更から
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+の相違を導く部分にはhashのbinding条件が必要である。同じ生成文
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>y</mi><annotation encoding="application/x-tex">y</annotation></semantics></math>
+が出ることは禁止されず、モデルの内部状態が常に異なるとも結論しない。</p>
+<p>challengeを先頭に置くと、長い共通job
+prefixの後ろへnonceを置く場合に比べ、直接再利用できる同一prefixの範囲を限定できる。KV
+cacheは既計算の状態を再利用する仕組みである［1］。ただし、AN1が全てのbatch化・cache・代数的簡約・外注を排除するという主張にはしない。</p>
+<p><strong>サービス意味論。</strong> challenge
+tokenを加えると、元jobだけを実行した場合と出力や品質が変わり得る。AN1入力の実行を、無変更の通常promptへの推論と同一視しない。profileと利用者向け契約は、実際の入力変換、生成条件、料金・納品対象を明示する。無審査モデル登録を、品質審査やモデル別の費用保証へ変更しない。</p>
+<h1 id="二つの固定時点と受付順序">4. 二つの固定時点と受付順序</h1>
+<p>AN1の順序を次のとおり固定する。</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>段階</th>
+<th>必須の処理</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>登録閉鎖</td>
+<td>owner・nonce・model・job・profile・target・会計版・全候補を、攻撃者が実行用beaconへ最初にアクセスする前に固定する</td>
+</tr>
+<tr class="even">
+<td>実行</td>
+<td>登録済みroundの
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>σ</mi><annotation encoding="application/x-tex">\sigma</annotation></semantics></math>
+を認証し、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>s</mi><mo>,</mo><mi>x</mi><mo>,</mo><mi>y</mi><mo>,</mo><mi>τ</mi></mrow><annotation encoding="application/x-tex">s,x,y,\tau</annotation></semantics></math>
+とcanonicalなRoot・Ticketを導出する</td>
+</tr>
+<tr class="odd">
+<td>元claim固定</td>
+<td>Minerの署名済み元claimを一回だけ固定し、受付対象集合を閉じる。後でRootを交換しない</td>
+</tr>
+<tr class="even">
+<td>Panel選出</td>
+<td>元claimと選出poolが閉じた後の選出イベントを使う。同じ既知seedのhashし直しを未来の未知性とみなさない</td>
+</tr>
+<tr class="odd">
+<td>検査・裁定</td>
+<td>完全再実行、資料要求、局所Court、未解決caseの終結を元の期限と予約で処理する</td>
+</tr>
+<tr class="even">
+<td>Final・消費</td>
+<td>現在の適格性を再検査し、反証・取消を先に反映して、一回だけ成功・権利発行を行う</td>
+</tr>
+</tbody>
+</table>
+<p>一般公開前でも、攻撃者がbeaconへ早期アクセスできるなら登録閉鎖は遅すぎる。鍵・round認証、偏り・先取り・公開停止、安定anchorとreorgの扱いは具体beaconの別の要件である。異常時に別roundへ自動差替えして無料の再試行を与えない。</p>
+<p>事前登録した多数候補のうち一部だけを計算する行為は残る。nonce候補を事前固定しただけで、費用の非償却性を示したことにはならない。有限な登録容量、資金、候補数、受付窓を規定し、登録spamへの費用とLLM評価費用を区別する。</p>
+<p>旧RFC-0058のSWC1は、Original固定後の未来
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">k</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">t</mi></mrow></msub><annotation encoding="application/x-tex">R_{\mathrm{ticket}}</annotation></semantics></math>
+による別の受付方式である。AN1では上の
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>T</mi><annotation encoding="application/x-tex">T</annotation></semantics></math>
+を使い、同じcodecへ未来
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>R</mi><mrow><mi mathvariant="normal">t</mi><mi mathvariant="normal">i</mi><mi mathvariant="normal">c</mi><mi mathvariant="normal">k</mi><mi mathvariant="normal">e</mi><mi mathvariant="normal">t</mi></mrow></msub><annotation encoding="application/x-tex">R_{\mathrm{ticket}}</annotation></semantics></math>
+を混ぜない。新familyの入力・順序・署名domainを固定し、全model共通difficulty
+controllerを一回だけ接続する。</p>
+<h1 id="決定論的な実行と完全trace">5. 決定論的な実行と完全trace</h1>
+<p>profile
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>P</mi><annotation encoding="application/x-tex">P</annotation></semantics></math>
+は、命令、重み配置、token読出し、整数幅、符号、丸め、飽和またはoverflow拒否、非線形関数、attention、生成停止、tie-break、RNGを一意に定める。実行結果がGPUやlibraryの未指定挙動に依存してはならない。</p>
+<p>実行traceを
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>τ</mi><mo>=</mo><mrow><mo stretchy="true" form="prefix">(</mo><msub><mi>v</mi><mn>0</mn></msub><mo>,</mo><mi>…</mi><mo>,</mo><msub><mi>v</mi><mrow><mi>V</mi><mo>−</mo><mn>1</mn></mrow></msub><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">\tau=(v_0,\ldots,v_{V-1})</annotation></semantics></math>
+とし、位置ごとの関係を次で表す。</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>v</mi><mi>i</mi></msub><mo>=</mo><msub><mi>f</mi><mrow><mi>P</mi><mo>,</mo><mi>i</mi></mrow></msub><mrow><mo stretchy="true" form="prefix">(</mo><mo stretchy="false" form="prefix">{</mo><msub><mi>v</mi><mi>j</mi></msub><mo>:</mo><mi>j</mi><mo>&lt;</mo><mi>i</mi><mo stretchy="false" form="postfix">}</mo><mo>,</mo><mi>x</mi><mo>,</mo><mi>M</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">v_i=f_{P,i}(\{v_j:j&lt;i\},x,M).</annotation></semantics></math></p>
+<p>これは算術値だけの列ではない。正規なrecordには命令位置・型・参照先・必要な状態・値が結び付く。全ての入力読出し、weight
+index、分岐・状態更新、全依存辺、Init、End、出力Rootとの接続を検査対象に含める。算術部分だけが合っていても、別の重みや別のtokenを使うtraceを受理しない。</p>
+<p>program
+rootは固定profileと正規compiler/configurationへ認証される。Minerが選んだ任意の「常に受理する命令列」へ差し替えない。全モデルを審査することと、実行する命令・意味論をすり替えないことは別である。</p>
+<p>局所CourtをNodeの有界な仕事にするため、各命令のfan-in、整数幅、opening数、証拠byte数、checkerの最悪実行量を上限内にする。巨大な行列積や全attentionを無制限の一命令へ隠さない。必要なら有界な基本関係へ展開する。対応するlocal
+checkerと完全な展開がないprofileは、AN1の保証対象として有効化しない。</p>
+<h1 id="commitmentとcanonicalな木">6. commitmentとcanonicalな木</h1>
+<p>入力・出力・traceは別の用途domainを使う。全leaf、padding、内部nodeに試行ID
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>、木の種別、論理長、位置または高さ・範囲を結合する。値・添字・長さ・signed表現は一意なbytesへ変換し、別表現をmod演算や文字列正規化で黙って受理しない。</p>
+<p>AN1の参照形では、論理レコード数を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>D</mi><mo>&gt;</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">D&gt;0</annotation></semantics></math>
+として、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>L</mi><mo>=</mo><msup><mn>2</mn><mrow><mo stretchy="false" form="prefix">⌈</mo><msub><mo>log</mo><mn>2</mn></msub><mi>D</mi><mo stretchy="false" form="postfix">⌉</mo></mrow></msup></mrow><annotation encoding="application/x-tex">L=2^{\lceil\log_2D\rceil}</annotation></semantics></math>
+leavesへpaddingする。実recordとpaddingは別tagを持ち、padding bytesは
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>、木種別、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>D</mi><annotation encoding="application/x-tex">D</annotation></semantics></math>、位置から一意に導出する。左右の順序と完全二分木の形を固定し、各padding
+leafも個別にhashする。</p>
+<p>本参照shapeは入力・出力・traceの論理長を1以上とし、空出力を受理しない。空shapeを許す変更には、専用のcanonical
+empty rootと終端規則の版更新が必要である。</p>
+<p>model rootとprogram rootは試行前に固定するため、未知の
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+をその定義へ入れない。Courtの外側contextが期待するmodel/program
+rootと試行を結合する。入力・出力・traceの木とは役割が異なる。</p>
+<p>NodeはOpeningが「どこかのleaf」であるだけでは受理しない。native元claimと命令から、木、論理長、期待位置、record型、重みindexを導き、その位置への認証を確認する。重みオブジェクトのRoot属性を信用するのでなく、供給された実weight
+bytes・正規形から計算したRootとの対応を、資料取得とPanel再実行で確認する。</p>
+<p>受付とCourtの論理長・件数・index・値は、同じ厳密な型と範囲で検査する。整数6153と小数6153.0を同一視するような型のaliasを拒否し、受付済みclaimの全openingが後で型不一致になる経路を閉じる。</p>
+<p>正しく認証された自由paddingや型違反は計算・構造の反証になり得る。変更した値に古いpathを付けただけの証拠は認証に失敗しており、Minerの元claimの不正を示さない。この二つを区別する。</p>
+<h1 id="一意性直接付け替え防止の条件付き証明">7.
+一意性・直接付け替え防止の条件付き証明</h1>
+<h2 id="一試行の正しいticketは一つ">7.1 一試行の正しいTicketは一つ</h2>
+<p><strong>命題1。</strong> 有効な登録
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>C</mi><annotation encoding="application/x-tex">C</annotation></semantics></math>、一意に認証された
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>σ</mi><annotation encoding="application/x-tex">\sigma</annotation></semantics></math>、決定論的な
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>P</mi><annotation encoding="application/x-tex">P</annotation></semantics></math>
+と実modelを固定すると、正しい実行に対応するTicket入力は一つに定まる。</p>
+<p><strong>証明。</strong>
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>C</mi><mo>,</mo><mi>σ</mi></mrow><annotation encoding="application/x-tex">C,\sigma</annotation></semantics></math>
+から
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+が一意、入力規則から
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>
+が一意、実行規則から
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>y</mi><mo>,</mo><mi>τ</mi></mrow><annotation encoding="application/x-tex">y,\tau</annotation></semantics></math>
+が一意になる。正規化と木の規則から三つのRootも一意である。従ってTicket入力は一つである。再署名、コメント、Panelの変更、Courtの再包装はその入力を変えない。</p>
+<p>この命題は、任意の偽Rootに対するhash照会を禁止しない。Minerが多くの安価な偽Rootを試す経路はあり、その成功FinalをPanel＋Courtの条件付き検証で止める。受付負荷は別の容量契約で制御する。</p>
+<h2 id="別ownernonceへの直接転用">7.2 別owner・nonceへの直接転用</h2>
+<p><strong>命題2。</strong>
+hash・署名・Merkleの認証条件のもとで、固定済みのclaim・openingを、別ownerまたは別nonceの正規実行へそのまま付け替えて受理させることはできない。</p>
+<p><strong>証明。</strong> ownerまたはnonceが変わるとcanonical
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>C</mi><annotation encoding="application/x-tex">C</annotation></semantics></math>
+が変わる。hashのbinding失敗以外では
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+が変わり、単射な入力表現により
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>
+が変わる。元claimの帰属照合、期待
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>R</mi><mi>x</mi></msub><annotation encoding="application/x-tex">R_x</annotation></semantics></math>、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+を含む各木の認証が一致しない。IDだけを変更すると古いopeningは期待する木のopeningではなくなる。</p>
+<p>これは直接転用の防止である。外注、第三者による正しい再計算、過去の値を使った別の正しいtraceの構成は、同じ費用を要するという定理ではない。署名を検査しても、署名者本人がGPUを動かしたことまでは証明しない。</p>
+<h1 id="局所関係から全体正当性を導く">8.
+局所関係から全体正当性を導く</h1>
+<p><strong>命題3。</strong>
+認証された初期入力・model・programのもとで、全ての必要な局所関係と境界条件が成立すれば、traceと出力は正規実行に一致する。</p>
+<p><strong>証明。</strong>
+Initが正しい最初の状態を固定する。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>j</mi><mo>&lt;</mo><mi>i</mi></mrow><annotation encoding="application/x-tex">j&lt;i</annotation></semantics></math>
+の全参照値が正しいと仮定する。位置
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>i</mi><annotation encoding="application/x-tex">i</annotation></semantics></math>
+の命令・型・参照先・重みindexが正規で、その関係が成立するなら、決定論性により
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>v</mi><mi>i</mi></msub><annotation encoding="application/x-tex">v_i</annotation></semantics></math>
+は正規値である。命令順の帰納法とEnd・出力結合により全体が一致する。</p>
+<p>形式の整った完全traceが正規実行と異なるなら、最初に異なる位置がある。その直前までの値が正しいため、その位置の認証された被演算値を使う再計算と、記録値の不一致を示せる。これが局所反証になる。</p>
+<p>ただし、全関係が成立することを、少数の正しい局所Courtから推定してはいけない。関係の欠落、未認証のindex、未検査の終端があれば帰納法の前提が失われる。記録の欠落・取得不能には、構造検査・資料要求・成功停止の経路も必要である。</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Nodeが照合する値</th>
+<th>認証先と期待値の導出</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>命令・位置・型</td>
+<td>固定profileのprogram rootと期待する命令番号</td>
+</tr>
+<tr class="even">
+<td>過去の計算値</td>
+<td>Minerの元trace root、命令が参照する位置</td>
+</tr>
+<tr class="odd">
+<td>入力token</td>
+<td>正規input root。challenge部分は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>
+から、job部分は登録jobから導出</td>
+</tr>
+<tr class="even">
+<td>重み</td>
+<td>登録model root。命令・token・座標からNodeが導くindex</td>
+</tr>
+<tr class="odd">
+<td>問題の計算結果</td>
+<td>同じ元trace rootの期待位置</td>
+</tr>
+<tr class="even">
+<td>最終出力</td>
+<td>元output rootと、終端命令が参照するtrace値</td>
+</tr>
+</tbody>
+</table>
+<p>本改訂の具体参照profileは、Nodeが正規入力とinput
+rootを直接再計算できる予算内の長さに限定する。より長いjobのadapterは、入力位置と登録jobへの認証、全入力結合の検査を別に定義してから有効化する。未実装adapterを理由にpayloadのinput
+rootを正規値として採用しない。</p>
+<p>Courtの分類は、認証に失敗した
+<code>InvalidEvidence</code>、認証された記録の関係・構造違反を示す
+<code>ComputationRefuted</code>、その局所関係に矛盾がない結果を分ける。局所的に矛盾がないことは、全実行が正しいという認証ではない。Courtのサイズ上限を超えるrecordは、元claim・期待位置に結合した有限の資料/構造caseへ送る。局所判定できない証拠を捨てただけで未充足を解消せず、規定内の正しい応答が得られなければ成功を止める。</p>
+<h1 id="panelcourtによる不正finalの阻止">9.
+Panel＋Courtによる不正Finalの阻止</h1>
+<p><strong>命題4。</strong>
+以下を全て満たす対象claimについて、算術・構造・入力・終端のいずれかが不正な実行は成功Finalにできない。ただし暗号認証や規範どおりのnative処理の失敗は除く。</p>
+<ol type="1">
+<li>選出されたPanelに少なくとも一人、能動的で正直な検査者がいる。</li>
+<li>その検査者は元claimを知り、必要資料を取得して全実行を再現・比較できる。取得不能なら、有限な資料caseを有効に起こし、未充足のまま成功にならない。</li>
+<li>元claimはPanel選出より前に固定され、Panelの結果を見てRootを書き換えられない。</li>
+<li>正直な反証・資料caseがFinal前に包含・裁定され、対応する異議機会を短縮されない。</li>
+<li>一つの有効反証が承認数より優先し、構造不正、資料不足、未解決の適格caseを時間経過で成功に変えない。</li>
+</ol>
+<p><strong>証明。</strong>
+資料が揃っていて実行が違えば、命題3から局所反証が存在し、正直Panelが提出し、Nodeが確認する。Finalの反証なし条件に矛盾する。資料や構造を確認できなければ、その未充足を成功停止へ結合する条件に反する。従って不正成功は起こらない。</p>
+<p>一人の正直者という前提は、Panel人数を一人へ固定すること、各Panelが必ず独立した物理労働をしたこと、任意のネットワークでも反証が届くことを意味しない。複数の悪意Panelが正しい局所Courtをコピーして署名しても、正直者の有効反証を覆せないという条件付きの性質である。</p>
+<p>能動的な正直者がいない場合、全員が不正承認し、適格反証も起きない履歴を、この方式だけで排除できない。抽選の独立性、攻撃者のpool占有、候補選別、資料供給、検閲耐性、実際の裁定容量を別々に評価する。未評価の失敗確率を自動的にnegligibleと置かない。</p>
+<h1 id="final一回性現在状態の再検査">10.
+Final・一回性・現在状態の再検査</h1>
+<p>成功Finalの条件は、概念上次の論理積とする。</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mo>CanFinal</mo><mrow><mi mathvariant="normal">A</mi><mi mathvariant="normal">N</mi><mn mathvariant="normal">1</mn></mrow></msub><mo>=</mo><mi>E</mi><mo>∧</mo><msub><mi>T</mi><mrow><mi mathvariant="normal">o</mi><mi mathvariant="normal">k</mi></mrow></msub><mo>∧</mo><mi>A</mi><mo>∧</mo><mi>O</mi><mo>∧</mo><mo>¬</mo><mi>Q</mi><mo>∧</mo><mo>¬</mo><mi>F</mi><mo>∧</mo><mo>¬</mo><mi>U</mi><mi>.</mi></mrow><annotation encoding="application/x-tex">\operatorname{CanFinal}_{\mathrm{AN1}}=E\land T_{\mathrm{ok}}\land A\land O\land\neg Q\land\neg F\land\neg U.</annotation></semantics></math></p>
+<p><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>E</mi><annotation encoding="application/x-tex">E</annotation></semantics></math>
+は登録・帰属・profile・期限・依存・資金・現在状態、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>T</mi><mrow><mi mathvariant="normal">o</mi><mi mathvariant="normal">k</mi></mrow></msub><annotation encoding="application/x-tex">T_{\mathrm{ok}}</annotation></semantics></math>
+は固定targetのTicket、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>A</mi><annotation encoding="application/x-tex">A</annotation></semantics></math>
+はprofile所定の完全承認、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>O</mi><annotation encoding="application/x-tex">O</annotation></semantics></math>
+は必要資料と実効的な検査・異議機会、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Q</mi><annotation encoding="application/x-tex">Q</annotation></semantics></math>
+は未解決の適格case、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>F</mi><annotation encoding="application/x-tex">F</annotation></semantics></math>
+は受理済み反証・失効、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>U</mi><annotation encoding="application/x-tex">U</annotation></semantics></math>
+はslot・試行ID・実計算キー・用途上必要なBaseWorkKeyのいずれかが消費済みであることを表す。</p>
+<p>これらはMinerが自由に設定するboolean欄ではない。native状態と、当該claimに結び付いた受付・義務・裁定記録から導出する。ACKだけで
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>O</mi><annotation encoding="application/x-tex">O</annotation></semantics></math>
+を真にせず、少数の局所positiveだけで
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>A</mi><annotation encoding="application/x-tex">A</annotation></semantics></math>
+を作らない。承認数とscopeは旧profileから無断で推測せず、AN1の公開profileへ固定する。</p>
+<p>同batchの適格notice・資料caseによるhold、有効反証・取消を、成功・mint・reserve・consumeより先に適用する。成功Final、slot・試行ID・実計算キーの未消費検査と消費、用途に応じたBaseWorkKey消費、credit・報酬の発行、依存index更新を一つの原子的遷移にする。後続のEXEC予約や合意weight消費も現在の認証・成熟・失効を再検査する。</p>
+<p>古いsnapshotの承認、期限切れの資料記録、profile停止前のcacheを使って現在の適格性を代替しない。snapshot/import/repair/別API/legacy経路でも、AN1の成功済み状態を未検証のまま作らない。</p>
+<p>reorg時はclaim・消費集合・発行・予約・依存を同じjournalに従って整合的に戻す。これは一つのcanonical履歴の二重発行を防ぐ仕様であり、fork間の安定性、DAG
+common-prefix、外部決済の不可逆性を証明しない。成熟とsettlementを区別する。</p>
+<h1 id="ticketの確率と未証明の費用下界">11.
+Ticketの確率と未証明の費用下界</h1>
+<p>256 bit Ticketを、登録時に固定した整数
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>0</mn><mo>≤</mo><mi>θ</mi><mo>≤</mo><msup><mn>2</mn><mn>256</mn></msup></mrow><annotation encoding="application/x-tex">0\le\theta\le2^{256}</annotation></semantics></math>
+と比較し、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi><mo>&lt;</mo><mi>θ</mi></mrow><annotation encoding="application/x-tex">T&lt;\theta</annotation></semantics></math>
+を当選とする。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mi>θ</mi><mi>/</mi><msup><mn>2</mn><mn>256</mn></msup></mrow><annotation encoding="application/x-tex">p=\theta/2^{256}</annotation></semantics></math>
+と置く。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi><mo>=</mo><msup><mn>2</mn><mn>256</mn></msup></mrow><annotation encoding="application/x-tex">\theta=2^{256}</annotation></semantics></math>
+を256 bit型で0へwraparoundさせない。</p>
+<p>正しいcanonical
+Ticket入力に対する初回照会数が、全実行で事前に定めた上限
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>q</mi><annotation encoding="application/x-tex">q</annotation></semantics></math>
+以下であるとする。照会には協力者と外注先、miner未照会候補をNodeが初めて検査する場合も含める。独立なTicket
+RO、固定
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>p</mi><annotation encoding="application/x-tex">p</annotation></semantics></math>、返値を見る前に正しさが定まる条件下で、</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>Pr</mo><mrow><mo stretchy="true" form="prefix">[</mo><mtext mathvariant="normal">correct win</mtext><mo stretchy="true" form="postfix">]</mo></mrow><mo>≤</mo><mn>1</mn><mo>−</mo><msup><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>−</mo><mi>p</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>q</mi></msup><mo>≤</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>,</mo><mi>p</mi><mi>q</mi><mo stretchy="true" form="postfix">)</mo></mrow><mi>.</mi></mrow><annotation encoding="application/x-tex">\Pr[\text{correct win}]\le 1-(1-p)^q\le\min(1,pq).</annotation></semantics></math></p>
+<p>証明は、未照会の正しい入力に対し一様な返値を順に与え、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>q</mi><annotation encoding="application/x-tex">q</annotation></semantics></math>
+回で停止する比較実験による。将来の当選集合を見て選んだ事後的な
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>q</mi><annotation encoding="application/x-tex">q</annotation></semantics></math>
+を代入しない。期待照会数だけから固定回数の式をそのまま使わない。異なるshape・閾値なら候補別の
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>p</mi><mi>a</mi></msub><annotation encoding="application/x-tex">p_a</annotation></semantics></math>
+と資源予算へ分ける。</p>
+<p>さらに、総予算の各実行上限を
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>B</mi><annotation encoding="application/x-tex">B</annotation></semantics></math>
+とし、cache、前処理、batch、外注、特殊モデル、入力選別を許した全生成方法について、正しい初回Ticket照会までに、</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>q</mi><mo>≤</mo><mrow><mo stretchy="true" form="prefix">⌊</mo><mi>B</mi><mi>/</mi><msub><mi>c</mi><mo>min</mo></msub><mo stretchy="true" form="postfix">⌋</mo></mrow></mrow><annotation encoding="application/x-tex">q\le\left\lfloor B/c_{\min}\right\rfloor</annotation></semantics></math></p>
+<p>が成立する費用定理を別に得た場合に限り、</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo>Pr</mo><mrow><mo stretchy="true" form="prefix">[</mo><mtext mathvariant="normal">success Final</mtext><mo stretchy="true" form="postfix">]</mo></mrow><mo>≤</mo><mo>min</mo><mrow><mo stretchy="true" form="prefix">(</mo><mn>1</mn><mo>,</mo><mi>p</mi><mrow><mo stretchy="true" form="prefix">⌊</mo><mi>B</mi><mi>/</mi><msub><mi>c</mi><mo>min</mo></msub><mo stretchy="true" form="postfix">⌋</mo></mrow><mo>+</mo><msub><mi>ε</mi><mrow><mi mathvariant="normal">c</mi><mi mathvariant="normal">o</mi><mi mathvariant="normal">s</mi><mi mathvariant="normal">t</mi></mrow></msub><mo>+</mo><msub><mi>ε</mi><mrow><mi mathvariant="normal">c</mi><mi mathvariant="normal">r</mi><mi mathvariant="normal">y</mi><mi mathvariant="normal">p</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">o</mi></mrow></msub><mo>+</mo><msub><mi>ε</mi><mrow><mi mathvariant="normal">g</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">e</mi></mrow></msub><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">\Pr[\text{success Final}]\le\min\left(1,p\left\lfloor B/c_{\min}\right\rfloor+\varepsilon_{\mathrm{cost}}+\varepsilon_{\mathrm{crypto}}+\varepsilon_{\mathrm{gate}}\right)</annotation></semantics></math></p>
+<p>へ接続できる。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>ε</mi><mrow><mi mathvariant="normal">g</mi><mi mathvariant="normal">a</mi><mi mathvariant="normal">t</mi><mi mathvariant="normal">e</mi></mrow></msub><annotation encoding="application/x-tex">\varepsilon_{\mathrm{gate}}</annotation></semantics></math>
+は正直Panel・資料・包含・裁定・Final条件の対象期間全体の失敗を扱う。Node実装不備や契約欠落を、根拠なしに小さな確率へ置き換えない。</p>
+<p><strong>本稿は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>c</mi><mo>min</mo></msub><annotation encoding="application/x-tex">c_{\min}</annotation></semantics></math>
+を得ていない。</strong>
+正しいFinalから過去の実費は直接導けず、最終的な再実行で正しいtraceを知ったことからTicket照会前の生成も自動的には従わない。生成時点と費用境界を追加で証明する必要がある。</p>
+<p>AN1の実入力は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>σ</mi><annotation encoding="application/x-tex">\sigma</annotation></semantics></math>
+に依存する。従って、固定
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>A</mi><mo>,</mo><mi>B</mi></mrow><annotation encoding="application/x-tex">A,B</annotation></semantics></math>
+を前提とした旧FULL1の
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>b</mi><mi>C</mi><mo>≥</mo><mi>K</mi><mi>N</mi></mrow><annotation encoding="application/x-tex">bC\ge KN</annotation></semantics></math>、<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>18</mn><mi>N</mi></mrow><annotation encoding="application/x-tex">18N</annotation></semantics></math>
+の算術上界、費用比
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>α</mi><mi>b</mi></mrow><annotation encoding="application/x-tex">\alpha b</annotation></semantics></math>
+をAN1のLLM推論へ転用しない。新しい入力が生じることと、高い評価費用が避けられないことは異なる性質である。</p>
+<h1 id="正当な最適化とhash会計">12. 正当な最適化とhash会計</h1>
+<p>同じ正しい公開記録を、cacheや別アルゴリズムで安く作れたとしても、それ自体は算術不正ではない。支払判断に使う全観測記録が同じ分布で、同じ支払規則なら期待受取額も同じである。待機・外注・担保拘束等まで含む総費用差は、公開記録に基づくslashでは消せない。</p>
+<p>過去の実行値を再利用して別nonceの正しいtraceを作る方法、challengeを無視するモデル、定数・零重みモデル、入力選別、共有計算を攻撃モデルへ含める。元入力を毎回変えるだけで、この費用分析を省略しない。</p>
+<p>完全木のhash数は、木の仕様が固定されていれば計数できる。論理長
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>D</mi><annotation encoding="application/x-tex">D</annotation></semantics></math>
+のpaddingなし二分木は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mi>D</mi><mo>−</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">2D-1</annotation></semantics></math>、AN1参照形の2冪padding木は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>2</mn><mi>L</mi><mo>−</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">2L-1</annotation></semantics></math>
+回である。出力・入力・traceの三木を数える場合は、別用途domainによる入力集合の分離も確認する。</p>
+<p>古典ROで、正しいRootの初回Ticket照会より前の<strong>実際の全生成履歴</strong>から完全木を抽出でき、scope/位置の分離と先取り条件が成立するなら、複数試行のtree-hash照会数を各木のnode数の合計で下から評価する方向はある。ただし本稿は、そのAN1全体への抽出定理・具体hashとの合成を完成済みにせず、protocolが照会回数を直接観測する仕組みとも扱わない。</p>
+<p>hashの回数は通常LLM算術の費用ではない。異なる操作の下界を共通費用へ換算する場合は、機械モデル、単位、重なり、前処理境界を定義する。根拠のないFLOPs・GPU秒・金銭額をAN1の認定量に加えない。</p>
+<h1 id="容量報酬サービス">13. 容量・報酬・サービス</h1>
+<p>全model共通の受付difficultyは、資源予約や検証を代替しない。偽Rootを安価にhashする攻撃者が存在し得るため、資金付き登録、byte/候補数上限、安い構文検査、既受理caseの保護、完全再実行・Courtの予約を別々に規定する。</p>
+<p>既存CAD1が
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>T</mi><mo>≤</mo><mi>t</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>D</mi><mo stretchy="true" form="postfix">)</mo></mrow></mrow><annotation encoding="application/x-tex">T\le t(D)</annotation></semantics></math>
+なら、AN1は
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>θ</mi><mo>=</mo><mi>t</mi><mrow><mo stretchy="true" form="prefix">(</mo><mi>D</mi><mo stretchy="true" form="postfix">)</mo></mrow><mo>+</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">\theta=t(D)+1</annotation></semantics></math>
+とし、数学的に同じ集合を受理する。difficulty
+snapshotを登録へ束縛し、当選後により易しいtargetへ持ち越さない。新旧の抽選を二重に掛けない。</p>
+<p>120秒はdifficultyの制御epochであり、AN1の登録・実行・Panel・資料case・成熟を含む完了時間の保証ではない。全carrier合計1
+BPSは既存の外側搬送目標であり、1秒で全Courtやsettlementが終わるという主張に変えない。モデルごとの別枠や固定court件数を勝手に追加しない。</p>
+<p>Panelの完全再実行・資料取得・保存・通信・Node裁定の費用を、Minerの実行費用と分けて測定する。通常の推論結果をnonce注入後も同じ価値で販売できるとは仮定しない。検証を意図的に重くして相対的な高速化の利得を薄めることは、費用下界の代替ではない。</p>
+<p>報酬規則がmodel係数1.0/0.3を用いることと、1.0/0.3倍の実費を強制したことは別である。既存の係数・総上限・無審査登録を維持しつつ、AN1の会計版に認定単位・用途・重複防止・移行を明記する。数学的なPoW費用保証がない段階では、全体系についてProof
+of LLMが完成したと宣言しない。</p>
+<h1 id="移行と方針の整合">14. 移行と方針の整合</h1>
+<p>AN1は新familyとして提出し、旧claimの署名domain、nonce、Ticket、期限、Court、認証・成熟の意味を変更しない。旧profileからAN1への自動的な再解釈や、同じ受付を新old双方で消費する経路を作らない。</p>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>状況</th>
+<th>AN1の扱い</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>未採択・未実装</td>
+<td>研究・参照検査に限定。nativeの有効化済みflagを作らない</td>
+</tr>
+<tr class="even">
+<td>新規登録</td>
+<td>有効化条件が満たされたprofileだけを、その固定版・target・scheduleで受理する</td>
+</tr>
+<tr class="odd">
+<td>profile改訂・停止</td>
+<td>既存pendingの元版・原期限と、事前に定めた終了・移行規則を使う</td>
+</tr>
+<tr class="even">
+<td>既成功・既消費</td>
+<td>別版への移行だけで同じslotを再発行しない。取消は既存の客観的根拠と手続による</td>
+</tr>
+<tr class="odd">
+<td>seed停止・資料不足・混雑</td>
+<td>保留または未検証終端。異議不在やtimeoutだけで成功へ変更しない</td>
+</tr>
+</tbody>
+</table>
+<p>Panel＋Courtを維持するため、添付AGENTS/PRINCIPLESの計算validity
+proof不使用方針を変更しない。モデル非保有Node、局所裁定、単独反証、モデル無審査登録、1.0/0.3の条件を保つ。外側の耐量子署名から、古典ROによるTicket確率分析まで耐量子保証が得られるとは記述しない。</p>
+<h1 id="独立参照実装と検証範囲">15. 独立参照実装と検証範囲</h1>
+<p>提供されたAN1説明は、小さな決定論的モデルについて11テスト群・失敗0を報告している。しかし、リンク先の実コード・results・vectorは今回取得していない。以下は本改訂のために作成した<strong>別の独立参照実装</strong>の結果であり、元ZIPの再実行やwire互換を意味しない。</p>
+<p>独立profileはvocabulary
+259、内部次元2、重み1,060個、2token生成の小整数causal
+modelである。embedding、Q/K/V、最後の位置でのattention、residual、FFN、全vocabularyのlogitと固定tie-breakを実装した。attentionは正の整数scoreの和で正規化し、checked
+signed-64整数を使う。学習済みLLMの数値互換は主張しない。</p>
+<table>
+<thead>
+<tr class="header">
+<th>項目</th>
+<th style="text-align: right;">本改訂の独立参照値</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>基準jobの入力長</td>
+<td style="text-align: right;">37 token</td>
+</tr>
+<tr class="even">
+<td>実model重み</td>
+<td style="text-align: right;">1,060 個</td>
+</tr>
+<tr class="odd">
+<td>出力長</td>
+<td style="text-align: right;">2 token</td>
+</tr>
+<tr class="even">
+<td>trace論理長</td>
+<td style="text-align: right;">6,153 record</td>
+</tr>
+<tr class="odd">
+<td>trace木のpadding後</td>
+<td style="text-align: right;">8,192 leaves</td>
+</tr>
+<tr class="even">
+<td>trace木のhash呼出</td>
+<td style="text-align: right;">16,383 回</td>
+</tr>
+</tbody>
+</table>
+<p>最終検査は<strong>15グループ・229項目がすべてPASS</strong>となった。さらに、別に作成した独立査読用scriptの<strong>52項目もすべてPASS</strong>した。両者を一つのテスト件数として合算しない。owner/nonce転用、異なる重みindex、認証された算術・構造・End・padding不正、偽opening、資料hold、二重credit、rollback、前提を外すと偽Finalが通る境界例を含む。検査対象のコードhash、profile、公開vector、実行結果を同梱する。</p>
+<p>追加査読で、受付が整数件数の小数表現を受理するとCourtが認証できなくなる型不一致と、有界Courtに載らない過大recordを反証成立と誤表示する問題を発見し、修正した。前者は同じ厳密型検査へ統一した。後者は期待位置への資料/構造noticeとnative
+holdへ接続し、正規生成器を使わずraw
+hashで作った過大leafのRootでも、同batchのFinalとcreditが止まることを確認した。初回反例の実行結果と修正後の結果は別に保全する。初回実装本体は保存されていないため、修正前については記録されたhashと実行結果までを監査証跡とする。</p>
+<p>署名・beacon・native登録の認証は、明示したfixture/抽象境界を使う。実際の鍵管理、ネットワーク、資料配布、Court包含、DBの並行性、reorg、最低Nodeや本番モデルの性能を実証したとは扱わない。資料noticeは成功停止までを実装し、取得応答・客観的なcase終結・pending解除は未実装である。正常claimの活性を完成したことにはならない。テストが成功しても、正直Panelと実効的な異議機会の仮定は残る。</p>
+<h1 id="攻撃経路と残る境界">16. 攻撃経路と残る境界</h1>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>経路</th>
+<th>規範上の対処と限界</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>owner・nonceだけ変更して旧claimを転用</td>
+<td>登録・<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>s</mi><annotation encoding="application/x-tex">s</annotation></semantics></math>・期待入力・元Root・署名の照合。新しい正しい再計算の費用は別問題</td>
+</tr>
+<tr class="even">
+<td>tokenizerがchallengeを落とす</td>
+<td>token
+IDへの固定単射写像と実入力読出し。切詰め・UNK・template変更を拒否</td>
+</tr>
+<tr class="odd">
+<td>beaconを見てmodel/job/nonceを選ぶ</td>
+<td>全候補の早期freeze。早期漏洩を無視しない</td>
+</tr>
+<tr class="even">
+<td>Panelの結果を見てRootを埋める</td>
+<td>元claimを未来のPanel選出前に固定。後から成功用のRootへ交換不可</td>
+</tr>
+<tr class="odd">
+<td>別model・別indexの重みを出す</td>
+<td>期待indexをNodeが導出し、登録model rootへopeningを検証</td>
+</tr>
+<tr class="even">
+<td>正しい局所Courtだけコピー</td>
+<td>正しい局所関係と全体承認を分離。一人の有効反証を優先</td>
+</tr>
+<tr class="odd">
+<td>元traceの算術・型・padding・End不正</td>
+<td>認証された局所・構造反証で成功を阻止</td>
+</tr>
+<tr class="even">
+<td>偽openingで正直Minerを攻撃</td>
+<td>InvalidEvidenceとして拒否。認証されない値をslash根拠にしない</td>
+</tr>
+<tr class="odd">
+<td>資料を隠してtimeout成功</td>
+<td>元期限・有限資料case・予約を維持し、未充足で成功しない</td>
+</tr>
+<tr class="even">
+<td>同じslotを別APIから二重発行</td>
+<td>原子的な成功・消費・発行と全consumerの現在状態再検査</td>
+</tr>
+<tr class="odd">
+<td>正しいcheap trace・cache・外注</td>
+<td>正しい最適化として許容。費用下界を別に要求</td>
+</tr>
+<tr class="even">
+<td>全Panel悪意・正直者検閲</td>
+<td>本稿の正当性条件外。pool・活性・包含の別評価が必要</td>
+</tr>
+</tbody>
+</table>
+<h1 id="rfcへの反映と履歴">17. RFCへの反映と履歴</h1>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>文書</th>
+<th>本改訂の所有範囲</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>RFC-0056</td>
+<td>AN1の共通difficulty接続、target固定、資金・受付・資源予約、旧Ticketとの分離</td>
+</tr>
+<tr class="even">
+<td>RFC-0057</td>
+<td>元claimへ結び付くCourt、期待index、証拠の分類、Panel完全再実行と救済経路</td>
+</tr>
+<tr class="odd">
+<td>RFC-0058</td>
+<td>AN1の二つのfreeze、識別子対応、一回性、全consumer、移行と保証の限界</td>
+</tr>
+<tr class="even">
+<td>RFC-0059</td>
+<td>AN1の登録・入力・trace・Court・Final・会計・有効化条件を定める新規仕様</td>
+</tr>
+<tr class="odd">
+<td>ADR-0227</td>
+<td>Panel＋Courtを維持しAN1へ切り替える理由と、採択・実装・有効化の区別</td>
+</tr>
+<tr class="even">
+<td>RFC-v2の担当冊・入口</td>
+<td>新提案への導線と担当範囲。既存20冊・ADR-v2の50冊を維持</td>
+</tr>
+</tbody>
+</table>
+<p>添付一式の元文書、過去の検証結果、source
+digestを保全する。新たな検査結果は改訂対象のbytesへ結び付ける。既存の文書検査に失敗がある場合は、元入力の失敗と新規回帰を分け、baselineを書き換えて隠さない。</p>
+<h1 id="有効化条件と未完了項目">18. 有効化条件と未完了項目</h1>
+<p>AN1を実ネットワークへ有効化するには、少なくとも次を具体化し、別々に確認する。</p>
+<ol type="1">
+<li>native登録、全候補freeze、beacon、元claim固定、未来Panel抽選の実装と署名・再送・reorgの境界。</li>
+<li>本番modelのtoken表、実入力導出、決定論的実行、全trace
+schema、全local checker、End結合の完全性。</li>
+<li>正直Panelがcold状態から資料を取得・再実行し、反証・資料caseを原期限内に包含・裁定できる実手順。</li>
+<li>全Final・報酬・credit・weight・import/repair経路のgate、原子性、取消・依存・成熟の接続。</li>
+<li>完全再実行・hash・資料保持・通信・裁定を含む最悪資源量と、最小Node・モデル規模での実測。</li>
+<li>採掘費用を安全性の根拠にする場合の独立な費用定理。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>c</mi><mo>min</mo></msub><annotation encoding="application/x-tex">c_{\min}</annotation></semantics></math>、予算単位、前処理・共有条件、Ticket前の生成条件を明示する。</li>
+<li>合意・DAG・stable
+freeze・settlementの証明と、旧profileを含む移行時のシステム全体評価。</li>
+</ol>
+<p>現時点の結論は、<strong>実入力への束縛、正しいTicketの一意性、直接付け替えの排除、Panel＋Courtによる条件付き実行正当性を具体化できる</strong>ということである。通常LLMと同額以上の実費、全最適化の排除、無条件な合意安全性を成立済みにしない。</p>
+<h1 id="参考資料と出典の範囲">参考資料と出典の範囲</h1>
+<p>［入力1］ユーザー提供のPALW-AN1説明（2026年11月18日、全8節）。設計・式・命題・元実装の報告値を参照した。リンク先HTML/ZIPは未取得である。</p>
+<p>［入力2］MISAKA_RFC_0056-0058_AuditRevision_20261117(2).zip。今回実際に展開したRFC・ADR・統合book・原則・過去検証記録。native
+runtimeコードの提供物ではない。</p>
+<p>［入力3］本会話で作成済みのPALW-FULL1/VF1費用監査統合補完稿v0.3。費用・正当最適化・観測記録の限界を参照したが、AN1に固定入力の費用定理を流用していない。</p>
+<p>［1］Hugging Face, Transformers公式文書, Cache strategies。KV
+cacheが既計算状態を再利用することの一次資料。本文のAN1への費用評価は本稿の推論である。https://huggingface.co/docs/transformers/en/kv_cache</p>
+<p>［再現］同梱のAN1独立参照実装、テスト結果、公開vector、profile仕様、文書回帰記録。元AN1コードの追試、実暗号・本番LLM・ネットワーク性能の証明ではない。</p>
+</body>
+</html>

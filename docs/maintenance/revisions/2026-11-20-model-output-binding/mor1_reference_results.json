@@ -1,0 +1,51 @@
+{
+  "status": "REFERENCE_EXAMPLES_ONLY_NOT_NATIVE_WIRE",
+  "test_groups": 8,
+  "failures": 0,
+  "errors": 0,
+  "passed": true,
+  "script_sha256": "407d20c8eb51be0f9edb40a1333a69234748a32ca663bc3cce1e9abda7299f01",
+  "example_codec": "MOR1-EXAMPLE-CODEC-OPAQUE-C-v1",
+  "receipt_domain_hex": "50414c572d4d4f52312f726563656970742f763100",
+  "native_wire_implemented": false,
+  "opaque_context_canonicality_verified": false,
+  "example_vector": {
+    "context_hex": "4558414d504c452d433a6f776e65723d413b6e6f6e63653d313b6d6f64656c3d66697865643b70726f66696c653d6578616d706c653b65706f63683d31",
+    "sigma_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+    "s_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+    "input_root_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+    "output_root_hex": "4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a",
+    "trace_root_hex": "5555555555555555555555555555555555555555555555555555555555555555",
+    "encoded_receipt_input_hex": "50414c572d4d4f52312f726563656970742f7631004d4f52312d4558414d504c452d434f4445432d4f50415155452d432d763100000f0000004558414d504c452d5349474d413332013d0000004558414d504c452d433a6f776e65723d413b6e6f6e63653d313b6d6f64656c3d66697865643b70726f66696c653d6578616d706c653b65706f63683d3102200000001111111111111111111111111111111111111111111111111111111111111111032000000022222222222222222222222222222222222222222222222222222222222222220420000000333333333333333333333333333333333333333333333333333333333333333305200000004b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a06200000005555555555555555555555555555555555555555555555555555555555555555",
+    "rho_hex": "e93771b445ab98a8b2c23bfec95add644cd0f3557ac1b3a5a07c07e315ef8c8c"
+  },
+  "birthday_examples": [
+    {
+      "query_bound": 1000000000000,
+      "exact_numerator": 244140624999755859375,
+      "exact_denominator": 56539106072908298546665520023773392506479484700019806659891398441363832832,
+      "decimal_upper_bound": "4.318084277543E-54"
+    },
+    {
+      "query_bound": 1099511627776,
+      "exact_numerator": 1099511627775,
+      "exact_denominator": 210624583337114373395836055367340864637790190801098222508621955072,
+      "decimal_upper_bound": "5.220243574394E-54"
+    },
+    {
+      "query_bound": 18446744073709551616,
+      "exact_numerator": 18446744073709551615,
+      "exact_denominator": 12554203470773361527671578846415332832204710888928069025792,
+      "decimal_upper_bound": "1.469367938528E-39"
+    }
+  ],
+  "limitations": [
+    "Finite examples do not prove hash collision resistance or computation cost.",
+    "Birthday bounds assume the classical random-oracle model and a total query upper bound.",
+    "C is assumed canonical opaque bytes; native C semantics, account authentication and eligibility are not verified.",
+    "The example sigma scheme is 32-byte only; no native beacon suite or wire identifier is assigned.",
+    "No Qwen execution, full trace verification, Panel/Court networking, Final, or one-time credit is implemented.",
+    "Arbitrary unverified roots can produce a receipt; its equality alone is not inference validity.",
+    "The AN1 Ticket formula and existing wire/claims are not changed by this example."
+  ]
+}

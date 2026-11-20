@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "scope": "Documentation comparison against pinned pre; no runtime or hardware validation",
+  "source_commit": "c3da7c6eaf5bf87f8e032d5b122c603d720a8398",
+  "generated_at_utc": "2026-11-17T06:00:49.648733+00:00",
+  "docs_audit": {
+    "baseline_exit": 1,
+    "after_exit": 1,
+    "baseline_failure_count": 950,
+    "after_failure_count": 948,
+    "baseline_link_issues_outside_old_checker_allowlist": 931,
+    "after_link_issues_outside_old_checker_allowlist": 931,
+    "baseline_targets": {
+      "ok": 12040,
+      "missing-doc-file": 972,
+      "outside-package-unchecked": 476,
+      "external-unchecked": 326,
+      "missing-heading": 2
+    },
+    "after_targets": {
+      "ok": 12213,
+      "missing-doc-file": 972,
+      "outside-package-unchecked": 481,
+      "external-unchecked": 326,
+      "missing-heading": 2
+    },
+    "new_failures": [],
+    "resolved_failures": [
+      "adr index is stale; run generate_indexes.py",
+      "rfc index is stale; run generate_indexes.py"
+    ],
+    "baseline_failures_sha256": "2179d93ade92aa12f12ed68eac6fa7eccbda7888035cdd15f6a77fda93e9aabb",
+    "after_failures_sha256": "a5c863133fbbe8f8d40d89502258e035c1c16a681e9366c89ca15812d6765dfc"
+  },
+  "rfc_historical_audit": {
+    "baseline_exit": 1,
+    "after_exit": 1,
+    "baseline_error_count": 7,
+    "after_error_count": 7,
+    "new_errors": [],
+    "identical_errors": true,
+    "errors": [
+      "FAIL: Original bytes changed or missing: RFC-0009",
+      "FAIL: Original bytes changed or missing: RFC-0011",
+      "FAIL: Original bytes changed or missing: RFC-0014",
+      "FAIL: Original bytes changed or missing: RFC-0023",
+      "FAIL: Original bytes changed or missing: RFC-0026",
+      "FAIL: Original bytes changed or missing: RFC-0037",
+      "FAIL: Original bytes changed or missing: RFC-0041"
+    ]
+  },
+  "adr_historical_audit": {
+    "baseline_exit": 1,
+    "after_exit": 1,
+    "baseline_error_count": 86,
+    "after_error_count": 86,
+    "new_errors": [],
+    "identical_errors": true,
+    "baseline_errors_sha256": "06476331b6f1f32fdd48df62296aa3ddbf55f9cbb46ac57a2c831baff66cd79b",
+    "after_errors_sha256": "06476331b6f1f32fdd48df62296aa3ddbf55f9cbb46ac57a2c831baff66cd79b"
+  },
+  "preservation_review": {
+    "old_numbered_rfcs_unchanged": 55,
+    "old_numbered_adrs_unchanged": 218,
+    "adr_v2_books_unchanged": 50,
+    "rfc_v2_front_only_additions": 18,
+    "existing_parameters_preserved": 56,
+    "new_parameters": 14,
+    "runtime_changed": false
+  },
+  "baseline_rewritten": false,
+  "runtime_executed": false,
+  "no_new_legacy_audit_failures": true
+}

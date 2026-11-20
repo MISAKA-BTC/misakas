@@ -59,7 +59,16 @@
 | RFC-0048 | [EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約](0048-exec-credit-schedule-and-one-bps.md) | Accepted design / EXEC 1 BPS・court容量、未有効化 |
 | RFC-0049 | [PALW実行整合性と一人による反証の完結契約](0049-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW実行整合性・単独反証、未有効化 |
 | RFC-0050 | [公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md) | Accepted design / 公開資料・モデル未保有の一人検証、未有効化 |
-| RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | Accepted design / 有料 tokenizer 登録、未有効化 |
-| RFC-0052 | [Hugging Face固定モデル取得とclaim固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md) | 取得認定はRFC-0053で置換、資料分離は維持／未有効化 |
-| RFC-0053 | [追加モデルのburn停止・解除](0053-additional-model-burn-pause.md) | Accepted design / 未有効化 |
+| RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | 原文と後続改定を参照 |
+| RFC-0052 | [Hugging Face 固定モデル取得と claim 固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md) | 原文と後続改定を参照 |
+| RFC-0053 | [追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md) | 原文と後続改定を参照 |
 | RFC-0054 | [公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |
+| RFC-0055 | [全モデル共通の受付難易度・資源予約・総搬送1 BPS](0055-global-admission-court-calendar-and-one-bps.md) | 前回提供の設計 / 資源保護・未有効化 |
+| RFC-0056 | [全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md) | Proposed design / 全claim受付難易度・未実装未有効化 |
+| RFC-0057 | [Court nonce・Panel固有チャレンジと提出の一回性](0057-court-nonce-and-panel-challenges.md) | Proposed design / Court nonce・Panel固有challenge・未有効化 |
+| RFC-0058 | [実行commit・段階別抽選・仕事の一回性と合意資格](0058-staged-work-commitments-and-consensus-eligibility.md) | Proposed design / 実行commit・段階抽選・合意資格、未有効化 |
+
+## 2026-11-18 追加草案
+
+- [RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court](0059-palw-an1-input-binding-and-panel-court.md) — **DRAFT_NOT_ACTIVATED**。既存番号・wire・過去採択の意味を変更しない。
+| RFC-0060 | [モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md) | DRAFT_NOT_ACTIVATED / モデル登録時の認証出力非重複性、費用下界は別 |

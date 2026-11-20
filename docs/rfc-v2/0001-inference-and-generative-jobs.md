@@ -1,5 +1,14 @@
 # RFC-v2-0001 — 推論・生成Job・入出力
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1の実入力はnonce由来32 byteの固定token prefixを含む。元prompt単独と同じ出力・品質を保証せず、入力変換、context上限、生成条件をサービス契約へ表示する。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
 ## 2026-11-09公開資料・一人前提の追加境界
 
 [採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。公開promptの原文、canonical token列、tokenizer・前処理の対応を検査対象へ結ぶ。入力・初期依存を隠したclaimを成功へ進めない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
@@ -51,6 +60,15 @@ jobのモデル・program・入力・seed・出力・依存関係を、[16](0016
 同一入力の再現、乱数domain、停止条件の境界、無効なschema／profileの拒否、textの回帰、延期profileの通常入口・代替入口での拒否を確認する。ここに列挙した試験は完了条件であり、今回実行した結果ではない。
 
 ---
+
+
+<!-- MOR1-DRAFT-20261120-BEGIN -->
+## 2026-11-20 MOR1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。正式な認証出力を回答y・試行ID・256bit実行識別値として定義する。回答文の一致は許し、Ryはコア回答yのみをcommitする。実行識別値の生成を自身のRootへ戻す循環を作らない。旧回答API・旧署名を遡及変更しない。
+
+[RFC-0060](../rfc/0060-model-registration-and-attempt-output-binding.md)／[ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)／[変更・検証](../maintenance/revisions/2026-11-20-model-output-binding/README.md)。この参照追記は既存の採択・履歴原文・runtime・activationを変更しない。
+<!-- MOR1-DRAFT-20261120-END -->
 
 ## 原条文の統合収録
 

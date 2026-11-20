@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "scope": "abstract-model-only",
+  "model": "SWC1 integer-trace integration contract v1",
+  "passed": true,
+  "source_hashes": {
+    "docs/rfc/0056-global-claim-admission-difficulty.md": "a4b05f802d0d1cfd42e40c602eb93c5cff9b417230ac58a63f6e7cea13d06702",
+    "docs/rfc/0057-court-nonce-and-panel-challenges.md": "c18a160c26cbf7665ff7796061d43249e86486d6bef33819b53fbe00d0e8f03a",
+    "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md": "854ea306551434bbcff6d81702f60636de3842aae198aecb88e97970bbbc7d80"
+  },
+  "sources_unchanged_during_run": true,
+  "model_script_sha256": "2653679f7938bc3349022395792d64ec83535faa1cddb7fa167623a360f71060",
+  "normative_outer_codec_parts": [
+    "SHA-256, LP=u32le length, NR=tag/version/native bytes",
+    "D=u128 little-endian container with exact range 1..2^120-1; ticket uint256 big-endian",
+    "SWC1 WorkTicket, JobSeed, StageDescriptor, FreezeId, BeaconMessage domains and field order",
+    "SWC1 SET leaf/ordinal/padding/parent/empty-root domains",
+    "CPN1 outer context/obligation and SWC1 positive/action context distinction"
+  ],
+  "case_count": 12,
+  "cases_passed": 12,
+  "fixtures": [
+    "bounded typed NR payload codec is toy-specific, not a native wire implementation",
+    "HMAC actor authentication is not ML-DSA/native signature verification",
+    "deterministic public beacon vectors and release API model knowledge order, not cryptographic unpredictability",
+    "stable control cuts, roster identity, funding ownership and trusted snapshot roots are fixture facts",
+    "material is locally available to the fixture Panel; no adversarial DA protocol is implemented",
+    "u64 modular dot-product model is not an LLM and the operation counters are not measured physical costs",
+    "checkpoint deepcopy plus authenticated digest is not native DB, IBD, crash recovery or a history accumulator",
+    "canonical batch ordering and checkpoint undo do not prove DAG common-prefix, convergence or finality",
+    "toy ticks, two selected actors, scalar stock limits and two negative slots are fixture sizes, not adopted timing/Panel/court constants",
+    "stage ordinals are the fixture's bounded canonical ID order; native order and vector meter are not implemented",
+    "GC models a complete expired bounded cohort without consumed rights; native partial-history accumulator and settled-provenance pruning are not implemented",
+    "the CAD1 feedback controller is not reimplemented here; only its D range, codec and ticket gate are integrated"
+  ],
+  "not_verified": [
+    "BLS",
+    "DKG",
+    "native signatures",
+    "native DB",
+    "native LLM",
+    "network DA",
+    "DAG theorem",
+    "PoW cost lower bound",
+    "non-amortization",
+    "Studio native route",
+    "one BPS performance",
+    "10000-model load"
+  ],
+  "negative_demonstrations": {
+    "known_seed_domain_separation_gives_stage_unpredictability": false,
+    "correct_optimized_trace_implies_full_physical_work": false,
+    "mature_work_implies_settled_ledger": false,
+    "valid_local_samples_prove_full_panel_replay": false,
+    "cost_lower_bound_proved": false
+  },
+  "results": [
+    {
+      "id": "C01",
+      "name": "owner_to_actual_integer_execution_to_mature_one_time_right",
+      "passed": true,
+      "details": {
+        "registration": "ad434972f5b3e9e8a49669fc6d43c1df1937303a6a4307fa94e59a40f36d9efb",
+        "work_key": "29ad1291940148092f8b0fcb1d2a6670f95fd706b3515edee67bf7e57a0bc358",
+        "original": "87abef1527c1b59a31ebca37edc1a10fda819333482225832bf8399b1b391bca",
+        "stage_freezes": {
+          "JOB": "7acfcc5f7382374c628400c857186a7948d93617bbd0b87f4ba611f6642301f5",
+          "TICKET": "2826e999a72cdbdf12787c222e102f205c6792c1ab6c11fb9e20f26b8e8478dc",
+          "PANEL": "911e723ff3aa2b8ff36a7379ba895aaa19706df9448d58bff7b8cba89933bf0d"
+        },
+        "ticket": "0x5b1c340436eb1bef09ffa7d9caded28990c3537f04c2a3af5fb33756c9789edf",
+        "panel_target": 3,
+        "right_state": "Consumed",
+        "ledger_settled": false
+      }
+    },
+    {
+      "id": "C02",
+      "name": "unauthenticated_or_unfunded_front_run_cannot_consume_owner",
+      "passed": true,
+      "details": {
+        "invalid_inputs_changed_canonical_state": false,
+        "legitimate_owner_committed": true
+      }
+    },
+    {
+      "id": "C03",
+      "name": "alias_signature_transport_and_funding_do_not_reroll_same_work",
+      "passed": true,
+      "details": {
+        "same_work_original_count": 1,
+        "aliases_and_resigning_create_draws": 0,
+        "funding_only_is_not_work_identity": true,
+        "legitimate_new_job_differs_in_actual_input": true,
+        "funded_other_slot_cannot_claim_old_work": true,
+        "batch_reordering_changes_only_wrapper": true,
+        "adding_fresh_leaf_cannot_reroll_reused_leaf": true,
+        "failed_atomic_batch_leaves_no_partial_new_claim": true
+      }
+    },
+    {
+      "id": "C04",
+      "name": "freeze_root_target_losing_and_aborted_opportunity_are_not_reset",
+      "passed": true,
+      "details": {
+        "losing_ticket": "0xc7db8fb65dbd7a5882095afbe392d3db5f74d1b6a4aeda47259d595f9976851d",
+        "lost_and_aborted_work_remains_used": true,
+        "root_and_target_changes_refused_after_freeze": true,
+        "difficulty_container_bits": 128,
+        "difficulty_range": [
+          1,
+          1329227995784915872903807060280344575
+        ],
+        "D1_inclusive_threshold": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "Dmax_inclusive_threshold": "0x10000000000000000000000000000010000",
+        "threshold_below_equal_above_checked": true
+      }
+    },
+    {
+      "id": "C05",
+      "name": "false_root_may_win_but_authenticated_local_refutation_blocks_success",
+      "passed": true,
+      "details": {
+        "false_root_passed_ticket": true,
+        "local_authenticated_mismatch": true,
+        "outcome": "timely-refutation-no-success",
+        "rights": 0,
+        "fresh_negative_ticket_required": false
+      }
+    },
+    {
+      "id": "C06",
+      "name": "panel_context_copy_rejected_shared_openings_allowed_once",
+      "passed": true,
+      "details": {
+        "distinct_positive_nonces": true,
+        "sample_targets": [
+          3,
+          3
+        ],
+        "shared_authenticated_trace_allowed": true,
+        "obligations_consumed": 2,
+        "work_rights": 1,
+        "independent_physical_replay_proven": false,
+        "right": "b1c1ecc81a817679cff694036a4ae12dae594108fb7bf3977587d9e7ac0b81dc"
+      }
+    },
+    {
+      "id": "C07",
+      "name": "known_seed_domain_separation_is_not_future_unknownness_and_no_fallback",
+      "passed": true,
+      "details": {
+        "known_seed_domains_differ": true,
+        "adversary_computes_both_immediately": true,
+        "domain_separation_establishes_stage_unknownness": false,
+        "unavailable_is_not_zero_demand": true,
+        "fallback_new_seed_refused": true,
+        "pool_substitution_refused": true,
+        "beacon_security_proved": false,
+        "action_context_fixed_before_panel_freeze": true,
+        "negative_succeeded_while_panel_beacon_unavailable": true,
+        "action_has_no_panel_seed_dependency": true,
+        "native_64_byte_seed_not_truncated": true,
+        "stage_set_ordinal_empty_and_domain_rules_checked": true
+      }
+    },
+    {
+      "id": "C08",
+      "name": "inclusive_notice_unresolved_case_strict_release_and_not_settled",
+      "passed": true,
+      "details": {
+        "inclusive_notice_tick": 15,
+        "last_terminal_tick": 19,
+        "first_mature_tick": 20,
+        "unresolved_case_blocks_after_clock_passed": true,
+        "maturity_is_settlement": false,
+        "zero_positive_case_resolution_cannot_mint": true,
+        "eligibility_rechecks_positive_not_only_phase": true,
+        "aborted_state_cannot_be_revived_by_notice_or_resolution": true,
+        "late_positive_refused": true
+      }
+    },
+    {
+      "id": "C09",
+      "name": "same_batch_stop_priority_prior_batch_provenance_and_canonical_undo",
+      "passed": true,
+      "details": {
+        "same_batch_all_body_orders_equal": true,
+        "sample_outside_fraud_step": 2,
+        "prior_batch_consumed_provenance_preserved": true,
+        "late_evidence_outcome": [
+          "post-window-new-use-stop-no-retroactive-slash"
+        ],
+        "retroactive_slash_or_settlement_rollback_claimed": false,
+        "canonical_checkpoint_undo_in_model": true
+      }
+    },
+    {
+      "id": "C10",
+      "name": "finite_nullifier_gc_restart_and_expired_namespace_nonresurrection",
+      "passed": true,
+      "details": {
+        "live_work_nullifiers_after_gc": 0,
+        "live_trial_nullifiers_after_gc": 0,
+        "capital_sequence_highwater_after_gc": {
+          "coin-0": 0
+        },
+        "authenticated_expired_floor": 1,
+        "summary_root": "994410f34e059a492d74cc059c44fbf4ba43c4d3ab506547c2a1ef7924a023ac",
+        "archived_terminal_records": 1,
+        "old_work_resurrected": false,
+        "new_epoch_does_not_reset_capital_sequence": true,
+        "record_registration_reference_tamper_refused": true,
+        "trusted_checkpoint_authentication_is_fixture": true,
+        "native_ibd_or_accumulator_verified": false
+      }
+    },
+    {
+      "id": "C11",
+      "name": "negative_demonstration_correct_cache_and_zero_model_shortcut_pass",
+      "passed": true,
+      "details": {
+        "normal": {
+          "scalar_multiplications": 32,
+          "scalar_additions": 40,
+          "trace_leaf_hashes": 9,
+          "trace_internal_hashes": 15
+        },
+        "optimized": {
+          "scalar_multiplications": 0,
+          "scalar_additions": 0,
+          "trace_leaf_hashes": 9,
+          "trace_internal_hashes": 15
+        },
+        "identical_valid_trace_and_root": true,
+        "fresh_seed_does_not_force_large_scalar_work_on_zero_model": true,
+        "correct_cached_or_optimized_results_slashed": false,
+        "cost_lower_bound_proved": false,
+        "metric_limit": "toy scalar-operation counts only; root hashing, memory, model checks and physical time still cost work"
+      }
+    },
+    {
+      "id": "C12",
+      "name": "global_admission_limit_preserves_existing_negative_reservation",
+      "passed": true,
+      "details": {
+        "ticket_eligible": 3,
+        "global_accepted": 2,
+        "capacity_not_admitted": 1,
+        "reserved_negative_succeeded_under_full_new_claim_budget": true,
+        "outcome": "timely-refutation-no-success",
+        "one_bps_or_large_model_performance_measured": false
+      }
+    }
+  ]
+}

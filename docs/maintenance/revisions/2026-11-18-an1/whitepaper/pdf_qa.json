@@ -1,0 +1,44 @@
+{
+  "pages": 13,
+  "math_expressions": 60,
+  "math_render_failures": [],
+  "text_characters": 16280,
+  "pdf_size_bytes": 443074,
+  "original_whitepaper_integrated": false,
+  "source_sha256": "fa0cb0f7861e57c429e581f74965537e20e7fb7a9b6d8e2032c7bca5326e7696",
+  "pdf_sha256": "ef919d1d0c4ceb4daed9aa18fb80ecadb34495fcdedc1b013ca97870c3dc05ed",
+  "render_engine": "pdftoppm",
+  "render_dpi": 110,
+  "rendered_pages": 13,
+  "visual_review": {
+    "all_pages": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13
+    ],
+    "detail_pages": [
+      7,
+      8,
+      11
+    ],
+    "observed_clipping": false,
+    "overlapping_text_or_tables": false,
+    "unreadable_math": false,
+    "notes": "All 13 pages inspected in contact sheets; probability/Final equations and dense threat/RFC tables inspected at page resolution."
+  },
+  "page_boundary_or_text_replacement_findings": [],
+  "latex_source_generated": true,
+  "latex_source_compiled_directly": false,
+  "pdf_build_method": "ReportLab; 330 dpi equation images from source math. Standalone editable LaTeX and MathML HTML also generated.",
+  "status": "PASS"
+}

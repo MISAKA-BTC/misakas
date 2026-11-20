@@ -1,5 +1,26 @@
 # RFC-v2-0015 — 設計凍結・延期・不採用・未採択・変更管理
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。ユーザーの2026-11-18指示に従いAN1・Panel＋Courtへ統一する。計算validity proof不使用と既存凍結原則を維持し、新familyの草案を採択・有効化と区別する。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 受付難易度CAD1の設計案
+
+ユーザーのRFC記述依頼を具体的な設計案として登録する。RFC0055の資源保護とRFC0056の受付Dを区別し、採択される新profileでは55§6を一つのCAD1へ置換する。二重Dや黙示の本番activationは行わない。
+
+本節は **PROPOSED_DESIGN_NOT_ACTIVATED** の設計案への入口であり、既存runtime・署名・fenceの意味や採択状態を変更しない。[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md)。
+<!-- CAD1-PROPOSAL-END -->
+
 ## 2026-11-09公開資料・一人前提の追加境界
 
 [採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。今回のユーザー採択を0050／0218に記録する。k_min=1は新profileの意味変更、mや資源値・有効化は別記録とし、旧75／41、署名、禁止方式、延期機能、過去レビュー・測定を保持する。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

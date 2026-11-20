@@ -1,5 +1,26 @@
 # RFC-v2-0011 — Bond予算・配分・Fee同意・決済会計
 
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1は共通difficultyを一回だけ適用し、登録・完全再実行・資料・Courtを別に予約する。正しいcache/外注をslashせず、未証明のGPU費用を会計単位へ換算しない。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 受付難易度CAD1の設計案
+
+native資本台帳によるTrialSlot、実入口費、必要資金の分離lockを規定する案。無資金の送信数で難化せず、有料の虚偽commitによる圧力は残余リスクとして扱う。新model登録審査・試行料やtier再係数化を導入しない。
+
+本節は **PROPOSED_DESIGN_NOT_ACTIVATED** の設計案への入口であり、既存runtime・署名・fenceの意味や採択状態を変更しない。[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md)。
+<!-- CAD1-PROPOSAL-END -->
+
 ## 2026-11-09公開資料・一人前提の追加境界
 
 [採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。cold取得・全再実行・最大合法caseの費用と支払原資を既存の有限契約へ結ぶ。多数不署名だけを成功阻害条件にしない。登録tier縮小分の発行・再配分の既存不整合は未解決gateとして維持し、今回のk_min=1から経済値変更を導かない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

@@ -1007,6 +1007,90 @@
       "id": "ADR-0222",
       "path": "docs/adr/0222-public-t12-original-admission-profile.md",
       "status": "DRAFT_NOT_ADOPTED"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0055",
+      "path": "docs/rfc/0055-global-admission-court-calendar-and-one-bps.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "previous conversation delivery"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0223",
+      "path": "docs/adr/0223-global-admission-court-calendar-and-one-bps.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "previous conversation delivery"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0056",
+      "path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested difficulty RFC"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0224",
+      "path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested difficulty RFC"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0057",
+      "path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested Court nonce RFC"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0225",
+      "path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested Court nonce RFC"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0058",
+      "path": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested audit amendment; supplied docs and prior RFC0055-0057 preserved"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0226",
+      "path": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "provenance": "current requested audit amendment; supplied docs and prior RFC0055-0057 preserved"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0059",
+      "path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "provenance": "Explicit 2026-11-18 user direction: PALW-AN1 with Panel and Court; supplied archive reviewed; no cryptographic computation validity proof."
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0227",
+      "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "provenance": "AN1 decision draft; native implementation, adoption and activation are separate."
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0060",
+      "path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "provenance": "Explicit 2026-11-20 user direction: require astronomically low cross-attempt authenticated-output collision probability at model registration; AN1 Ticket and Panel/Court unchanged."
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0228",
+      "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "status": "DRAFT_NOT_ACTIVATED",
+      "provenance": "MOR1 decision draft: structural registration conformity and immutable execution/output binding; adoption, native implementation and activation remain separate."
     }
   ],
   "current_revision": {
@@ -1023,5 +1107,55 @@
       "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
       "docs/adr/0218-public-materials-and-one-honest-panel.md"
     ]
-  }
+  },
+  "latest_proposal": {
+    "revision": "2026-11-20-model-output-binding",
+    "rfc_record": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+    "decision_record": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+    "depends_on": [
+      "RFC-0059",
+      "ADR-0227"
+    ],
+    "amended_proposals": [],
+    "status": "DRAFT_NOT_ACTIVATED",
+    "runtime_changed": false,
+    "activation_changed": false,
+    "adopted_policy_changed": false,
+    "pow_lower_bound_proved": false,
+    "dag_safety_proved": false,
+    "claim": "cross-attempt authenticated-output collision bound under canonical encoding and the classical random-oracle model",
+    "verification": "AN1 Panel full replay + authenticated local Court; receipt equality is not a full-execution validity proof"
+  },
+  "proposal_history": [
+    {
+      "revision": "2026-11-17-work-binding",
+      "rfc_record": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "decision_record": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "amended_proposals": [
+        "RFC-0056",
+        "RFC-0057"
+      ],
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "pow_lower_bound_proved": false,
+      "dag_safety_proved": false
+    },
+    {
+      "revision": "2026-11-18-an1",
+      "rfc_record": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "decision_record": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "amended_proposals": [
+        "docs/rfc/0056-global-claim-admission-difficulty.md",
+        "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+        "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md"
+      ],
+      "status": "DRAFT_NOT_ACTIVATED",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "pow_lower_bound_proved": false,
+      "dag_safety_proved": false,
+      "verification": "Panel full replay + authenticated local Court; no Groth16"
+    }
+  ]
 }
