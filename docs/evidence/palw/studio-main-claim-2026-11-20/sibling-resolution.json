@@ -1,0 +1,138 @@
+{
+  "commonParent": "f299fd71c53c486afef8186f04c3e0acdf01e3eff3e9ec4690b8db51b4d1b90eab34773494121a96e788e5aacf6c9c4a9bcdec76fa27010836977cbca89143bf",
+  "sharedTips": [
+    "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+    "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+  ],
+  "before": [
+    {
+      "virtualDaaScore": 4689,
+      "sink": "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    },
+    {
+      "virtualDaaScore": 4689,
+      "sink": "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    },
+    {
+      "virtualDaaScore": 4689,
+      "sink": "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    }
+  ],
+  "submissions": [
+    {
+      "report": {
+        "type": "success"
+      }
+    },
+    {
+      "report": {
+        "type": "success"
+      }
+    },
+    {
+      "report": {
+        "type": "success"
+      }
+    },
+    {
+      "report": {
+        "type": "success"
+      }
+    },
+    {
+      "report": {
+        "type": "success"
+      }
+    },
+    {
+      "report": {
+        "type": "success"
+      }
+    }
+  ],
+  "after": [
+    {
+      "virtualDaaScore": 4689,
+      "sink": "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    },
+    {
+      "virtualDaaScore": 4689,
+      "sink": "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    },
+    {
+      "virtualDaaScore": 4689,
+      "sink": "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44",
+      "tips": [
+        "5abb596c006c4f1ec6927183b1963f579319ee48a88bc4cf7e16420b2b8a7685d2d9572806306722544a907733e83cfe586c61d9c8c523f1463a2c3235d184ef",
+        "a2dfde6ac52073f7dfeccef2a166c75da52b9a080ef77a6b3bc23ddfe4e1faffd045caedecfd76ef5db0c5c44560d6ffd585e48af3f19bb87b9c85209a569f44"
+      ]
+    }
+  ],
+  "claimReadbacks": [
+    {
+      "port": 54703,
+      "found": true,
+      "tipDaa": 4732,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    },
+    {
+      "port": 54713,
+      "found": true,
+      "tipDaa": 4732,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    },
+    {
+      "port": 54723,
+      "found": true,
+      "tipDaa": 4732,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    }
+  ]
+}

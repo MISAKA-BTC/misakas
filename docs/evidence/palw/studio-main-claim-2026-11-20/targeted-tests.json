@@ -10,7 +10,7 @@
     "MOE2": 5,
     "TB1": 3
   },
-  "protectedPythonTests": 65,
+  "protectedPythonTests": 66,
   "upstreamStudioQueueTests": 5,
   "upstreamStudioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
   "regressions": [

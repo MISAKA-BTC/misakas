@@ -91,6 +91,23 @@ class ObservationTests(unittest.TestCase):
         clients[0].call.assert_called_once_with('submitBlock', dict(block=child, allowNonDAABlocks=False))
         clients[2].call.assert_not_called()
 
+    def test_agreement_reoffers_both_shared_sibling_bodies_at_a_stalled_tie(self):
+        from unittest.mock import Mock
+        from protected_private_registration_run import retry_retained_sink
+        tips = [h(8), h(9)]
+        views = [dict(sink=tips[i], tipHashes=tips[::-1], virtualDaaScore=20) for i in (1, 0, 0)]
+        clients = [Mock() for _ in views]
+        bodies = [dict(header=dict(hash=tip), verboseData=dict(hash=tip, isHeaderOnly=False,
+                      isChainBlock=tip == views[0]['sink'], selectedParentHash=h(7))) for tip in tips]
+        accepted = dict(report=dict(type='success'))
+        clients[0].call.side_effect = [*(dict(block=b) for b in bodies), accepted, accepted]
+        for client in clients[1:]:
+            client.call.return_value = accepted
+        retry_retained_sink(clients, views)
+        for client in clients:
+            sent = [args[1] for args, _ in client.call.call_args_list if args[0] == 'submitBlock']
+            self.assertEqual(sent, [dict(block=b, allowNonDAABlocks=False) for b in bodies])
+
     def test_restart_retries_the_single_shared_direct_child_through_native_validation(self):
         from unittest.mock import Mock
         from protected_private_registration_run import retry_shared_child

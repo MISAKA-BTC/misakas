@@ -61,6 +61,19 @@ def wait_until(deadline, read):
 
 def retry_retained_sink(clients, views):
     """Retry native resolution when a resumed peer already has the selected block body."""
+    tips = sorted(views[0]['tipHashes'])
+    sinks = {view['sink'] for view in views}
+    if len(tips) == 2 and sinks == set(tips) and all(
+            sorted(v['tipHashes']) == tips and v['virtualDaaScore'] == views[0]['virtualDaaScore'] for v in views):
+        # Both bodies already reached every peer. Retry both through normal consensus when
+        # local preparation left identical DAGs with differing virtual selections.
+        siblings = [block_read(clients[0], h, transactions=True) for h in tips]
+        if siblings[0]['verboseData']['selectedParentHash'] == siblings[1]['verboseData']['selectedParentHash']:
+            for child in siblings:
+                for client in clients:
+                    reply = client.call('submitBlock', dict(block=child, allowNonDAABlocks=False))
+                    require(reply['report']['type'] == 'success', f'native sibling resolution failed: {reply}')
+            return
     for source in sorted(range(len(views)), key=lambda i: views[i]['virtualDaaScore'], reverse=True):
         best = views[source]
         sink = best['sink']
