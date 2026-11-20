@@ -21,6 +21,7 @@ pub const PALW_PROCESSOR_SOURCE_FILES_V1: &[&str] = &[
     "processor/palw_validate/improvement.rs",
     "processor/palw_validate/structural.rs",
     "processor/palw_accept.rs",
+    "processor/palw_candidate_v3.rs",
     "processor/palw.rs",
     "processor/palw_h1_guard.rs",
     "processor/evm.rs",
