@@ -1,0 +1,55 @@
+{
+  "binarySha256": "d02c85cb009bb4739e5f024fc9781185c00239e9a378914692ec2a4909e06b3a",
+  "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+  "pinnedBlock": "54484b4e3a9c7c06728c25bcfa201aeb8b6e2138e2350887ce6f15d729bb2f8af6b5d66eb5dfc158f3d1fa7c1e43e58ed1d0d9a148dfd5555e74b9d0f9cf6536",
+  "readers": [
+    {
+      "port": 54703,
+      "sink": "1268247fd5cb60686177178a1ed0fb865914f7b5c58a81ab5fc7616f63883c2afca848a759fdc0f7264640a8941890e01440aa05def0d2c4b1da4aa215c2ecbd",
+      "daa": 7745,
+      "phase": "final",
+      "certification": "certified",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "stateRoot": "2878297bf907cefc32b8a9e56085d5249f8cb34a7f85dad3440c0706507c476ef5cd2e9ea583b3b220a4e7ccd7a16a43a506b4fa7b6ffdf8c997fec0f2a7cfc6",
+      "stateBytes": 7631437,
+      "sha256": "78f94be5f3ee7791beccaebc43532aaa0e4ba885e102004ef9bd7818d2f8f4ee"
+    },
+    {
+      "port": 54713,
+      "sink": "1268247fd5cb60686177178a1ed0fb865914f7b5c58a81ab5fc7616f63883c2afca848a759fdc0f7264640a8941890e01440aa05def0d2c4b1da4aa215c2ecbd",
+      "daa": 7745,
+      "phase": "final",
+      "certification": "certified",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "stateRoot": "2878297bf907cefc32b8a9e56085d5249f8cb34a7f85dad3440c0706507c476ef5cd2e9ea583b3b220a4e7ccd7a16a43a506b4fa7b6ffdf8c997fec0f2a7cfc6",
+      "stateBytes": 7631437,
+      "sha256": "78f94be5f3ee7791beccaebc43532aaa0e4ba885e102004ef9bd7818d2f8f4ee"
+    },
+    {
+      "port": 54723,
+      "sink": "1268247fd5cb60686177178a1ed0fb865914f7b5c58a81ab5fc7616f63883c2afca848a759fdc0f7264640a8941890e01440aa05def0d2c4b1da4aa215c2ecbd",
+      "daa": 7745,
+      "phase": "final",
+      "certification": "certified",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "stateRoot": "2878297bf907cefc32b8a9e56085d5249f8cb34a7f85dad3440c0706507c476ef5cd2e9ea583b3b220a4e7ccd7a16a43a506b4fa7b6ffdf8c997fec0f2a7cfc6",
+      "stateBytes": 7631437,
+      "sha256": "78f94be5f3ee7791beccaebc43532aaa0e4ba885e102004ef9bd7818d2f8f4ee"
+    }
+  ]
+}

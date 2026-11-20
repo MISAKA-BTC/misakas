@@ -2,6 +2,8 @@
 
 **元の Studio claim は落選した。** Final、Gate C 認証を経て、DAA 7730 の beacon で21枚の ticket が確定した。使用期限 DAA 8330 までの最大 target も全 ticket が上回った。3ピアとも消費数は0で、この claim の受賞ブロックと決済は発生しなかった。[最終結果](result.json)
 
+抽選後に隔離3ピアを停止し、同じノードバイナリで各ピアの保存済みDBを開いた。3ピアとも DAA 7745 の同じ先端で元の claim に Final、Gate C 認証済み、21枚中の消費数0を返した。抽選時に固定したブロックの状態7,631,437バイトを各ピアから再取得し、停止前と同じ SHA-256 を確認した。[再起動後の3ピアの記録](post-draw-restart.json)
+
 2026-11-20 に MISAKA-Studio の `main`（`c9257516b23b14527ef9cef06af143756a422e8f`）を未変更のソースからビルドした。チャット画面と共通の `POST /api/v1/network/mining-queue` に “Continue the count: three, four,” を投入した。隔離 testnet-12 の登録済み TIR クラスで17入力トークン、1出力トークン、85,938 leaves を実行した。Studio の queue、gateway の receipt、rail による Borsh の再読は同じ claim `05ba473f…e1c0cce9` を返した。[入力・実行 root・ファイルハッシュ](commitment.json)
 
 | 段階 | 観測 |
