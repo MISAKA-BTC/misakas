@@ -542,6 +542,24 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         return result
 
 
+def studio_admission(rpc, expected, scan_from, data):
+    """Keep a selected carrier and a refused native claim distinguishable after submission."""
+    _, before = chain_identity(rpc, expected)
+    response = rpc.call('getPalwClaimDetail', {'claimHex': expected['claim']})
+    require(response['available'] is True, 'native claim details unavailable')
+    if response['found']:
+        return observe(rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
+    try:
+        carrier = observe_transaction(rpc, dict(expected, scanFromBlock=scan_from),
+                                      maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
+    except AcceptancePending:
+        return None
+    if list(before) != carrier['context']:
+        raise ContextMoved('claim lookup and carrier acceptance came from different snapshots')
+    write_new(data / 'carrier-accepted-without-claim.json', dict(carrier=carrier, claimDetail=response))
+    raise ValueError(f"Studio carrier accepted in {carrier['acceptingBlock']} but claim {expected['claim']} is absent")
+
+
 def receipt_window_elapsed(original, detail):
     accepted_daa = unsigned(original['origin']['acceptedDaa'])
     return unsigned(detail['tipDaa']) > accepted_daa + PROTECTED_HARD_WINDOW_DAA
@@ -666,6 +684,7 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
 
             gateway = wait_until(min(deadline, time.monotonic() + config['startupTimeoutSeconds']), gateway_ready)
             write_new(data / 'gateway-health.json', gateway)
+            scan_from = chain_identity(rpc, registration['chain'])[0]['sink']
             run_result = request('/network/prompt-mining/run', prompt)
             write_new(data / 'studio-run.json', run_result)
             job_id = hash64(run_result['fp_job_id'])
@@ -722,12 +741,7 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
             expected = wait_until(deadline, submission)
             observe_lifecycle = partial(observe, rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
 
-            def admission():
-                response = rpc.call('getPalwClaimDetail', {'claimHex': expected['claim']})
-                require(response['available'] is True, 'native claim details unavailable')
-                return observe_lifecycle() if response['found'] else None
-
-            original = until('protected original admission', admission)
+            original = until('protected original admission', partial(studio_admission, rpc, expected, scan_from, data))
             write_new(data / 'original.json', original)
             producer_log = logs / f'peer-{producer}.log'
             panel_logs = [logs / f'peer-{index}.log' for index, peer in enumerate(config['peers'])

@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from protected_claim_observation import ContextMoved, expectation_from_studio, observe, observe_claim_progress, receipt_from_producer_log
 from protected_claim_observation import validate_receipt_observation
-from protected_private_registration_run import receipt_peer_view, receipt_window_elapsed, require_gate_c_status
+from protected_private_registration_run import receipt_peer_view, receipt_window_elapsed, require_gate_c_status, studio_admission
 
 
 def h(n):
@@ -61,6 +61,27 @@ class Rpc:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_studio_carrier_pending_dropped_and_admitted(self):
+        rpc = Rpc()
+        real_call = rpc.call
+
+        def absent(method, request=None):
+            if method == 'getPalwClaimDetail':
+                return dict(available=True, found=False, viewJson='')
+            return real_call(method, request)
+
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory)
+            with patch.object(rpc, 'call', side_effect=absent):
+                self.assertIsNone(studio_admission(rpc, rpc.expected, rpc.dag['sink'], data))
+                self.assertEqual(list(data.iterdir()), [])
+                with self.assertRaisesRegex(ValueError, 'but claim .* is absent'):
+                    studio_admission(rpc, rpc.expected, h(11), data)
+            recorded = json.loads((data / 'carrier-accepted-without-claim.json').read_text())
+            self.assertEqual(recorded['carrier']['acceptingBlock'], h(9))
+            self.assertFalse(recorded['claimDetail']['found'])
+            self.assertEqual(studio_admission(rpc, rpc.expected, h(11), data)['origin']['claim'], h(4))
+
     def test_final_is_insufficient_for_gate_c_milestone(self):
         detail = dict(gateCGoverns=True, claim=dict(phase='final', securityCertification='pending'))
         self.assertFalse(require_gate_c_status(detail))
