@@ -10,7 +10,7 @@
     "MOE2": 5,
     "TB1": 7
   },
-  "protectedPythonTests": 68,
+  "protectedPythonTests": 72,
   "upstreamStudioQueueTests": 5,
   "upstreamStudioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
   "regressions": [
@@ -215,5 +215,19 @@
       ]
     },
     "passed": 7
+  },
+  "studioReceiptSettlement": {
+    "protectedPythonTestsPassed": 74,
+    "fullDrillPythonSuitePassed": 349,
+    "testScope": "Private drill orchestration using controlled RPC responses",
+    "cases": [
+      "normal winning receipt continues to settlement on all three readers",
+      "one unsettled peer keeps the audited receipt resumable",
+      "a wrong queried DAA or moved peer denies completion",
+      "a spent worker output is traceable under its original coinbase acceptance",
+      "missing, unrelated or inconsistent coinbase acceptance cannot settle",
+      "the expired unspent branch records peer agreement without payout"
+    ],
+    "independentNativeUtxo": "../studio-winning-receipt-2026-11-20/worker-utxo-acceptance.json"
   }
 }

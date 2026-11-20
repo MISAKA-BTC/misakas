@@ -93,3 +93,5 @@ drill は指定 ID が `committed` になるまで待ち、該当する gateway 
 | `scanFromBlock` | rail が取引を提出する直前の、同じ隔離チェーンの sink hash |
 
 drill は queue の job ID から gateway のファイルを開き、claim、executor bond、output root、execution root、network domain と rail の署名済み取引 ID を照合する。受付ブロック以降は従来と同じ Panel・Final・Gate C・受賞ブロックの観測を使用する。既に受付記録のある実行には `--resume-claim` を使用する。
+
+当選時は同じ実行で receipt、選択鎖の子ブロック、その worker の coinbase UTXO を追跡し、各ピアがその UTXO の受理 DAA まで決済済みと返すまで待つ。途中停止時は、`studio/receipt-checkpoint.json` がある実行ディレクトリを `--resume-settlement` に指定して同じ receipt から再開できる。従来の receipt 監査済み `result.json` からも再開できる。原受付からのハード期限を過ぎた場合は、全ピアで認証済み・未消費を照合して `receipt-deadline-passed-unspent` を記録して終了コード3を返す。決済確認時の状態は `receipt-settled`、終了コードは0となる。期限切れの記録だけからは ticket が閾値を通ったかどうかは判定できない。元の Studio claim の落選は別途、保存した全 ticket から確認した。[抽選結果](result.json)

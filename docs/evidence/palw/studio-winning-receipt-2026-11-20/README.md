@@ -99,3 +99,5 @@ for peer in 1 2 3; do
 done
 cmp "$result_dir/1.json" "$result_dir/2.json" && cmp "$result_dir/1.json" "$result_dir/3.json"
 ```
+
+保存した同じ T-N1 の DB から、worker の coinbase outpoint を再読した。子ブロックの DAA は 2725、UTXO の受理 DAA は 2726、金額は 320,084,650,080 sompi だった。受理ブロックの native acceptance data でも、子ブロックの先頭取引としてこの coinbase の ID が一度だけ記録されていた。決済照会には UTXO の受理 DAA を使う。[worker UTXO の記録](worker-utxo-acceptance.json)

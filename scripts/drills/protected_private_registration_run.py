@@ -318,9 +318,13 @@ def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer
     require(json.loads((previous / 'run.json').read_text()) == config,
             'warmup configuration differs from the original run')
     if studio or admitted:
-        require((previous / 'registration-result.json').is_file() and (previous / 'result.json').is_file() == settlement,
-                'Studio checkpoint completion does not match the requested lifecycle stage')
         studio_dir = previous / 'studio'
+        completed = previous / 'result.json'
+        require((previous / 'registration-result.json').is_file(), 'Studio registration is missing')
+        if settlement:
+            receipt_checkpoint(previous)
+        else:
+            require(not completed.exists(), 'Studio lifecycle already has a terminal result')
         if admitted:
             require(all((studio_dir / name).is_file() for name in ('studio-run.json', 'studio-evidence.json', 'original.json')),
                     'claim resume requires the Studio job, signed rail evidence and native admission')
@@ -712,6 +716,32 @@ def receipt_window_elapsed(original, detail):
     return unsigned(detail['tipDaa']) > accepted_daa + PROTECTED_HARD_WINDOW_DAA
 
 
+def expired_unspent_receipt(clients, expected, original):
+    """Record an expired right only if every peer still sees the same certified, unspent claim."""
+    rows, stamps = [], []
+    for client in clients:
+        dag, stamp = chain_identity(client, expected)
+        detail = observe_claim_progress(client, expected, original)
+        if chain_identity(client, expected)[1] != stamp:
+            raise ContextMoved('peer moved during the unspent receipt read')
+        if not receipt_window_elapsed(original, detail):
+            return None
+        quanta = detail['receiptQuanta']
+        if unsigned(quanta['spentCount']) != 0:
+            raise ContextMoved('a peer observed a consumed receipt')
+        require(detail['claim']['phase'] == 'final' and require_gate_c_status(detail)
+                and detail['claim']['quantaSpent'] == 0 and quanta['spentIndicesComplete'] is True
+                and quanta['spentIndices'] == [], 'incomplete certified unspent receipt view')
+        rows.append(dict(sink=dag['sink'], tipDaa=detail['tipDaa'], quanta=quanta))
+        stamps.append(stamp)
+    if any(row != rows[0] for row in rows):
+        raise ContextMoved('peers differ at the receipt deadline')
+    for client, stamp in zip(clients, stamps):
+        if chain_identity(client, expected)[1] != stamp:
+            raise ContextMoved('a peer moved during the final deadline check')
+    return rows
+
+
 def receipt_peer_view(rpc, expected, producer, receipt, quantum):
     """Read the same selected receipt and spent quantum from a separate node."""
     dag, stamp = chain_identity(rpc, expected)
@@ -1002,12 +1032,15 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
                   if index != producer and 'seat' in peer]
     observe_lifecycle = partial(observe, rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
 
-    def progress_view(stage):
-        detail = observe_claim_progress(rpc, expected, original)
-        if stage != 'receipt' and receipt_window_elapsed(original, detail) and unsigned(detail['receiptQuanta']['spentCount']) == 0:
+    def pending_stage(stage, detail):
+        if receipt_window_elapsed(original, detail) and unsigned(detail['receiptQuanta']['spentCount']) == 0:
             write_new(data / 'claim-window-elapsed.json', dict(
                 stage=stage, expected=expected, origin=original['origin'], detail=detail))
             raise ValueError(f'protected claim hard deadline passed while waiting for {stage}')
+        return None
+
+    def progress_view():
+        detail = observe_claim_progress(rpc, expected, original)
         row = detail['claim']
         require(row['phase'] != 'voided', f"Studio claim voided: {row.get('voidReason')}")
         require(detail['protectedOriginal']['publicRefutationRecorded'] is False,
@@ -1015,9 +1048,9 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
         return detail
 
     def panel_approved():
-        detail = progress_view('Panel approval')
+        detail = progress_view()
         if not detail['protectedOriginal']['fullReplayApprovalRecorded']:
-            return None
+            return pending_stage('Panel approval', detail)
         return observe_lifecycle(previous=original, panel_logs=panel_logs, excluded_panel_bond=executor_bond)
 
     approved = until('same-claim included Panel approval', panel_approved, admitted=True)
@@ -1025,8 +1058,9 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
     approval = approved['panelApprovalAcceptance']['carrierTransaction']
 
     def finalized():
-        if progress_view('Final')['claim']['phase'] != 'final':
-            return None
+        detail = progress_view()
+        if detail['claim']['phase'] != 'final':
+            return pending_stage('Final', detail)
         current = observe_lifecycle(previous=original, panel_approval=approval)
         if current['detail']['claim']['phase'] != 'final':
             raise ContextMoved('Final changed during full readback')
@@ -1036,9 +1070,9 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
     write_new(data / 'final.json', final)
 
     def certified():
-        detail = progress_view('Gate C certification')
+        detail = progress_view()
         if not require_gate_c_status(detail):
-            return None
+            return pending_stage('Gate C certification', detail)
         current = observe_lifecycle(previous=original, panel_approval=approval)
         if current['detail']['claim']['phase'] != 'final' or not require_gate_c_status(current['detail']):
             raise ContextMoved('Gate C certification changed during full readback')
@@ -1051,12 +1085,17 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
 
     def receipt_read():
         nonlocal receipt_reads
-        current = progress_view('receipt')
+        current = progress_view()
         if current['receiptQuanta']['spentCount'] == 0:
             if receipt_window_elapsed(original, current):
-                write_new(data / 'receipt-window-elapsed.json', dict(
-                    expected=expected, origin=original['origin'], detail=current))
-                raise ValueError('protected receipt hard deadline passed with no consumed quantum for this claim')
+                rows = expired_unspent_receipt(clients, expected, original)
+                if rows is None:
+                    return None
+                result = dict(status='receipt-deadline-passed-unspent', expected=expected, original=original['origin'],
+                              registration=registration, phase='final', securityCertification=current['claim']['securityCertification'],
+                              panelApproval=approved['panelApprovalAcceptance'], unspentPeerViews=rows)
+                write_new(data / 'receipt-window-elapsed.json', result)
+                return result
             return None
         candidate = receipt_from_producer_log(
             producer_logs, expected['claim'], rpc=rpc,
@@ -1091,7 +1130,11 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
                     securityCertification=observed['detail']['claim']['securityCertification'],
                     panelApproval=observed['panelApprovalAcceptance'])
 
-    return until('same-claim receipt block and validated spent quantum', receipt_read, admitted=True)
+    result = until('same-claim receipt block and validated spent quantum', receipt_read, admitted=True)
+    if result.get('status') == 'receipt-deadline-passed-unspent':
+        return result
+    write_receipt_checkpoint(data / 'receipt-checkpoint.json', result)
+    return follow_receipt_settlement(result, data, clients, until)
 
 
 def resume_admitted_studio(config, output, checkpoint, registration, clients, step, logs, executor_bond):
@@ -1122,7 +1165,23 @@ def resume_admitted_studio(config, output, checkpoint, registration, clients, st
     return observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond)
 
 
-def receipt_payout(rpc, receipt):
+def write_receipt_checkpoint(path, result):
+    # Publish only a complete checkpoint. A restart can retry from the admitted claim
+    # if the process stops before the link is installed.
+    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent) as scratch:
+        json.dump(result, scratch, indent=2)
+        scratch.write('\n')
+        scratch.flush()
+        os.fsync(scratch.fileno())
+        os.link(scratch.name, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def receipt_payout(rpc, receipt, *, dag=None, previously_seen=None):
     """Locate the source worker output on the selected chain of this private run."""
     block = block_read(rpc, receipt, transactions=True)
     require(block['header']['powAlgoId'] == 7 and block['verboseData']['isChainBlock'],
@@ -1132,8 +1191,8 @@ def receipt_payout(rpc, receipt):
         return None
     child = block_read(rpc, page['addedChainBlockHashes'][0], transactions=True)
     info = child['verboseData']
-    require(info['isChainBlock'] and info['selectedParentHash'] == receipt
-            and info['mergeSetBluesHashes'][0] == receipt, 'receipt is not the first blue reward source')
+    if not info['isChainBlock'] or info['selectedParentHash'] != receipt:
+        raise ContextMoved('selected child moved during receipt payout read')
     payload = bytes.fromhex(block['transactions'][0]['payload'])
     require(len(payload) >= 19 and len(payload) >= 19 + payload[18] and payload[18] > 0,
             'receipt coinbase has no complete worker script')
@@ -1147,80 +1206,162 @@ def receipt_payout(rpc, receipt):
             'selected child did not pay the receipt worker as its first output')
     value = unsigned(coinbase['outputs'][0]['value'])
     require(value > 0, 'receipt worker reward is empty')
-    outpoint = hash64(coinbase['verboseData']['transactionId']) + ':0'
+    txid = hash64(coinbase['verboseData']['transactionId'])
+    outpoint = txid + ':0'
+    child_hash = child['header']['hash']
+    # The virtual UTXO can appear before a selected block has accepted the coinbase.
+    accepted = chain_read(rpc, child_hash, PROTECTED_LIFECYCLE_SCAN_BLOCKS)
+    if not accepted['addedChainBlockHashes']:
+        return None
+    accepting_hash = accepted['addedChainBlockHashes'][0]
+    matches = [row for row in accepted['acceptedTransactionIds'] if row['acceptingBlockHash'] == accepting_hash]
+    require(len(matches) == 1 and matches[0]['acceptedTransactionIds'].count(txid) == 1,
+            'selected successor did not uniquely accept the worker coinbase')
+    accepting = block_read(rpc, accepting_hash)
+    if not accepting['verboseData']['isChainBlock'] or accepting['verboseData']['selectedParentHash'] != child_hash:
+        raise ContextMoved('worker coinbase accepting block moved')
     utxos = rfc12_state_value(rpc, [outpoint])
+    if dag and (utxos['virtualSelectedParent'], utxos['virtualDaaScore']) != (dag['sink'], dag['virtualDaaScore']):
+        raise ContextMoved('worker UTXO came from another generation')
     entry = utxos['pointStates'][outpoint]
     if entry is None:
-        return None
+        if not previously_seen or (previously_seen['block'], previously_seen['child'], previously_seen['outpoint'],
+                                   previously_seen.get('acceptingBlock')) != (receipt, child_hash, outpoint, accepting_hash):
+            return None
+        entry = previously_seen['output']
+    require(unsigned(entry['blockDaaScore']) == unsigned(accepting['header']['daaScore']),
+            'worker UTXO accepting DAA differs from selected acceptance')
     require(entry['isCoinbase'] and entry['amount'] == value and entry['scriptPublicKey'] == script,
             'worker UTXO differs from the accepted coinbase')
     return dict(block=receipt, receiptDaa=block['header']['daaScore'], child=child['header']['hash'],
-                childDaa=child['header']['daaScore'], outpoint=outpoint, output=entry,
+                childDaa=child['header']['daaScore'], acceptingBlock=accepting_hash, outpoint=outpoint, output=entry,
                 receiptSubsidy=int.from_bytes(payload[8:16], 'little'))
 
 
-def resume_receipt_settlement(config, output, checkpoint, registration, clients, step):
-    previous = json.loads((checkpoint / 'result.json').read_text())
-    prior = checkpoint / 'studio'
-    evidence = json.loads((prior / 'studio-evidence.json').read_text())
-    job = json.loads((prior / 'studio-run.json').read_text())
-    expected = expectation_from_studio(job, evidence['studioJob'], evidence['rail'], registration['chain'])
-    audit = previous['receiptAudit']
-    require(previous['expected'] == expected and job == evidence['studioRun'] and audit['claim'] == expected['claim']
-            and previous['registration'] == registration and audit['nativeReceiptEnvelopeValidated'] is True,
-            'completed receipt belongs to another Studio job or chain')
-    observed = json.loads((prior / previous['receiptObservation']).read_text())
-    receipt, quantum = hash64(audit['block']), unsigned(audit['quantumIndex'], 32)
-    require(receipt == observed['receiptBlock']['header']['hash'] and observed['expected'] == expected,
-            'completed receipt observation differs from the native audit')
-    data = output / 'studio'
-    data.mkdir(mode=0o700)
-    timeout = unsigned(config['studio']['timeoutSeconds'])
-    until = partial(until_claim_observation, step=step, timeout=timeout, deadline=time.monotonic() + timeout,
-                    admitted=True, check_alive=None)
+def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on_paid=None):
+    """Read the worker UTXO and its own accepting DAA under one stable generation per peer."""
+    payouts, rows, stamps = [], [], []
+    for i, rpc in enumerate(clients):
+        dag, stamp = chain_identity(rpc, expected)
+        try:
+            payout = receipt_payout(rpc, receipt, dag=dag, previously_seen=seen_payouts[i] if seen_payouts else None)
+        except ValueError:
+            if chain_identity(rpc, expected)[1] != stamp:
+                raise ContextMoved('receipt chain changed during payout readback')
+            raise
+        if payout is None:
+            return None
+        if chain_identity(rpc, expected)[1] != stamp:
+            raise ContextMoved('worker payout generation changed')
+        payouts.append(payout)
+        stamps.append(stamp)
+    if any(p != payouts[0] for p in payouts) or any(s[0] != stamps[0][0] for s in stamps):
+        raise ContextMoved('peers have different selected sinks or worker payouts')
+    if on_paid is not None:
+        if any(chain_identity(rpc, expected)[1] != stamp for rpc, stamp in zip(clients, stamps)):
+            raise ContextMoved('a peer moved before the payout checkpoint')
+        on_paid(payouts)
+    accepted = unsigned(payouts[0]['output']['blockDaaScore'])
+    for rpc, stamp, payout in zip(clients, stamps, payouts):
+        sink = stamp[0]
+        try:
+            row = rpc.call('getPalwSettlement', dict(daaScore=accepted))
+        except RuntimeError as error:
+            if 'changed during the read' in str(error) or 'unavailable during pruning import' in str(error):
+                raise ContextMoved('settlement generation changed') from error
+            raise
+        sink_daa = block_read(rpc, sink)['header']['daaScore']
+        if chain_identity(rpc, expected)[1] != stamp or row['sinkDaa'] != sink_daa:
+            raise ContextMoved('settlement generation changed')
+        require(unsigned(row['daaScore']) == accepted, 'settlement read names another accepting DAA')
+        if row['available'] is not True or row['settled'] is not True:
+            return None
+        rows.append(dict(sink=sink, payout=payout, settlement=row))
+    for rpc, stamp in zip(clients, stamps):
+        if chain_identity(rpc, expected)[1] != stamp:
+            raise ContextMoved('a peer moved during settlement readback')
+    return rows
 
-    def recovered():
+
+def follow_receipt_settlement(previous, data, clients, until, *, restarted=False, seen_payouts=None):
+    expected, audit = previous['expected'], previous['receiptAudit']
+    observed = json.loads((data / previous['receiptObservation']).read_text())
+    receipt, quantum = hash64(audit['block']), unsigned(audit['quantumIndex'], 32)
+    require(receipt == observed['receiptBlock']['header']['hash'] and observed['expected'] == expected
+            and audit['claim'] == expected['claim'] and audit['nativeReceiptEnvelopeValidated'] is True,
+            'completed receipt observation differs from the native audit')
+
+    def consumed():
         details = [observe_claim_progress(client, expected, observed) for client in clients]
         for detail in details:
             quanta = detail['receiptQuanta']
             require(detail['claim']['phase'] == 'final' and require_gate_c_status(detail)
                     and quanta['spentIndicesComplete'] and quantum in quanta['spentIndices']
-                    and len(set(quanta['spentIndices'])) == quanta['spentCount'] == len(quanta['spentIndices']),
-                    'resumed peer lost the certified receipt spend')
+                    and quantum < unsigned(quanta['total'], 32)
+                    and len(set(quanta['spentIndices'])) == quanta['spentCount'] == len(quanta['spentIndices'])
+                    and detail['claim']['quantaSpent'] == quanta['spentCount'],
+                    'peer lost the certified receipt spend')
         return details
 
-    write_new(data / 'restarted-claim.json', until('persisted same-claim spend', recovered))
+    details = until('certified same-claim spend before settlement', consumed, admitted=True)
+    if restarted:
+        write_new(data / 'restarted-claim.json', details)
+    seen = list(seen_payouts or [])
+    require(not seen or len(seen) == len(clients), 'payout checkpoint peer count differs')
 
-    def paid():
-        rows = [receipt_payout(client, receipt) for client in clients]
-        if any(row is None for row in rows):
-            return None
-        require(all(row == rows[0] for row in rows), 'peer receipt payouts differ')
-        return rows
+    def keep_payouts(payouts):
+        if not (data / 'receipt-payout.json').exists():
+            write_receipt_checkpoint(data / 'receipt-payout.json', payouts)
+        seen[:] = payouts
 
-    payouts = until('selected child and included worker coinbase', paid)
-    write_new(data / 'receipt-payout.json', payouts)
+    rows = until('native settlement through worker payout',
+                 partial(receipt_settlement_view, clients, expected, receipt, seen_payouts=seen, on_paid=keep_payouts),
+                 admitted=True)
+    payouts = [row['payout'] for row in rows]
+    settled = [dict(sink=row['sink'], settlement=row['settlement'], payout=row['payout']) for row in rows]
+    write_new(data / 'receipt-settlement.json', settled)
+    return dict(previous, status='receipt-settled', payout=payouts[0],
+                settlement=dict(sink=rows[0]['sink'], settlement=rows[0]['settlement']), peers=len(rows))
 
-    def settled():
-        rows = []
-        for client in clients:
-            dag, stamp = chain_identity(client, expected)
-            for block in (receipt, payouts[0]['child']):
-                if not block_read(client, block)['verboseData']['isChainBlock']:
-                    raise ContextMoved('receipt or reward child moved off chain')
-            row = client.call('getPalwSettlement', dict(daaScore=payouts[0]['childDaa']))
-            if chain_identity(client, expected)[1] != stamp or row['sinkDaa'] != block_read(client, dag['sink'])['header']['daaScore']:
-                raise ContextMoved('settlement generation changed')
-            if not row['available'] or not row['settled']:
-                return None
-            rows.append(dict(sink=dag['sink'], settlement=row))
-        if any(row != rows[0] for row in rows):
-            raise ContextMoved('peers have different settlement generations')
-        return rows
 
-    rows = until('native settlement through worker payout', settled)
-    write_new(data / 'receipt-settlement.json', rows)
-    return dict(expected=expected, receiptAudit=audit, payout=payouts[0], settlement=rows[0], peers=len(rows))
+def receipt_checkpoint(checkpoint):
+    marker = checkpoint / 'studio/receipt-checkpoint.json'
+    path = marker if marker.is_file() else checkpoint / 'result.json'
+    require(path.is_file(), 'settlement requires a completed receipt audit')
+    result = json.loads(path.read_text())
+    require(isinstance(result.get('receiptAudit'), dict) and
+            result['receiptAudit'].get('nativeReceiptEnvelopeValidated') is True,
+            'settlement requires a completed receipt audit')
+    return result
+
+
+def resume_receipt_settlement(config, output, checkpoint, registration, clients, step):
+    previous = receipt_checkpoint(checkpoint)
+    prior = checkpoint / 'studio'
+    evidence = json.loads((prior / 'studio-evidence.json').read_text())
+    job = json.loads((prior / 'studio-run.json').read_text())
+    expected = expectation_from_studio(job, evidence['studioJob'], evidence['rail'], registration['chain'])
+    require(previous.get('expected') == expected and job == evidence['studioRun']
+            and previous.get('registration') == registration and 'receiptAudit' in previous,
+            'completed receipt belongs to another Studio job or chain')
+    data = output / 'studio'
+    data.mkdir(mode=0o700)
+    for name in ('original.json', previous['receiptObservation'], previous['receiptPeerObservations']):
+        require(Path(name).name == name, 'invalid receipt checkpoint filename')
+        write_new(data / name, json.loads((prior / name).read_text()))
+    write_new(data / 'studio-run.json', job)
+    write_new(data / 'studio-evidence.json', evidence)
+    paid = prior / 'receipt-payout.json'
+    seen = None
+    if paid.is_file():
+        seen = json.loads(paid.read_text())
+        require(isinstance(seen, list) and len(seen) == len(clients) and all(isinstance(p, dict) for p in seen),
+                'invalid saved peer payouts')
+        write_receipt_checkpoint(data / 'receipt-payout.json', seen)
+    write_receipt_checkpoint(data / 'receipt-checkpoint.json', previous)
+    timeout = unsigned(config['studio']['timeoutSeconds'])
+    until = partial(until_claim_observation, step=step, timeout=timeout, deadline=time.monotonic() + timeout, check_alive=None)
+    return follow_receipt_settlement(previous, data, clients, until, restarted=True, seen_payouts=seen)
 
 
 def main():
@@ -1236,7 +1377,7 @@ def main():
     parser.add_argument('--isolated-node', type=Path,
                         help='private node executable with operator-controlled heartbeat templates')
     parser.add_argument('--resume-studio', type=Path, help='stopped run with registration complete and no Studio claim sent')
-    parser.add_argument('--resume-settlement', type=Path, help='verify a completed receipt and follow its native payout and settlement')
+    parser.add_argument('--resume-settlement', type=Path, help='resume an audited receipt from a settlement checkpoint or a legacy receipt result')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
     queue = parser.add_mutually_exclusive_group()
     queue.add_argument('--studio-main-job', nargs='+', metavar='ARG',
@@ -1261,11 +1402,13 @@ def main():
                 return follow_studio_queue_submission(config, args.output, registration, clients, step, logs, executor_bond,
                                                       args.studio_queue_submission, main_job=args.studio_main_job)
             return studio_lifecycle(config, args.output, registration, clients, step, logs, executor_bond)
-    print(json.dumps(run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
-                         resume_tokenizer=args.resume_tokenizer,
-                         tokenizer_clock_checkpoint=args.tokenizer_clock_checkpoint, isolated_node=args.isolated_node,
-                         resume_studio=args.resume_studio, resume_claim=args.resume_claim, resume_settlement=args.resume_settlement)))
+    result = run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
+                 resume_tokenizer=args.resume_tokenizer, tokenizer_clock_checkpoint=args.tokenizer_clock_checkpoint,
+                 isolated_node=args.isolated_node, resume_studio=args.resume_studio,
+                 resume_claim=args.resume_claim, resume_settlement=args.resume_settlement)
+    print(json.dumps(result))
+    return 3 if result.get('status') == 'receipt-deadline-passed-unspent' else 0
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())
