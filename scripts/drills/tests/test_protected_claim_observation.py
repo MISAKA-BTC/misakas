@@ -309,6 +309,36 @@ class ObservationTests(unittest.TestCase):
                 finally:
                     record[field] = old
 
+    def test_main_submission_uses_the_gateway_outbox_and_preserves_native_admission(self):
+        import protected_private_registration_run as runner
+        rpc = Rpc()
+        chain = {key: rpc.expected[key] for key in ('genesisHash', 'consensusParamsId', 'networkDomain')}
+        bond = h(30) + ':0'
+        queue = dict(status='committed', fp_job_id=h(20), claim_id=h(4))
+        receipt = dict(schema='misaka.palw.output-receipt.v1', job_id=h(20), claim_id=h(4), executor_bond=bond,
+                       output_root=h(21), execution_root=h(6), network_domain=chain['networkDomain'])
+        job = dict(schema='misaka.palw.fp-v3-gateway-artifact.v1', committed=True, executor_bond=bond, fp_job_id=h(20),
+                   fp_claim_id=h(4), output_root=h(21), receipt=receipt)
+        rail = dict(schema='misaka.palw.fp-rail-tx.v1', fp_claim_id=h(4), submitted=h(5),
+                    protected_execution_root=h(6), protected_funding_sompi=100)
+        config = dict(studio=dict(producerPeer=0, timeoutSeconds=10))
+        with (tempfile.TemporaryDirectory() as tmp,
+              patch.object(runner, 'retain_studio_claim', return_value={}),
+              patch.object(runner, 'observe_admitted_studio', return_value='following') as follow):
+            root = Path(tmp)
+            submission = root / 'submission.json'
+            submission.write_text(json.dumps(dict(studioRun=queue, outbox=tmp, rail=rail, scanFromBlock=h(11))))
+            (root / ('fp-job-' + h(20)[:16] + '.json')).write_text(json.dumps(job))
+            args = (config, root, dict(chain=chain), [rpc], None, root)
+            with self.assertRaisesRegex(ValueError, 'executor'):
+                runner.follow_studio_queue_submission(*args, h(31) + ':0', submission)
+            self.assertEqual(runner.follow_studio_queue_submission(*args, bond, submission), 'following')
+            original = json.loads((root / 'studio/original.json').read_text())
+            self.assertEqual(original['origin']['acceptingBlock'], h(9))
+            self.assertEqual(follow.call_args.args[-2], original)
+            self.assertEqual(json.loads((root / 'studio/studio-evidence.json').read_text()),
+                             dict(studioRun=queue, studioJob=job, rail=rail, chain=chain))
+
     def test_panel_txid_requires_the_matching_stored_approval(self):
         rpc = Rpc()
         rpc.detail['protectedReplayApprovals'] = [dict(

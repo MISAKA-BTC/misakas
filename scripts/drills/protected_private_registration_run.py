@@ -718,6 +718,36 @@ def receipt_peer_view(rpc, expected, producer, receipt, quantum):
     return observed
 
 
+def follow_studio_queue_submission(config, output, registration, clients, step, logs, executor_bond, submission):
+    """Join a Studio main queue job submitted by its gateway and protected rail."""
+    timeout = unsigned(config['studio']['timeoutSeconds'])
+    deadline = time.monotonic() + timeout
+    # The operator publishes this small JSON file atomically after the rail has submitted.
+    bundle = wait_until(deadline, lambda: json.loads(submission.read_text()) if submission.is_file() else None)
+    queue = bundle['studioRun']
+    job_id = hash64(queue['fp_job_id'])
+    outbox = Path(bundle['outbox'])
+    require(outbox.is_absolute() and outbox.is_dir(), 'Studio gateway outbox is unavailable')
+    job = json.loads((outbox / f'fp-job-{job_id[:16]}.json').read_text())
+    require(job.get('schema') == 'misaka.palw.fp-v3-gateway-artifact.v1'
+            and job.get('executor_bond') == executor_bond == (job.get('receipt') or {}).get('executor_bond'),
+            'gateway job does not name the owned Studio executor')
+    rail = bundle['rail']
+    chain = registration['chain']
+    expected = expectation_from_studio(queue, job, rail, chain)
+    scan_from = hash64(bundle['scanFromBlock'])
+    rpc = clients[unsigned(config['studio']['producerPeer'])]
+    data = output / 'studio'
+    data.mkdir(mode=0o700)
+    write_new(data / 'studio-run.json', queue)
+    write_new(data / 'studio-evidence.json', dict(studioRun=queue, studioJob=job, rail=rail, chain=chain))
+    write_new(data / 'executor-retention.json', retain_studio_claim(rpc, rail, expected['claim'], outbox))
+    until = partial(until_claim_observation, step=step, timeout=timeout, deadline=deadline, check_alive=None)
+    original = until('Studio queue claim admission', partial(studio_admission, rpc, expected, scan_from, data))
+    write_new(data / 'original.json', original)
+    return observe_admitted_studio(config, registration, clients, until, [logs], data, original, executor_bond)
+
+
 def studio_lifecycle(config, output, registration, clients, step, logs, executor_bond):
     """Run one fresh Studio request and retain native observations as it lands."""
     studio = config['studio']
@@ -1129,8 +1159,12 @@ def main():
     parser.add_argument('--resume-studio', type=Path, help='stopped run with registration complete and no Studio claim sent')
     parser.add_argument('--resume-settlement', type=Path, help='verify a completed receipt and follow its native payout and settlement')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
+    parser.add_argument('--studio-queue-submission', type=Path,
+                        help='join Studio main using a JSON file with studioRun, outbox, rail and scanFromBlock')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
+    if args.studio_queue_submission is not None and ('studio' not in config or args.resume_claim or args.resume_settlement):
+        parser.error('--studio-queue-submission requires a Studio run before claim admission')
     continuation = None
     if 'studio' in config:
         def continuation(registration, clients, step, logs, executor_bond):
@@ -1138,6 +1172,9 @@ def main():
                 return resume_receipt_settlement(config, args.output, args.resume_settlement, registration, clients, step)
             if args.resume_claim is not None:
                 return resume_admitted_studio(config, args.output, args.resume_claim, registration, clients, step, logs, executor_bond)
+            if args.studio_queue_submission is not None:
+                return follow_studio_queue_submission(config, args.output, registration, clients, step, logs, executor_bond,
+                                                      args.studio_queue_submission)
             return studio_lifecycle(config, args.output, registration, clients, step, logs, executor_bond)
     print(json.dumps(run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
                          resume_tokenizer=args.resume_tokenizer,

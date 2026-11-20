@@ -21,3 +21,16 @@ misaka-palw-fp-rail --artifact ./fp-job-5853ff54e729b614 --print-claim
 隔離 VM の再起動後、3ピアで同じ bond・金額・sequence の割当を再読した。3ピアに共通して残っていた直後の子ブロックを通常の `submitBlock` で各ピアに再提出すると、3ピアすべてで選択鎖に戻り、以降のブロック生成も再開した。[再起動後の子ブロックの照会結果](retained-child-after-restart.json)
 
 見積もり RPC は、同じ epoch の bond 指定時に、受付側と共通の関数でクラスの残り配分枠を照合する。テストで空の初期配分、必要量ちょうど、枠不足、epoch 切替を確認した。Rust の bond budget 91件、TB1 3件、MOE2 5件、Python の protected drill 62件、Studio main の mining queue 5件が通った。ノード側は `cargo check --locked -p kaspa-consensus --lib` も通った。
+
+### Studio main の提出済みジョブから再開する
+
+隔離3ピアを起動する `scripts/drills/protected_private_registration_run.py` に `--studio-queue-submission /absolute/path/to/submission.json` を渡すと、外部で起動した Studio main、gateway、rail の結果を受け取れる。通常の `--config` と `--output` に対応し、登録済みの隔離チェーンなら `--resume-studio` も使える。ジョブを送信した側で、次の4フィールドを持つ JSON を rail の提出後に rename で配置する。
+
+| フィールド | 入力 |
+| --- | --- |
+| `studioRun` | Studio の `GET /api/v1/network/mining-queue` の `jobs` 配列にある対象行（`status=committed`） |
+| `outbox` | その gateway の `fp-job-*.json` と rail の `retention/` を含む絶対ディレクトリ |
+| `rail` | 同じ job で実行した `misaka-palw-fp-rail --submit` の JSON 出力 |
+| `scanFromBlock` | rail が取引を提出する直前の、同じ隔離チェーンの sink hash |
+
+drill は queue の job ID から gateway のファイルを開き、claim、executor bond、output root、execution root、network domain と rail の署名済み取引 ID を照合する。受付ブロック以降は従来と同じ Panel・Final・Gate C・受賞ブロックの観測を使用する。既に受付記録のある実行には `--resume-claim` を使用する。
