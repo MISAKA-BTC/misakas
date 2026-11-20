@@ -1,0 +1,70 @@
+{
+    "version": 1,
+    "source": "getPalwClaimDetail after restarting three isolated peers from their own existing databases",
+    "nodeSha256": "ce21fe80097a7d1e286a0ac3f2db3930e0e9f9b240af3b69c63b99999e7768ba",
+    "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+    "origin": {
+        "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+        "executionRoot": "37674e698d7e11a48d2026d6e6c466d482d3920e4677d86a360f35fe6b5771c2963a0e31ae91a242be0a1572ab17100973d68d9a867c843be12174abe734718c",
+        "original": "1effee96e1e68c51d203e8554be865e64f75a20e02fab4c1657d8d3851ee2e1426f98794f9a880f40a6d4de09cbd2cccb9074f060a778db01a9143e1b25936fc",
+        "carrierTransaction": "3a989cfc95014170d270399eaee1e78491d6f51f302968a1d359f10c76fa512c0d2e90fd43b0c890a23c3790c526a09a649f92ecadfa6afd02c74928a54f08de",
+        "carrierBlock": "62182f1b9497a8f318b1d02f51ad4bfde94e98cf65c188789b0f3dac84d007da549a42833f301791f4a06ede33339b3fe2a01809a452ddf62d27941d66303ebd",
+        "acceptingBlock": "c643963c5cced32cb5d904afef8178308851991f2f28d05e2edb4da1ccade8b2d98154310a122c825dfa7cd05eccda59e3d653b159c68c5955326380cbb93873",
+        "acceptedTxOrdinal": 1,
+        "eventOrdinal": 0,
+        "acceptedDaa": 318,
+        "acceptedBlueScore": 638
+    },
+    "approval": {
+        "acceptedDaa": 325,
+        "acceptedTxOrdinal": 1,
+        "acceptingBlock": "db95051c4cc6c813c6a3bb82a0f0748fa5c863d01eca7367b46c414d4bd414ea202da0a8da3d92fe269a0b1e07a57c4ec703ef8299724ccfea64ce519cecccef",
+        "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7",
+        "carrierBlock": "00d7bd3357bb8cd549deae45e18676e1aca727f1faad236d4deb96fbd9896bdbd1a1c09d6063044921d79e7b760393615ad9e989797f2451171db3958e8dc115",
+        "carrierTransaction": "50fbc44848031017a608482abb42a12fae925cd7c8bb3eb074b6fafecfadd68ec402fe279b98ea19648c45501c83845e4608de81f3f9b49a299e2407e43498bc"
+    },
+    "peers": [
+        {
+            "peer": 0,
+            "tip": "3b64888de98a6d8d9676b24e61ad91fa45fd8ab4200b7991aaf12c15b415e2c0f5392e0116c3f92158894c37c3906e82602aae2351d7ee7a0c0cb99d35a9a195",
+            "daa": 374,
+            "originMatched": true,
+            "approvalMatched": true,
+            "phase": "receipt_licensed",
+            "securityCertification": "pending",
+            "quanta": 21,
+            "quantaSpent": 0,
+            "openDaSessions": 0,
+            "liveReservations": 7,
+            "reservationsHold": true
+        },
+        {
+            "peer": 1,
+            "tip": "3b64888de98a6d8d9676b24e61ad91fa45fd8ab4200b7991aaf12c15b415e2c0f5392e0116c3f92158894c37c3906e82602aae2351d7ee7a0c0cb99d35a9a195",
+            "daa": 374,
+            "originMatched": true,
+            "approvalMatched": true,
+            "phase": "receipt_licensed",
+            "securityCertification": "pending",
+            "quanta": 21,
+            "quantaSpent": 0,
+            "openDaSessions": 0,
+            "liveReservations": 7,
+            "reservationsHold": true
+        },
+        {
+            "peer": 2,
+            "tip": "3b64888de98a6d8d9676b24e61ad91fa45fd8ab4200b7991aaf12c15b415e2c0f5392e0116c3f92158894c37c3906e82602aae2351d7ee7a0c0cb99d35a9a195",
+            "daa": 374,
+            "originMatched": true,
+            "approvalMatched": true,
+            "phase": "receipt_licensed",
+            "securityCertification": "pending",
+            "quanta": 21,
+            "quantaSpent": 0,
+            "openDaSessions": 0,
+            "liveReservations": 7,
+            "reservationsHold": true
+        }
+    ]
+}
