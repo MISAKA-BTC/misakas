@@ -31,6 +31,17 @@ DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピア�
 
 異議申立期間中の DAA 4859 で隔離VMを正常停止し、検証用ディスクの上限を42 GiBから54 GiBに拡張した。同じノードバイナリと3つのデータベースで再開し、DAA 4864 に全ピアが元の受付ブロック、Panel 承認と未消費の権利を返した。[再起動後の3ピアの照会](notice-window-restart.json)
 
+DAA 5213 の状態を同じブロックに固定して再読した。3ピアとも7,147,447バイトが一致し、Panel 承認済みの claim は `receipt_licensed`、Gate C は `pending` だった。抽選の照合器はこの状態を `claim is not Final` で終了した。当落はまだ確定していない。[3ピアの固定ブロックと照会結果](before-final-capture.json)・[固定した状態（Borsh、zstd）](before-final-state.borsh.zst)
+
+この検査はリポジトリのルートから次のコマンドで再現できる。照合器は当該 claim の Final、Gate C の行、異議申立中の時計停止を照合し、成熟後に各 ticket と target を計算する。Court への申立てがない claim にも使える。
+
+```sh
+d=docs/evidence/palw/studio-main-claim-2026-11-20
+state=$(mktemp)
+zstd -dc "$d/before-final-state.borsh.zst" > "$state"
+cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --draw "$d/before-final-capture.json" "$state"
+```
+
 ### Studio main の提出済みジョブから再開する
 
 隔離3ピアを起動する `scripts/drills/protected_private_registration_run.py` に `--studio-queue-submission /absolute/path/to/submission.json` を渡すと、外部で起動した Studio main、gateway、rail の結果を受け取れる。通常の `--config` と `--output` に対応し、登録済みの隔離チェーンなら `--resume-studio` も使える。ジョブを送信した側で、次の4フィールドを持つ JSON を rail の提出後に rename で配置する。

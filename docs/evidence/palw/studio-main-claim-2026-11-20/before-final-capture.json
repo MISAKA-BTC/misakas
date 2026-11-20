@@ -1,0 +1,124 @@
+{
+  "expected": {
+    "version": 1,
+    "genesisHash": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+    "consensusParamsId": "ab561ca8997430974c993004330a51cecc662f774b2b32acf74d989626c3112b",
+    "networkDomain": "e8721ed44c1f304d4b0f701e223872c758ebb174ac6766e1da1c3552f9fc627cdd77a6d7b5d9daccbb2beb59f4e2a67d71ee224312b9b626d7154e9e9775f9c6",
+    "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "transactionId": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+    "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda"
+  },
+  "baseClass": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+  "maturityDaa": 40,
+  "pinned": {
+    "pinned": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+    "root": "34bc71506ed97b1bf6455d3e790d3c2dd58b5352736f3d437e67c64d36abb46e27b3c0a31b73c997aa2a8ed06aee30aaf227182a0fd9c704d8eff18443db05b5",
+    "header": {
+      "acceptedIdMerkleRoot": "22b08811c9d7edd7e13e6be254deda2886db94aa5566abd209f6f43f3890d62a183b6ba0484b44c300e32cdfbbbb07bc7bc3ce187aa0d2c9b07457b1437db4e6",
+      "bits": 545259519,
+      "blueScore": 10465,
+      "blueWork": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004b02897",
+      "daaScore": 5213,
+      "evmCommitmentRoot": "285f55915a39c57940615cf0d52cb23fc324d9346f64b913f8bdb72e8e53bbd07b065f314882edf769bee7d6c3ae8e3abc7b1f8c80e2fe5d1ec34197682291ce",
+      "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+      "hash": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "hashMerkleRoot": "0d26ce85355a1ecc1cc7bc2ea614115fda46d4be985718b45f643e9b49bba1231f8bbb222dae9ecab1e76787f1dc51ab605c52483bc60ff09c1e727aad2a71b4",
+      "nonce": 22100128,
+      "overlayCommitmentRoot": "6ba5180322643be398d13497d0625bbb3724b943e4c52c006a93756027f1e995f6877a3aa9ba1edbf092227c89d079dabb063b2d6020004b6e7af551a41f7e1d",
+      "palwCommitment": [],
+      "palwStateRoot": "34bc71506ed97b1bf6455d3e790d3c2dd58b5352736f3d437e67c64d36abb46e27b3c0a31b73c997aa2a8ed06aee30aaf227182a0fd9c704d8eff18443db05b5",
+      "parentsByLevel": [
+        [
+          "b19dd3644ef7e7d236605c80901838a4435603640257f8a60f2e68cd9a22fe2a271fb41c7d2697bdf72d6674c1eb8a7b166d5c254b76a6e273f174122ad66978"
+        ]
+      ],
+      "powAlgoId": 8,
+      "pruningPoint": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+      "timestamp": 1789558993309,
+      "utxoCommitment": "650a5313ea02fbfab3a9c65435f4591d837bcef709f3f153b0e3a26c92c4d549e54e7445f72ee911a5003b9eef773c89a87160b642d2770bfec03c507b57e5ff",
+      "version": 2
+    },
+    "parent": {
+      "acceptedIdMerkleRoot": "7729e078e97e93f3c2a32da2e1dbfd696b11d38ffac6885f746bea3e1a21353bead1785a294d54942161b069f6de012ac0f91ee0489019e1ed1aab317bf179c5",
+      "bits": 545259519,
+      "blueScore": 10464,
+      "blueWork": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004b02896",
+      "daaScore": 5213,
+      "evmCommitmentRoot": "d965e32122edd2bd97fb1c1987b39618eb77e29b80cc03c334a348988b2d6688bee617b336b0ffacbda057d7a2a1f2a6aca6d4eb3c08c936dfbeffafd14af595",
+      "evmPayloadHash": "877fcd175efdb52807879d7fca7f28b3257f5afdc596c39557d1fe3d6c30f85c9d3da6c0a8bb8b96dfbbd2c136408414ad59cf473c1646042499566e02d676b1",
+      "hash": "b19dd3644ef7e7d236605c80901838a4435603640257f8a60f2e68cd9a22fe2a271fb41c7d2697bdf72d6674c1eb8a7b166d5c254b76a6e273f174122ad66978",
+      "hashMerkleRoot": "5c88eabf1a0ce8168b05a0970dbb46055bd333befc95e29b2efa4ab3b0a72801fdf4c7d87717d321ca8f270be5962cd8e97e5c1f30407550b46aafc72e35c8eb",
+      "nonce": 5247801,
+      "overlayCommitmentRoot": "6ba5180322643be398d13497d0625bbb3724b943e4c52c006a93756027f1e995f6877a3aa9ba1edbf092227c89d079dabb063b2d6020004b6e7af551a41f7e1d",
+      "palwCommitment": [],
+      "palwStateRoot": "7d756806ab897ab6971df284736aa2e79db3dff8d5ba18d69a3f1bca833a514249051a8284060bf47f3c0e945733a49a32df519e1679e0b39cfa3eab4da5abd7",
+      "parentsByLevel": [
+        [
+          "ce3cd80f3fda7d93132fd8ace538629fa509b6c966ed367cae13dd50d5a1ae8a4d14ce86ad0277425aa88373b8cb0fa61e9f9f8e18d3ef48ecf302f94cf3a725"
+        ]
+      ],
+      "powAlgoId": 8,
+      "pruningPoint": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+      "timestamp": 1789558853184,
+      "utxoCommitment": "650a5313ea02fbfab3a9c65435f4591d837bcef709f3f153b0e3a26c92c4d549e54e7445f72ee911a5003b9eef773c89a87160b642d2770bfec03c507b57e5ff",
+      "version": 2
+    },
+    "opening": [],
+    "bytes": 7147447,
+    "sha256": "ea022ad990b1f0adc97c2f03306296bff258c61ab538f22a20c7dc8984d3891c",
+    "attempts": []
+  },
+  "readbackPeers": [
+    {
+      "peer": 54703,
+      "observedTip": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "daa": 5214,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "pinnedBlock": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "stateRoot": "34bc71506ed97b1bf6455d3e790d3c2dd58b5352736f3d437e67c64d36abb46e27b3c0a31b73c997aa2a8ed06aee30aaf227182a0fd9c704d8eff18443db05b5",
+      "carriageSha256": "ea022ad990b1f0adc97c2f03306296bff258c61ab538f22a20c7dc8984d3891c",
+      "attempts": []
+    },
+    {
+      "peer": 54713,
+      "observedTip": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "daa": 5214,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "pinnedBlock": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "stateRoot": "34bc71506ed97b1bf6455d3e790d3c2dd58b5352736f3d437e67c64d36abb46e27b3c0a31b73c997aa2a8ed06aee30aaf227182a0fd9c704d8eff18443db05b5",
+      "carriageSha256": "ea022ad990b1f0adc97c2f03306296bff258c61ab538f22a20c7dc8984d3891c",
+      "attempts": []
+    },
+    {
+      "peer": 54723,
+      "observedTip": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "daa": 5214,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "pinnedBlock": "e0aa4c100b9c0a4e6b19cd459816684cdb35bcfacb6529ff35e18b29e8ae35ca4d2b71678720dee05b672930ca85da56a651fc586df4c0f172033f40f7ea16df",
+      "stateRoot": "34bc71506ed97b1bf6455d3e790d3c2dd58b5352736f3d437e67c64d36abb46e27b3c0a31b73c997aa2a8ed06aee30aaf227182a0fd9c704d8eff18443db05b5",
+      "carriageSha256": "ea022ad990b1f0adc97c2f03306296bff258c61ab538f22a20c7dc8984d3891c",
+      "attempts": []
+    }
+  ]
+}
