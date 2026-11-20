@@ -1,0 +1,51 @@
+kaspad native Court withholding
+running 1 test
+test palw_panel::held_court_e2e::step6_a_forger_that_withholds_the_chunk_is_voided_and_the_seat_made_whole ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1077 filtered out; finished in 0.37s
+
+TIR public answers and first-tile generated IDs
+running 2 tests
+test palw_panel::tir_court_e2e::an_ir_claims_trace_events_are_answered_in_the_ir_form ... ok
+test palw_panel::tir_court_e2e::protected_filer_reads_the_generated_ids_from_the_original_trace ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1147 filtered out; finished in 47.28s
+
+consensus receipt and restore
+running 28 tests
+test palw_fp_admission_v3::tests::an_honest_spend_admits_and_returns_its_id ... ok
+test palw_fp_admission_v3::tests::item_1_claim_existence_source_and_phase ... ok
+test palw_fp_admission_v3::tests::item_2_quantum_range_and_double_spend ... ok
+test palw_fp_admission_v3::tests::item_3_beacon_binding ... ok
+test palw_fp_admission_v3::tests::item_4_use_window_edges ... ok
+test palw_fp_admission_v3::tests::item_5_ticket_against_the_receipt_target ... ok
+test palw_fp_admission_v3::tests::gatec_an_accusation_pending_after_certification_suspends_receipts ... ok
+test palw_fp_admission_v3::tests::items_6_7_8_producer_bond_key_and_class ... ok
+test palw_fp_admission_v3::tests::r6_receipt_pause_row_is_dropped_on_conviction_and_a_malformed_row_refuses ... ok
+test palw_fp_admission_v3::tests::r6_receipt_pause_row_follows_a_reorg ... ok
+test palw_fp_admission_v3::tests::r6_receipt_pause_row_opens_on_accusation_and_dismissal_resumes_the_remaining_window ... ok
+test palw_fp_admission_v3::tests::rfc18_a_an_honest_claim_is_certified_and_receipted_before_it_retires ... ok
+test palw_fp_admission_v3::tests::rfc18_a_material_is_fetchable_at_the_latest_certification_point ... ok
+test palw_fp_admission_v3::tests::stage_d_a_bond_a_class_and_a_claim_are_proven_against_the_committed_root ... ok
+test palw_fp_admission_v3::tests::rfc18_a_receipts_wait_for_security_certification_and_count_from_it ... ok
+test palw_fp_admission_v3::tests::the_composed_entry_point_orders_its_refusals ... ok
+test palw_fp_admission_v3::tests::v4_an_honest_redemption_by_another_party_admits_and_returns_its_id ... ok
+test palw_fp_admission_v3::tests::v4_items_one_to_five_and_eight_are_the_v3_ones ... ok
+test palw_fp_admission_v3::tests::v4_the_authorization_expires_on_its_own_daa_and_the_boundary_is_inclusive ... ok
+test palw_fp_admission_v3::tests::v4_spend_by_another_party_folds_identically_to_v3_once_and_reverts ... ok
+test palw_fp_admission_v3::tests::v4_the_builder_must_be_a_standing_bond_holding_the_key_that_signed ... ok
+test palw_fp_admission_v3::tests::v4_the_composed_entry_point_orders_stateless_then_signatures_then_state ... ok
+test palw_fp_admission_v3::tests::v4_the_executor_must_be_the_claims_executor_standing_and_holding_its_key ... ok
+test palw_state_v2::palw_claim_local_execution_cohort_census_v15::interval_tests::rfc23s2_cohort_interval_cold_boundary_death_and_frame_collection ... ok
+test palw_state_v2::tests::claim_local_v1::rfc23_native_cohort_baseline_real_genesis_cold_and_undo_not_first_ordinary_fold ... ok
+test palw_native_resource_v1::restore::tests::direct_restore_success_keeps_native_owner_and_default_off_state_parity ... ok
+test palw_state_v2::tests::claim_local_v1::rfc23_native_cohort_current_completeness_preserves_actual_red_acceptor_v25 ... ok
+test palw_state_v2::tests::claim_local_v1::rfc23_native_cohort_historical_scope_authenticates_all_current_root_members_v25 ... ok
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 6069 filtered out; finished in 0.06s
+
+court reorg and restart
+running 4 tests
+test palw_batch_court_v1::tests::out_of_order_and_restart_have_same_verified_checkpoint ... ok
+test palw_evidence_court_v1::tests::a_reorg_restores_the_court_exactly_and_two_branches_do_not_share_a_verdict ... ok
+test palw_fp_admission_v3::tests::item_2_quantum_range_and_double_spend ... ok
+test palw_fp_admission_v3::tests::r6_receipt_pause_row_follows_a_reorg ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6092 filtered out; finished in 0.02s
+

@@ -67,3 +67,7 @@ zstd -dc "$evidence/draw-state.borsh.zst" > "$state"
 cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- \
   "$evidence/draw-and-court.json" "$state" "$evidence/court-answer.bin"
 ```
+
+## 資料遮断と再起動の回帰試験
+
+ネイティブ Court のテストで、署名者が要求された chunk を最後まで提供しなかった場合は claim が無効になり、異議を出した seat の預託が回復した。旧経路で再起動すると実行 cohort の内部インデックスの初期状態が通常のブロック適用時と食い違っていた。非稼働期間の復元を直し、資料遮断ケースを再実行して成功した。別途、実行記録からの TIR 回答、二重消費の拒否、異議中の受賞権利の停止、reorg 時の Court 復元を検査した。これらはローカルのテストで、上記の Studio 3ピアでは実際に取得した署名済みの公開回答と保存済み DB を検証した。[実行したケースと結果](native-regressions.log)
