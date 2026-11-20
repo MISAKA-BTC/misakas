@@ -51,5 +51,17 @@
       "matching_all_tir_roots_keep_budgeted_ids_and_require_public_bundle_completion",
       "bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change"
     ]
+  },
+  "moe2SettlementOrder": {
+    "nativeTestFilter": "moe2",
+    "passed": 5,
+    "observedOnThreePeers": {
+      "daa": 7614,
+      "parent": "ffe981db1cc2ce7644db10cfa907a31e8879b334933440ee35a65ee9bba52eb1d98ea0d3f136c09d4c21b1bf4ee01890e516ba166de7c45394b1573aed8f6023",
+      "parentBlueScore": 15298,
+      "child": "f36490f41cb7a6869f300893914abd85ecaf424c1a6739c5c655f812558b5af707851a1cc2e579dfabe84088c95ae5e2d4bdab07e237daa014147e003bc0f3f6",
+      "childBlueScore": 15299
+    },
+    "regression": "A later selected block can settle at a lower ordinal at the same DAA. A sibling at the same blue score cannot advance settlement."
   }
 }

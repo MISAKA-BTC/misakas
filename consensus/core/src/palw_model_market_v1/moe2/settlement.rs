@@ -4,12 +4,25 @@
 use super::{Moe2ModelAllocation, Moe2QuantityLimits, Moe2QuoteRefusal, Moe2RegisteredModel, Moe2RewardAllocation, Moe2WorkerPlan};
 use crate::Hash64;
 use crate::palw_model_market_v1::PalwModelMarketV1;
+use crate::palw_state_v2::PalwBlockContextV2;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2Position {
-    pub daa: u64,
+    pub point: PalwBlockContextV2,
     pub ordinal: u32,
+}
+
+impl Moe2Position {
+    /// DAA can stay equal across successive selected blocks. Only the native
+    /// blue score advances strictly. Ordinals order settlements within one block.
+    fn follows(self, prior: Self) -> bool {
+        if self.point.block == prior.point.block {
+            self.point == prior.point && self.ordinal > prior.ordinal
+        } else {
+            self.point.blue_score > prior.point.blue_score && self.point.daa_score >= prior.point.daa_score
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,10 +165,10 @@ impl Moe2SettlementBook {
             return Err(AlreadySettled);
         }
         let terms = *self.admitted.get(&claim).ok_or(UnknownClaimContext)?;
-        if self.last_settlement.is_some_and(|last| position <= last) {
+        if self.last_settlement.is_some_and(|last| !position.follows(last)) {
             return Err(PositionOutOfOrder);
         }
-        if !(terms.valid_from..=terms.deadline).contains(&position.daa) {
+        if !(terms.valid_from..=terms.deadline).contains(&position.point.daa_score) {
             return Err(OutsideWindow);
         }
         let model = self.models.get_mut(&terms.model).ok_or(UnknownRegistration)?;
@@ -224,7 +237,8 @@ mod tests {
         parent.models.insert(model.model, model);
         parent.admit(terms).unwrap();
         let mut child = parent.clone();
-        let at = Moe2Position { daa: 3, ordinal: 1 };
+        let block = PalwBlockContextV2 { block: h(20), blue_score: 10, daa_score: 3, subsidy: 1000 };
+        let at = Moe2Position { point: block, ordinal: 1 };
         assert_eq!(child.settle(terms.claim, at, h(6), 1000), Err(Moe2SettlementError::UnknownClaimContext));
         let high_min = Moe2SettlementTerms { claim: h(11), limits: Moe2QuantityLimits { min_out: 2308, ..LIMITS }, ..terms };
         child.admit(high_min).unwrap();
@@ -243,9 +257,19 @@ mod tests {
         child.admit(second).unwrap();
         assert_eq!(child.settle(second.claim, at, h(5), 1000), Err(Moe2SettlementError::PositionOutOfOrder));
         assert_eq!(
-            child.settle(second.claim, Moe2Position { daa: 5, ordinal: 0 }, h(5), 1000),
+            child.settle(
+                second.claim,
+                Moe2Position { point: PalwBlockContextV2 { block: h(21), blue_score: 11, daa_score: 5, ..block }, ordinal: 0 },
+                h(5),
+                1000
+            ),
             Err(Moe2SettlementError::OutsideWindow)
         );
+        let successor = Moe2Position { point: PalwBlockContextV2 { block: h(22), blue_score: 11, ..block }, ordinal: 0 };
+        let sibling = Moe2Position { point: PalwBlockContextV2 { block: h(23), ..block }, ordinal: 2 };
+        assert_eq!(child.settle(second.claim, sibling, h(5), 1000), Err(Moe2SettlementError::PositionOutOfOrder));
+        child.settle(second.claim, successor, h(5), 1000).unwrap();
+        assert_eq!(child.receipt(&second.claim).unwrap().position, successor);
         assert!(parent.entitlement(&h(3)).is_none());
         let dust = parent.settle(terms.claim, at, h(5), 3).unwrap();
         assert_eq!((dust.miner, dust.panel_pool), (3, 0));
