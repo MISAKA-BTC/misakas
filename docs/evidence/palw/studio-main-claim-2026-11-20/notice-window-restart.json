@@ -1,0 +1,59 @@
+{
+  "lastCompletedDaa": 4859,
+  "lastCompletedSink": "e02f94880d5c27a8a4242453b0db65661c965a98284aec91c4dca55bd736d9d46be06ddede98a484f317a157c7eae6e15d3b4368dc41326adb69dfbce6aba787",
+  "panelApproval": {
+    "acceptedDaa": 4444,
+    "acceptedTxOrdinal": 1,
+    "acceptingBlock": "179bf9ef9f24c776ac3922506ad75bed63c8fe94d432b44fbb14b5f5245fe4318bf5a3e91aec41b816709643f6f039fc78192cd248a5ba1d979e557e7d97b1bb",
+    "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+    "carrierBlock": "3e663b7640128e11735f8caebc64b0eccd63a46766e3e8ec44beeb7d796446fa6f1144628fc68fdd294aa0c319cf0ac80ec60c71f1dc081804614c6b7ef952a1",
+    "carrierTransaction": "ef9eceefba63c077b2f90fcf5030f0362cd85277d6ced840b95d7310bdee45765657e6fbaa5a13ea65e070a6dd2f862df8d747e6347ce0334130e84714132390"
+  },
+  "peers": [
+    {
+      "port": 54703,
+      "found": true,
+      "tipDaa": 4864,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    },
+    {
+      "port": 54713,
+      "found": true,
+      "tipDaa": 4864,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    },
+    {
+      "port": 54723,
+      "found": true,
+      "tipDaa": 4864,
+      "phase": "receipt_licensed",
+      "certification": "pending",
+      "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "carrier": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+      "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+      "acceptedDaa": 4429,
+      "replayApproval": true,
+      "publicRefutation": false,
+      "spent": 0
+    }
+  ]
+}

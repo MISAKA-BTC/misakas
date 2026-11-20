@@ -29,6 +29,8 @@ misaka-palw-fp-rail --artifact ./fp-job-5853ff54e729b614 --print-claim
 
 DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピアの選択先が分かれた。両方を通常のブロック検証に再提出した後、3ピアは同じ先端に収束し、元の claim の受付・Panel 承認を読み戻せた。[分岐前後の3ピアと6件の再検証応答](sibling-resolution.json)
 
+異議申立期間中の DAA 4859 で隔離VMを正常停止し、検証用ディスクの上限を42 GiBから54 GiBに拡張した。同じノードバイナリと3つのデータベースで再開し、DAA 4864 に全ピアが元の受付ブロック、Panel 承認と未消費の権利を返した。[再起動後の3ピアの照会](notice-window-restart.json)
+
 ### Studio main の提出済みジョブから再開する
 
 隔離3ピアを起動する `scripts/drills/protected_private_registration_run.py` に `--studio-queue-submission /absolute/path/to/submission.json` を渡すと、外部で起動した Studio main、gateway、rail の結果を受け取れる。通常の `--config` と `--output` に対応し、登録済みの隔離チェーンなら `--resume-studio` も使える。ジョブを送信した側で、次の4フィールドを持つ JSON を rail の提出後に rename で配置する。
