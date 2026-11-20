@@ -49,3 +49,24 @@ test palw_fp_admission_v3::tests::item_2_quantum_range_and_double_spend ... ok
 test palw_fp_admission_v3::tests::r6_receipt_pause_row_follows_a_reorg ... ok
 test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6092 filtered out; finished in 0.02s
 
+Court after restart, material disclosure and false accusation
+running 4 tests
+test palw_panel::held_court_e2e::a_pooled_demand_is_not_resent_after_a_restart_and_a_failing_build_backs_off ... ok
+test palw_panel::held_court_e2e::step6_a_restarted_seats_node_resumes_its_pursuit_from_the_chain ... ok
+test palw_panel::tir_court_e2e::a_withholding_liar_is_demanded_on_chain_and_convicted_from_its_disclosure ... ok
+test palw_panel::tir_court_e2e::an_honest_ir_claim_goes_final_and_a_false_accusation_is_defeated ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1074 filtered out; finished in 46.44s
+
+Inactive native MOE2 and TB1 components
+running 8 tests
+test palw_model_market_v1::moe2::tests::dust_bounds_and_rounding ... ok
+test palw_model_market_v1::moe2::tests::worker_plan_applies_to_residual_of_additional_only ... ok
+test palw_model_market_v1::moe2::tests::canonical_purchase_lp_and_residual ... ok
+test palw_tb1::tests::canonical_521_bit_field_and_wide_product ... ok
+test palw_tb1::tests::seven_slots_require_five_distinct_consistent_public_points ... ok
+test palw_tb1::tests::whole_qualified_set_is_bound_once_in_frozen_order ... ok
+test palw_model_market_v1::moe2::settlement::tests::settlement_is_atomic_across_dust_order_retries_and_alternate_forks ... ok
+test palw_state_v2::tests::model_market_virtual::moe2_opens_only_new_additional_registrations_in_the_native_delta ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 6094 filtered out; finished in 0.01s
