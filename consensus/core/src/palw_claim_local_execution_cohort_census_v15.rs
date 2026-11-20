@@ -351,16 +351,22 @@ fn add_candidate(census: &mut ExecutionCohortCensusV15, id: Hash64, c: &PalwClai
         }
     }
 }
+// Only an empty origin can establish complete coverage before the first active
+// block. A restored historical parent must acquire its census at the boundary
+// even if its last claim has already retired.
+fn inactive_census_v15(s: &PalwChainStateV2) -> ExecutionCohortCensusV15 {
+    if s.last_point.is_none() && s.claims.is_empty() && s.kernel_route.is_none() {
+        ExecutionCohortCensusV15::genesis_v15()
+    } else {
+        ExecutionCohortCensusV15::default()
+    }
+}
+
 /// Native global boundary ONLY. Two source-only traversals count before ONE
 /// canonical row/member and observation/index nodes allocate; no world retained.
 pub(super) fn rebuild_v15(s: &mut PalwChainStateV2, p: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
     if !s.last_point.is_some_and(|point| p.claim_local_settlement_active_at(point.daa_score)) {
-        s.execution_cohort_census_v15 = if s.last_point.is_none() && s.claims.is_empty() {
-            ExecutionCohortCensusV15::genesis_v15()
-        } else {
-            ExecutionCohortCensusV15::default()
-        };
-        s.execution_cohort_census_v15.compact_complete = false;
+        s.execution_cohort_census_v15 = inactive_census_v15(s);
         return Ok(());
     }
 
@@ -643,9 +649,8 @@ pub(super) fn observe_fold_v15(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     if !b.params.claim_local_settlement_active_at(ctx.daa_score) {
-        // No prefence index allocation. A changed native source means this
-        // cache cannot later pretend its genesis empty baseline stayed complete.
-        if b.entries.iter().any(|e|matches!(e,PalwDeltaEntryV2::Claim{key,old,new}if old.as_ref().map(|c|Key::of(*key,c))!=new.as_ref().map(|c|Key::of(*key,c)))){b.state.execution_cohort_census_v15.ready=false;}
+        // This accepted block is a historical point on every subsequent read.
+        b.state.execution_cohort_census_v15 = ExecutionCohortCensusV15::default();
         return Ok(());
     }
 
@@ -801,7 +806,7 @@ pub(super) fn replay_fold_v15(
     params: &PalwStateParamsV2,
 ) -> Result<(), PalwStateV2Error> {
     if !params.claim_local_settlement_active_at(delta.point.daa_score) {
-        if delta.entries.iter().any(|e|matches!(e,PalwDeltaEntryV2::Claim{key,old,new}if old.as_ref().map(|c|Key::of(*key,c))!=new.as_ref().map(|c|Key::of(*key,c)))){s.execution_cohort_census_v15.ready=false;}
+        s.execution_cohort_census_v15 = inactive_census_v15(s);
         return Ok(());
     }
     s.execution_cohort_census_v15.tracking_active = true;
@@ -1111,12 +1116,7 @@ pub(super) fn settle_replay_boundary_v15(state: &mut PalwChainStateV2, params: &
         return Ok(());
     }
     if !state.last_point.is_some_and(|point| params.claim_local_settlement_active_at(point.daa_score)) {
-        state.execution_cohort_census_v15 = if state.last_point.is_none() && state.claims.is_empty() {
-            ExecutionCohortCensusV15::genesis_v15()
-        } else {
-            ExecutionCohortCensusV15::default()
-        };
-        state.execution_cohort_census_v15.compact_complete = false;
+        state.execution_cohort_census_v15 = inactive_census_v15(state);
         return Ok(());
     }
     let native_requests = crate::palw_native_resource_v1::native_value_requests_v1(state).map_err(PalwStateV2Error::NativeResource)?;
