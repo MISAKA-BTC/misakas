@@ -328,6 +328,17 @@ impl Rig {
         evm: EvmTemplateData,
         inject: Vec<Transaction>,
     ) -> MutableBlock {
+        self.attempt_with_miner(card, txs, evm, inject, MinerData::new(card_payout_spk(card), vec![]))
+    }
+
+    fn attempt_with_miner(
+        &mut self,
+        card: usize,
+        txs: Vec<Transaction>,
+        evm: EvmTemplateData,
+        inject: Vec<Transaction>,
+        miner: MinerData,
+    ) -> MutableBlock {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
             PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -337,7 +348,7 @@ impl Rig {
         let mut t = self
             .api()
             .build_block_template_with_evm(
-                MinerData::new(card_payout_spk(card), vec![]),
+                miner,
                 Box::new(OnetimeTxSelector::new(txs)),
                 TemplateBuildMode::Standard,
                 evm,

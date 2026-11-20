@@ -16,6 +16,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod publication;
+
 const MAGIC: &[u8; 8] = b"TB1EXP01";
 const HEADER: usize = 8 + 64 + 4;
 const BODY: usize = 4 * 64 + 2 * 8; // accepting block, roots, signing message digest, original DAA window
@@ -121,7 +123,7 @@ enum AnchorState {
 
 // Snapshot generation names the selected sink. Missing native data gives no
 // verdict; it cannot establish either stability or a deep reorg.
-fn anchor_state(native: &dyn ConsensusApi, anchor: Hash64) -> io::Result<(AnchorState, u64)> {
+fn anchor_state(native: &dyn ConsensusApi, anchor: Hash64) -> io::Result<(AnchorState, u64, Hash64)> {
     let snapshot = native
         .get_native_settlement_snapshot()
         .map_err(Error::other)?
@@ -154,7 +156,7 @@ fn anchor_state(native: &dyn ConsensusApi, anchor: Hash64) -> io::Result<(Anchor
     if native.get_native_settlement_snapshot().map_err(Error::other)?.as_ref() != Some(&snapshot) || native.get_sink() != sink {
         return Err(Error::new(ErrorKind::WouldBlock, "native settlement changed during custody read"));
     }
-    Ok((state, sink_daa))
+    Ok((state, sink_daa, sink))
 }
 
 /// Per holder key and RoundRef. Slot, qualification and freeze cannot select
@@ -246,7 +248,7 @@ impl Tb1ExposureJournal {
 
     fn check_exposed(&mut self, native: &dyn ConsensusApi, body: &[u8; BODY]) -> io::Result<u64> {
         let anchor = Hash64::from_bytes(body[..64].try_into().expect("fixed anchor width"));
-        let (state, daa) = anchor_state(native, anchor)?;
+        let (state, daa, _) = anchor_state(native, anchor)?;
         match state {
             AnchorState::Finalized => Ok(daa),
             AnchorState::Pending | AnchorState::Detached => {
@@ -297,7 +299,7 @@ impl Tb1ExposureJournal {
             Some(previous) if previous != body => return Err(invalid("TB1 round already reserved for a different exposure")),
             Some(_) => {}
             None => {
-                let (state, daa) = anchor_state(native, freeze.accepting_block)?;
+                let (state, daa, _) = anchor_state(native, freeze.accepting_block)?;
                 freeze.check_window(daa)?;
                 if !matches!(state, AnchorState::Finalized) {
                     return Err(Error::new(ErrorKind::WouldBlock, "TB1 freeze has not reached the native finalized head"));

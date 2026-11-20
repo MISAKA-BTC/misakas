@@ -4,7 +4,19 @@
 //! Each native database resolves the closure from the same accepted close block.
 use super::*;
 use kaspa_rpc_core::RpcRawBlock;
-use std::{fs::File, path::Path, process::Command};
+use misaka_palw_remote::tb1_exposure::publication::{NativePublicationGate, PublicationLimits, PublishedRelease, batch_commitment};
+use serde::{Deserialize, Serialize};
+use std::{
+    fs::File,
+    io::{Read, Write},
+    os::{
+        fd::{AsFd, OwnedFd},
+        unix::net::UnixStream,
+    },
+    path::Path,
+    process::{Child, Command, Stdio},
+    time::Duration,
+};
 
 const READER_DIR: &str = "MISAKA_PRIVATE_TB1_FREEZE_READER";
 const READER_SLOT: &str = "MISAKA_PRIVATE_TB1_FREEZE_SLOT";
@@ -19,20 +31,80 @@ use kaspa_consensus_core::palw_tb1::{
 use libcrux_ml_dsa::ml_dsa_65;
 use misaka_palw_remote::tb1_exposure::{Tb1ExposureJournal, Tb1HolderFreeze};
 
-fn child_signature(dir: &Path, slot: usize) -> ml_dsa_65::MLDSA65Signature {
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    let mut child = command
+const LIMITS: PublicationLimits = PublicationLimits { records: 4, message_bytes: 2048, matrix_cells: 100 };
+
+#[derive(Serialize, Deserialize)]
+struct ReleaseRecord {
+    holder: usize,
+    shares: Vec<(usize, Vec<u8>)>,
+    signature: Vec<u8>,
+}
+
+struct DecodedRecord {
+    holder: usize,
+    shares: Vec<(usize, Tb1Field)>,
+    signature: ml_dsa_65::MLDSA65Signature,
+}
+
+impl ReleaseRecord {
+    fn decode(&self) -> DecodedRecord {
+        DecodedRecord {
+            holder: self.holder,
+            shares: self.shares.iter().map(|(d, v)| (*d, Tb1Field::from_bytes(v.as_slice().try_into().unwrap()).unwrap())).collect(),
+            signature: ml_dsa_65::MLDSA65Signature::new(self.signature.as_slice().try_into().unwrap()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Publication {
+    batch: RpcRawBlock,
+    certificate: RpcRawBlock,
+    rows: Vec<ReleaseRecord>,
+}
+
+// Private fixture transport between live instances of the same executable.
+// A length-delimited full-duplex channel also separates data from test output.
+fn send<T: Serialize>(socket: &mut UnixStream, value: &T) {
+    let bytes = serde_json::to_vec(value).unwrap();
+    socket.write_all(&u32::try_from(bytes.len()).unwrap().to_be_bytes()).unwrap();
+    socket.write_all(&bytes).unwrap();
+}
+
+fn receive<T: serde::de::DeserializeOwned>(socket: &mut UnixStream) -> T {
+    let mut size = [0; 4];
+    socket.read_exact(&mut size).unwrap();
+    let size = u32::from_be_bytes(size) as usize;
+    assert!(size < 4_000_000);
+    let mut bytes = vec![0; size];
+    socket.read_exact(&mut bytes).unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn child_reader(dir: &Path, slot: usize) -> (Child, UnixStream) {
+    let (parent, child_input) = UnixStream::pair().unwrap();
+    for s in [&parent, &child_input] {
+        s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
+        s.set_write_timeout(Some(Duration::from_secs(60))).unwrap();
+    }
+    let child = Command::new(std::env::current_exe().unwrap())
         .arg("native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected")
         .args(["--test-threads=1", "--nocapture"])
         .env(READER_DIR, dir)
         .env(READER_SLOT, slot.to_string())
+        .stdin(Stdio::from(OwnedFd::from(child_input)))
         .spawn()
         .unwrap();
-    let pid = child.id();
-    assert!(child.wait().unwrap().success());
-    let bytes = std::fs::read(dir.join(format!("holder-{slot}.sig"))).unwrap();
-    eprintln!("TB1 native reader pid {pid}, holder slot {slot}, signature bytes {}", bytes.len());
-    ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap())
+    (child, parent)
+}
+
+fn views<'a>(rows: &'a [DecodedRecord], context: Tb1ReleaseContext<'a>) -> Vec<PublishedRelease<'a>> {
+    rows.iter()
+        .map(|r| PublishedRelease {
+            row: Tb1HolderRelease { context, holder_slot: r.holder, shares: &r.shares },
+            signature: &r.signature,
+        })
+        .collect()
 }
 
 fn field(v: usize) -> Tb1Field {
@@ -137,6 +209,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     let dir = kaspa_database::utils::get_kaspa_tempdir();
     let api = node.api().as_ref();
     let freeze = Tb1HolderFreeze::resolve(api, anchor, &closure, &q).unwrap();
+    let gate = NativePublicationGate::observe(api, anchor, &closure, &q).unwrap();
     let mut other_chain = round.chain_id;
     other_chain[0] ^= 1;
     assert!(!api.palw_coinbase_commits_to(other_chain, anchor, &freeze_id).unwrap());
@@ -162,23 +235,79 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         before.generation,
         Hash64::from_bytes(q.root())
     );
-    if let Some(target) = child_dir {
-        use std::io::Write;
-        File::create_new(target.join(format!("holder-{slot}.sig"))).unwrap().write_all(sig.as_slice()).unwrap();
+    let own_record = ReleaseRecord {
+        holder: slot,
+        shares: values.iter().map(|(d, v)| (*d, v.to_bytes().to_vec())).collect(),
+        signature: sig.as_slice().to_vec(),
+    };
+    let mut peers = Vec::new();
+    let mut parent_socket = None;
+    let (records, batch, certificate) = if child_dir.is_some() {
+        let mut socket = UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap());
+        send(&mut socket, &own_record);
+        let publication: Publication = receive(&mut socket);
+        let batch = Block::try_from(publication.batch).unwrap();
+        let certificate = Block::try_from(publication.certificate).unwrap();
+        node.arrive(batch.clone(), "native signed batch").await;
+        parent_socket = Some(socket);
+        (publication.rows, batch, certificate)
+    } else {
+        let raw: Vec<_> = prefix.iter().chain([&work, &tip]).map(RpcRawBlock::from).collect();
+        serde_json::to_writer(File::create_new(dir.path().join("blocks.json")).unwrap(), &raw).unwrap();
+        peers.extend((1..3).map(|s| child_reader(dir.path(), s)));
+        let mut records = vec![own_record];
+        records.extend(peers.iter_mut().map(|(_, s)| receive::<ReleaseRecord>(s)));
+        let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
+        let rows = views(&decoded, context);
+        let miner = MinerData::new(card_payout_spk(4), batch_commitment(&rows, LIMITS).unwrap().to_vec());
+        let template = node.attempt_with_miner(4, vec![], no_evm(), vec![], miner);
+        let batch = node.take(template, "TB1 signed batch").await;
+        let marker = gate.propose(node.api().as_ref(), batch.hash(), &rows, &q, LIMITS).unwrap();
+        assert!(gate.read_seed(node.api().as_ref(), batch.hash(), batch.hash(), &rows, &q, LIMITS).is_err());
+        let miner = MinerData::new(card_payout_spk(5), marker.to_vec());
+        let template = node.attempt_with_miner(5, vec![], no_evm(), vec![], miner);
+        let certificate = template.to_immutable();
+        let publication = Publication { batch: (&batch).into(), certificate: (&certificate).into(), rows: records };
+        for (_, socket) in &mut peers {
+            send(socket, &publication);
+        }
+        (publication.rows, batch, certificate)
+    };
+    let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
+    let mut rows = views(&decoded, context);
+    assert_eq!(node.chain.sink(), batch.hash());
+    node.arrive(certificate.clone(), "native TB1 certificate").await;
+    assert_eq!(node.chain.sink(), certificate.hash());
+    let api = node.api().as_ref();
+    let seed = gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+    assert!(gate.read_seed(api, batch.hash(), certificate.hash(), &rows[..2], &q, LIMITS).is_err());
+    rows.swap(0, 1);
+    assert!(gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
+    rows.swap(0, 1);
+    eprintln!(
+        "TB1 publication pid {} batch {} certificate {} seed {}",
+        std::process::id(),
+        batch.hash(),
+        certificate.hash(),
+        faster_hex::hex_string(seed.as_bytes())
+    );
+    if let Some(mut socket) = parent_socket {
+        socket.write_all(seed.as_bytes()).unwrap();
         return;
     }
-    let raw: Vec<_> = prefix.iter().chain([&work, &tip]).map(RpcRawBlock::from).collect();
-    serde_json::to_writer(File::create_new(dir.path().join("blocks.json")).unwrap(), &raw).unwrap();
-    let signatures = [sig, child_signature(dir.path(), 1), child_signature(dir.path(), 2)];
-    for (holder_slot, sig) in signatures.iter().enumerate() {
-        let values = shares(holder_slot);
-        let row = Tb1HolderRelease { context, holder_slot, shares: &values };
-        let bytes = q.holder_release_message(&row, &public[holder_slot], 2048).unwrap();
-        ml_dsa_65::verify(&public[holder_slot], &bytes, RELEASE_CONTEXT, sig).unwrap();
+    for (child, socket) in &mut peers {
+        let mut received = [0; 32];
+        socket.read_exact(&mut received).unwrap();
+        assert_eq!(&received, seed.as_bytes());
+        assert!(child.wait().unwrap().success());
     }
+    let later = extend(&mut node, &[6]).await.remove(0);
+    let api = node.api().as_ref();
+    assert_eq!(gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap(), seed);
+    assert!(gate.read_seed(api, batch.hash(), later.hash(), &rows, &q, LIMITS).is_err());
     let mut rival = follower(&parts, 0x12_d500_0000, &prefix).await;
     plant_frontier(&rival, prefix[0].header.blue_score, anchor);
-    let alternative = extend(&mut rival, &[4, 5, 6]).await;
+    let alternative = extend(&mut rival, &[4, 5, 6, 0, 1, 2]).await;
     for block in &alternative {
         node.arrive(block.clone(), "heavier branch").await;
     }
@@ -186,6 +315,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert_eq!(after.generation, alternative.last().unwrap().hash());
     assert!(node.api().is_chain_ancestor_of(anchor, after.generation).unwrap());
     assert_eq!(after.finalized, None);
+    assert!(gate.read_seed(node.api().as_ref(), batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
     assert_eq!(readiness_of(&node).finalized.withdrawn_from, Some(anchor));
     assert!(journal.observe_branch(node.api().as_ref()).unwrap_err().to_string().contains("halted"));
     drop(journal);

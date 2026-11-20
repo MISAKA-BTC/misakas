@@ -14,6 +14,14 @@ holder は roster の鍵と有限体座標、期限内の VSS 終了記録、有
 
 VSS の終了記録、資源予約参照、consumer と policy の内容、成熟した仕事と pruning frontier には試験入力を使用する。ブロックの受け渡しにはファイルに保存した RPC raw block を使う。通常の P2P 通信、新規 FOW1 claim の推論・Panel・Court・受賞ブロックはこの試験の対象外。FOW1 採掘には、関数系列に適合する descriptor と G-COLL・G-COST の成立条件を満たす必要がある。[RFC-0062](../../../rfc/0062-palw-function-output-and-work-admissibility.md)
 
+### 署名公開から EXEC seed まで
+
+同じテストバイナリの3つのプロセスを同時に動かし、各 DB が凍結ブロックの finality を観測した後に holder が署名した。各署名は、round、QualRoot、FreezeId、holder の slot、全 qualified dealer の share 値を束縛する。holder 間の試験用 Unix ソケットで実データを運び、選択鎖の1ブロックに全署名と署名対象の順序付き digest を載せた。後続ブロックには、公開ブロックのハッシュ、全 dealer の係数、支持する署名の位置を束縛する certificate の digest を載せた。
+
+3者はそれぞれ、固定済みの roster と公開データから署名を検査し、全 dealer の多項式を復元し、両ブロックの commitment と元の DAA 期限を照合した。得られた EXEC seed は3者とも `956c3261087432dbe72221d4c3c536c706a5bf8ce59ff9f3ace3bd0b2bd4c10b`。後続ブロックが伸びた後にも、親ノードは元の certificate を指定して同じ値を読めた。署名データの欠落・並べ替え、certificate 公開前の読み取り、別ブロックの指定、finality 撤回後の読み取りは拒否された。[各 PID のブロックハッシュ・seed・実行ログ](native-release-certificate.txt)
+
+初回は追加の heartbeat が native の時刻上限を超え、公開ブロックの受理前に試験が止まった。記録した実行には、この隔離チェーンで既に有効な attempt ブロック2個を使った。新規 FOW1 の仕事からは独立している。consumer と policy、VSS と成熟済み仕事には前節と同じ試験入力を使用した。この reader は安定化を現地で観測したプロセス向けで、後から同期したノードの過去の finality、公開データのネットワーク配信、FOW1 の推論や合意 credit は未検証。隔離版の位置表現は DAA が32ビット、blue score が30ビットの範囲で動作し、範囲外の値を拒否する。
+
 ## MOE2
 
 隔離した状態遷移は、追加モデルの登録ブロックの delta に class と初期市場を一緒に書き込む。分類には登録時点の native catalog、登録者、モデル ID、artifact root を使う。core の登録では市場行を作らない。決済帳簿は delta の旧値・新値とブロック後の市場を照合する。登録を巻き戻すと市場も同じ遷移で取り消される。
