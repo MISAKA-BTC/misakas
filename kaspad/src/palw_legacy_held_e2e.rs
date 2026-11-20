@@ -733,6 +733,7 @@ fn service_filer_case(
         producer: bond_key(PRODUCER),
         accepted_daa: 101,
         seat: false,
+        unused_reservation_after_replay: false,
         job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
             accepted_block: point(101).block,
             class_id: f.profile.shape_profile_id(),
@@ -1368,6 +1369,7 @@ async fn lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_collu
             producer: target.executor_bond,
             accepted_daa: 101,
             seat: false,
+            unused_reservation_after_replay: false,
             job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
                 accepted_block: point(101).block,
                 class_id: target.class_id,

@@ -905,6 +905,9 @@ pub struct PalwFraudFilerCandidateV1 {
     pub accepted_daa: u64,
     /// The filer's bond is a seat of the claim's current panel: its sessions are the seat's duties' (P2-6, P2-8), never this filer's.
     pub seat: bool,
+    /// Node policy may withdraw this bond's unused pre-draw reservation after its own
+    /// protected replay approval was included. The ordinary signed release still has to land.
+    pub unused_reservation_after_replay: bool,
     /// What the node replays (lane B's job facts: the claim's block, class, artifact root and committed roots).
     pub job: crate::palw_operator_da_v1::PalwOperatorDaJobV1,
 }
@@ -1077,6 +1080,24 @@ impl PalwFraudFilerStatusV1 {
 pub const PALW_FILER_EXPLICIT_TARGETS_V1: usize = 16;
 
 impl PalwChainStateV2 {
+    pub(super) fn unused_reservation_after_replay(&self, claim: Hash64, owner: PalwBondKeyV2) -> bool {
+        let Some(record) = self.legacy_dispute_v1(&claim) else { return false };
+        let Some(row) = record.live.get(&owner) else { return false };
+        let Some(panel) = self.panel(&claim) else { return false };
+        row.reserved_daa < panel.bound_daa
+            && row.sessions_opened == 0
+            && row.lanes_joined == 0
+            && panel.seats.iter().any(|seat| seat.bond == owner)
+            && self.open_courts_of(&claim) == 0
+            && self.da_session(&claim, &owner).is_none()
+            && !record.courts.contains_key(&owner)
+            && !record.reacquiring.contains_key(&owner)
+            && self.staged_owned_row_v1(claim, owner).is_none()
+            && self.claim(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
+            && !super::palw_protected_refutation_recorded_v1(self, &claim)
+            && super::included_replay::protected_seat_replay_recorded_v1(self, claim, owner)
+    }
+
     /// **The claims `me`'s filer may pursue at `now_daa`**, oldest acceptance first: past the fence, every claim at a reservable stage
     /// (`palw_dispute_phase_reservable_v1`: unlicensed, licensed, or an open public post-Final stage) that is not `me`'s own,
     /// and every claim on which `me` holds a dispute record (so a restarted filer finds its own pursuits). Empty below the fence.
@@ -1108,6 +1129,7 @@ impl PalwChainStateV2 {
                     producer: claim.bond,
                     accepted_daa: claim.accepted_daa,
                     seat: facts.seats.contains(me),
+                    unused_reservation_after_replay: self.unused_reservation_after_replay(*claim_id, *me),
                     job: facts.job,
                 })
             })
@@ -1169,6 +1191,7 @@ impl PalwChainStateV2 {
                     producer: claim.bond,
                     accepted_daa: claim.accepted_daa,
                     seat: facts.seats.contains(me),
+                    unused_reservation_after_replay: self.unused_reservation_after_replay(claim_id, *me),
                     job: facts.job,
                 })
             })

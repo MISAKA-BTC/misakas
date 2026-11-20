@@ -659,6 +659,7 @@ pub(super) struct PalwFraudFilerCaseV1 {
 
 impl PalwFraudFilerCaseV1 {
     pub(super) fn new(candidate: PalwFraudFilerCandidateV1) -> Self {
+        let release_pending = candidate.unused_reservation_after_replay;
         Self {
             candidate,
             verdict: PalwFraudFilerVerdictV1::Pending,
@@ -703,7 +704,7 @@ impl PalwFraudFilerCaseV1 {
             fp_job_disclosure_enabled: false,
             fp_descriptor: None,
             _fp_job_reservation: None,
-            release_pending: false,
+            release_pending,
             awaiting_public: None,
             sent: None,
             carried: None,
@@ -3403,6 +3404,27 @@ impl PalwPanelService {
                 continue;
             }
             if book.cases.get(&claim).is_some_and(|case| case.release_pending) {
+                let candidate = &book.cases[&claim].candidate;
+                if candidate.unused_reservation_after_replay {
+                    // A same-DAA reorg can undo the owner's approval or replace this
+                    // acceptance before the regular discovery pass. Check the full
+                    // candidate again before retaining or signing its withdrawal.
+                    let current = session
+                        .clone()
+                        .spawn_blocking(move |c| {
+                            c.palw_fraud_filer_candidates_for_claims_v1(bond_key, vec![claim])
+                                .into_iter()
+                                .find(|candidate| candidate.claim_id == claim)
+                        })
+                        .await;
+                    if current.as_ref() != Some(candidate) {
+                        court_outbox
+                            .retain_pending(|(held, round, _, _)| *held != claim || *round != PALW_FRAUD_FILER_RELEASE_ROUND_V1);
+                        court_outbox.retain_due(|(held, round, _), _| *held != claim || *round != PALW_FRAUD_FILER_RELEASE_ROUND_V1);
+                        book.read_at = None;
+                        continue;
+                    }
+                }
                 // Stop unsent bootstrap moves; a handed-off reservation may still land. Observe it
                 // for one resend interval before forgetting a currently unreserved case.
                 court_outbox.retain_pending(|(held, round, responder, _)| {
@@ -7507,6 +7529,7 @@ pub(super) mod tests {
             producer: bond(99),
             accepted_daa,
             seat,
+            unused_reservation_after_replay: false,
             job: PalwOperatorDaJobV1 {
                 accepted_block: Hash64::from_u64_word(claim + 1_000),
                 class_id: Hash64::from_u64_word(7),
@@ -7620,7 +7643,9 @@ pub(super) mod tests {
 
     #[test]
     fn an_idle_filer_reopens_the_accepted_publicda_body_after_a_metadata_probe() {
-        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER};
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PANEL_DA, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER,
+        };
         let mut book = PalwFraudFilerBookV1::default();
         let mut fp = candidate(1, 100, false);
         fp.job.free_prompt = true;
@@ -9331,6 +9356,16 @@ pub(super) mod tests {
         assert!(book.pursued().is_empty());
         assert_eq!(book.next_replay(), None, "the new Panel seat's replay belongs to its seat lane");
         assert!(book.judge_replay(&c, Ok(run(Hash64::default(), c.job.trace_root))).is_none());
+        let mut approved = c.clone();
+        approved.seat = true;
+        approved.unused_reservation_after_replay = true;
+        book.refresh(vec![approved.clone()], 13);
+        assert!(book.cases[&claim].release_pending);
+        assert_eq!(book.pursued(), vec![claim]);
+        assert_eq!(book.next_replay(), None, "only the owner's existing release is due");
+        approved.unused_reservation_after_replay = false;
+        assert_eq!(book.refresh(vec![approved], 14), BTreeSet::from([claim]));
+        assert!(!book.cases[&claim].release_pending, "a reorg invalidates the queued release");
     }
 
     /// **The book replays oldest first, one at a time, never a seat's claim, and holds at most two mismatches.**

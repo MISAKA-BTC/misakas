@@ -180,6 +180,7 @@ fn fp_discovery(
         producer: target.executor_bond,
         accepted_daa,
         seat: false,
+        unused_reservation_after_replay: false,
         job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
             accepted_block,
             class_id: c.job.class_id,

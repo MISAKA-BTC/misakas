@@ -492,6 +492,30 @@ pub(crate) fn exercise_included_replay_v1(
     assert_eq!(other_duties.len(), 1, "another seat's approval must not cancel this seat's whole replay");
     assert_eq!(other_duties[0].protected_replay, Some(binding));
 
+    // The public reservation predates the draw. Only the owner that has actually
+    // signed an included full replay can retire its untouched reservation. Work
+    // already opened under an outside reservation keeps its independent liability.
+    let mut reserved = other_seat_view.clone();
+    let vacant = crate::palw_legacy_public_filer_v1::PalwDisputeReservationRowV1 {
+        reserved_daa: prior.daa_score,
+        deposit: 1,
+        ..Default::default()
+    };
+    for owner in [bond, other_bond] {
+        reserved.legacy_disputes.entry(claim).or_default().live.insert(owner, vacant);
+    }
+    assert!(reserved.unused_reservation_after_replay(claim, bond));
+    assert!(!reserved.unused_reservation_after_replay(claim, other_bond));
+    reserved.legacy_disputes.get_mut(&claim).unwrap().live.get_mut(&bond).unwrap().sessions_opened = 1;
+    assert!(!reserved.unused_reservation_after_replay(claim, bond));
+    let row = reserved.legacy_disputes.get_mut(&claim).unwrap().live.get_mut(&bond).unwrap();
+    *row = vacant;
+    row.reserved_daa = bound_point.daa_score;
+    assert!(!reserved.unused_reservation_after_replay(claim, bond));
+    reserved.legacy_disputes.get_mut(&claim).unwrap().live.insert(bond, vacant);
+    reserved.set_open_courts_for_tests(claim, 1);
+    assert!(!reserved.unused_reservation_after_replay(claim, bond));
+
     assert!(protected_full_replay_digest_v1(&voted, claim, bond, key).is_none(), "included approval stops retransmission");
     assert_eq!(
         vote_delta
