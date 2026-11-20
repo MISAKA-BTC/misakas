@@ -26562,7 +26562,7 @@ mod model_market_virtual {
 
     /// A model class (h64(2)) registered at DAA 100 by bond 1, to activate at DAA 200 — h64(1) is
     /// the floor, which has no line and so no market.
-    fn registered(e: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+    fn registration_block(e: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, PalwStateDeltaV2) {
         let p = economy_params();
         let class = h64(2);
         let mut objects = register_class_and_bond();
@@ -26572,8 +26572,13 @@ mod model_market_virtual {
             *slash_value_per_pwu = 5;
         }
         objects.push(future);
-        let (s1, _) = fold_with(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, e).expect("the class registers");
-        (p, s1, class)
+        let (s1, delta) = fold_with(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, e).expect("the class registers");
+        (p, s1, class, delta)
+    }
+
+    fn registered(e: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64) {
+        let (params, state, class, _) = registration_block(e);
+        (params, state, class)
     }
 
     /// The market every surface reads for `line` past the fence.
@@ -26593,6 +26598,41 @@ mod model_market_virtual {
             "M2"
         );
         assert!(m.msk_reserve >= m.seed_sompi, "I-V1");
+    }
+
+    #[test]
+    fn moe2_opens_only_new_additional_registrations_in_the_native_delta() {
+        use crate::palw_model_market_v1::moe2::{
+            Moe2ModelAllocation,
+            settlement::{Moe2SettlementBook, Moe2SettlementError},
+        };
+        use crate::palw_model_tier_v1::PalwModelTierMirrorV1;
+
+        let (_, state, additional, delta) = registration_block(&armed());
+        let core = h64(1);
+        let catalog = PalwModelTierMirrorV1 {
+            from_daa: 0,
+            catalogs: Default::default(),
+            registered_permille: 300,
+            registered_cap_permille: 300,
+        };
+        let mut book = Moe2SettlementBook::default();
+        let mut changed = delta.clone();
+        let registered_row = changed.entries.iter_mut().find_map(|entry| match entry {
+            PalwDeltaEntryV2::Class { key, old: None, new: Some(row) } if *key == additional => Some(row),
+            _ => None,
+        }).unwrap();
+        registered_row.artifact_root = h64(99);
+        assert_eq!(book.register_block(&state, &catalog, &changed), Err(Moe2SettlementError::UnknownRegistration));
+        assert!(book.model(&core).is_none() && book.model(&additional).is_none());
+
+        book.register_block(&state, &catalog, &delta).unwrap();
+        assert_eq!(book.model(&core).unwrap().allocation, Moe2ModelAllocation::Core);
+        let registered = book.model(&additional).unwrap();
+        assert_eq!(registered.owner, Some(bond_key(1)));
+        assert_eq!(registered.artifact_root, state.class(&additional).unwrap().artifact_root);
+        assert_eq!(registered.allocation, Moe2ModelAllocation::Additional(PalwModelMarketV1::open_virtual_v2(100, V)));
+        assert_eq!(book.register_block(&state, &catalog, &delta), Err(Moe2SettlementError::DuplicateRegistration));
     }
 
     /// **I-V9 and I-V10 at the fold, and the seed's window between them.** A class registered past

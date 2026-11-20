@@ -4,7 +4,7 @@
 use super::{Moe2ModelAllocation, Moe2QuantityLimits, Moe2QuoteRefusal, Moe2RegisteredModel, Moe2RewardAllocation, Moe2WorkerPlan};
 use crate::Hash64;
 use crate::palw_model_market_v1::PalwModelMarketV1;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Moe2Position {
@@ -46,6 +46,7 @@ pub struct LockedLiquidityReceipt {
 pub enum Moe2SettlementError {
     UnknownRegistration,
     DuplicateRegistration,
+    PermanentLiquidityHistory,
     UnknownClaimContext,
     AlreadyAdmitted,
     AlreadySettled,
@@ -60,24 +61,44 @@ pub struct Moe2SettlementBook {
     admitted: BTreeMap<Hash64, Moe2SettlementTerms>,
     settled: BTreeMap<Hash64, Moe2RewardAllocation>,
     receipts: BTreeMap<Hash64, LockedLiquidityReceipt>,
+    permanent_lp_models: BTreeSet<Hash64>,
+    permanent_lp_roots: BTreeSet<Hash64>,
     last_settlement: Option<Moe2Position>,
 }
 
 impl Moe2SettlementBook {
-    /// In the registration transition, resolve the canonical model and install
-    /// the resulting registration with its market (or core allocation) in one row.
-    pub fn register(
+    /// Apply the registrations of a completed native block in one batch. The
+    /// owning fold commits this projection together with that block's class
+    /// delta. A second registration in a block cannot leave the first half-installed.
+    pub fn register_block(
         &mut self,
         state: &crate::palw_state_v2::PalwChainStateV2,
         catalog: &crate::palw_model_tier_v1::PalwModelTierMirrorV1,
-        model: Hash64,
-        daa: u64,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
     ) -> Result<(), Moe2SettlementError> {
-        if self.models.contains_key(&model) {
-            return Err(Moe2SettlementError::DuplicateRegistration);
+        use crate::palw_state_v2::PalwDeltaEntryV2;
+        use Moe2SettlementError::*;
+        if state.last_point() != Some(&delta.point) {
+            return Err(UnknownClaimContext);
         }
-        let row = Moe2RegisteredModel::at_registration(state, catalog, model, daa).ok_or(Moe2SettlementError::UnknownRegistration)?;
-        self.models.insert(model, row);
+        let mut registered = BTreeMap::new();
+        for entry in &delta.entries {
+            let PalwDeltaEntryV2::Class { key, old: None, new: Some(class) } = entry else {
+                continue;
+            };
+            let model =
+                Moe2RegisteredModel::at_registration(state, catalog, *key, delta.point.daa_score).ok_or(UnknownRegistration)?;
+            if model.artifact_root != class.artifact_root || model.owner != class.registrant_bond {
+                return Err(UnknownRegistration);
+            }
+            if model.allocation == Moe2ModelAllocation::Core {
+                self.check_core_designation(*key, model.artifact_root)?;
+            }
+            if self.models.contains_key(key) || registered.insert(*key, model).is_some() {
+                return Err(DuplicateRegistration);
+            }
+        }
+        self.models.append(&mut registered);
         Ok(())
     }
 
@@ -93,7 +114,12 @@ impl Moe2SettlementBook {
 
     /// A model ID and all aliases of a root share the permanent-LP exclusion.
     pub fn has_permanent_lp(&self, model: Hash64, artifact_root: Hash64) -> bool {
-        self.receipts.values().any(|receipt| receipt.model == model || receipt.artifact_root == artifact_root)
+        self.permanent_lp_models.contains(&model) || self.permanent_lp_roots.contains(&artifact_root)
+    }
+
+    /// The same history check applies to registrations and to annual catalog designations.
+    pub fn check_core_designation(&self, model: Hash64, artifact_root: Hash64) -> Result<(), Moe2SettlementError> {
+        if self.has_permanent_lp(model, artifact_root) { Err(Moe2SettlementError::PermanentLiquidityHistory) } else { Ok(()) }
     }
 
     /// Bind terms before the draw. Neither a failed quote nor a retry can
@@ -153,6 +179,8 @@ impl Moe2SettlementBook {
                     liquidity_units: q.liquidity_units,
                     retired_units: q.retired_units,
                 };
+                self.permanent_lp_models.insert(receipt.model);
+                self.permanent_lp_roots.insert(receipt.artifact_root);
                 self.receipts.insert(terms.claim, receipt);
             }
             model.allocation = Moe2ModelAllocation::Additional(q.after);
@@ -207,8 +235,9 @@ mod tests {
         let pay = child.settle(terms.claim, at, h(5), 1000).unwrap();
         assert_eq!((pay.miner, pay.panel_pool), (400, 100));
         assert_eq!(child.receipt(&h(3)).unwrap().liquidity_units, 1183);
-        assert!(child.has_permanent_lp(h(7), model.artifact_root));
-        assert!(child.has_permanent_lp(model.model, h(8)));
+        assert_eq!(child.check_core_designation(h(7), model.artifact_root), Err(Moe2SettlementError::PermanentLiquidityHistory));
+        assert_eq!(child.check_core_designation(model.model, h(8)), Err(Moe2SettlementError::PermanentLiquidityHistory));
+        assert!(parent.check_core_designation(h(7), model.artifact_root).is_ok());
         assert_eq!(child.settle(terms.claim, at, h(5), 1000), Err(Moe2SettlementError::AlreadySettled));
         let second = Moe2SettlementTerms { claim: h(9), ..terms };
         child.admit(second).unwrap();
