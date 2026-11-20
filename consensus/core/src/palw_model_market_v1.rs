@@ -30,6 +30,8 @@
 //! locked for good, raising the floor `(V + seed) / supply`. A row opened before the fence has
 //! `virtual_sompi == 0` and quotes, encodes and hashes exactly as it did.
 
+pub mod moe2;
+
 use crate::Hash64;
 use crate::tx::ScriptPublicKey;
 
