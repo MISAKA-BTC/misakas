@@ -1,0 +1,80 @@
+[
+  {
+    "peer": 54703,
+    "tipBlock": "f02ab921bc96a1484e3b1c1b351791f01d467a6fb50bbbb73fef22892d11eb70c3727df521dcc573e23106842095436762f54abac9e617394c919c57cdabe0f6",
+    "tipDaa": 7685,
+    "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+    "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+    "approval": true,
+    "publicRefutation": false,
+    "phase": "final",
+    "phaseDaa": 7615,
+    "certification": "certified",
+    "spent": 0,
+    "reservations": [],
+    "closed": [
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+    ],
+    "dismissedHeld": 7,
+    "accusationPending": false
+  },
+  {
+    "peer": 54713,
+    "tipBlock": "f02ab921bc96a1484e3b1c1b351791f01d467a6fb50bbbb73fef22892d11eb70c3727df521dcc573e23106842095436762f54abac9e617394c919c57cdabe0f6",
+    "tipDaa": 7685,
+    "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+    "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+    "approval": true,
+    "publicRefutation": false,
+    "phase": "final",
+    "phaseDaa": 7615,
+    "certification": "certified",
+    "spent": 0,
+    "reservations": [],
+    "closed": [
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+    ],
+    "dismissedHeld": 7,
+    "accusationPending": false
+  },
+  {
+    "peer": 54723,
+    "tipBlock": "f02ab921bc96a1484e3b1c1b351791f01d467a6fb50bbbb73fef22892d11eb70c3727df521dcc573e23106842095436762f54abac9e617394c919c57cdabe0f6",
+    "tipDaa": 7685,
+    "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+    "carrierTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+    "approval": true,
+    "publicRefutation": false,
+    "phase": "final",
+    "phaseDaa": 7615,
+    "certification": "certified",
+    "spent": 0,
+    "reservations": [],
+    "closed": [
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+    ],
+    "dismissedHeld": 7,
+    "accusationPending": false
+  }
+]
