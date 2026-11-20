@@ -682,10 +682,15 @@ impl PalwHeartbeatMinerService {
             if let Some(pool) = historical_grind {
                 use rayon::prelude::*;
                 let prepared = private_heartbeat::PreparedHeartbeat::new(&header0, network_id.as_bytes());
+                let auxiliary = private_heartbeat::PrivateNonceSource::for_header(&header0, &network_id);
                 return grind_nonce_windows_v1(
                     NONCES_PER_TEMPLATE,
                     NONCES_PER_CHECK,
-                    |range| pool.install(|| range.into_par_iter().find_any(|&nonce| prepared.solves(nonce) && solves(nonce))),
+                    |range| {
+                        auxiliary.as_ref().and_then(|source| source.verified(&solves)).or_else(|| {
+                            pool.install(|| range.into_par_iter().find_any(|&nonce| prepared.solves(nonce) && solves(nonce)))
+                        })
+                    },
                     shutting_down,
                     superseded,
                 );

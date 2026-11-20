@@ -11,6 +11,53 @@ use kaspa_consensus_core::{
 use kaspa_math::Uint512;
 use sha3::{Digest, Sha3_512};
 
+/// Optional local nonce source for the isolated clock's heartbeat miner. Only the
+/// public prehash and PoW fields leave the process. A missing or stale reply
+/// leaves the ordinary CPU search running. The caller verifies every proposed
+/// nonce against the current header with the native PoW verifier.
+pub(super) struct PrivateNonceSource {
+    answer: std::path::PathBuf,
+}
+
+impl PrivateNonceSource {
+    pub(super) fn for_header(header: &Header, network_id: &str) -> Option<Self> {
+        let directory = std::path::PathBuf::from(std::env::var_os("MISAKA_PRIVATE_HEARTBEAT_NONCE_DIR")?);
+        if !directory.is_absolute() {
+            return None;
+        }
+        let prehash = hashing::header::pre_pow_hash_64(header);
+        let work = serde_json::json!({
+            "version": 1, "network": network_id, "prehash": faster_hex::hex_string(prehash.as_byte_slice()),
+            "timestamp": header.timestamp, "bits": header.bits, "algo": header.pow_algo_id,
+        });
+        let temporary = directory.join(format!("work-{}.tmp", std::process::id()));
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary).ok()?;
+        let written = file.write_all(work.to_string().as_bytes());
+        drop(file);
+        if written.and_then(|_| std::fs::rename(&temporary, directory.join("work.json"))).is_err() {
+            let _ = std::fs::remove_file(temporary);
+            return None;
+        }
+        Some(Self { answer: directory.join("nonce.le64") })
+    }
+
+    fn candidate(&self) -> Option<u64> {
+        use std::io::Read;
+        let metadata = std::fs::symlink_metadata(&self.answer).ok()?;
+        let mut bytes = [0u8; 8];
+        if !metadata.is_file() || metadata.len() != bytes.len() as u64 {
+            return None;
+        }
+        std::fs::File::open(&self.answer).ok()?.read_exact(&mut bytes).ok()?;
+        Some(u64::from_le_bytes(bytes))
+    }
+
+    pub(super) fn verified(&self, solves: impl FnOnce(u64) -> bool) -> Option<u64> {
+        self.candidate().filter(|&nonce| solves(nonce))
+    }
+}
+
 pub(super) struct PreparedHeartbeat {
     blake_prefix: State,
     sha_prefix: Sha3_512,
@@ -70,6 +117,20 @@ impl PreparedHeartbeat {
 mod tests {
     use super::*;
     use kaspa_pow::StateLayer0;
+
+    #[test]
+    fn optional_nonce_requires_a_complete_reply_and_current_header_verification() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = PrivateNonceSource { answer: directory.path().join("nonce.le64") };
+        assert!(source.verified(|_| true).is_none());
+        for malformed in [&[0u8; 7][..], &[0u8; 9][..]] {
+            std::fs::write(&source.answer, malformed).unwrap();
+            assert!(source.verified(|_| true).is_none());
+        }
+        std::fs::write(&source.answer, 42u64.to_le_bytes()).unwrap();
+        assert!(source.verified(|n| n == 41).is_none());
+        assert_eq!(source.verified(|n| n == 42), Some(42));
+    }
 
     #[test]
     fn prepared_heartbeat_matches_verifier() {
