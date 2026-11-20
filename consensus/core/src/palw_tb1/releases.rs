@@ -1,9 +1,10 @@
 //! RFC-0061 §7 public release assembly and verification after native record resolution.
-//! The caller supplies the authenticated roster, complete Q, canonical RoundRef bytes,
+//! The caller supplies the resolved qualification, canonical RoundRef bytes,
 //! signed release rows keyed by their actual references, and release-gate/deadline checks.
 //! This layer neither defines their wire encodings nor admits a beacon into consensus.
+use super::qualification::Tb1Qualification;
 use super::reconstruction::reconstruct_dealer;
-use super::{Tb1DealerPoint, Tb1Field, Tb1PolynomialError, check_points, check_qualified, check_roster};
+use super::{Tb1DealerPoint, Tb1Field, Tb1PolynomialError, check_points};
 use std::collections::{BTreeMap, btree_map::Entry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,9 +42,23 @@ pub struct Tb1ReleaseSet<'a, R> {
 }
 
 impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
+    /// Use the full Q resolved from native preparation outcomes and Ready
+    /// records. A release for another qualification cannot borrow this quorum.
+    pub fn new(
+        context: Tb1ReleaseContext<'a>,
+        qualified: &Tb1Qualification<'a>,
+        releases: &BTreeMap<R, Tb1HolderRelease<'a>>,
+        max_release_records: usize,
+    ) -> Result<Self, Tb1PolynomialError> {
+        if context.round_ref != qualified.round_ref || context.qual_root != qualified.qual_root {
+            return Err(Tb1PolynomialError::ReleaseContext);
+        }
+        Self::index_releases(context, qualified.roster, qualified.f, qualified.dealers, releases, max_release_records)
+    }
+
     /// Index only complete releases at this freeze. A malformed or unrelated row cannot
     /// suppress a quorum of honest releases. Other signed versions can coexist by reference.
-    pub fn new(
+    fn index_releases(
         context: Tb1ReleaseContext<'a>,
         roster: &'a [Tb1Field],
         f: usize,
@@ -51,8 +66,6 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
         resolved: &BTreeMap<R, Tb1HolderRelease<'a>>,
         max_release_rows: usize,
     ) -> Result<Self, Tb1PolynomialError> {
-        check_roster(roster, f)?;
-        check_qualified(roster, f, qualified)?;
         if resolved.len() > max_release_rows {
             return Err(Tb1PolynomialError::ReconstructionBudget);
         }
@@ -172,13 +185,87 @@ mod tests {
     }
 
     #[test]
+    fn qualification_counts_every_eligible_dealer_before_the_fixed_cut() {
+        use crate::palw_tb1::qualification::{Tb1DealerEnd, Tb1PreparationCut, Tb1Ready, Tb1VssEnd};
+        use Tb1PolynomialError::*;
+        let roster = (1..=7).map(field).collect::<Vec<_>>();
+        let ends: Vec<_> = (0..7)
+            .map(|i| Some(Tb1DealerEnd { end: Tb1VssEnd { transcript_root: [i; 64], end_anchor: [4; 64] }, position: 10 }))
+            .collect();
+        // Six dealers each reach q=5; dealer 3 is one valid holder short.
+        let mut ready = Vec::new();
+        for (slot, terminal) in ends.iter().enumerate() {
+            for holder_slot in 0..if slot == 3 { 4 } else { 5 } {
+                ready.push(Tb1Ready {
+                    round_ref: EXEC.round_ref,
+                    dealer_slot: slot,
+                    holder_slot,
+                    position: 11,
+                    end: terminal.unwrap().end,
+                });
+            }
+        }
+        let fourth = Tb1Ready { round_ref: EXEC.round_ref, dealer_slot: 3, holder_slot: 4, position: 12, end: ends[3].unwrap().end };
+        ready.extend([
+            Tb1Ready { holder_slot: 0, ..fourth },
+            Tb1Ready { holder_slot: 7, ..fourth },
+            Tb1Ready { round_ref: b"PANEL", ..fourth },
+            Tb1Ready { position: 9, ..fourth },
+            Tb1Ready { position: 13, ..fourth },
+            Tb1Ready { dealer_slot: 7, ..fourth },
+            Tb1Ready { end: Tb1VssEnd { transcript_root: [8; 64], ..fourth.end }, ..fourth },
+            Tb1Ready { end: Tb1VssEnd { end_anchor: [8; 64], ..fourth.end }, ..fourth },
+        ]);
+        ready.reverse();
+        let cut = Tb1PreparationCut {
+            round_ref: EXEC.round_ref,
+            deadline_position: 12,
+            observed_through: 13,
+            dealer_ends: &ends,
+            ready: &ready,
+        };
+        let resolve = |dealers, snapshot: &Tb1PreparationCut<'_>, budget| {
+            Tb1Qualification::resolve(&roster, 2, EXEC.round_ref, EXEC.qual_root, dealers, snapshot, budget)
+        };
+        assert!(matches!(resolve(&Q, &cut, ready.len() - 1), Err(PreparationBudget)));
+        assert!(matches!(resolve(&Q[1..], &cut, ready.len()), Err(QualifiedSet)));
+        assert!(matches!(resolve(&Q, &Tb1PreparationCut { round_ref: b"PANEL", ..cut }, ready.len()), Err(PreparationContext)));
+        assert!(matches!(resolve(&Q, &Tb1PreparationCut { observed_through: 11, ..cut }, ready.len()), Err(PreparationContext)));
+        let qualified = resolve(&Q, &cut, ready.len()).unwrap();
+        let values = rows();
+        let released = resolved(&values);
+        let set = Tb1ReleaseSet::new(EXEC, &qualified, &released, 7).unwrap();
+        assert_eq!(set.verify(&set.assemble(336).unwrap()).unwrap(), Q.map(|d| (d, field(100 + d))));
+        assert!(matches!(
+            Tb1ReleaseSet::new(Tb1ReleaseContext { qual_root: [3; 64], ..EXEC }, &qualified, &released, 7),
+            Err(ReleaseContext)
+        ));
+        ready.push(fourth);
+        let cut = Tb1PreparationCut {
+            round_ref: EXEC.round_ref,
+            deadline_position: 12,
+            observed_through: 13,
+            dealer_ends: &ends,
+            ready: &ready,
+        };
+        assert!(matches!(resolve(&Q, &cut, ready.len()), Err(QualifiedSet)));
+        let all = [0, 1, 2, 3, 4, 5, 6];
+        assert!(resolve(&all, &cut, ready.len()).is_ok());
+        let mut incomplete = ends.clone();
+        incomplete[3] = None;
+        let cut = Tb1PreparationCut { dealer_ends: &incomplete, ..cut };
+        assert!(resolve(&Q, &cut, ready.len()).is_ok());
+        assert!(matches!(resolve(&all, &cut, ready.len()), Err(QualifiedSet)));
+    }
+
+    #[test]
     fn each_dealer_uses_its_own_signed_column_and_support_subset() {
         let roster = (1..=7).map(field).collect::<Vec<_>>();
         let mut values = rows();
         values[1][0].1 = field(800);
         values[6][1].1 = field(900);
         let rows = resolved(&values);
-        let set = Tb1ReleaseSet::new(EXEC, &roster, 2, &Q, &rows, 7).unwrap();
+        let set = Tb1ReleaseSet::index_releases(EXEC, &roster, 2, &Q, &rows, 7).unwrap();
         let budget = Q.len() * 56;
         assert!(matches!(set.assemble(budget - 1), Err(Tb1PolynomialError::ReconstructionBudget)));
         let mut cert = set.assemble(budget).unwrap();
@@ -225,10 +312,10 @@ mod tests {
         rows.insert(45, Tb1HolderRelease { holder_slot: 7, ..row });
         rows.insert(46, row); // another reference to the same holder values
         assert!(matches!(
-            Tb1ReleaseSet::new(EXEC, &roster, 2, &Q, &rows, rows.len() - 1),
+            Tb1ReleaseSet::index_releases(EXEC, &roster, 2, &Q, &rows, rows.len() - 1),
             Err(Tb1PolynomialError::ReconstructionBudget)
         ));
-        let set = Tb1ReleaseSet::new(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
+        let set = Tb1ReleaseSet::index_releases(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
         let mut cert = set.assemble(336).unwrap();
         let expected = Q.map(|d| (d, field(100 + d)));
         for id in 40..=46 {
@@ -239,14 +326,14 @@ mod tests {
         assert_eq!(set.verify(&cert).unwrap(), expected);
         rows.insert(47, Tb1HolderRelease { shares: &changed, ..row });
         rows.remove(&26); // one absentee and one equivocator still leave q=5
-        let later = Tb1ReleaseSet::new(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
+        let later = Tb1ReleaseSet::index_releases(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
         let mut alternative = later.assemble(6 * 20).unwrap();
         assert!(alternative.dealers.iter().all(|d| d.supporting_releases == [21, 22, 23, 24, 25]));
         assert_eq!(later.verify(&alternative).unwrap(), expected);
         alternative.dealers[0].supporting_releases = cert.dealers[0].supporting_releases.clone();
         assert_eq!(later.verify(&alternative).unwrap(), expected);
         rows.remove(&25);
-        let lacking = Tb1ReleaseSet::new(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
+        let lacking = Tb1ReleaseSet::index_releases(EXEC, &roster, 2, &Q, &rows, rows.len()).unwrap();
         assert!(matches!(lacking.assemble(336), Err(Tb1PolynomialError::Support)));
     }
 }

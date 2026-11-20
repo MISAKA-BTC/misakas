@@ -274,5 +274,38 @@
         "accepted": 385
       }
     }
+  },
+  "tb1PreparationCut": {
+    "scope": "Native Rust projection of resolved VSS outcomes and authenticated Ready records. Private VSS, signature verification, native snapshot authentication and public activation are outside these tests.",
+    "regression": "qualification_counts_every_eligible_dealer_before_the_fixed_cut",
+    "rustModuleTestsPassed": 8,
+    "countRule": "At least n-f distinct in-roster holders for the same round, dealer, terminal transcript and end anchor, at positions from the VSS end through the fixed deadline inclusive.",
+    "rejections": [
+      "incomplete preparation cut",
+      "foreign round",
+      "missing VSS end",
+      "premature or late Ready",
+      "duplicate or out-of-roster holder",
+      "wrong transcript or end anchor",
+      "omitted qualified dealer",
+      "included unqualified dealer",
+      "different qualification root at release",
+      "over-budget Ready set"
+    ],
+    "crosscheck": {
+      "vectors": "tb1WholeReleaseAssembly.independentFieldOracle",
+      "slots": [
+        7,
+        16,
+        64
+      ],
+      "viewsVerified": 9,
+      "qualificationInputs": "Every dealer has n Ready rows, rotated holder slot (dealer + h) % n. For dealer % 3 == 2, n-f-1 are timely; all other dealers have n-f timely. Remaining rows arrive after the native cut.",
+      "vssEndPosition": 10,
+      "deadlinePosition": 12,
+      "observedThrough": 13,
+      "lateReadyPosition": 13,
+      "allOrderedConstantsMatched": true
+    }
   }
 }

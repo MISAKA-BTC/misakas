@@ -1,6 +1,7 @@
 //! RFC-0061 public dealer-certificate arithmetic. Verifying these equations
 //! is only one part of TB1. The caller authenticates the frozen roster, signed
 //! releases, VSS qualification, purpose, position and limits before using them.
+pub mod qualification;
 pub mod reconstruction;
 pub mod releases;
 
@@ -56,6 +57,8 @@ pub enum Tb1PolynomialError {
     Support,
     InconsistentPoint,
     QualifiedSet,
+    PreparationContext,
+    PreparationBudget,
     ReleaseContext,
     ReconstructionBudget,
 }
