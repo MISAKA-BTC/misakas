@@ -818,7 +818,7 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
 
     def progress_view(stage):
         detail = observe_claim_progress(rpc, expected, original)
-        if stage != 'receipt' and receipt_window_elapsed(original, detail):
+        if stage != 'receipt' and receipt_window_elapsed(original, detail) and unsigned(detail['receiptQuanta']['spentCount']) == 0:
             write_new(data / 'claim-window-elapsed.json', dict(
                 stage=stage, expected=expected, origin=original['origin'], detail=detail))
             raise ValueError(f'protected claim hard deadline passed while waiting for {stage}')

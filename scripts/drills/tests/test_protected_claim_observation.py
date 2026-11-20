@@ -286,6 +286,9 @@ class ObservationTests(unittest.TestCase):
                                    for n in (8, 10)))
             self.assertEqual(receipt_from_producer_log(log, h(4), rpc=rpc, spent_indices=[2]), (h(10), 2))
             self.assertIsNone(receipt_from_producer_log(log, h(4), rpc=rpc, spent_indices=[3]))
+            resumed_log = log.with_name('resumed.log')
+            resumed_log.write_text('')
+            self.assertEqual(receipt_from_producer_log([resumed_log, log], h(4), rpc=rpc, spent_indices=[2]), (h(10), 2))
 
     def test_receipt_must_follow_admission_on_the_observed_selected_chain(self):
         rpc = Rpc()
