@@ -520,6 +520,15 @@ impl TirFixture {
     /// The colluding Panel licenses `claim` (a V2 quorum of every bound seat's Valid, assembled by the chain's own assembler).
     pub async fn license(&self, chain: &mut Chain, floats: &mut [Funding], claim: Hash64) {
         let duties = chain.tc.palw_seat_duties_v2(chain.bonds.clone()).into_iter().filter(|d| d.claim_id == claim).collect::<Vec<_>>();
+        Self::submit_valid_receipts(chain, floats, claim, &duties).await;
+    }
+
+    async fn submit_valid_receipts(
+        chain: &mut Chain,
+        floats: &mut [Funding],
+        claim: Hash64,
+        duties: &[kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2],
+    ) {
         assert!(!duties.is_empty(), "the claim's Panel is bound: {:?}", chain.view(claim));
         let signed_daa = chain.daa();
         let receipts = duties
@@ -1850,7 +1859,8 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         if !declared {
             let child = chain.history.last().unwrap().hash();
             chain.heartbeat(Vec::new()).await;
-            receipt_replay::check_readers(&chain, paid_claim, block, child).await;
+            let anchor = receipt_replay::settle_worker(&mut chain, &fixture, &mut floats, child).await;
+            receipt_replay::check_readers(&chain, paid_claim, block, child, anchor).await;
         }
         assert_eq!(collateral_of(&chain, producer_bond), before, "payment never charges the honest producer");
         eprintln!("[service-tir-frame] honest: claim {paid_claim} Final and paid in receipt block {block} at DAA {}", chain.daa());
@@ -1882,7 +1892,24 @@ fn check_paid_chain(chain: &Chain, claim_id: Hash64, receipt: Hash64, child: Has
     let claim = state.claim(&claim_id).unwrap();
     let PalwClaimPhaseV2::Final { final_daa } = &claim.phase else { panic!("paid claim must be Final") };
     assert!(matches!(&claim.source, PalwClaimSourceV2::FreePrompt { spent, .. } if spent.contains(&spend.quantum_index)));
+    let path = chain.tc.get_virtual_chain_from_block(child.hash(), Some(1)).expect("worker coinbase on selected chain");
+    assert!(path.removed.is_empty());
+    let accepting_block = *path.added.first().expect("a chain block merges the child coinbase");
+    assert_eq!(chain.tc.get_block(accepting_block).unwrap().header.daa_score, entry.block_daa_score);
+    assert!(chain.tc.get_block_acceptance_data(accepting_block).unwrap().iter().any(|merged| {
+        merged.block_hash == child.hash()
+            && merged.accepted_transactions.iter().any(|tx| tx.transaction_id == cb.id() && tx.index_within_block == 0)
+    }));
+    let settlement = chain.tc.palw_settlement_v1(entry.block_daa_score).expect("the node dates the worker UTXO");
     serde_json::json!({
+        "workerAcceptingBlock": accepting_block, "workerAcceptedDaa": entry.block_daa_score,
+        "workerSettlement": {
+            "settled": settlement.settled, "depth": settlement.depth, "pending": settlement.pending,
+            "depthIsLowerBound": settlement.depth_is_lower_bound, "sinkDaa": settlement.sink_daa,
+            "safeFrontierBlock": state.safe_frontier().1, "safeFrontierDaa": settlement.safe_frontier_daa,
+            "safeFrontierBlueScore": settlement.safe_frontier_blue_score, "gateCInForce": settlement.gate_c_in_force,
+            "uncertifiedFinal": settlement.uncertified_final,
+        },
         "claim": claim_id, "quantum": spend.quantum_index, "receipt": receipt, "child": child.hash(),
         "tip": chain.tc.get_sink(), "acceptedDaa": claim.accepted_daa, "finalDaa": final_daa,
         "gateCRequired": kaspa_consensus_core::palw_rfc0018_v1::palw_gate_c_governs_v1(&chain.bundle.state, claim),

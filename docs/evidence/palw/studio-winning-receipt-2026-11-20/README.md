@@ -101,3 +101,11 @@ cmp "$result_dir/1.json" "$result_dir/2.json" && cmp "$result_dir/1.json" "$resu
 ```
 
 保存した同じ T-N1 の DB から、worker の coinbase outpoint を再読した。子ブロックの DAA は 2725、UTXO の受理 DAA は 2726、金額は 320,084,650,080 sompi だった。受理ブロックの native acceptance data でも、子ブロックの先頭取引としてこの coinbase の ID が一度だけ記録されていた。決済照会には UTXO の受理 DAA を使う。[worker UTXO の記録](worker-utxo-acceptance.json)
+
+## T-N1 の当選履歴で確認した決済
+
+元の5,473ブロックを再生した時点では、worker UTXO の受理 DAA 2726 に対し、決済可能な範囲は DAA 1726 までだった。その先に実行済みの IR attempt を追加し、抽選された各 seat が受理ブロックから job を導出して再実行した。execution・trace・output root と価格対象の work に通常の seat 判定を適用し、承認を含む取引を署名して提出した。attempt は DAA 2850 で Final に達した。
+
+DAA 3927 のブロックでは決済深度 1、決済判定は false だった。次の DAA 3928 のブロックで safe frontier が 2726 に達し、同じ worker UTXO が決済済みになった。元の5,473ブロックの全行がバイト単位で一致することを照合し、拡張後の7,879ブロックを同一バイナリの独立3プロセスがそれぞれ genesis から受理した。3つの DB で claim、消費した index 0、受賞ブロック、UTXO の受理ブロック・金額、決済状態が一致した。これは Gate C 有効化前の T-N1 の記録で、Studio main の TFO3 claim の当落は別記した。[決済前後と3プロセスの照合結果](tn1-native-settlement.json)・[Studio main の当落](../studio-main-claim-2026-11-20/result.json)
+
+拡張履歴のファイル名は `misaka-tn1-settled-receipt-20261121.jsonl.zst`。上の再読コマンドで `archive` にこのファイルを指定すると、各 reader は決済 anchor と worker UTXO を照合する。元の履歴から延長を再実行する場合は、1つの reader に `MISAKA_TN1_SETTLED_ARCHIVE` で新しい JSONL の出力先を指定する。

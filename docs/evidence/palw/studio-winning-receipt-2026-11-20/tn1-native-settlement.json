@@ -1,0 +1,109 @@
+{
+  "profile": "T-N1 private historical producer-service fixture",
+  "binarySha256": "b5423ba6a7b97bbd4025b50ecafd931edde30251c3c30013e1131fb7012b660d",
+  "sourceArchiveSha256": "68f482b493efa458b56de0eb965bd9aabcdea14564d877976f4457bff52af983",
+  "extendedArchiveSha256": "5d6597f5b7f00e49d101d69420441140786d7120be73de128f955eb5cc5917bc",
+  "unchangedPrefixBlocks": 5473,
+  "extendedBlocks": 7879,
+  "before": {
+    "acceptedDaa": 1726,
+    "child": "64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd",
+    "childDaa": 2725,
+    "claim": "e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791",
+    "coinbaseAmount": 320084650080,
+    "coinbaseTx": "ee6ed4928107b92aef388d63af9100fcc0677f1e16ed75c26c77d584ad3c29e71323458d3ace551338f7583fbb6d4f27478679a46faa7e2b4503003cfc5e35cb",
+    "finalDaa": 2325,
+    "gateCRequired": false,
+    "outputIndex": 0,
+    "quantum": 0,
+    "receipt": "7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147",
+    "receiptDaa": 2725,
+    "settledThroughChild": false,
+    "tip": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028",
+    "workerAcceptedDaa": 2726,
+    "workerAcceptingBlock": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028",
+    "workerSettlement": {
+      "depth": 0,
+      "depthIsLowerBound": false,
+      "gateCInForce": false,
+      "pending": 0,
+      "safeFrontierBlock": "8644c045d1edd87607e349d99a8b771ad0f4be35965663b0eefb3228eebf2313dc5388333e2447b13f5c77d49af18610a7e68489db4370f887ce25ccc651ad37",
+      "safeFrontierBlueScore": 3473,
+      "safeFrontierDaa": 1726,
+      "settled": false,
+      "sinkDaa": 2726,
+      "uncertifiedFinal": 0
+    }
+  },
+  "after": {
+    "acceptedDaa": 1726,
+    "child": "64525d97405391670bbd1ae7c59d1a67b5f094f02766a2318c9925403e9ec5d05692103491fb9520802c76a6d858668dc2a3ffad558e2151ed4c2610457388fd",
+    "childDaa": 2725,
+    "claim": "e6770642a88b066e39eee4bd5117ac71d4c27693d57221dfeffcbb40a8c417e5390855f43c169758936caf64e55a8599e9783d0cbd8e6da10008cda3f8934791",
+    "coinbaseAmount": 320084650080,
+    "coinbaseTx": "ee6ed4928107b92aef388d63af9100fcc0677f1e16ed75c26c77d584ad3c29e71323458d3ace551338f7583fbb6d4f27478679a46faa7e2b4503003cfc5e35cb",
+    "finalDaa": 2325,
+    "gateCRequired": false,
+    "outputIndex": 0,
+    "quantum": 0,
+    "receipt": "7cb8b072b23da9654adfb099dd637f37e59431caf0d329d9538b06e918b6814a180aa19a71e16e52cf58ef48fcdbfaac6153da5684cbcbfcaabed04156e5a147",
+    "receiptDaa": 2725,
+    "settledThroughChild": true,
+    "settlementAnchor": {
+      "acceptedDaa": 2726,
+      "block": "e9f0d181b4b6eacd566c096e3231a875dd751b1251f6855980b7edf76b1e55cf297c76473e5ea9db4141dfefc01073c7804d353ec5521ed3c9613359301f2b26",
+      "claim": "f45787128eb5cba08b6a5acd561c7259a2208025f6aa390a3bd00ae37b541cc45b8ca9b166e2b6d321109c8bf1ae6ad60a2b41b28c36b6b88fb01be68ee4ce3a",
+      "finalDaa": 2850
+    },
+    "tip": "91df8a3a72d32d8463e3ce757085bb43b440dbf0b5fea20b7b02c7e80225fc0831780a361e5196d7c21cbdfc8d08a4a07eea9f51180ab37223bcab0b89b0f1ba",
+    "workerAcceptedDaa": 2726,
+    "workerAcceptingBlock": "53b8c9fa7376400ec3c4d362950801dda11a06e28460c872c8aaa60ae96805bcffcac0f7727960f78d752b2f1af883d148752f129095d76c4466e2a5569e3028",
+    "workerSettlement": {
+      "depth": 1,
+      "depthIsLowerBound": false,
+      "gateCInForce": false,
+      "pending": 0,
+      "safeFrontierBlock": "e9f0d181b4b6eacd566c096e3231a875dd751b1251f6855980b7edf76b1e55cf297c76473e5ea9db4141dfefc01073c7804d353ec5521ed3c9613359301f2b26",
+      "safeFrontierBlueScore": 5474,
+      "safeFrontierDaa": 2726,
+      "settled": true,
+      "sinkDaa": 3928,
+      "uncertifiedFinal": 0
+    }
+  },
+  "readers": [
+    {
+      "pid": 8982,
+      "blocksRead": 7879,
+      "observationsIdentical": true,
+      "observationSha256": "d380e3e8a9410521e2ca954fdd2d08b21614cb64267395e5127a39cbb418b0f7"
+    },
+    {
+      "pid": 8983,
+      "blocksRead": 7879,
+      "observationsIdentical": true,
+      "observationSha256": "d380e3e8a9410521e2ca954fdd2d08b21614cb64267395e5127a39cbb418b0f7"
+    },
+    {
+      "pid": 8984,
+      "blocksRead": 7879,
+      "observationsIdentical": true,
+      "observationSha256": "d380e3e8a9410521e2ca954fdd2d08b21614cb64267395e5127a39cbb418b0f7"
+    }
+  ],
+  "previousTip": {
+    "tip": "76e203594e060d4842ffad338dcd93010d02f4c546f3aef52227fb0d541c2d147844159ce513d640305ce29cc7f94dc258956e8ef0fffa09c3bbe59e6f144b49",
+    "workerSettlement": {
+      "depth": 1,
+      "depthIsLowerBound": false,
+      "gateCInForce": false,
+      "pending": 0,
+      "safeFrontierBlock": "8644c045d1edd87607e349d99a8b771ad0f4be35965663b0eefb3228eebf2313dc5388333e2447b13f5c77d49af18610a7e68489db4370f887ce25ccc651ad37",
+      "safeFrontierBlueScore": 3473,
+      "safeFrontierDaa": 1726,
+      "settled": false,
+      "sinkDaa": 3927,
+      "uncertifiedFinal": 0
+    }
+  }
+}

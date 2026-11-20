@@ -1280,6 +1280,21 @@ def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on
     for rpc, stamp in zip(clients, stamps):
         if chain_identity(rpc, expected)[1] != stamp:
             raise ContextMoved('a peer moved during settlement readback')
+
+    def settlement_anchor(row):
+        settlement = row['settlement']
+        retired = settlement.get('dnsRetiredAt')
+        depth = unsigned(settlement['depth'])
+        if retired is not None:
+            snapshot = settlement.get('nativeSettlement')
+            require(isinstance(snapshot, dict) and snapshot.get('safe'), 'settled response lacks a native safe block')
+            return (unsigned(retired), hash64(snapshot['safe']), depth)
+        frontier = unsigned(settlement['safeFrontierDaa'])
+        require(frontier >= accepted, 'settled frontier precedes the worker UTXO')
+        return (None, frontier, unsigned(settlement['safeFrontierBlueScore']), depth)
+
+    require(len({settlement_anchor(row) for row in rows}) == 1,
+            'receipt peers disagree on the settlement anchor at the same sink')
     return rows
 
 

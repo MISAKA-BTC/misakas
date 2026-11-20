@@ -101,7 +101,8 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
                            publicRefutationRecorded=False))
         self.dag = dict(sink=self.sink, virtualDaaScore=200)
         self.payout = dict(child=self.child, childDaa=190, output=dict(blockDaaScore=191))
-        self.settled = dict(sinkDaa=199, daaScore=191, available=True, settled=True)
+        self.settled = dict(sinkDaa=199, daaScore=191, available=True, settled=True, depth=1,
+                            safeFrontierDaa=191, safeFrontierBlueScore=210)
         self.clients = [Mock() for _ in range(3)]
         for rpc in self.clients:
             rpc.call.return_value = self.settled
@@ -177,6 +178,24 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
         initial = self.identity.return_value
         self.identity.side_effect = [initial]*8 + [(self.dag, ('new generation',))]
         with self.assertRaises(ContextMoved):
+            receipt_settlement_view(self.clients, self.expected, self.receipt)
+
+    def test_settled_peers_must_agree_on_the_anchor_under_the_active_rules(self):
+        for changed in (dict(safeFrontierDaa=192), dict(safeFrontierBlueScore=211), dict(depth=2)):
+            with self.subTest(changed=changed):
+                self.clients[-1].call.return_value = dict(self.settled, **changed)
+                with self.assertRaisesRegex(ValueError, 'disagree on the settlement anchor'):
+                    receipt_settlement_view(self.clients, self.expected, self.receipt)
+        self.clients[-1].call.return_value = dict(self.settled, safeFrontierDaa=190)
+        with self.assertRaisesRegex(ValueError, 'precedes the worker UTXO'):
+            receipt_settlement_view(self.clients, self.expected, self.receipt)
+
+        native = dict(self.settled, dnsRetiredAt=0, safeFrontierDaa=0, nativeSettlement=dict(safe=self.child))
+        for rpc in self.clients:
+            rpc.call.return_value = native
+        self.assertEqual(len(receipt_settlement_view(self.clients, self.expected, self.receipt)), 3)
+        self.clients[-1].call.return_value = dict(native, nativeSettlement=dict(safe=self.sink))
+        with self.assertRaisesRegex(ValueError, 'disagree on the settlement anchor'):
             receipt_settlement_view(self.clients, self.expected, self.receipt)
 
     def test_expired_unspent_is_a_distinct_outcome_without_a_payout(self):
