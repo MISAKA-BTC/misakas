@@ -1,0 +1,12 @@
+{
+  "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+  "transaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+  "carrierPayloadSha256": "d0cce381a4ec7a4fe6ffe24d36745be3d0e6493091eec6c0d443911b306edc0a",
+  "artifactFileSha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+  "localObserverRefusals": {
+    "studioJob.receipt.execution_root": "outbox roots or network differ",
+    "studioJob.output_root": "outbox roots or network differ",
+    "rail.protected_execution_root": "outbox roots or network differ",
+    "studioRun.claim_id": "queue and outbox name different work"
+  }
+}
