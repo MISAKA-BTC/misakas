@@ -4962,8 +4962,11 @@ mod tests {
             max_models_per_bond: 4,
             average: None,
         };
+        let checked_allocation = PalwModelAllocationPolicyV1 { average: Some(PalwAllocationAverageV1::decided_v1()), ..ap.clone() };
+        let mirror = PalwBondBudgetMirrorV1 { from_daa: 0, policy: p.clone(), allocation: Some((0, checked_allocation)) };
         let mut s = PalwBondBudgetStateV1::new(0, &p);
         let mut j = Vec::new();
+        assert_eq!(s.check_fp_block_room_v1(&mirror, &h(1), 0, 21), Ok(()));
         assert!(s.allocation_bootstrapping_v1(), "no epoch yet");
         s.roll_epoch(&ap, 1, 10, |_| (1_000 * BILI, true), &mut j);
         assert!(s.allocation_bootstrapping_v1(), "an epoch with no capital anywhere: ΣA = 0");
@@ -4985,6 +4988,11 @@ mod tests {
         // The block opportunity the fold refuses on (`ModelBlockOpportunity`): none for the S̄ = 0 model, some for the funded one.
         assert_eq!(s.model_blocks_available_v1(&h(1), 31), 0, "S̄ = 0: refused block opportunity");
         assert!(s.model_blocks_available_v1(&h(2), 31) >= PALW_BUDGET_BLOCK_UNIT_V1, "capital: a block admitted");
+        assert_eq!(s.check_fp_block_room_v1(&mirror, &h(1), 31, 1), Err(PalwBudgetRefusalV1::ModelBlockOpportunity));
+        assert_eq!(s.check_fp_block_room_v1(&mirror, &h(2), 31, 2), Ok(()), "exactly two blocks accrued");
+        assert_eq!(s.check_fp_block_room_v1(&mirror, &h(2), 31, 21), Err(PalwBudgetRefusalV1::ModelBlockOpportunity));
+        assert_eq!(s.check_fp_block_room_v1(&mirror, &h(1), 40, 21), Ok(()), "do not reuse a prior epoch's room");
+        assert_eq!(s.model_block_room_v1(&ap, &h(1), 31), None, "allocation without the block-opportunity rule");
         let r = s.reserve_claim_v1(&p, 1_000 * BILI, h(6), bond(3), Some(h(1)), 31, ask, PalwBudgetOriginV1::Attempt, &mut j).unwrap();
         assert_eq!(r.reward_sompi, 0, "past the bootstrap the S̄ = 0 model's reward is clipped to its (empty) share");
     }

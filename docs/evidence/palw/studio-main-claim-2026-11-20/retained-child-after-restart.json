@@ -1,0 +1,32 @@
+[
+  {
+    "peerPort": 54703,
+    "hash": "f98bff8ebbfb87d045402bfe0f8dc55f0cb740f714a16918f6bd269f3a1051d8237a6279c04b405a0fb1cca09e08ac198a34e613eee141d69cf7f3140b0307bf",
+    "selectedParent": "5e915a8542d11e37c786ec2868c97c94c5f088132da7a0b2d26839f3ffb13ff4c264bdf06bab3e66265a174136ba2528f3b3e4705692f44bedf769ca020b7408",
+    "isChainBlock": true,
+    "isHeaderOnly": false,
+    "blockDaa": 3829,
+    "virtualDaaScore": 3863,
+    "sink": "a560d3d27750f54d6d346452c7ac67a99c16a93eb649219b3a769746b67ac87396c7d4024dab0918ac32cba4adb2dc49788d878fa07525adedeac42e69eddf8c"
+  },
+  {
+    "peerPort": 54713,
+    "hash": "f98bff8ebbfb87d045402bfe0f8dc55f0cb740f714a16918f6bd269f3a1051d8237a6279c04b405a0fb1cca09e08ac198a34e613eee141d69cf7f3140b0307bf",
+    "selectedParent": "5e915a8542d11e37c786ec2868c97c94c5f088132da7a0b2d26839f3ffb13ff4c264bdf06bab3e66265a174136ba2528f3b3e4705692f44bedf769ca020b7408",
+    "isChainBlock": true,
+    "isHeaderOnly": false,
+    "blockDaa": 3829,
+    "virtualDaaScore": 3863,
+    "sink": "a560d3d27750f54d6d346452c7ac67a99c16a93eb649219b3a769746b67ac87396c7d4024dab0918ac32cba4adb2dc49788d878fa07525adedeac42e69eddf8c"
+  },
+  {
+    "peerPort": 54723,
+    "hash": "f98bff8ebbfb87d045402bfe0f8dc55f0cb740f714a16918f6bd269f3a1051d8237a6279c04b405a0fb1cca09e08ac198a34e613eee141d69cf7f3140b0307bf",
+    "selectedParent": "5e915a8542d11e37c786ec2868c97c94c5f088132da7a0b2d26839f3ffb13ff4c264bdf06bab3e66265a174136ba2528f3b3e4705692f44bedf769ca020b7408",
+    "isChainBlock": true,
+    "isHeaderOnly": false,
+    "blockDaa": 3829,
+    "virtualDaaScore": 3863,
+    "sink": "a560d3d27750f54d6d346452c7ac67a99c16a93eb649219b3a769746b67ac87396c7d4024dab0918ac32cba4adb2dc49788d878fa07525adedeac42e69eddf8c"
+  }
+]

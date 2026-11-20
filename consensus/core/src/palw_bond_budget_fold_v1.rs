@@ -1063,11 +1063,8 @@ impl TransitionBuilder<'_> {
         // ADR-0177 (2026-10-14): P_m sets the model's reward-bearing block opportunity too (a rider rides its lead's block, which the
         // lead's acceptance counted). Refused, never clipped: a block opportunity is a whole block.
         if let (Some(m), Some(alloc)) = (model, mirror.allocation_at(ctx.daa_score))
-            && alloc.average.is_some_and(|a| a.block_opportunity)
             && origin != PalwBudgetOriginV1::Rider
-            // Allocation bootstrap (option (b)): an empty allocation limits no block opportunity.
-            && !budget.allocation_bootstrapping_v1()
-            && reservation.block_units > budget.model_blocks_available_v1(&m, ctx.daa_score)
+            && budget.model_block_room_v1(alloc, &m, ctx.daa_score).is_some_and(|room| reservation.block_units > room)
         {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::ModelBlockOpportunity));
         }

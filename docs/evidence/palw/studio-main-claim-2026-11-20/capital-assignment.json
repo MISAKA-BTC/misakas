@@ -1,0 +1,159 @@
+{
+  "carrier": {
+    "id": "e2f4631a3b1112c0ebba13c7b945727fe73004505e1824d78aeac219d0ff7bbbbfa294e641b7e841731d370be9aea0474adffc28a55f7321aa1651a4346e3e26",
+    "amount": 10000000000,
+    "class": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "fee": 287337,
+    "sequence": 1
+  },
+  "peerReadbacks": [
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 4,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3619,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    },
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 4,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3619,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    },
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 4,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3619,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    }
+  ],
+  "nodeProcesses": [
+    {
+      "localJsonRpcPort": 54703,
+      "executableSha256": "943fff6f04fab970907ca136cb6d01b8f6a059f1ba9841c2462b797525451fed"
+    },
+    {
+      "localJsonRpcPort": 54713,
+      "executableSha256": "943fff6f04fab970907ca136cb6d01b8f6a059f1ba9841c2462b797525451fed"
+    },
+    {
+      "localJsonRpcPort": 54723,
+      "executableSha256": "943fff6f04fab970907ca136cb6d01b8f6a059f1ba9841c2462b797525451fed"
+    }
+  ],
+  "afterVmRestart": [
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 5,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3830,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    },
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 5,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3830,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    },
+    {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 5,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3830,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    }
+  ]
+}

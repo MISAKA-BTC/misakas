@@ -57,12 +57,26 @@ def check_expectation(expected):
 def expectation_from_studio(studio_run, studio_job, rail, chain):
     """Bind Studio's job to the submitted protected rail carrier."""
     job = hash64(studio_run['fp_job_id'])
-    require(studio_job.get('object') == 'misaka.request'
-            and studio_job.get('job_id') == job, 'Studio status names another job')
-    require(hash64(studio_job['output_root']) == hash64(studio_run['output_root']),
-            'Studio output changed')
-    claim = hash64(studio_job['claim_id'])
-    txid = hash64(studio_job['submission_txid'])
+    if studio_job.get('schema') == 'misaka.palw.fp-v3-gateway-artifact.v1':
+        # Studio main's mining queue returns the claim and job IDs. The gateway outbox
+        # carries their output receipt. The rail supplies the transaction after signing.
+        receipt = studio_job.get('receipt') or {}
+        require(studio_run.get('status') == 'committed' and studio_job.get('committed') is True
+                and receipt.get('schema') == 'misaka.palw.output-receipt.v1', 'missing committed Studio queue receipt')
+        claim = hash64(studio_run.get('claim_id'))
+        require(job == studio_job.get('fp_job_id') == receipt.get('job_id')
+                and claim == studio_job.get('fp_claim_id') == receipt.get('claim_id'), 'queue and outbox name different work')
+        require(hash64(studio_job.get('output_root')) == receipt.get('output_root')
+                and hash64(receipt.get('execution_root')) == rail.get('protected_execution_root')
+                and hash64(receipt.get('network_domain')) == chain.get('networkDomain'), 'outbox roots or network differ')
+        txid = hash64(rail.get('submitted'))
+    else:
+        require(studio_job.get('object') == 'misaka.request'
+                and studio_job.get('job_id') == job, 'Studio status names another job')
+        require(hash64(studio_job['output_root']) == hash64(studio_run['output_root']),
+                'Studio output changed')
+        claim = hash64(studio_job['claim_id'])
+        txid = hash64(studio_job['submission_txid'])
     require(rail.get('schema') == 'misaka.palw.fp-rail-tx.v1'
             and rail.get('fp_claim_id') == claim and rail.get('submitted') == txid,
             'rail summary names another submitted claim')
@@ -369,7 +383,7 @@ def main():
     inputs = parser.add_mutually_exclusive_group(required=True)
     inputs.add_argument('--expected', type=Path)
     inputs.add_argument('--studio-evidence', type=Path,
-                        help='JSON containing studioRun, studioJob, rail and chain records')
+                        help='JSON with studioRun (queue entry or prompt run), studioJob (gateway outbox or request status), rail and chain')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--previous', type=Path)
     approval_input = parser.add_mutually_exclusive_group()

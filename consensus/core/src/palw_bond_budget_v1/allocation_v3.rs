@@ -353,6 +353,33 @@ impl PalwBondBudgetStateV1 {
         palw_model_available_v1(accrued, &row.weight, &epoch.sum_a, reserved)
     }
 
+    /// The block-unit limit used for a priced lead or free-prompt claim. An empty allocation
+    /// bootstraps without this limit. A funded epoch may have zero room for a particular model.
+    pub fn model_block_room_v1(&self, policy: &PalwModelAllocationPolicyV1, model: &Hash64, daa: u64) -> Option<u64> {
+        (policy.average.is_some_and(|average| average.block_opportunity) && !self.allocation_bootstrapping_v1())
+            .then(|| self.model_blocks_available_v1(model, daa))
+    }
+
+    /// Check a free-prompt price on the captured parent. A pending epoch roll uses a new
+    /// allocation, so its admission remains the accepting fold's decision.
+    pub fn check_fp_block_room_v1(
+        &self,
+        mirror: &PalwBondBudgetMirrorV1,
+        model: &Hash64,
+        daa: u64,
+        quanta: u32,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        if mirror.active_at(daa)
+            && let Some(policy) = mirror.allocation_at(daa)
+            && self.header.allocation.map(|e| e.index) == mirror.allocation_epoch_at(daa)
+            && let Some(room) = self.model_block_room_v1(policy, model, daa)
+            && u64::from(quanta) * PALW_BUDGET_BLOCK_UNIT_V1 > room
+        {
+            return Err(PalwBudgetRefusalV1::ModelBlockOpportunity);
+        }
+        Ok(())
+    }
+
     /// **Reserve `units` of a model's block opportunity this epoch** (the claim's acceptance; never returned early).
     pub fn reserve_model_blocks_v1(&mut self, model: &Hash64, units: u64, j: &mut Vec<PalwBudgetWriteV1>) {
         let Some(epoch) = self.header.allocation else { return };

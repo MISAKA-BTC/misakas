@@ -1,0 +1,33 @@
+{
+  "claimId": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+  "planningDeclarationId": "7065aa7f4a1e54695347b7e278faaf9b15c6cea8809a263fe902dbd5a2632006aaf39d8012d4314d789f7b668d277b90af1dee60b26bd98e044ccd937d63adfd",
+  "protectedQuoteSha256": "4b9bfba3e66acde4789f9215d8e424fa25004ef1814e30b36ea6e23b35d0bc14",
+  "materialSha256": "deec9fd60429e5693561050b8edc0dbe37b6ee51eb5255999156b71f3317bc9a",
+  "bindingSha256": "31dbbdc9a32a1f98625815361aa6d78907ff38903eb600a619605cc90913f45f",
+  "peers": [
+    {
+      "peer": 0,
+      "localJsonRpcPort": 54703,
+      "daa": 3617,
+      "available": true,
+      "quoted": true,
+      "protectedQuoteSha256": "4b9bfba3e66acde4789f9215d8e424fa25004ef1814e30b36ea6e23b35d0bc14"
+    },
+    {
+      "peer": 1,
+      "localJsonRpcPort": 54713,
+      "daa": 3617,
+      "available": true,
+      "quoted": true,
+      "protectedQuoteSha256": "4b9bfba3e66acde4789f9215d8e424fa25004ef1814e30b36ea6e23b35d0bc14"
+    },
+    {
+      "peer": 2,
+      "localJsonRpcPort": 54723,
+      "daa": 3617,
+      "available": true,
+      "quoted": true,
+      "protectedQuoteSha256": "4b9bfba3e66acde4789f9215d8e424fa25004ef1814e30b36ea6e23b35d0bc14"
+    }
+  ]
+}

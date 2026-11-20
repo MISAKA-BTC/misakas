@@ -1,0 +1,124 @@
+{
+  "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+  "carrier": {
+    "submitted": "d964e42784a827cc4713dd0c239d6a635862bf405d8e66876f6b995af1cacc28e01764f8e131c93d23e963afb565351cf7c3f92d7e74b7f1e1f0390af721d4b6",
+    "protected_execution_root": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+    "protected_funding_sompi": 193119700,
+    "quanta": 21,
+    "fee_sompi": 112114700
+  },
+  "observedAcceptance": {
+    "version": 1,
+    "kind": "protectedCarrierTransactionAcceptance",
+    "source": "node-rpc",
+    "expected": {
+      "version": 1,
+      "genesisHash": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+      "consensusParamsId": "ab561ca8997430974c993004330a51cecc662f774b2b32acf74d989626c3112b",
+      "networkDomain": "e8721ed44c1f304d4b0f701e223872c758ebb174ac6766e1da1c3552f9fc627cdd77a6d7b5d9daccbb2beb59f4e2a67d71ee224312b9b626d7154e9e9775f9c6",
+      "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+      "transactionId": "d964e42784a827cc4713dd0c239d6a635862bf405d8e66876f6b995af1cacc28e01764f8e131c93d23e963afb565351cf7c3f92d7e74b7f1e1f0390af721d4b6",
+      "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+      "scanFromBlock": "1d910ff68aff527a781d9c2a8ac7ec151f1b6c87c0466636dee23f7e8d4d14f4ce2ab6f7fadfd9871e60e734baa7a3f52d066cb3854526ea23f0aeb0b7ce7b37"
+    },
+    "context": [
+      "f8182c968b35223219fab4aaeb062b146a3e473ffb9ab184dcabd4ede0225ea98298a0bf5973c3d2fb6834b1e08a118b57b94ee7fadc10f0a160fb60483accd8",
+      "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+      3617,
+      "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+      "ab561ca8997430974c993004330a51cecc662f774b2b32acf74d989626c3112b",
+      0,
+      "",
+      "legacy-stable",
+      true
+    ],
+    "acceptingBlock": "f8182c968b35223219fab4aaeb062b146a3e473ffb9ab184dcabd4ede0225ea98298a0bf5973c3d2fb6834b1e08a118b57b94ee7fadc10f0a160fb60483accd8",
+    "acceptedDaa": 3617,
+    "acceptedTransactionIds": {
+      "acceptedTransactionIds": [
+        "3886cef3489654fbe5d5cc4b56bd602dc73bd4b9a9120e4d72368f285748e6caa85d6c4fd6919388e5aad5dcade9d6ab5581c39f00c380b87d8cd58fc5531166",
+        "d964e42784a827cc4713dd0c239d6a635862bf405d8e66876f6b995af1cacc28e01764f8e131c93d23e963afb565351cf7c3f92d7e74b7f1e1f0390af721d4b6",
+        "015133774922f0360a876bb6d33a52023c16f3ac504f064d05c66e037a19321d9ed86bb613709ac7e1deff4366f0fc1fef5bc2881a01f5b0c23dc6c7123fb102",
+        "0e28ecc1cd28a416e9c9d0ba3bfc153b180ffadecad8ab76bcdb55ca3af73560d84e19f3e97be2bbd765c04c036e115f4c6a2be6ce9e459079a9478260090963",
+        "256c67feea45b306bd3e1667037221f9ee7f16eabc16b19a062231cd3b0e77facc0062213934f69ff602c8d695b4710deb3301f25fdab333581ed2a35455b5ba",
+        "50cb6ac849055265af24fe17687fc59dbac5cc2e95a8948c7429adac6635b7929fd3a9029ec0921ccdd075d30d0905f1c2bca9ee6f2bffbda9251f66990b56f3",
+        "95f6f2f2ee73e16d7a1915700c25b2ca60497420ff76ac7638f271587a668c01de5ffd5bf62e67b730e7a4962c4abb08e9dd611a7e7c2e139d2d99d31fc09f55",
+        "aa1c49aa8c80ca306835c95b2e63fdea38439f4fd4b2312dcf03e1a6b0917a0822ad9c3d15c0fc6dcdf09e2a4837356ad6170bcb34a797fa09b7b78e843fc076",
+        "ed7487cb7e647dbd48241ac714c2b23382d951ece42e7e72ec0c81e8dd6661791a98896866cddc339286d40e1cfe0d2d447919e48fb7a2687cd4f2c395ccfa03"
+      ],
+      "acceptingBlockHash": "f8182c968b35223219fab4aaeb062b146a3e473ffb9ab184dcabd4ede0225ea98298a0bf5973c3d2fb6834b1e08a118b57b94ee7fadc10f0a160fb60483accd8"
+    },
+    "nativeEffectAuthenticated": false
+  },
+  "firstClaimRead": {
+    "available": true,
+    "found": false,
+    "nowDaa": 3618,
+    "viewJson": ""
+  },
+  "readAfterRestart": [
+    {
+      "peer": 0,
+      "claimFound": false,
+      "nowDaa": 3618,
+      "epoch": {
+        "accruedSompi": 421231399505280,
+        "index": 4,
+        "startDaa": 2960,
+        "sumA": "2521321958376"
+      },
+      "allocation": {
+        "availableSompi": 7962590935764,
+        "cPermille": 300,
+        "capitalSompi": "29333270",
+        "epoch": 4,
+        "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+        "reservedSompi": 0,
+        "tier": "registered",
+        "weight": "47660870950"
+      }
+    },
+    {
+      "peer": 1,
+      "claimFound": false,
+      "nowDaa": 3618,
+      "epoch": {
+        "accruedSompi": 421231399505280,
+        "index": 4,
+        "startDaa": 2960,
+        "sumA": "2521321958376"
+      },
+      "allocation": {
+        "availableSompi": 7962590935764,
+        "cPermille": 300,
+        "capitalSompi": "29333270",
+        "epoch": 4,
+        "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+        "reservedSompi": 0,
+        "tier": "registered",
+        "weight": "47660870950"
+      }
+    },
+    {
+      "peer": 2,
+      "claimFound": false,
+      "nowDaa": 3618,
+      "epoch": {
+        "accruedSompi": 421231399505280,
+        "index": 4,
+        "startDaa": 2960,
+        "sumA": "2521321958376"
+      },
+      "allocation": {
+        "availableSompi": 7962590935764,
+        "cPermille": 300,
+        "capitalSompi": "29333270",
+        "epoch": 4,
+        "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+        "reservedSompi": 0,
+        "tier": "registered",
+        "weight": "47660870950"
+      }
+    }
+  ]
+}

@@ -4563,6 +4563,17 @@ impl VirtualStateProcessor {
             (Some(refusal), _) | (None, Some(refusal)) => Err(refusal),
             (None, None) => price,
         };
+        // The free-prompt fold reserves one block per priced quantum. A protected material
+        // quote and ample bond exposure alone cannot reserve the class's accrued opportunity.
+        let price = price.and_then(|price| {
+            use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwStateV2Error};
+            if let (Some(outpoint), Some(mirror), Some(budget)) = (bond, state_params.bond_budget(), state.bond_budget()) {
+                budget
+                    .check_fp_block_room_v1(mirror, &class_id, daa_score, price.quanta)
+                    .map_err(|why| PalwStateV2Error::BondBudgetExhausted { bond: PalwBondKeyV2(outpoint), why: why.to_string() })?;
+            }
+            Ok(price)
+        });
         let bond_room = bond.and_then(|outpoint| {
             // ADR-0152 SR-7: the one committed ledger past `palw_rcore_plus`, as the FP ceiling reads it.
             kaspa_consensus_core::palw_state_v2::palw_fp_bond_room_v2(

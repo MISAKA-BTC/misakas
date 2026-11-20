@@ -78,6 +78,23 @@ class ObservationTests(unittest.TestCase):
         clients[1].call.assert_called_once_with('submitBlock', dict(block=block, allowNonDAABlocks=False))
         clients[2].call.assert_not_called()
 
+    def test_restart_retries_the_single_shared_direct_child_through_native_validation(self):
+        from unittest.mock import Mock
+        from protected_private_registration_run import retry_shared_child
+        clients = [Mock() for _ in range(3)]
+        view = dict(sink=h(7), virtualDaaScore=7, tipHashes=[h(8)])
+        child = dict(header=dict(hash=h(8)), verboseData=dict(hash=h(8), selectedParentHash=h(7),
+                                                             isChainBlock=False, isHeaderOnly=False))
+        accepted = dict(report=dict(type='success'))
+        for client in clients:
+            client.call.return_value = accepted
+        clients[0].call.side_effect = [dict(block=child), accepted]
+        self.assertFalse(retry_shared_child(clients, [view, view, dict(view, tipHashes=[h(9)])]))
+        self.assertFalse(retry_shared_child(clients, [dict(view, tipHashes=[h(8), h(9)])] * 3))
+        self.assertTrue(retry_shared_child(clients, [view] * 3))
+        for client in clients:
+            client.call.assert_called_with('submitBlock', dict(block=child, allowNonDAABlocks=False))
+
     def test_resume_keeps_original_carrier_and_rechecks_each_peer_without_submission(self):
         from protected_private_registration_run import resume_admitted_studio
         clients = [Rpc(), Rpc()]
@@ -268,6 +285,29 @@ class ObservationTests(unittest.TestCase):
                         expectation_from_studio(run, job, rail, rpc.expected)
                 finally:
                     doc[field] = original
+
+    def test_studio_main_queue_requires_the_same_committed_job_roots_and_chain(self):
+        chain = Rpc().expected
+        queue = dict(status='committed', fp_job_id=h(20), claim_id=h(4))
+        receipt = dict(schema='misaka.palw.output-receipt.v1', job_id=h(20), claim_id=h(4),
+                       output_root=h(21), execution_root=h(6), network_domain=chain['networkDomain'])
+        artifact = dict(schema='misaka.palw.fp-v3-gateway-artifact.v1', committed=True, fp_job_id=h(20),
+                        fp_claim_id=h(4), output_root=h(21), receipt=receipt)
+        rail = dict(schema='misaka.palw.fp-rail-tx.v1', fp_claim_id=h(4), submitted=h(5),
+                    protected_execution_root=h(6), protected_funding_sompi=100)
+        self.assertEqual(expectation_from_studio(queue, artifact, rail, chain)['transactionId'], h(5))
+        for record, field, wrong in [(queue, 'status', 'queued'), (artifact, 'committed', False),
+                                     (receipt, 'job_id', h(22)), (queue, 'claim_id', h(22)),
+                                     (receipt, 'output_root', h(22)), (rail, 'protected_execution_root', h(22)),
+                                     (receipt, 'network_domain', h(22)), (rail, 'submitted', None)]:
+            with self.subTest(field=field):
+                old = record[field]
+                record[field] = wrong
+                try:
+                    with self.assertRaises(ValueError):
+                        expectation_from_studio(queue, artifact, rail, chain)
+                finally:
+                    record[field] = old
 
     def test_panel_txid_requires_the_matching_stored_approval(self):
         rpc = Rpc()

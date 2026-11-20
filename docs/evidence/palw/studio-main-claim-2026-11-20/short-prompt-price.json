@@ -1,0 +1,30 @@
+{
+  "queue": {
+    "id": "1a1f8d83bb920dd9b0",
+    "conversation_id": "studio-main-c925751",
+    "message_id": "short-greeting",
+    "prompt": "Hi",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hi"
+      }
+    ],
+    "created_ms": 1795176283065,
+    "status": "committed",
+    "attempts": 1,
+    "not_before_ms": 0,
+    "started_ms": 1795176283066,
+    "finished_ms": 1795176285474,
+    "fp_job_id": "aef59eb300beaf37c1943fb16420535343df4fd03686fcc8b2df467f45d762da7380db1ec42404fce82923eabd10a9296b4f90c10bd6a01d08815868e63f3f99",
+    "claim_id": "b2db3dd6202f1712477c68c3d141eff688c3a4c41bd392ba0607c6ea6ef8e3214523115b051f812a181ab1b43b214c8aa31da9afbe56e81182eb8e0cd61acf14",
+    "answer": "",
+    "prompt_tokens": 10,
+    "completion_tokens": 1,
+    "error": null,
+    "gateway_url": "http://127.0.0.1:54842"
+  },
+  "quanta": 21,
+  "workLeaves": 50595,
+  "submitted": false
+}
