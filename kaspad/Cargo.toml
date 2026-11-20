@@ -117,7 +117,7 @@ positive-miner-client = ["misaka-palw-remote/positive-miner-rocksdb"]
 private-integration-config = ["kaspa-consensus/private-integration-config", "dep:misaka-palw-tir-artifact", "dep:kaspa-wrpc-client", "misaka-palw-sdk/native-rpc"]
 # Explicit process-local historical clock for isolated protected integration.
 # Neither ordinary Args nor private-integration-config alone can activate it.
-private-integration-clock = ["private-integration-config", "kaspa-core/test-clock", "dep:sha3", "dep:kaspa-math"]
+private-integration-clock = ["private-integration-config", "kaspa-core/test-clock", "dep:sha3", "dep:kaspa-math", "sysinfo/linux-tmpfs"]
 # Only private acceptance artifacts opt in to environment-armed OS-kill rendezvous.
 rfc12-import-failpoints = ["private-integration-config", "kaspa-consensus/rfc12-import-failpoints"]
 # The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
