@@ -1,0 +1,23 @@
+{
+  "test_binary_sha256": "7349fd09946875902f4e830e3b31948d8ce3a191c4e97187b3f6008ddfaf24e6",
+  "peer_pids": [
+    79485,
+    79820,
+    79821
+  ],
+  "class_id": "b1da96d186242c16b4015a8a608f31de5be115db4d151bd284c7f1a30c003f03cbb2e0f8af4f8c59a8e39bba23410bedb2af261430823c1ffac1220fd987f905",
+  "inventory": "98ef4077c2d83fb415ac6820ce9433961781e1783226ba40c2392e0e99567de38e53e95140909ff89757c04ff056d3fd142e9162119327f2df3fea48e860e061",
+  "registration_tip": "840693709f082a2f1e1ee291f12fbe2bfc8a8e46c9534458fa337fac4ca3a5b8cb73362797007cdb4ee4050204e406a3a2338f2d40e6a93dc967868f658f1146",
+  "state_root": "d04df4f11dc23285e01248006fab041ddcc4c7ef43d75cc9d1b4afc0fbab6287ee0fa4283a2f2765d7c787e7d783843e4ac9de89f799fa39c35e201760c57a5e",
+  "burn_sompi": 100000000,
+  "stop": {
+    "signatures": 3,
+    "assessment": "ReviewHold",
+    "state": "BftSafetyStop",
+    "market": "open"
+  },
+  "reorg": {
+    "detached_stop_rejected": true,
+    "collateral_restored": 100000000
+  }
+}

@@ -52,6 +52,29 @@ fn depends(block: &Block, output: u16, source: Ref, cut: Option<u16>) -> bool {
 
 impl<'a> LocalInstance<'a> {
     pub fn bind(artifact: &'a TirArtifactV1, manifest: Hash64, final_norm: u16, scales: &[Hash64; ROLES]) -> Result<Self, String> {
+        Self::bind_inventory(artifact, manifest, final_norm, scales, false)
+    }
+
+    /// Evaluate the full portable PALWTIR1 represented by these tensor bytes.
+    /// The full class commits to the ordinary inventory tree. Even when the
+    /// bytes are locally held in sections, no composite root or opening is
+    /// used for this numerical replay or for the signed QF1 descriptor.
+    pub fn bind_full_weights(
+        artifact: &'a TirArtifactV1,
+        manifest: Hash64,
+        final_norm: u16,
+        scales: &[Hash64; ROLES],
+    ) -> Result<Self, String> {
+        Self::bind_inventory(artifact, manifest, final_norm, scales, true)
+    }
+
+    fn bind_inventory(
+        artifact: &'a TirArtifactV1,
+        manifest: Hash64,
+        final_norm: u16,
+        scales: &[Hash64; ROLES],
+        full_weights: bool,
+    ) -> Result<Self, String> {
         let class = artifact.class()?;
         let space = PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
         let p = &space.program;
@@ -91,7 +114,11 @@ impl<'a> LocalInstance<'a> {
         };
         producers[ROLES - 1] = (p.schedule.post, final_norm);
         artifact.check_weights_unmodified()?;
-        let (inventory, _) = artifact.inventory_root()?;
+        let (inventory, _) = if full_weights && artifact.composite_ref().is_some() {
+            kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1(p, artifact).map_err(|e| e.to_string())?
+        } else {
+            artifact.inventory_root()?
+        };
         artifact.check_weights_unmodified()?;
         let class_id = class.class_id(&inventory);
         let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();

@@ -1,0 +1,63 @@
+{
+  "parent": "64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260",
+  "class_id": "2f16e918fafe8cf95a394529a99835d62de033445636c7b82a3b1851c05f0e90e3737cca518fd701b7ced923651d9fd6847328bf5fde9e7b3f0d0c1020e1fbe2",
+  "inventory": "7ba36ffa60680c6307abcddf939861bb3bd985673c5d6fc2a35a23beb959d9317882d17272c90243733f3d64000e98e685839a2dbae37c2f4d8d89a033ee245f",
+  "adapter_root": "6a2a6704dc3fa9c138c44efeff465d42e9e4ffa2d15dc363121411872fc5d30d8a9903b2d0a922d7ebdc2f724388be1fa9a81a2db4b209cf3aed8d09560c2549",
+  "program_sha256": "d64eb9477933692ec9758618da72216593d59f16694f7ac2036500f248b4b99a",
+  "section_bytes": 1684480,
+  "instances": 506,
+  "jobs": [
+    {
+      "source": "3 + 5?",
+      "text": "3 + 5 = 8.<|im_end|>",
+      "input_tokens": 111,
+      "output_ids": [
+        18,
+        488,
+        220,
+        20,
+        284,
+        220,
+        23,
+        13,
+        151645
+      ],
+      "logits_sha256": [
+        "a494fd87018cdd33661d098ab04de2a3417e08eb31b30a9f9e052fe79bc8bf97",
+        "9b63961307bad41290549ab4e49cfafc3588907427db6fb7c1f17bc15eb6ec4a",
+        "f8be9e333805589eda859434b7a2166b7a29c297df80bb00e957e4e9cdd32747",
+        "5f1f186fa845747e89e2183a061948780dbcf22ce5a1aadb4f228e55eb6b5d63",
+        "7f224825aa375817c39d03980ce0bdef4df964ee06b069e162fc4bb66e5367a0",
+        "2463f10d58bba297af49c2ad5ac7247423dbec3595bd207068c88c5c613ed335",
+        "188d5f96c93436081ed9956888dec6523ddb7ab74f2a0a24c074d2a52a476350",
+        "9b6fca8f991c89082e5ac2b546238e5e1b8c8a97652e7d28973ab86545af099a",
+        "df3fc52e45561e558f8ec2007d233a79fe2eab217d3419d6b194de37025253b9"
+      ]
+    },
+    {
+      "source": "What is the capital of France?",
+      "text": "The capital of France is Paris.<|im_end|>",
+      "input_tokens": 113,
+      "output_ids": [
+        785,
+        6722,
+        315,
+        9625,
+        374,
+        12095,
+        13,
+        151645
+      ],
+      "logits_sha256": [
+        "a3d0246d31ed140586f8f34b321b7a94e35b0fa49f43f526a3e9e585f64a6216",
+        "0d7502836999af21ba903292f24e10c4720b9f33aa31ccddee3e6f691c520601",
+        "723e05387840a3b8eb1ae2477bbc749a1273625ab9e8b009c9375790a03fb290",
+        "651746f62d36fa87e88285a398ab85e8c67d42f17424c5d095b873edd6acda52",
+        "5c9cb67ea1205b9806ed934b4b742cd7dd6b378d2e96bac5df5aa18106631af4",
+        "e98f00b2680e3bb19ddbc693c8955a9913af33a21597022004f1ac7c3dbaf1df",
+        "d6df583013977ff713073c0e4ccad2cf9431bf60dbbaa53b27c18a0478d451ef",
+        "64dd2d362523d35682723130d75cea30d7c55f7296fc5cf8e89e01401a9787be"
+      ]
+    }
+  ]
+}

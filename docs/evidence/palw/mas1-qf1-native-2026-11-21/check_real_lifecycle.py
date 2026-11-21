@@ -12,14 +12,14 @@ from check_prediction import qf1, shared_rows
 from check_stop import verify_case
 
 
-def check(log, artifact):
+def check(log, artifact, decode_limit=3):
     pids, (attempt, prompt_json) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64}) tokens=(\[[0-9, ]+\])")
     peers, (cls, descriptor, positions, answer_json, stop, z_hex) = shared_rows(
         log, r"QF1 fixture pid=(\d+) class=(\w+) descriptor=(\w+) positions=(\d+) tokens=(\[[0-9, ]+\]) stop=(\w+) z=(\w+)")
     if peers != pids or cls != artifact["class_id"]:
         raise ValueError("peer or real model class mismatch")
     prompt, answer = json.loads(prompt_json), json.loads(answer_json)
-    schedule = qf1.schedule(prompt, answer, 3)
+    schedule = qf1.schedule(prompt, answer, decode_limit)
     if (schedule["stop_reason"], schedule["processed_positions"]) != (stop.upper(), int(positions)):
         raise ValueError("decode position or Stop")
     ordered = sorted(map(int, pids))
@@ -56,7 +56,7 @@ def check(log, artifact):
                                   list(map(bytes.fromhex, row["siblings"])), roots[3]):
             raise ValueError("TRACE disclosure")
     init = bytes.fromhex(openings[0]["record"])
-    if init != envelope(0, init[5:69] + bytes.fromhex(descriptor) + s + roots[0] + struct.pack("<IH",l,3)):
+    if init != envelope(0, init[5:69] + bytes.fromhex(descriptor) + s + roots[0] + struct.pack("<IH",l,decode_limit)):
         raise ValueError("Init does not bind the signed instance and input")
     h = (len(qf1.DOM_Z) + t * (5 + 2*37*4096) + 5 + 4095) // 4096
     tiles = d - h - t - 3
@@ -69,7 +69,7 @@ def check(log, artifact):
     panel = verify_draw(log, dict(**body, pids=ordered, receipt=receipt, panel_close=close, panel_close_blue_score=int(blue),
                                   panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]))
     return dict(class_id=cls,descriptor=descriptor,attempt=attempt,input_ids=prompt,output_ids=answer,stop=stop,
-                readout_z=z_hex,panel=panel,court=verify_case(log,panel))
+                readout_z=z_hex,panel=panel,court=verify_case(log,panel,decode_limit))
 
 
 def check_pending_freeze(log, artifact):
@@ -288,6 +288,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log",type=Path)
     parser.add_argument("class_check",type=Path)
+    parser.add_argument("--decode-limit", type=int, default=3, help="precommitted generation bound for Original verification")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
     mode.add_argument("--live-offers", action="store_true", help="verify the same signed long offer before and after native capital seasoning")
@@ -309,4 +310,9 @@ if __name__ == "__main__":
         verify = check_model_audit
     elif args.pending_freeze:
         verify = check_pending_freeze
-    print(json.dumps(verify(args.log.read_text(), json.loads(args.class_check.read_bytes())), indent=2))
+    expected = json.loads(args.class_check.read_bytes())
+    if "full" in expected:
+        expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
+    log = args.log.read_text()
+    result = check(log, expected, args.decode_limit) if verify is check else verify(log, expected)
+    print(json.dumps(result, indent=2))

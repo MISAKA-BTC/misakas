@@ -467,3 +467,23 @@ export MISAKA_PRIVATE_GENESIS_RENEW_READ="$OUT/genesis-renew.json"
 隔離枝の実仕事について、受付済み raw block と推論資料を読み戻す試験に、Panel と Gate C の署名を進めるモードを追加した。生成側は Panel の bind 用と Gate C の抽選用の両方で実行した BASE-0 ブロックを使う。各署名の直前に、選出された席・検証者が受け付けた元の header と元の資料に対して、登録モデルの backend で独立再実行する。検証者候補から除外する bond は元の claim から読む。手数料原資は8席の更新を支払った取引の釣銭である。
 
 `MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE` で受け付けた claim 以後の raw block を記録し、`MISAKA_PRIVATE_GENESIS_CERTIFY_READ` を指定した各 reader は同じ branch を検証して、Final、元の claim の Gate C 投票数・transcript、当初の監査 close に対する publication 可否を読み直す。両モードには前節の素材と `MISAKA_PRIVATE_GENESIS_ATTEMPT_READ` の受付記録が必要である。実行ファイル SHA-256 `2cbce58f…6be290` の [BASE-0 再実行と RFC-0041 の回帰試験](genesis-certification-regressions.txt)は双方成功。この2試験は Qwen2.5 の仕事の認証結果を含まない。
+
+## 64 lane 群の補正を使った QF1 の native 実行と登録
+
+36 層の残差を 64 群に分けて固定した係数を native 実行グラフに組み込んだ。旧 Q15 の全重みを保持し、追加した係数を別にコミットする。native と独立 Python 実装は算術と地理の2問で、生成した全17位置の全語彙 logits のハッシュ、各 token、EOS が一致した。[実行結果](qf1-native-tile-decodes.json)
+
+同じ数値グラフのファイル形式ごとに class ID が異なる。親の重みを共有する形式は現行 T12 の Court サイズ計算で作業量の上限に達した。単一ファイル形式では全 8,835,229,568 bytes をストリームで独立に照合し、class ID は `b1da96d1…`。DAA 18,640 の条件で11種の終端の最大 close は 1,422,367 bytes、搬送上限は 3,200,000 bytes。[形式ごとの計測](qf1-native-tile-artifacts.json)
+
+3つの独立したプロセス・DBで単一ファイル形式の class を導出し、署名付き登録、登録 burn、MOE2 市場の開設、MAS1 停止、reorg 後の担保復元を観測した。同じ class の別の登録試験では、未確定の EXEC close で公開と署名が3ピアとも WouldBlock となった。市場試験の予算は隔離用で、QF1 への採掘報酬は未検証。2問の結果は G-USE の判定に使用していない。[登録結果](qf1-native-tile-registration.json)・[登録生ログ](qf1-native-tile-registration.txt)・[EXEC close の照合](qf1-native-tile-registered-freeze.json)
+
+以下の `parent` は先の節で作成した Q15 の全重み、`ex` は SDK の example バイナリ `qf1-8b-artifact`、`out` は書き込み可能な空のディレクトリを指す。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+zstd -dc "$p/qf1-residual-tiles.section.zst" > "$out/scales.section"
+"$ex" pack-tiles "$parent" "$out/generated.section"
+cmp "$out/scales.section" "$out/generated.section"
+"$ex" full-tiles "$parent" "$out/scales.section"
+"$ex" export-tiles "$parent" "$out/scales.section" | python3 -B "$p/check_qf1_full_tiles.py" "$out/scales.section"
+python3 -B "$p/check_real_lifecycle.py" "$p/qf1-native-tile-registered-freeze.txt" "$p/qf1-native-tile-artifacts.json" --pending-freeze
+```

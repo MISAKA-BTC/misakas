@@ -16,6 +16,7 @@ metal = ["misaka-palw-tir-exec/metal"]
 native-rpc = ["dep:kaspa-wrpc-client", "dep:kaspa-rpc-core", "dep:tokio"]
 
 [dependencies]
+tempfile.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-wrpc-client = { workspace = true, optional = true }
 kaspa-rpc-core = { workspace = true, optional = true }
@@ -78,7 +79,6 @@ name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
 
 [dev-dependencies]
-tempfile.workspace = true
 # `census::onboarding`'s tokens are the lifecycle's `OnboardingFailureV1::code()` (a test compares them).
 misaka-palw-challenge.workspace = true
 misaka-palw-tir-sketch = { path = "../tir/sketch" }

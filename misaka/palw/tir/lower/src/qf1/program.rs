@@ -1,6 +1,6 @@
 //! Full fixed-scale experiment from authenticated input ID to greedy output ID.
 //! Parameters of each layer are distinct instances even when the block is reused.
-use super::{AttentionInputParams, DecoderBlockParams, attention_input, decoder_block_output};
+use super::{AttentionInputParams, DecoderBlockParams, align_rms, attention_input_aligned, decoder_block_output_aligned};
 use crate::{LowerError, Result};
 use misaka_palw_tir::{
     DType, Ref, TensorType, TirProgramV1,
@@ -29,6 +29,17 @@ fn constant_scale(p: &mut ProgramBuilder, m: i64, s: i8) -> Narrowing {
 /// The caller supplies the native tiled logit scheme. This produces canonical
 /// program bytes and declares every weight; no eligibility is inferred.
 pub fn fixed_scale_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
+    build_program(tiled_logits, false)
+}
+
+/// Integer residuals retain one immutable fractional scale for each contiguous
+/// group of 64 lanes in each layer. All additional tables are ordinary params
+/// after the fixed-scale inventory, so the authenticated parent can be shared.
+pub fn residual_tile_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
+    build_program(tiled_logits, true)
+}
+
+fn build_program(tiled_logits: [u8; 64], tiles: bool) -> Result<Qf1Program> {
     const VOCAB: u32 = 151936;
     let mut p = ProgramBuilder::new(VOCAB, HISTORY_BOUND_V1_SMALL);
     let embed = p.param("model.embed_tokens.weight", DType::I16, &[VOCAB, 4096], false);
@@ -43,35 +54,83 @@ pub fn fixed_scale_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
     let pre = pre.finish(&[lifted]);
     let gain_narrow = constant_scale(&mut p, 1, 34);
     let eps = |frac: u32| ((1_i128 << (24 + 2 * frac)) + 500_000) / 1_000_000;
-    let residual_eps = p.scalar(DType::I64, eps(15));
-    let head_eps = p.scalar(DType::I64, eps(10));
+    let fixed_eps = (!tiles).then(|| [15, 10].map(|f| p.scalar(DType::I64, eps(f))));
     let gains = [("input_layernorm.weight", 4096), ("self_attn.q_norm.weight", 128), ("self_attn.k_norm.weight", 128)]
         .map(|(n, w)| p.param(n, DType::I32, &[w], true));
     let projections = [("self_attn.q_proj.weight", 4096), ("self_attn.k_proj.weight", 1024), ("self_attn.v_proj.weight", 1024)]
         .map(|(n, r)| projection(&mut p, n, [r, 4096], true));
-    let qkv = AttentionInputParams { gains, eps: [residual_eps, head_eps, head_eps], gain_narrow: [gain_narrow; 3], projections };
     let (m, s) = crate::quant::mul_shift(16.0 / libm::sqrt(128.0));
-    let tail = DecoderBlockParams {
-        rope_cos: p.param("rope.cos", DType::I32, &[8192, 64], false),
-        rope_sin: p.param("rope.sin", DType::I32, &[8192, 64], false),
-        key_history: p.hist_state("key", DType::I16, &[1024], 8192, true),
-        value_history: p.hist_state("value", DType::I16, &[1024], 8192, true),
-        score: constant_scale(&mut p, m, s),
-        value: constant_scale(&mut p, 1, 24),
-        output: projection(&mut p, "self_attn.o_proj.weight", [4096, 4096], true),
-        post_eps: residual_eps,
-        post_gain: p.param("post_attention_layernorm.weight", DType::I32, &[4096], true),
-        post_narrow: gain_narrow,
-        gate: projection(&mut p, "mlp.gate_proj.weight", [12288, 4096], true),
-        up: projection(&mut p, "mlp.up_proj.weight", [12288, 4096], true),
-        product: constant_scale(&mut p, 1, 24),
-        down: projection(&mut p, "mlp.down_proj.weight", [4096, 12288], true),
+    let rope_cos = p.param("rope.cos", DType::I32, &[8192, 64], false);
+    let rope_sin = p.param("rope.sin", DType::I32, &[8192, 64], false);
+    let key_history = p.hist_state("key", DType::I16, &[1024], 8192, true);
+    let value_history = p.hist_state("value", DType::I16, &[1024], 8192, true);
+    let score = constant_scale(&mut p, m, s);
+    let value = constant_scale(&mut p, 1, 24);
+    let output = projection(&mut p, "self_attn.o_proj.weight", [4096, 4096], true);
+    let post_gain = p.param("post_attention_layernorm.weight", DType::I32, &[4096], true);
+    let gate = projection(&mut p, "mlp.gate_proj.weight", [12288, 4096], true);
+    let up = projection(&mut p, "mlp.up_proj.weight", [12288, 4096], true);
+    let product = constant_scale(&mut p, 1, 24);
+    let down = projection(&mut p, "mlp.down_proj.weight", [4096, 12288], true);
+    let final_gain = p.param("model.norm.weight", DType::I32, &[4096], false);
+    let head = projection(&mut p, "lm_head.weight", [VOCAB, 4096], false);
+    let (ingress_eps, post_eps, final_eps) = match fixed_eps {
+        Some([res, head]) => ([res, head, head], res, res),
+        None => {
+            let ingress = ["tile.input.eps", "tile.q.eps", "tile.k.eps"].map(|n| p.param(n, DType::I64, &[], true));
+            (ingress, p.param("tile.post.eps", DType::I64, &[], true), p.param("tile.final.eps", DType::I64, &[], false))
+        }
     };
+    let mut qkv = AttentionInputParams { gains, eps: ingress_eps, gain_narrow: [gain_narrow; 3], projections };
+    let mut tail = DecoderBlockParams {
+        rope_cos,
+        rope_sin,
+        key_history,
+        value_history,
+        score,
+        value,
+        output,
+        post_eps,
+        post_gain,
+        post_narrow: gain_narrow,
+        gate,
+        up,
+        product,
+        down,
+    };
+    let mut final_factor = None;
+    let mut input_factor = None;
+    let mut skip_post = None;
+    let mut deltas = None;
+    if tiles {
+        tail.product.s = p.param("tile.product.shift", DType::I8, &[], true);
+        input_factor = Some(p.param("tile.input.factor", DType::I32, &[4096], true));
+        let post_factor = p.param("tile.post.factor", DType::I32, &[4096], true);
+        let skip = p.param("tile.skip.shift", DType::I8, &[4096], true);
+        skip_post = Some((Narrowing::new(tail.product.m, skip, None), post_factor));
+        deltas =
+            Some(["tile.q.delta", "tile.k.delta", "tile.v.delta", "tile.up.delta", "tile.o.delta", "tile.down.delta"].map(|name| {
+                let shape: &[u32] = if matches!(name, "tile.o.delta" | "tile.down.delta") { &[4096] } else { &[] };
+                p.param(name, DType::I8, shape, true)
+            }));
+        final_factor = Some(p.param("tile.final.factor", DType::I32, &[4096], false));
+    }
     let carry = vec![TensorType::fixed(DType::I16, &[4096])];
     let mut block = p.block("decoder", carry.clone());
     let x = Ref::CarryIn(0);
-    let a = attention_input(&mut block, x, &qkv)?;
-    let y = decoder_block_output(&mut block, x, &a, &tail)?;
+    if let Some([q, k, v, up, o, down]) = deltas {
+        for (scale, delta) in qkv
+            .projections
+            .iter_mut()
+            .map(|(_, n)| n)
+            .chain([&mut tail.up.1, &mut tail.output.1, &mut tail.down.1])
+            .zip([q, k, v, up, o, down])
+        {
+            scale.s = block.add(scale.s, delta, DType::I32);
+        }
+    }
+    let a = attention_input_aligned(&mut block, x, &qkv, input_factor)?;
+    let y = decoder_block_output_aligned(&mut block, x, &a, &tail, skip_post)?;
     // Separate the two sides of the history reduction and the large MLP
     // projections so each terminal dispute fits the shipped t12 court.
     for site in [a.q, y.attention, y.after_attention, y.product] {
@@ -79,10 +138,9 @@ pub fn fixed_scale_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
     }
     let hidden = block.commit(y.residual);
     let decoder = block.finish(&[hidden]);
-    let final_gain = p.param("model.norm.weight", DType::I32, &[4096], false);
-    let head = projection(&mut p, "lm_head.weight", [VOCAB, 4096], false);
     let mut post = p.block("prediction", carry);
-    let norm = post.rms_gain_codes(x, residual_eps, final_gain, &gain_narrow);
+    let aligned = align_rms(&mut post, x, final_factor);
+    let norm = post.rms_gain_codes(aligned, final_eps, final_gain, &gain_narrow);
     let Ref::Node(final_norm) = post.commit(norm) else { unreachable!() };
     let logits = post.a16_matmul(head.0, norm, &head.1, true);
     let Ref::Node(logits_node) = post.commit(logits) else { unreachable!() };

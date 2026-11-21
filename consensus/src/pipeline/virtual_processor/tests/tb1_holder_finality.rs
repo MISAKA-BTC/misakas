@@ -280,6 +280,28 @@ async fn run(stable: bool, registered: bool) {
     let tokenizer = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER");
     assert!(full.is_none() || (stable && tokenizer.is_some()), "the full class uses the stable round and pinned tokenizer");
     let held = full.as_ref().map(|p| misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(p)).unwrap());
+    let tiles = std::env::var_os("MISAKA_PRIVATE_QF1_TILES").map(|path| {
+        let parent = held.as_ref().expect("QF1 tile scales require their registered parent");
+        let recipe = misaka_palw_sdk::qf1_local::residual_tiles::Candidate::over(parent).unwrap();
+        let asset = recipe.open(parent, Path::new(&path)).unwrap();
+        (recipe, asset)
+    });
+    let (recipe, held) = match tiles {
+        Some((recipe, asset)) => (Some(recipe), Some(asset)),
+        None => (None, held),
+    };
+    let exercise = tokenizer.as_ref().map(|_| match held {
+        Some(a) => {
+            let norm = recipe.as_ref().map_or_else(|| misaka_palw_sdk::qf1_local::program().unwrap().final_norm, |r| r.final_norm());
+            (a, norm)
+        }
+        None => prediction::artifact(&dir.path().join("schedule.palwtir")),
+    });
+    let instance = exercise.as_ref().map(|(a, norm)| match (&recipe, &full) {
+        (Some(candidate), _) => candidate.bind_full(a).unwrap(),
+        (_, Some(_)) => misaka_palw_sdk::qf1_local::bind(a).unwrap(),
+        _ => prediction::bind(a, *norm),
+    });
     let parts = if registered {
         let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
         let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
@@ -296,9 +318,8 @@ async fn run(stable: bool, registered: bool) {
     let mut registered_quote = None;
     let mut quote_anchor_state = None;
     let registration = if registered {
-        let artifact = held.as_ref().unwrap();
-        let class = artifact.class().unwrap();
-        let inventory = artifact.inventory_root().unwrap().0;
+        let class = exercise.as_ref().unwrap().0.class().unwrap();
+        let inventory = instance.as_ref().unwrap().identity().inventory;
         let class_id = class.class_id(&inventory);
         let filename = "held-registration.json";
         let prefix: Vec<Block> = if let Some(path) = &child_dir {
@@ -469,15 +490,6 @@ async fn run(stable: bool, registered: bool) {
         )
         .is_err()
     );
-    // Optional non-rewarding RFC-0066 exercise, with the real pinned tokenizer.
-    let exercise = tokenizer.as_ref().map(|_| match held {
-        Some(a) => (a, misaka_palw_sdk::qf1_local::program().unwrap().final_norm),
-        None => prediction::artifact(&dir.path().join("schedule.palwtir")),
-    });
-    let instance = exercise.as_ref().map(|(a, norm)| match &full {
-        Some(_) => misaka_palw_sdk::qf1_local::bind(a).unwrap(),
-        None => prediction::bind(a, *norm),
-    });
     if let Some((block, class_id)) = registration {
         assert_eq!(instance.as_ref().unwrap().identity().class, class_id);
         assert!(node.api().is_chain_ancestor_of(block, parent).unwrap());
@@ -524,7 +536,7 @@ async fn run(stable: bool, registered: bool) {
         } else {
             terms.target
         },
-        decode_tokens: 3,
+        decode_tokens: if recipe.is_some() { 16 } else { 3 },
         max_leaves: if full.is_some() { 32_000_000 } else { terms.max_leaves },
         ..terms
     });

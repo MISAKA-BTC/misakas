@@ -1,4 +1,5 @@
 //! Node-side pins for the non-rewarding RFC-0066 fixed-scale instance.
+pub mod residual_tiles;
 use kaspa_consensus_core::{
     palw_qf1::{self, ROLES},
     palw_step_refute::tiled_logits_scheme_id_v1,

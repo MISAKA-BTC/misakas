@@ -82,6 +82,24 @@ async fn heavier_fork(env: &Env, common: &Block) -> (Vec<Block>, Hash64) {
     (blocks, chain.tip_state().1.state_root())
 }
 
+/// Each process derives the full PALWTIR1 registration root from every tensor.
+fn held_full_tile_case() -> Option<Case> {
+    use misaka_palw_sdk::qf1_local::residual_tiles::Candidate;
+    use misaka_palw_tir_exec::node::TirArtifactV1;
+    use std::path::Path;
+    let section = std::env::var_os("MISAKA_PRIVATE_QF1_TILES")?;
+    let path = std::env::var_os("MISAKA_PRIVATE_QF1_FULL").expect("held fixed-scale parent");
+    let parent = TirArtifactV1::open(Path::new(&path)).unwrap();
+    let candidate = Candidate::over(&parent).unwrap();
+    let source = candidate.open(&parent, Path::new(&section)).unwrap();
+    let (class_id, root) = candidate.full_identity(&source).unwrap();
+    let class = source.class().unwrap();
+    assert_eq!(class.class_id(&root), class_id);
+    assert_ne!(class_id, candidate.bind(&source).unwrap().identity().class);
+    println!("full tile tensors pid={} class={class_id} inventory={root}", std::process::id());
+    Some(Case { class, root, name: "full QF1 residual tiles".into(), real_root: true })
+}
+
 /// Independently accept a signed registration, then reorganize onto a branch without it.
 #[tokio::test]
 async fn private_moe2_three_process_registration() {
@@ -93,6 +111,8 @@ async fn private_moe2_three_process_registration() {
     assert!(genesis.classes_iter().all(|(key, _)| genesis.model_market(key).is_none()));
     const PEER_INPUT: &str = "MISAKA_TEST_MOE2_REGISTRATION_BLOCKS";
     let peer_input = std::env::var_os(PEER_INPUT);
+    let full = held_full_tile_case();
+    let full_id = full.as_ref().map(|c| (c.class.class_id(&c.root), c.root));
     let (class_id, artifact_root, blocks, expected, fork, fork_root, remote_control, remote_economics) =
         if let Some(ref path) = peer_input {
             let replay: RegistrationReplay = serde_json::from_reader(File::open(path).unwrap()).unwrap();
@@ -112,23 +132,28 @@ async fn private_moe2_three_process_registration() {
                 Some(replay.economics),
             )
         } else {
-            let c = match std::env::var_os("MISAKA_PRIVATE_QF1_FULL").or_else(|| std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT")) {
-                Some(path) => {
-                    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(std::path::Path::new(&path)).unwrap();
-                    Case {
-                        class: artifact.class().unwrap(),
-                        root: artifact.inventory_root().unwrap().0,
-                        name: "held TIR".into(),
-                        real_root: true,
+            let c = full.unwrap_or_else(|| {
+                match std::env::var_os("MISAKA_PRIVATE_QF1_FULL").or_else(|| std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT")) {
+                    Some(path) => {
+                        let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(std::path::Path::new(&path)).unwrap();
+                        Case {
+                            class: artifact.class().unwrap(),
+                            root: artifact.inventory_root().unwrap().0,
+                            name: "held TIR".into(),
+                            real_root: true,
+                        }
                     }
+                    None => case("moe-top2-shared"),
                 }
-                None => case("moe-top2-shared"),
-            };
+            });
             let m = mine_registration_on(env, &c, card).await;
             env = m.env;
             let (fork, fork_root) = heavier_fork(&env, &m.blocks[0]).await;
             (m.class_id, c.root, m.blocks, None, fork, fork_root, None, None)
         };
+    if let Some(expected) = full_id {
+        assert_eq!(expected, (class_id, artifact_root));
+    }
     let (tip, state) = env.chain.tip_state();
     assert_eq!(tip, blocks.last().unwrap().hash());
     let class = state.class(&class_id).expect("registered class");

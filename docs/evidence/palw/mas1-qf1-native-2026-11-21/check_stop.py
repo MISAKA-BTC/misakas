@@ -12,7 +12,7 @@ def check(log):
     return verify_case(log, check_panel(log))
 
 
-def verify_case(log, panel):
+def verify_case(log, panel, decode_limit=3):
     peers, fields = shared_rows(log, r"TB1 Court Stop pid=(\d+) original=([0-9a-f]{128}) case=([0-9a-f]{128}) "
                                 r"verdict=([0-9a-f]{128}) result=(\w+) witness=([0-9a-f]+)")
     original, case, verdict, outcome, wire = fields
@@ -36,7 +36,7 @@ def verify_case(log, panel):
             raise ValueError("unauthenticated case material")
     reason = 0 if token in qf1.EOS else 1
     expected = struct.pack("<BIIIIB", 3, 13, t, l+t-1, token, reason)
-    if stop != expected or (token not in qf1.EOS and t != 3) or outcome != "ChallengeNotEstablished":
+    if stop != expected or (token not in qf1.EOS and t != decode_limit) or outcome != "ChallengeNotEstablished":
         raise ValueError("honest Stop or local verdict differs from reference")
     return dict(original=original, case=case, verdict=verdict, result=outcome, token=token,
                 answer_index=t-1, stop_index=stop_index, processed_positions=l+t-1, witness_bytes=len(wire),

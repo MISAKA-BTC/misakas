@@ -2,8 +2,8 @@
 //! descriptor's conversion recipe. These builders only emit ordinary TIR.
 mod program;
 mod weights;
+pub use program::{Qf1Program, fixed_scale_program, residual_tile_program};
 pub use weights::{INVENTORY, visit_fixed_scale_weights};
-pub use program::{Qf1Program, fixed_scale_program};
 
 use crate::{LowerError, Result};
 use misaka_palw_tir::{DType, Ref, TensorType, builder::BlockBuilder, library::Narrowing};
@@ -31,6 +31,21 @@ pub struct AttentionInput {
 /// Lower the first operations of any of the 36 layers. Q and K normalization
 /// precede rotary position encoding; V stays in its projection's code scale.
 pub fn attention_input(b: &mut BlockBuilder<'_>, residual: Ref, p: &AttentionInputParams) -> Result<AttentionInput> {
+    attention_input_aligned(b, residual, p, None)
+}
+
+fn align_rms(b: &mut BlockBuilder<'_>, codes: Ref, factor: Option<Ref>) -> Ref {
+    let Some(factor) = factor else { return codes };
+    let f = b.clamp(factor, 1, 32768, DType::I32);
+    b.mul(codes, f, DType::I64)
+}
+
+fn attention_input_aligned(
+    b: &mut BlockBuilder<'_>,
+    residual: Ref,
+    p: &AttentionInputParams,
+    factor: Option<Ref>,
+) -> Result<AttentionInput> {
     // Check geometry before adding any nodes to the caller's block.
     if b.ty(residual) != TensorType::fixed(DType::I16, &[4096]) {
         return Err(LowerError::not_lowerable("QF1 residual must be i16[4096]"));
@@ -45,7 +60,8 @@ pub fn attention_input(b: &mut BlockBuilder<'_>, residual: Ref, p: &AttentionInp
             return Err(LowerError::not_lowerable("QF1 Q/K/V weights have the wrong shape or dtype"));
         }
     }
-    let input_norm = b.rms_gain_codes(residual, p.eps[0], p.gains[0], &p.gain_narrow[0]);
+    let aligned = align_rms(b, residual, factor);
+    let input_norm = b.rms_gain_codes(aligned, p.eps[0], p.gains[0], &p.gain_narrow[0]);
     let [q, k, v] = p.projections.each_ref().map(|(weight, n)| b.a16_matmul(*weight, input_norm, n, false));
     let q_heads = b.reshape_fixed(q, &[32, 128]);
     let q_norm = b.rms_gain_codes(q_heads, p.eps[1], p.gains[1], &p.gain_narrow[1]);
@@ -89,6 +105,16 @@ pub fn decoder_block_output(
     input: &AttentionInput,
     p: &DecoderBlockParams,
 ) -> Result<DecoderBlockOutput> {
+    decoder_block_output_aligned(b, residual, input, p, None)
+}
+
+fn decoder_block_output_aligned(
+    b: &mut BlockBuilder<'_>,
+    residual: Ref,
+    input: &AttentionInput,
+    p: &DecoderBlockParams,
+    tiles: Option<(Narrowing, Ref)>,
+) -> Result<DecoderBlockOutput> {
     use misaka_palw_tir::{library::attn::AttnCfg, program::INPUT_POS};
 
     for (weight, shape) in [(p.output.0, [4096, 4096]), (p.gate.0, [12288, 4096]), (p.up.0, [12288, 4096]), (p.down.0, [4096, 12288])]
@@ -129,9 +155,11 @@ pub fn decoder_block_output(
         },
     );
     let output = b.a16_matmul(p.output.0, attention, &p.output.1, false);
-    let sum = b.add(residual, output, DType::I32);
+    let skip = tiles.map_or(residual, |(scale, _)| b.narrow_codes(residual, &scale));
+    let sum = b.add(skip, output, DType::I32);
     let after_attention = b.clamp(sum, -32767, 32767, DType::I16);
-    let norm = b.rms_gain_codes(after_attention, p.post_eps, p.post_gain, &p.post_narrow);
+    let aligned = align_rms(b, after_attention, tiles.map(|(_, factor)| factor));
+    let norm = b.rms_gain_codes(aligned, p.post_eps, p.post_gain, &p.post_narrow);
     let gate = b.a16_matmul(p.gate.0, norm, &p.gate.1, true);
     let up = b.a16_matmul(p.up.0, norm, &p.up.1, false);
     let activation = b.silu(gate);
