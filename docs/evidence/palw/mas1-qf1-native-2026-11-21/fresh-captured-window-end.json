@@ -1,0 +1,13 @@
+{
+  "reader": 10387,
+  "slot": 0,
+  "tip": "50f5791a36918ef8e486edcf4893144016bc469ebbd8115b8103cf6d3cccae490a6a9ff3bb9fc4b9073a6b3a173f203caeb4f2bd88a750dbf9e2dd3bce2bf95f",
+  "daa": 37758,
+  "deadline": 90641,
+  "state": "975c6beba32340bbffa97b5239fb730c4076a8c07e9a0d785e936ad4bacdd7200558f8c137ddf7def2e834b39f3d1c6bdc32daf21b75be8f99ca2142b89bb2b5",
+  "safe": "5292996bea7057622435449112b9b501e1bc0eadfb3b1b6e9f9f2371c503314cd96cea658a716db81b9b812b301a668a9666218c819ca15e8dddf4baf5407f7d",
+  "advisory_finalized": "98da02e77e744c1f2545e906a5117b132267d8fb120f3dfcaab1e583536a93200f7a99cbca84ef261ee0550cd4b3ce252ab68eb6b817d4cbd1ee02a4235ed09d",
+  "holder_gate": "WouldBlock: native finalized head unavailable",
+  "binary_sha256": "3713a40548242dfbfa7bda19a579f49693d8d58a9618f6d942fc139cd402118c",
+  "captured_checkpoint": "98da02e77e744c1f2545e906a5117b132267d8fb120f3dfcaab1e583536a93200f7a99cbca84ef261ee0550cd4b3ce252ab68eb6b817d4cbd1ee02a4235ed09d"
+}

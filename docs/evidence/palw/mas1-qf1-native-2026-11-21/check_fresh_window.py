@@ -110,9 +110,11 @@ def check_maturity(window, native_log):
                 finalized=ready["finalized"]["finalized"], publication=row["publication"])
 
 
-def check_held_endpoint(window, native_log):
+def check_held_endpoint(window, native_log, *, captured=False):
     maturity = check_maturity(window, native_log)
-    require(maturity == json.loads((HERE / "fresh-work-maturity.json").read_bytes()),
+    original = json.loads((HERE / "fresh-work-maturity.json").read_bytes())
+    allowed = {"reader", "binary_sha256"} if captured else set()
+    require({k for k in original if original[k] != maturity[k]} == allowed,
             "terminal transcript does not reproduce the earlier funded work observation")
     log = native_log.read_text()
     [(pid, end)] = records(log, "fresh audit window end")
@@ -131,8 +133,17 @@ def check_held_endpoint(window, native_log):
             "sign only on an independently finalized close:" in log and
             "test result: FAILED. 0 passed; 1 failed" in log and "fresh audit signed holder=" not in log,
             "expected the native custody refusal")
-    return dict(reader=pid, slot=end["slot"], tip=end["tip"], daa=end["daa"], deadline=window["deadline"],
+    result = dict(reader=pid, slot=end["slot"], tip=end["tip"], daa=end["daa"], deadline=window["deadline"],
                 state=end["state"], safe=readiness["safe"], advisory_finalized=point, holder_gate=end["publication"])
+    if captured:
+        [marker] = re.findall(r"^fresh audit pruning checkpoint tip=([0-9a-f]+) header_point=([0-9a-f]+) captured=([0-9a-f]+)$", log, re.M)
+        prior = json.loads((HERE / "fresh-holder-window-end.json").read_bytes())
+        require(marker == (window["tip"], point, point) and "configured as an archival node" in log and
+                log.index("fresh audit pruning checkpoint") < log.index("fresh audit window end") and
+                all(v == prior[k] for k, v in result.items() if k != "reader"),
+                "archival replay did not capture the same checkpoint or reproduce the custody decision")
+        result.update(binary_sha256=binary, captured_checkpoint=point)
+    return result
 
 
 if __name__ == "__main__":
@@ -142,9 +153,12 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--maturity-log", type=Path, help="cold holder log through the first native closed-fact row")
     group.add_argument("--held-endpoint-log", type=Path, help="holder refusal at the first covering pruning point")
+    group.add_argument("--captured-endpoint-log", type=Path, help="separate archival replay after durable checkpoint capture")
     args = parser.parse_args()
     window = verify(args.branch, args.writer_log)
-    if args.held_endpoint_log:
+    if args.captured_endpoint_log:
+        window = check_held_endpoint(window, args.captured_endpoint_log, captured=True)
+    elif args.held_endpoint_log:
         window = check_held_endpoint(window, args.held_endpoint_log)
     elif args.maturity_log:
         window = check_maturity(window, args.maturity_log)

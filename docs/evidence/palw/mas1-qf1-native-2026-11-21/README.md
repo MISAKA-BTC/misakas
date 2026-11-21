@@ -826,3 +826,10 @@ python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" 
 python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
   --held-endpoint-log "$p/fresh-holder-window-end.log" | cmp - "$p/fresh-holder-window-end.json"
 ```
+
+履歴を保持する別プロセス（PID 10387）で同じ52,170ブロックを再生し、台帳の pruning snapshot が `98da02e7…` に保存されたことを確認してから、同じ先端で holder 0 に署名を要求した。成熟した work、先端の状態 root、期限、公開判定は先のプロセスと一致した。保存完了後も署名時の settlement snapshot から finalized head は取得できず、holder は署名を拒否した。[保存から署名拒否までの連続ログ](fresh-captured-window-end.log)・[独立照合結果](fresh-captured-window-end.json)
+
+```sh
+python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
+  --captured-endpoint-log "$p/fresh-captured-window-end.log" | cmp - "$p/fresh-captured-window-end.json"
+```
