@@ -8,7 +8,7 @@ from pathlib import Path
 from check_fresh_audit import records, verify as verify_audit
 from check_fresh_final import panel, walk
 from check_funded_certificate import verify as verify_certificate
-from check_genesis_draw import verify_readers
+from check_genesis_draw import attempt_identity, verify_readers
 from check_legacy_work import HERE, require
 
 
@@ -33,29 +33,23 @@ def studio_economics(path, binary):
                 miner_sompi=6_400_000_000, panel_sompi=1_600_000_000)
 
 
-def verify(root, winning, arithmetic_work=False):
-    if arithmetic_work:
-        fresh = verify_audit(root, arithmetic_work=True)
-        replay = fresh["native_replay"]
-        writer = root / "funded-0.log"
-    else:
-        fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
-        replay = fresh["cold_8k_replay"]
-        writer = root / "funded-1.log"
-    original = fresh["native_8k_draw"]
-    claim = original["claim"]
-    final = panel(root, arithmetic_work)
+def funded_draw(root, final, writer):
+    claim = final["claim"]
     log = writer.read_text()
     [(pid, recovered)] = records(log, "legacy genesis recovered")
     require(recovered["claim"] == claim and recovered["tip"] == final["tip"] and recovered["state"] == final["state"]
             and recovered["final_daa"] == final["daa"] and recovered["draws"] == recovered["approvals"] == 0
             and recovered["outcome"] == "None", "writer did not resume the uncredited Final")
+    require(recovered["accepted"] == final["accepted"] and recovered["replay"] == final["transcript"]
+            and log.splitlines()[0] == "test_binary_sha256="+final["binary_sha256"], "wrong recovered original or binary")
     final_branch = json.loads((root / "final.json").read_bytes())
     draw, headers = walk(root / "funded/draw.json", final["tip"], claim, final_branch["blocks"][-1]["header"]["blueScore"])
     [(c, anchor_claim, anchor, end, drawn_at, positions)] = re.findall(
         r"^funded floor draw claim=(\w+) anchor_claim=(\w+) block=(\w+) tip=(\w+) daa=(\d+) positions=(\d+)$", log, re.M)
     require(c == claim and end == draw["tip"] and headers[anchor]["powAlgoId"] == 6 and int(positions) == 75
             and final["daa"] <= headers[anchor]["daaScore"] <= int(drawn_at) < recovered["certify_by_daa"], "wrong funded draw")
+    _, _, observed_anchor_claim, _, _ = attempt_identity(headers[anchor])
+    require(anchor_claim == observed_anchor_claim and headers[end]["daaScore"] == int(drawn_at), "different draw anchor or DAA")
     [(c, base, opportunity, at, floor, card, amount, capacity, deadline)] = re.findall(
         r"^funded floor opportunity claim=(\w+) base=(\w+) tip=(\w+) daa=(\d+) floor=(\w+) card=(\d+) assigned=(\d+) microblocks=(\d+) deadline=(\d+)$",
         log, re.M)
@@ -70,9 +64,30 @@ def verify(root, winning, arithmetic_work=False):
     views = records(log, "legacy genesis boundary")
     [(txid, index)] = re.findall(r"\(([0-9a-f]{128}), (\d+)\)", views[-1][1]["cards"][int(card)]["bond"])
     require(payload[3:71] == bytes.fromhex(txid) + struct.pack("<I", int(index)), "wrong funding bond")
+    return dict(card=int(card), model=floor, collateral_sompi=int(amount), microblocks=int(capacity), daa=int(at),
+                anchor_claim=anchor_claim, anchor=anchor, tip=end), dict(drawn_daa=int(drawn_at), tip=end,
+                positions=int(positions), deadline=int(deadline), blocks=len(headers), writer=pid)
+
+
+def verify(root, winning, arithmetic_work=False, draw_only=False):
+    if arithmetic_work:
+        fresh = verify_audit(root, arithmetic_work=True)
+        replay = fresh["native_replay"]
+        writer = root / "funded-0.log"
+    else:
+        fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
+        replay = fresh["cold_8k_replay"]
+        writer = root / "funded-1.log"
+    original = fresh["native_8k_draw"]
+    claim = original["claim"]
+    final = panel(root, arithmetic_work)
+    funding, draw = funded_draw(root, final, writer)
+    pid = draw["writer"]
+    if draw_only:
+        return dict(panel=final, funding=funding, draw=draw)
     cert = verify_certificate(root / "funded/certification.json", writer, winning,
                               original=dict(original, reexecution=replay),
-                              funded=dict(tip=end, drawn_daa=int(drawn_at)))
+                              funded=draw)
     require(cert["writer"] == pid and cert["binary_sha256"] == final["binary_sha256"], "different writer build")
     peers = [root / f"read-cert-{i}.log" for i in (0, 2)]
     cold = verify_readers(original, peers, 2)
@@ -99,8 +114,7 @@ def verify(root, winning, arithmetic_work=False):
                 and audit["daa"] + wait["waitDaa"] == wait["readyDaa"], "different pending work or signed release window")
         observations.append((row, audit))
     require(observations[0] == observations[1], "readers disagree about remaining work")
-    return dict(panel=final, funding=dict(card=int(card), model=floor, collateral_sompi=int(amount), microblocks=int(capacity),
-                                         daa=int(at), anchor_claim=anchor_claim, anchor=anchor, tip=end),
+    return dict(panel=final, funding=funding,
                 certificate=cert, readers=cold["processes"], native=observations[0][0], audit=observations[0][1],
                 separate_studio_moe2=studio_economics(root / "moe2-studio.log", cert["binary_sha256"]))
 
@@ -110,5 +124,6 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("winning", type=Path, help="accepted/winning.json from the original fresh audit archive")
     parser.add_argument("--arithmetic-work", action="store_true")
+    parser.add_argument("--draw-only", action="store_true", help="verify only through the first funded Gate C draw")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work), indent=2))
+    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only), indent=2))

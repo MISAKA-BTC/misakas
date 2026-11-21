@@ -1166,3 +1166,12 @@ uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_co
 RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --online-stop "$parent" "$out/scales.section" "$out/repeat-plan.json" > "$out/repeat-run.jsonl"
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --reverse-online --online-log "$out/repeat-run.jsonl"
 ```
+
+算術監査枝のFinalを新しいDBで再生した時点ではGate Cの抽選・承認は0件だった。カード5の割当46,953,160,500,520 sompiが反映され、DAA 7932で1,021,082 microblocksを使用可能になった。同じDAAで実行ブロック `81a50221…` を起点に、元claim `de2c19ea…` のGate Cが75枠を抽選した。期限はDAA 8793。Finalからの2,600ブロックの取引とヘッダー、割当のbond、実行ブロックから導いたanchor claimを照合した。抽選記録のanchor claimだけを書き換えた対照は拒否した。[Gate C抽選の照合結果](qf1-arithmetic-8k-draw.json)・[抽選までのブロックと実行ログ](qf1-arithmetic-8k-draw.tar.zst)
+
+上記のFinalまでのアーカイブを展開したディレクトリで抽選を照合できる。
+
+```sh
+tar -xf "$p/qf1-arithmetic-8k-draw.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --draw-only | cmp - "$p/qf1-arithmetic-8k-draw.json"
+```
