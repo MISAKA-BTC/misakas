@@ -20,6 +20,10 @@ use std::{
     io,
 };
 
+pub mod moe2;
+use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote;
+use libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature;
+
 pub const REGISTRATION_DOMAIN: &[u8] = b"MISAKA/private/FOW1/input-owner/v2";
 
 /// The legacy input uses BOS=0, POW=1, SEP=2 and ByteToken[b]=3+b. QF1 uses
@@ -44,6 +48,8 @@ pub struct ExecInputTerms<'a> {
     pub difficulty: [u8; 64],
     pub target: [u8; 33],
     pub accounting: [u8; 64],
+    /// Optional private quote fixed before EXEC. No reward entitlement.
+    pub moe2_quote: Option<Moe2PreDrawQuote>,
     pub open_daa: u64,
     pub deadline_exclusive_daa: u64,
 }
@@ -129,6 +135,19 @@ impl ExecInputTerms<'_> {
         for value in [self.max_leaves, self.open_daa, self.deadline_exclusive_daa] {
             c.extend_from_slice(&value.to_be_bytes());
         }
+        if let Some(quote) = self.moe2_quote {
+            if quote.model != self.class_id
+                || quote.artifact_root != self.model_root
+                || quote.deadline == u64::MAX
+                || quote.deadline < quote.valid_from
+                || quote.price_limits.max_output_slippage_bps > 10_000
+                || quote.limits.min_out > quote.limits.max_purchase_units
+            {
+                return Err(invalid("invalid MOE2 quote for signed EXEC model"));
+            }
+            c.extend_from_slice(b"MISAKA/private/FOW1/MOE2/pre-draw-quote/v1");
+            c.extend_from_slice(&borsh::to_vec(&quote)?);
+        }
         Ok(c)
     }
 
@@ -154,6 +173,7 @@ pub struct SignedExecInput<'a> {
     pub signature: &'a MLDSA65Signature,
     pub slot: u64,
     pub funding_ref: [u8; 64],
+    pub quote_consent: Option<&'a MLDSA87Signature>,
 }
 
 /// The two signed qualification cuts of the private input profile. Dealer
@@ -266,6 +286,11 @@ impl<'a> ExecInputBatch<'a> {
             }
             ml_dsa_65::verify(row.owner, &key, REGISTRATION_DOMAIN, row.signature)
                 .map_err(|_| invalid("invalid EXEC owner signature"))?;
+            match (&row.terms.moe2_quote, row.quote_consent) {
+                (Some(quote), Some(consent)) => moe2::verify_consent(native, preparation, row, key, quote, consent)?,
+                (None, None) => {}
+                _ => return Err(invalid("EXEC quote and funder consent must be present together")),
+            }
             allocations.insert(row.slot, (key, row.funding_ref));
         }
         let mut h = Sha3_512::new()
@@ -288,13 +313,7 @@ impl<'a> ExecInputBatch<'a> {
         self.root
     }
 
-    pub fn observe(
-        self,
-        native: &dyn ConsensusApi,
-        close: Hash64,
-        closure: &Tb1MiningClosure,
-        q: &Tb1Qualification<'_>,
-    ) -> io::Result<FrozenExecInputs<'a>> {
+    fn check_close(&self, native: &dyn ConsensusApi, close: Hash64, closure: &Tb1MiningClosure) -> io::Result<()> {
         if closure.round.purpose != Tb1MiningPurpose::Exec
             || closure.round.id() != self.rounds.exec.id()
             || closure.qual_root != self.rounds.exec_qual
@@ -311,11 +330,23 @@ impl<'a> ExecInputBatch<'a> {
             let terms = entry.terms;
             if terms.policy != closure.policy_root
                 || !(terms.open_daa..terms.deadline_exclusive_daa).contains(&header.daa_score)
+                || terms.moe2_quote.is_some_and(|quote| !(quote.valid_from..=quote.deadline).contains(&header.daa_score))
                 || !native.is_chain_ancestor_of(terms.registration_anchor, parent).map_err(io::Error::other)?
             {
                 return Err(invalid("EXEC input outside its registration history or policy"));
             }
         }
+        Ok(())
+    }
+
+    pub fn observe(
+        self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        closure: &Tb1MiningClosure,
+        q: &Tb1Qualification<'_>,
+    ) -> io::Result<FrozenExecInputs<'a>> {
+        self.check_close(native, close, closure)?;
         let gate = NativePublicationGate::observe(native, close, closure, q)?;
         Ok(FrozenExecInputs { batch: self, gate, close })
     }

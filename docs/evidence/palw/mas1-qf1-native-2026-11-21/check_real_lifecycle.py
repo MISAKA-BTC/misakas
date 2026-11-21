@@ -103,6 +103,56 @@ def check_pending_freeze(log, artifact):
                 publication="WouldBlock", signing="WouldBlock")
 
 
+def check_exec_quote(log, artifact):
+    frozen = check_pending_freeze(log, artifact)
+    peers, (model, prep, close, anchor, deadline, reward, min_out, consent) = shared_rows(
+        log, r"MOE2 closed quote pid=(\d+) class=(\w+) preparation=(\w+) close=(\w+) quote_anchor=(\w+) "
+             r"deadline=(\d+) max_reward=(\d+) min_out=(\d+) consent=(\w+) no_debit=true")
+    quoted_peers, (root, buy, lp, burned, miner, panel) = shared_rows(
+        log, r"MOE2 anchor preview pid=(\d+) parent_root=(\w+) buy=(\d+) lp=(\d+) burn=(\d+) miner=(\d+) "
+             r"panel=(\d+) original_bond_and_market_unchanged=true")
+    curve_peers, curve = shared_rows(
+        log, r"MOE2 curve pid=(\d+) virtual=(\d+) reserve=(\d+) inventory=(\d+) purchased=(\d+) locked=(\d+)")
+    if (peers != quoted_peers or peers != curve_peers or sorted(map(int, peers)) != frozen["pids"]
+            or (model, prep, close, anchor, root) != tuple(frozen[k] for k in
+                ("class_id", "preparation", "close", "registration", "state_root"))
+            or int(deadline) < frozen["observed_daa"] or int(min_out) != 2):
+        raise ValueError("quote is not bound to the same peers, market anchor or EXEC close")
+    allocations = []
+    for slot in (7, 9):
+        observed, (rounds, key, reference) = shared_rows(
+            log, rf"MOE2 allocation row pid=(\d+) rounds=(\w+) slot={slot} key=(\w+) reference=(\w+)")
+        if observed != peers:
+            raise ValueError("missing quote allocation")
+        allocations.append((rounds, slot, bytes.fromhex(key), bytes.fromhex(reference)))
+    rounds = allocations[0][0]
+    source = hashlib.sha3_512(b"MISAKA/private/FOW1/MOE2/quote-consent/v1" + allocations[1][2]
+                             + (9).to_bytes(8, "big")).digest()
+    if allocations[1][0] != rounds or source != allocations[1][3] or source.hex() != consent:
+        raise ValueError("quote consent differs from the signed EXEC registration and slot")
+    h = hashlib.sha3_512(b"MISAKA/private/FOW1/exec-input-set/v2" + bytes.fromhex(rounds)
+                         + bytes.fromhex(prep) + (2).to_bytes(4, "big"))
+    for _, slot, key, ref in allocations:
+        h.update(slot.to_bytes(8, "big") + key + ref)
+    if h.hexdigest() != frozen["consumer_root"]:
+        raise ValueError("quote allocation differs from the closed consumer root")
+    reward = int(reward)
+    purchase, liquidity = 3 * reward // 10, reward // 5
+    workers = reward - purchase - liquidity
+    virtual, reserve, inventory, purchased, locked = map(int, curve)
+    after_buy = virtual + reserve + purchase
+    quantity = inventory * purchase // after_buy
+    lp_quantity = liquidity * (inventory - quantity) // after_buy
+    if (purchased, locked) != (quantity, lp_quantity) or purchased < int(min_out):
+        raise ValueError("MOE2 quantities differ from the quote anchor's curve")
+    if (int(buy), int(lp), int(burned), int(miner), int(panel)) != (purchase, liquidity, purchased - locked, workers - workers // 5, workers // 5):
+        raise ValueError("quote preview distribution mismatch")
+    return dict(**frozen, quote_consent=consent, quote_deadline=int(deadline), quote_max_reward=reward,
+                purchase=purchase, permanent_lp=liquidity, purchased_units=purchased, locked_units=locked,
+                retired_units=int(burned), miner=int(miner), panel=int(panel),
+                native_funding_debit=0)
+
+
 def check_model_audit(log, artifact):
     registered = check_pending_freeze(log, artifact)
     plans, plan = shared_rows(
@@ -184,12 +234,15 @@ if __name__ == "__main__":
     parser.add_argument("class_check",type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
+    mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
     args=parser.parse_args()
     verify = check
     if args.certified_history:
         verify = check_certified_history
+    elif args.exec_quote:
+        verify = check_exec_quote
     elif args.model_audit:
         verify = check_model_audit
     elif args.pending_freeze:

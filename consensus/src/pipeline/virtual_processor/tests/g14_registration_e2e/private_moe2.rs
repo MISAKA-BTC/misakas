@@ -2,7 +2,7 @@ use super::*;
 #[path = "mas1_stop.rs"]
 mod mas1_stop;
 #[path = "moe2_reservation.rs"]
-mod moe2_reservation;
+pub(in crate::pipeline::virtual_processor::tests) mod moe2_reservation;
 use kaspa_consensus_core::{
     config::params::{
         PALW_T12_FULL_BOND_BUDGET_ENTRY, PALW_T12_FULL_GATE_C_ENTRY, PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,

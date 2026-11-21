@@ -272,3 +272,20 @@ MISAKA_PRIVATE_CERTIFIED_AUDIT_READ="$OUT/audit.jsonl" \
 # 保存済みの3プロセス実行ログを照合する
 python3 -B "$p/check_real_lifecycle.py" --certified-history "$p/registered-certified-frontier.txt" "$p/class-check.json"
 ```
+
+### 登録済み Qwen3 の EXEC close に固定する MOE2 見積条件
+
+隔離版の EXEC 登録者は、モデルと inventory、資金提供 bond、会計 policy、quote anchor と有限期限、報酬・数量・価格の上限、worker 配分を含む文脈に ML-DSA-65 で署名する。資金提供者は、この登録キーと割当 slot に対して専用 domain で ML-DSA-87 署名を付ける。3ピアは準備ヘッダーの親状態から bond の公開鍵と class を検査する。EXEC close のブロック本文は、slot 順の登録キーと資金提供者の同意参照を含む集合を固定する。将来の Original、当選 ticket、claim ID を事前に仮定する必要はない。
+
+試験は登録ブロックの市場を quote anchor に用いる。準備ヘッダーの状態 root と照合した各ピアの台帳から、上限160での見積値を再計算する。規則の配分は買付48、永久LP 32、残り80。今回の worker プランでは miner 64、Panel 16 になる。選択鎖の close を読み戻しても資金提供 bond の予算行と市場準備金は元の値を維持した。数量と配分はいずれも見積値で、この Qwen3 の採掘資格は引き続き REVIEW_HOLD である。[3プロセスのログ](registered-exec-quote.txt)・[集合 root と整数計算の独立照合](registered-exec-quote.json)
+
+この実行のバイナリは SHA-256 `c9aeddbc4bb49669191c2d4d8ac7d3e07b97ce44458a12e2339774abdeec3c03`。見積の原期限は DAA 6（この値を含む）、観測は DAA 5。期限・policy・数量・slippage・配分プラン・model・anchor の差替え、slot 移動、署名欠落、別の実在 bond の署名は拒否された。元の見積を再計算すると2 Position 購入、1 Position 永久LP、1 Position burn。最新 tip の台帳を quote anchor の台帳として渡した場合と上限超過も拒否された。同じ実行ファイルで登録・予約決済後の短い再編成、holder の finality 撤回を検証した。[別台帳での回帰試験](exec-quote-regressions.txt)
+
+受賞を原資とする決済には、将来の認証済み claim、元の EXEC 割当、実予算予約を同じ採掘履歴上で対応付ける必要がある。別の隔離台帳の予約決済・再編成試験は従来どおり試験原資を使う。
+
+上記と同じ実モデル・tokenizer の環境変数を設定して検査する。
+
+```sh
+{ echo "test_binary_sha256=$(shasum -a 256 "$bin" | cut -d' ' -f1)"; "$bin" private_registered_tb1_pending_freeze --ignored --nocapture; } > "$OUT/registered-exec-quote.txt" 2>&1
+python3 -B "$p/check_real_lifecycle.py" --exec-quote "$OUT/registered-exec-quote.txt" "$p/class-check.json"
+```

@@ -49,6 +49,87 @@ pub struct Moe2SettlementTerms {
     pub price_limits: Moe2PriceLimits,
 }
 
+/// The finite terms an EXEC owner can fix before the Original or mining claim exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+pub struct Moe2PreDrawQuote {
+    pub funding_bond: PalwBondKeyV2,
+    pub model: Hash64,
+    pub artifact_root: Hash64,
+    pub policy: Hash64,
+    pub quote_anchor: Hash64,
+    pub valid_from: u64,
+    pub deadline: u64,
+    pub limits: Moe2QuantityLimits,
+    pub plan: Moe2WorkerPlan,
+    pub price_limits: Moe2PriceLimits,
+}
+
+impl Moe2PreDrawQuote {
+    /// Price a hypothetical reward against the selected quote anchor's post-state.
+    /// The caller authenticates the state root at its pinned preparation header.
+    pub fn preview_at_anchor(
+        &self,
+        config: &crate::config::params::Params,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        reward: u64,
+    ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_model_tier_v1::palw_model_tier_of_v1;
+        use Moe2SettlementError::*;
+        let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
+        let point = state.last_point().ok_or(UnknownClaimContext)?;
+        let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(point.daa_score)).ok_or(UnknownRegistration)?;
+        let class = state.class(&self.model).ok_or(UnknownRegistration)?;
+        if point.block != self.quote_anchor
+            || self.artifact_root != class.artifact_root
+            || self.valid_from < class.registered_daa
+            || !(self.valid_from..=self.deadline).contains(&point.daa_score)
+            || self.deadline == u64::MAX
+            || !bundle.state.bond_budget_active_at(point.daa_score)
+            || state.bond_budget().is_none_or(|b| b.header.policy_digest != self.policy)
+            || state.bond(&self.funding_bond).is_none()
+        {
+            return Err(UnknownClaimContext);
+        }
+        let approved =
+            palw_model_tier_of_v1(Some(catalog), &self.model, &self.artifact_root, class.registrant_bond.is_none(), point.daa_score)
+                .is_approved();
+        let allocation = match (approved, state.model_market(&self.model)) {
+            (true, None) if point.daa_score >= from => Moe2ModelAllocation::Core,
+            (false, Some(market)) if class.registered_daa >= from => Moe2ModelAllocation::Additional(*market),
+            _ => return Err(UnknownRegistration),
+        };
+        if u128::from(self.price_limits.max_output_slippage_bps) > BASIS_POINTS {
+            return Err(Quote(Moe2QuoteRefusal::OutsideQuote));
+        }
+        let split = allocation.quote_reward(reward, self.plan, self.limits).map_err(Quote)?;
+        if let (Moe2ModelAllocation::Additional(market), Some(q)) = (allocation, split.market) {
+            self.price_limits.check(PurchaseCurve::from_market(&market).map_err(Quote)?, &market, &q).map_err(Quote)?;
+        }
+        Ok(split)
+    }
+
+    /// The owning settlement fold supplies the independently authenticated claim.
+    /// Quoting alone creates no claim, reservation, or payment authority.
+    pub fn for_claim(self, claim: Hash64) -> Moe2SettlementTerms {
+        let Self { funding_bond, model, artifact_root, policy, quote_anchor, valid_from, deadline, limits, plan, price_limits } = self;
+        Moe2SettlementTerms {
+            claim,
+            funding_bond,
+            model,
+            artifact_root,
+            policy,
+            quote_anchor,
+            valid_from,
+            deadline,
+            limits,
+            plan,
+            price_limits,
+        }
+    }
+}
+
 impl Moe2SettlementTerms {
     /// Private accounting key for a reservation made under these pre-draw terms.
     /// Distinct from both the original claim ID and any public wire identifier.

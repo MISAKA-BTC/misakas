@@ -290,6 +290,8 @@ async fn run(stable: bool, registered: bool) {
     if stable {
         stable_panel::arm(&mut node);
     }
+    let mut registered_quote = None;
+    let mut quote_anchor_state = None;
     let registration = if registered {
         let artifact = held.as_ref().unwrap();
         let class = artifact.class().unwrap();
@@ -329,6 +331,13 @@ async fn run(stable: bool, registered: bool) {
             node.chain.daa_of(fold),
             node.api().get_header(fold).unwrap().blue_score
         );
+        registered_quote = Some(super::super::g14_registration_e2e::private_moe2::moe2_reservation::registration_quote(
+            &state,
+            class_id,
+            node.chain.bonds[1],
+            node.bundle.state.bond_budget().unwrap().policy.digest(),
+        ));
+        quote_anchor_state = Some(state);
         Some((fold, class_id))
     } else {
         None
@@ -401,8 +410,14 @@ async fn run(stable: bool, registered: bool) {
         std::fs::write(dir.path().join("input.sig"), sig.as_slice()).unwrap();
         sig
     };
-    let entry =
-        SignedExecInput { terms: &terms, owner: &owner.verification_key, signature: &owner_sig, slot: 7, funding_ref: [23; 64] };
+    let entry = SignedExecInput {
+        terms: &terms,
+        owner: &owner.verification_key,
+        signature: &owner_sig,
+        slot: 7,
+        funding_ref: [23; 64],
+        quote_consent: None,
+    };
     let changed = misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms { job_tokens: &[42, 108, 18], ..terms };
     assert!(
         ExecInputBatch::from_signed(node.api().as_ref(), parent, &rounds, &[SignedExecInput { terms: &changed, ..entry }], 4, 16)
@@ -491,6 +506,7 @@ async fn run(stable: bool, registered: bool) {
     });
     let qf1_terms = qf1.as_ref().map(|prompt| misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms {
         qf1: Some(Qf1Use::LocalInference(prompt)),
+        moe2_quote: registered_quote,
         tokenizer: QF1_TEST_TOKENIZER.parse().unwrap(),
         job_tokens: prompt.job_tokens(),
         vocab: 151936,
@@ -517,6 +533,7 @@ async fn run(stable: bool, registered: bool) {
     }
     let mut entries = vec![entry];
     let qf1_sig;
+    let quote_sig;
     if let Some(terms) = &qf1_terms {
         let key = terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap();
         // Readers verify the producer's original signature.
@@ -528,7 +545,32 @@ async fn run(stable: bool, registered: bool) {
             std::fs::write(file, sig.as_slice()).unwrap();
             sig
         };
-        entries.push(SignedExecInput { terms, owner: &owner.verification_key, signature: &qf1_sig, slot: 9, funding_ref: [24; 64] });
+        let mut entry = SignedExecInput {
+            terms,
+            owner: &owner.verification_key,
+            signature: &qf1_sig,
+            slot: 9,
+            funding_ref: [24; 64],
+            quote_consent: None,
+        };
+        if let Some(quote) = terms.moe2_quote {
+            use libcrux_ml_dsa::ml_dsa_87;
+            use misaka_palw_remote::tb1_exposure::exec_input::moe2::{QUOTE_DOMAIN, consent_ref};
+            let source = consent_ref(key, entry.slot);
+            let file = child_dir.as_deref().unwrap_or(dir.path()).join("funding.sig");
+            quote_sig = if child_dir.is_some() {
+                ml_dsa_87::MLDSA87Signature::new(std::fs::read(file).unwrap().as_slice().try_into().unwrap())
+            } else {
+                let funder = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(1);
+                let sig = ml_dsa_87::sign(&funder.signing_key, &source, QUOTE_DOMAIN, [49; 32]).unwrap();
+                std::fs::write(file, sig.as_slice()).unwrap();
+                sig
+            };
+            entry.funding_ref = source;
+            entry.quote_consent = Some(&quote_sig);
+            exec_input::check_quote_substitutions(node.api().as_ref(), parent, &rounds, &entry, quote);
+        }
+        entries.push(entry);
     }
     let inputs = ExecInputBatch::from_signed(node.api().as_ref(), parent, &rounds, &entries, 4, 16).unwrap();
     let closure = Tb1MiningClosure { round, qual_root: q.root(), consumer_set_root: inputs.root(), policy_root: terms.policy };
@@ -576,6 +618,70 @@ async fn run(stable: bool, registered: bool) {
         let ready = readiness_of(&node);
         assert_eq!(ready.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
         let freeze = Tb1HolderFreeze::resolve(api, anchor, &closure, &q).unwrap();
+        let closed_quote = inputs.read_closed_moe2_quote(api, anchor, &closure, &q, 9).unwrap();
+        let quote = closed_quote.terms();
+        assert_eq!(Some(quote), registered_quote);
+        assert!(inputs.read_closed_moe2_quote(api, anchor, &closure, &q, 7).is_err());
+        assert!(inputs.read_closed_moe2_quote(api, parent, &closure, &q, 9).is_err());
+        for row in &entries {
+            let key = row.terms.registration_key(parent, &rounds, row.owner, 16).unwrap();
+            peer_log!(
+                "MOE2 allocation row pid={} rounds={} slot={} key={} reference={}",
+                std::process::id(),
+                Hash64::from_bytes(rounds.commitment()),
+                row.slot,
+                Hash64::from_bytes(key),
+                Hash64::from_bytes(row.funding_ref)
+            );
+        }
+        let original_state = quote_anchor_state.as_ref().unwrap();
+        assert_eq!(original_state.state_root(), api.get_header(parent).unwrap().palw_state_root);
+        let reward = quote.limits.max_reward;
+        let split = closed_quote.preview(&node.config.params, original_state, reward).unwrap();
+        let market = split.market.unwrap();
+        assert_eq!((market.split.purchase, market.split.liquidity, market.split.workers), (reward * 3 / 10, reward / 5, reward / 2));
+        assert_eq!((split.miner, split.panel_pool, market.retired_units), (reward * 4 / 10, reward / 10, 1));
+        let (_, close_state) = node.chain.tip_state();
+        assert!(closed_quote.preview(&node.config.params, &close_state, reward).is_err());
+        assert!(closed_quote.preview(&node.config.params, original_state, reward + 1).is_err());
+        assert_eq!(original_state.model_market(&quote.model), close_state.model_market(&quote.model));
+        assert_eq!(
+            original_state.bond_budget().unwrap().bond_row(&quote.funding_bond),
+            close_state.bond_budget().unwrap().bond_row(&quote.funding_bond)
+        );
+        let before_market = original_state.model_market(&quote.model).unwrap();
+        peer_log!(
+            "MOE2 curve pid={} virtual={} reserve={} inventory={} purchased={} locked={}",
+            std::process::id(),
+            before_market.virtual_sompi,
+            before_market.msk_reserve,
+            before_market.position_units,
+            market.purchased_units,
+            market.liquidity_units
+        );
+        peer_log!(
+            "MOE2 anchor preview pid={} parent_root={} buy={} lp={} burn={} miner={} panel={} original_bond_and_market_unchanged=true",
+            std::process::id(),
+            original_state.state_root(),
+            market.split.purchase,
+            market.split.liquidity,
+            market.retired_units,
+            split.miner,
+            split.panel_pool
+        );
+        peer_log!(
+            "MOE2 closed quote pid={} class={} preparation={} close={} quote_anchor={} deadline={} max_reward={} min_out={} consent={} no_debit=true",
+            std::process::id(),
+            quote.model,
+            parent,
+            anchor,
+            quote.quote_anchor,
+            quote.deadline,
+            quote.limits.max_reward,
+            quote.limits.min_out,
+            Hash64::from_bytes(entries[1].funding_ref)
+        );
+        assert!(node.chain.tip_state().1.bond_budget().unwrap().claim_row(&Hash64::from_bytes(entries[1].funding_ref)).is_none());
         let err = inputs.observe(api, anchor, &closure, &q).err().expect("publication must wait for certified history");
         assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
         let values = dealers.map(|d| (d, field(10 + d + slot + 1)));

@@ -6,7 +6,9 @@ use kaspa_consensus_core::{
     palw_bond_budget_v1::{PalwBudgetAskV1, PalwBudgetOriginV1, PalwBudgetWriteV1, palw_bond_budget_export_cap_v1},
     palw_model_market_v1::moe2::{
         Moe2PriceLimits, Moe2QuantityLimits, Moe2WorkerPlan,
-        settlement::{Moe2Position, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms, Moe2WorkerRelease},
+        settlement::{
+            Moe2Position, Moe2PreDrawQuote, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms, Moe2WorkerRelease,
+        },
     },
     palw_settlement_liability_v1::PalwSettlementTermsSourcedV1,
 };
@@ -34,6 +36,35 @@ pub(super) struct Replay {
     undo: Vec<u8>,
 }
 
+pub(in crate::pipeline::virtual_processor::tests) fn registration_quote(
+    state: &PalwChainStateV2,
+    model: Hash64,
+    bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    policy: Hash64,
+) -> Moe2PreDrawQuote {
+    let point = state.last_point().unwrap();
+    let reward = 160 * SOMPI_PER_KASPA;
+    Moe2PreDrawQuote {
+        funding_bond: bond,
+        model,
+        artifact_root: state.class(&model).unwrap().artifact_root,
+        policy,
+        quote_anchor: point.block,
+        valid_from: point.daa_score,
+        deadline: point.daa_score + 5,
+        plan: Moe2WorkerPlan::MinerAndPanel20,
+        limits: Moe2QuantityLimits {
+            max_reward: reward,
+            max_purchase_sompi: reward * 3 / 10,
+            min_out: 2,
+            max_purchase_units: 2,
+            max_lp_sompi: reward / 5,
+            max_lp_units: 1,
+        },
+        price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 2000 },
+    }
+}
+
 pub(super) async fn exercise(
     env: &mut Env,
     state: &PalwChainStateV2,
@@ -49,26 +80,7 @@ pub(super) async fn exercise(
     let policy = env.bundle.state.bond_budget().unwrap().policy.clone();
     let mut budget = state.bond_budget().unwrap().clone();
     let reward = 160 * SOMPI_PER_KASPA;
-    let terms = Moe2SettlementTerms {
-        claim: Hash64::from_u64_word(641),
-        funding_bond: bond,
-        model,
-        artifact_root: registered.artifact_root,
-        policy: policy.digest(),
-        quote_anchor: point.block,
-        valid_from: point.daa_score,
-        deadline: point.daa_score + 5,
-        plan: Moe2WorkerPlan::MinerAndPanel20,
-        limits: Moe2QuantityLimits {
-            max_reward: reward,
-            max_purchase_sompi: reward * 3 / 10,
-            min_out: 2,
-            max_purchase_units: 2,
-            max_lp_sompi: reward / 5,
-            max_lp_units: 1,
-        },
-        price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 2000 },
-    };
+    let terms = registration_quote(state, model, bond, policy.digest()).for_claim(Hash64::from_u64_word(641));
     let source = terms.reservation_key();
     let shared_undo = remote.as_ref().map(|r| r.undo.as_slice().to_vec());
     // Peers receive the signed enrollment and both raw blocks. Only the first peer
