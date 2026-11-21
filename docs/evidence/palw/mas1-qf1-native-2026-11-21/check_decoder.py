@@ -50,11 +50,11 @@ def silu(x):
     return np.clip((x*sig) >> 24, -2147483648, 2147483647)
 
 
-def rotary(matrix):
+def rotary(matrix, first_position=0):
     inv = np.array([np.float32(1)/np.float32(math.pow(1_000_000., i/64)) for i in range(64)], dtype=np.float32)
     seq = matrix.reshape(len(matrix), -1, 128).astype(np.int64)
     out = []
-    for pos, heads in enumerate(seq):
+    for pos, heads in enumerate(seq, first_position):
         angles = (np.float32(pos)*inv).astype(np.float64)
         def table(fn):
             f = np.array([np.float32(fn(a)) for a in angles], dtype=np.float64) * Q24
@@ -77,7 +77,10 @@ def causal(queries, keys, values):
         return narrow(np.einsum("hgt,thd->hgd", probs, v), 1, 24).reshape(-1)
     rows = []
     v = values.reshape(-1,8,128).astype(np.int64)
-    for pos, q in enumerate(queries):
+    first_position = len(keys) - len(queries)
+    if first_position < 0 or len(keys) != len(v):
+        raise ValueError("attention query suffix and KV history disagree")
+    for pos, q in enumerate(queries, first_position):
         rows.append(attend(q,keys[:pos+1],v[:pos+1]))
     # Hold position, query, current key and value fixed and discard earlier KV.
     last_only = attend(queries[-1], keys[-1:], v[-1:])

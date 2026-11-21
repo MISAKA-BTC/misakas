@@ -334,3 +334,24 @@ for mode in '' '--archived' '--weight-reference'; do
     python -B "$p/check_residual_scale.py" ${mode:+"$mode"} "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 done
 ```
+
+#### 同じ重みで回答の最後まで比較した結果
+
+登録済み整数版の出力と、同じ変換済み重みを FP32 演算で評価した出力を、保存済みの2入力で比較した。どちらも質問は `2 + 2?` で、TB1 から導いた token 列は異なる。元の上限3 token では、FP32 は両入力とも `2 + ` で停止した。整数版はそれぞれ `fas联合会_COORD`、` whatever:inline profits` だった。
+
+同じ入力から FP32 の診断用上限を12 token にすると、双方とも `2 + 2 = 4.` を生成し、9 token 目で EOS に達した。数字4は7 token 目に出た。元の Original の上限は3である。この比較から、元の上限では参照計算も式を書き終えられず、整数版の出力は先頭位置から参照計算と異なることが分かる。同じ質問の2入力についての観測であり、実用性 suite の成績は未測定である。[入力ハッシュ、整数版・参照出力、各位置の順位](qf1-decoded-comparison.json)
+
+再現には上記の Python 環境と登録済み artifact を用いる。次の2コマンドを `--archived` 付きでも実行すると、もう一方の入力を検証できる。
+
+```sh
+python -B "$p/check_residual_scale.py" --decode-reference "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+python -B "$p/check_residual_scale.py" --decode-reference --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```
+
+もう一つの診断では、署名済み入力の111位置すべてで attention 後と MLP 後の FP32 残差の絶対値を測り、各層で最大値を i16 に収める小数 bit 数を固定した。embedding は Q15 から始め、小数 bit 数は前層以下にした。層をまたぐ残差、O・down 投影、RMS の epsilon をその単位へ合わせてから、もう一方の保存済み入力で整数演算を評価した。較正入力では第6層までの最大値は83未満だったが、第7層で22,076を超え、以後の小数 bit 数は0になった。
+
+評価入力の先頭予測は `The` だった。数字4の順位は元の整数版の80,201位から94位に変わり、第36層末端・最終入力位置の端値は2,465/4,096から0/4,096に減った。基準 Q15 では、KV 履歴を継いで計算した3つの予測位置の全 logits が、各位置で保存済み native 実行の SHA-256 と一致した。層別スケールで同じ評価入力から12 token まで生成したところ、冒頭は `The system is` となり、数字4も EOS も出なかった。両入力は異なる TB1 文脈で同一の質問を含む。この方式を登録モデルへ適用していない。[各層の観測値、固定スケール、評価入力の予測](qf1-layer-scale-comparison.json)
+
+```sh
+python -B "$p/check_residual_scale.py" --cross-input-scale --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```
