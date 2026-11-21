@@ -1,0 +1,33 @@
+{
+  "processes": [
+    90804,
+    90798
+  ],
+  "binary_sha256": "0a088baf774897e82e0800ce54296bec78da4a17218be43c7a81f25751a06dc6",
+  "recovered": {
+    "accepted": "3250abac45152186b080a6fa0d03a62b2b8e541a0ae7c5aebaa46786122e4598ecfa567fcb318d1ae4715162291e6b1d487817f260af0fe6943489610b852e3e",
+    "anchor_delay_spans": 1,
+    "approvals": 0,
+    "blocks": 2941,
+    "certify_by_daa": 8793,
+    "claim": "8748971cd35bc4b7c1fc3ce9825922672830f4491758f5c8667fdea0fab61dfbfa8d5f730854da50c0c5985bc0b8790765255bc9014807df13c631e5b1069b40",
+    "claim_local_settlement": false,
+    "committed_span": 0,
+    "current_seed_anchor": [
+      7932,
+      "066986fa09db628bd4cb38a9016c1624367da8ee7b9770e3cb6c09331e939997fa457298269df46974e41050a41cd19415067e8ae415386f8fa2d77f290c3423"
+    ],
+    "daa": 7932,
+    "drawn_daa": 7932,
+    "draws": 75,
+    "epoch": 11,
+    "epoch_cap": 4096,
+    "final_daa": 6633,
+    "network_draws": 1,
+    "outcome": "None",
+    "phase": "Final { final_daa: 6633 }",
+    "replay": "82bb8e540be784d06e5e9a3df99dfcda987f90ba4c694cbdcbc3ce2cd700ca522d2430dfa80556c623b2ce13ec0325559b4988eb3122ebeb8c5c227e9fe299a4",
+    "state": "8cf6d080fea0ab4003d40d73a7903231b0226313c4c5d03fc0a90095a29ef43caf9b09ecfabfba14fd74796bf92be2e70466a5aa31d9882007d7225c9705617f",
+    "tip": "d9c288640cf68d98a2c6393b989d347c8dc254112981668f133f4386895fb57e7735b9132d314ff9032169602d503d4aec0e7a0b9964565dac7726e12c6bf349"
+  }
+}

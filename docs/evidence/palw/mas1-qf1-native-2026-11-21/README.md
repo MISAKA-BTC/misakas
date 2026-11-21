@@ -587,3 +587,12 @@ python3 -B "$p/check_real_lifecycle.py" "$out/refuted.log" "$p/qf1-native-tile-a
 ### 元の Final から BASE-0 の機会を確保して Gate C を抽選
 
 上記の DAA 6,857 の枝から続けて、試験用 bond 5 が通常の資本割当を署名した。DAA 7,932 で BASE-0 の未使用枠が 1,021,082 microblocks に達した。登録済みの BASE-0 で実行した claim `614d0f9a…` が通常の価格でこの枠から受理され、ブロック `066986fa…` を抽選用アンカーとして状態に記録した。元の Qwen2.5 claim `8748971c…` は、原期限 DAA 8,793 より前の DAA 7,932 で Gate C の75枠を抽選した。75は重複を許す抽選枠数である。この記録の終点は抽選である。[割当と抽選](genesis-funded-draw.txt)・[ヘッダと元 claim の照合](genesis-funded-draw.json)・[追加の raw ブロック](genesis-funded-draw-blocks.json.zst)
+
+同じバイナリの2つの別プロセスが、新しいDBで元の8Kジョブを読み込み、数値実行とその後の2,941ブロックを再生した。両ピアで元の Final DAA 6,633、抽選 DAA 7,932、75枠、抽選時点の承認0枠、選択鎖先端と状態 root が一致した。[再生結果](genesis-funded-draw-replicas.json)・[読取ピアA](genesis-funded-draw-reader-a.txt.zst)・[読取ピアB](genesis-funded-draw-reader-b.txt.zst)
+
+```sh
+zstd -dc "$p/genesis-exported-suffix.json.zst" > "$out/final.json"
+zstd -dc "$p/genesis-funded-draw-blocks.json.zst" > "$out/draw.json"
+for peer in a b; do zstd -dc "$p/genesis-funded-draw-reader-$peer.txt.zst" > "$out/reader-$peer.log"; done
+python3 -B "$p/check_funded_draw_recovery.py" "$out/final.json" "$out/draw.json" "$out/reader-a.log" "$out/reader-b.log"
+```
