@@ -1183,3 +1183,12 @@ python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" -
 この読込処理を含むビルド `5aea69b7…` で、remote試験213件成功・1件ignored、別途Studioの3プロセス市場試験とholder撤回試験が成功した。実際の算術roundの読み取り結果はseed公開後に記録する。[ビルドの回帰試験](qf1-arithmetic-stream-replay-tests.tar.zst)
 
 同じ算術提出物読込ビルドで、隔離した3プロセスから決済台帳（1,789バイト）と切断時の復元記録（1,219バイト）を取得し、それぞれのバイト列の一致を確認した。追加モデル登録で開いた市場の元の価格曲線から、予約額16,000,000,000 sompiのうち購入4,800,000,000、永久LP 3,200,000,000、miner 6,400,000,000、Panel 1,600,000,000を再計算した。購入2単位のうち1単位が永久LPに入り、余剰1単位がburnされた。決済と復元記録の先頭1ビットを個別に変えた場合、照合は両方失敗した。これはStudio市場の隔離試験用claimによる決済で、Qwen3の算術監査は別の非報酬実行である。[照合結果](qf1-arithmetic-stream-moe2-book.json)・[元の台帳・復元記録・実行ログ](qf1-arithmetic-stream-moe2-book.tar.zst)
+
+算術監査枝の8K claim `de2c19ea…` は生成ノードでDAA 11673にGate C認証を得た。DAA 7932の抽選から認証先端 `0225310e…` までの7,481ブロックについて親・取引Rootを再計算し、カード0・2・3・4・5・6・7の8K再実行結果、各bondに結び付くML-DSA-87署名、75枠の賛成を照合した。これは算術監査枝を進める8K仕事の認証である。Qwen3-8Bの算術評価と採掘適格性には別の検査が残る。[生成ノードの認証結果](qf1-arithmetic-8k-certificate-writer.json)・[認証までのブロック・実行ログ](qf1-arithmetic-8k-certificate-writer.tar.zst)
+
+抽選までの記録を展開したディレクトリで生成ノードの認証記録を再検証する。
+
+```sh
+tar -xf "$p/qf1-arithmetic-8k-certificate-writer.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --writer-only --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-8k-certificate-writer.json"
+```
