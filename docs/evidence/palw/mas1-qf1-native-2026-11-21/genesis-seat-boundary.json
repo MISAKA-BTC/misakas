@@ -1,0 +1,113 @@
+{
+  "binary_sha256": "f0e9f7b33a8b00e9098c533e68184fcec5e44a44494564cebcd91950773b7409",
+  "processes": [
+    74061,
+    74528,
+    74529
+  ],
+  "archive_sha256": "89f1faca83c456f2053e3162810b0a7afe11c6404d5b8f7cd3f62ac169786072",
+  "artifact_digest": "f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5dbb7292be7186b7bc948a28ca0e02a4f59191edc71ff37bb4d7067b559bc3f0d0",
+  "artifact_bytes": 1799359436,
+  "duties": 8,
+  "selected_blocks": 20,
+  "artifact": "88096dc177826d880c1c5fca4ec93cffe5ab51af108ed169a8e03cd4726308f91263f79f81904b043327bfa277e3558b1656f14259f6dd33603a9f91871aae20",
+  "available_microblocks": 0,
+  "base": "9a8bfb90e5292a50afa768778bdcbbda8d9a8584d5da2f8637602dcba471cc1ed0cdfef31083f30667939620f73cd888137cfaf3ea1f03c8649f576bb6c70dc9",
+  "boundary": 5049,
+  "cards": [
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 0)",
+      "card": 0,
+      "chunks": 8,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5040
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 1)",
+      "card": 1,
+      "chunks": 16,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5041
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 2)",
+      "card": 2,
+      "chunks": 5,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5042
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 3)",
+      "card": 3,
+      "chunks": 10,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5043
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 4)",
+      "card": 4,
+      "chunks": 12,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5044
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 5)",
+      "card": 5,
+      "chunks": 16,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5045
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 6)",
+      "card": 6,
+      "chunks": 3,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5046
+    },
+    {
+      "bond": "(5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, 7)",
+      "card": 7,
+      "chunks": 6,
+      "class_refusal": null,
+      "fresh": true,
+      "producer_refusal": null,
+      "seat_reason": "",
+      "span": 5047
+    }
+  ],
+  "claims": 0,
+  "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+  "daa": 5050,
+  "heartbeats": 4,
+  "lifecycle": "Probation { probes_passed: 0 }",
+  "ready": 8,
+  "registry_reason": "probing: 0/10 finals passed, 0 failed since entry",
+  "room": 5,
+  "seat_daa": 5048,
+  "share": 1,
+  "span_daa": 1,
+  "state": "9a1fab58141eb5985c16fcf5524e9189fd4a4aa5197143d7ff31583ee463f2c3d2cd907c7cf05aba24bddc0d196f19a0ec8e0aba3111cdaccd7c10619a46d266",
+  "target": "0c94291fffffffffffffffffffffffff",
+  "tip": "bd74c8f9ba7919aaf82ef16e18859b7a357a8176471867c81c8006b0eb5aa357af732cb3140e1888d6379a619230066912c09e0cc18fa805ea0323d416d1bdcc"
+}

@@ -89,6 +89,7 @@ const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]
 mod real_attempt;
+pub(super) use real_attempt::RealAttemptV1;
 
 /// Card `i`'s harness key — row `i` of the registry fixture (row 0 is the harness identity).
 fn card_key(i: usize) -> &'static MLDSA87KeyPair {

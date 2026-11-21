@@ -10,6 +10,13 @@ use kaspa_consensus_core::{
 };
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
+#[path = "tb1_legacy_genesis_capital.rs"]
+mod genesis_capital;
+#[path = "tb1_legacy_genesis_claim.rs"]
+mod genesis_claim;
+#[path = "tb1_legacy_genesis_seats.rs"]
+mod genesis_seats;
+
 #[derive(Serialize, Deserialize)]
 struct Branch {
     close: Hash64,
@@ -201,4 +208,23 @@ pub(super) async fn exercise(
         "registration":registration,"assignment":assignment,"seasoned":seasoned,"claims":claims,"tip":tip,"state":state.state_root(),
         "daa":node.chain.daa_of(node.chain.sink()),"publication_refusal":format!("{:?}",err.kind()),"readiness":readiness})
     );
+    if let Some(path) = std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K") {
+        let path = Path::new(&path);
+        let last_duty = genesis_seats::run(&mut node, assignment, path, "MISAKA_PRIVATE_GENESIS_SEATS").await;
+        if std::env::var_os("MISAKA_PRIVATE_GENESIS_CAPITAL_READ").is_some()
+            || std::env::var_os("MISAKA_PRIVATE_GENESIS_CAPITAL_WRITE").is_some()
+        {
+            let assigned = genesis_capital::run(&mut node, last_duty, deadline).await;
+            if std::env::var_os("MISAKA_PRIVATE_GENESIS_RENEW_READ").is_some()
+                || std::env::var_os("MISAKA_PRIVATE_GENESIS_RENEW_WRITE").is_some()
+            {
+                genesis_seats::run(&mut node, assigned, path, "MISAKA_PRIVATE_GENESIS_RENEW").await;
+                if let Some(location) = std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_WRITE") {
+                    genesis_claim::run(&mut node, path, Path::new(&location), true).await;
+                } else if let Some(location) = std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_READ") {
+                    genesis_claim::run(&mut node, path, Path::new(&location), false).await;
+                }
+            }
+        }
+    }
 }

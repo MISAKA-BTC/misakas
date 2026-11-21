@@ -48,6 +48,17 @@ impl T12Chain {
         class: Hash64,
         backend: &dyn PalwExecutionBackendV1,
     ) -> RealAttemptV1 {
+        self.draw_with_backend(card, step_ms, class, backend, Some(std::time::Duration::from_secs(900))).await
+    }
+
+    pub(in crate::pipeline::virtual_processor::tests) async fn draw_with_backend(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        class: Hash64,
+        backend: &dyn PalwExecutionBackendV1,
+        time_limit: Option<std::time::Duration>,
+    ) -> RealAttemptV1 {
         self.ctx.simulated_time += step_ms;
         self.arm_clock();
         let mut template = self
@@ -81,8 +92,8 @@ impl T12Chain {
         );
         for bucket in 0..4_000_000u64 {
             assert!(
-                started.elapsed() < std::time::Duration::from_secs(900),
-                "real class draws exceeded the fixture's 900 s budget after {bucket} executions"
+                time_limit.is_none_or(|limit| started.elapsed() < limit),
+                "real class draws exceeded the fixture's time budget after {bucket} executions"
             );
             if bucket > 0 && bucket % 128 == 0 {
                 eprintln!("[real-attempt] {bucket} actual executions, {:?} elapsed", started.elapsed());
@@ -110,7 +121,11 @@ impl T12Chain {
                 &execution,
                 header.daa_score,
             );
-            if class_ticket_v3(&attempt, anchor) > facts.class_target {
+            let ticket = class_ticket_v3(&attempt, anchor);
+            if time_limit.is_none() {
+                eprintln!("[real-attempt] completed draw {} after {:?}, ticket {:032x}", bucket + 1, started.elapsed(), ticket);
+            }
+            if ticket > facts.class_target {
                 continue;
             }
             let claim = attempt_id_v2(&attempt);
@@ -142,11 +157,20 @@ impl RealAttemptV1 {
     pub(in crate::pipeline::virtual_processor::tests) fn replay_transcript(&self, chain: &T12Chain) -> Result<[u8; 64], String> {
         let (_, state) = chain.tip_state();
         let claim = state.claim(&self.claim).ok_or("accepted claim absent")?;
+        let artifact = state.class(&claim.class_id).ok_or("registered class absent")?.artifact_root;
+        self.replay_with_backend(chain, &backend(chain, artifact))
+    }
+
+    pub(in crate::pipeline::virtual_processor::tests) fn replay_with_backend(
+        &self,
+        chain: &T12Chain,
+        backend: &dyn PalwExecutionBackendV1,
+    ) -> Result<[u8; 64], String> {
+        let (_, state) = chain.tip_state();
+        let claim = state.claim(&self.claim).ok_or("accepted claim absent")?;
         if claim.accepted_block != self.block.header.hash {
             return Err("claim is not from this header".into());
         }
-        let artifact = state.class(&claim.class_id).ok_or("registered class absent")?.artifact_root;
-        let backend = backend(chain, artifact);
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&self.block.header);
         let anchor = execution_anchor_v3(chain.network_domain, pre_pow, claim.class_id, &claim.bond.0, self.block.header.nonce);
         let prefill = chain.config.params.palw_prefill_draw_active_at(self.block.header.daa_score);

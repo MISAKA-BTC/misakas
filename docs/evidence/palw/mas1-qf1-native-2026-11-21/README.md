@@ -412,7 +412,7 @@ python -B "$p/check_residual_scale.py" --stage-scales --preserve-mlp-range --ref
 
 ### 64成分単位の残差スケールによる Qwen3 の回答
 
-元の署名付き入力だけを較正に使い、Q/K/V、MLP の up と積、残差の最大絶対値を層ごとに測った。第7層の残差には約22,076の値がある。層に一つの固定指数を与えると、ここから全4,096成分が Q0 になった。別の challenge を持つ `2 + 2?` に対する整数出力は48 token の上限で止まり、末尾で `2?` を反復した。[全層で一つの指数を使った結果](qf1-stage-maxima.json)
+元の署名付き入力だけを較正に使い、Q/K/V、MLP の up と積、残差の最大絶対値を層ごとに測った。第7層の残差には約22,076の値がある。層に一つの固定指数を与えると、ここから全4,096成分が Q0 になった。別の challenge を持つ `2 + 2?` に対する整数出力は48 token の上限で止まり、末尾で `2?` を反復した。[各層の残差に一つの指数を使った結果](qf1-stage-maxima.json)
 
 同じ較正入力・重み・projection・greedy 規則で、残差だけを連続64成分ごとの固定指数にした。各層の指数64個を較正後に固定し、skip 加算は対応する指数へ丸め、RMSNorm に入る前に整数を共通指数へ正確に揃えた。別の challenge への回答は `2 + 2 = 4.` の後に EOS、9 token だった。元の Q15 実装についても同じ評価入力の3位置すべてで全 logit の SHA-256 が保存済み native 実行と一致した。[候補の指数・回答・logit hash](qf1-residual-tiles.json)
 
@@ -429,4 +429,37 @@ python -B "$p/check_residual_scale.py" --stage-scales --preserve-mlp-range --ref
 python -B "$p/check_residual_scale.py" --stage-scales --preserve-stage-ranges --reference-limit 48 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 python -B "$p/check_residual_scale.py" --stage-scales --preserve-stage-ranges --residual-tiles --reference-limit 48 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 python -B "$p/check_qf1_tile_transfer.py" "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```
+
+### Genesis 8K の保有証明と非 floor 仕事の受付条件
+
+署名済み MODEL_AUDIT を含む既存の [DAA 5,040 の履歴](legacy-work.json)を延長した。手元の Qwen2.5-1.5B A16 / graph-v7 @8192 は 1,799,359,436 バイト。通常の class manifest 検査で genesis の class と inventory root を再導出した。生成側はこのファイルの実データから、隔離 genesis の8個の異なる bond に当たった葉を開き、各 bond の鍵で V2 readiness に署名した。対象は既存の genesis class で、Qwen3 の監査判定とは別である。
+
+通常の手数料を支払う8取引を16ブロックに収録した。DAA 5,048 に8席すべてが ready となり、class は `Probation { probes_passed: 0 }` に移った。さらに4個の heartbeat を検証した DAA 5,050 でも8席の証明は新鮮で、各席の producer preflight は通った。panel room は5、モデル別の利用可能枠は0 microblocks、claim は0件。3プロセスはそれぞれの native DB で同じ選択先端・状態 root・各席の span と開示数を得た。8鍵は隔離試験用である。[3ピア照合](genesis-seat-boundary.json)・[20個の raw block](genesis-seat-blocks.json.zst)
+
+```sh
+zstd -dc "$p/genesis-seat-blocks.json.zst" > "$OUT/genesis-seats.json"
+python3 -B "$p/check_genesis_seats.py" "$OUT/genesis-seats.json" "$p"/genesis-seat-{a,b,c}.txt
+# 前節の署名済み監査履歴と legacy fork を読み込んだうえで実行
+MISAKA_PRIVATE_TB1_GENESIS8K="$held_qwen25" MISAKA_PRIVATE_GENESIS_SEATS_READ="$OUT/genesis-seats.json" \
+  "$bin" private_registered_audit_legacy_work --ignored --nocapture
+```
+
+同じ選択先端から、別の genesis bond が自分の担保 46,953,160,500,520 sompi を 8K class に割り当てた。元の Studio 向け割当と監査期限 DAA 15,121 はこの分岐に残っている。8席の最後の手数料取引の釣銭で通常の署名付き carrier を支払い、DAA 5,051 の native 親状態遷移で pending となった。続く最初の利用可能額を3プロセスが確認した位置は DAA 6,481（epoch 9）。利用枠は152,530 microblocks、旧証明の有効席数は0、class は Held、claim 数は0だった。1ブロックは1,000,000 microblocks である。[署名・成熟・3ピアの照合](genesis-capital.json)・[割当から成熟までの2,862ブロック](genesis-capital-blocks.json.zst)
+
+```sh
+zstd -dc "$p/genesis-capital-blocks.json.zst" > "$OUT/genesis-capital.json"
+python3 -B "$p/check_genesis_capital.py" "$OUT/genesis-capital.json" "$p"/genesis-capital-{a,b,c}.txt
+```
+
+成熟位置から同じ class と8個の bond に対し、新しい span の開示と署名を生成した。追加20ブロックを独立に検証した3ピアでは、DAA 6,491 に全8席が再び ready、class は Probation、panel room は5、利用可能な仕事枠は1,677,832 microblocks となった。この位置の claim は0件。監査期限内に既存クラスの通常の実仕事を試せる位置である。readout の `target` は registry の値で、実行時の draw は producer facts から target を読む。[更新後の3ピア照合](genesis-renew.json)・[更新の raw block](genesis-renew-blocks.json.zst)
+
+```sh
+zstd -dc "$p/genesis-renew-blocks.json.zst" > "$OUT/genesis-renew.json"
+python3 -B "$p/check_genesis_seats.py" --renewed "$OUT/genesis-renew.json" "$p"/genesis-renew-{a,b,c}.txt
+export MISAKA_PRIVATE_GENESIS_SEATS_READ="$OUT/genesis-seats.json"
+export MISAKA_PRIVATE_GENESIS_CAPITAL_READ="$OUT/genesis-capital.json"
+export MISAKA_PRIVATE_GENESIS_RENEW_READ="$OUT/genesis-renew.json"
+# 上記の MODEL_AUDIT と legacy fork の READ、Qwen2.5 の実ファイルと QF1 の実行環境を引き継ぐ
+"$bin" private_registered_audit_legacy_work --ignored --nocapture
 ```
