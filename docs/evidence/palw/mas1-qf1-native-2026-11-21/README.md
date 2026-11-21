@@ -833,3 +833,10 @@ python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" 
 python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
   --captured-endpoint-log "$p/fresh-captured-window-end.log" | cmp - "$p/fresh-captured-window-end.json"
 ```
+
+非報酬の MODEL_AUDIT と後続の評価 PANEL では、各 round の3 dealer に対する3 holder の READY 計18署名を、公開ブロックに固定された元記録から OpenSSL 3.6.3 で検証した。隔離 fixture の[4つの公開鍵](fresh-holder-public-keys.bin)は slot 順の ML-DSA-65 生鍵（各1,952 bytes）で、元の固定試験鍵に対応する。検証器は公開鍵・座標から roster root を求め、各 round の用途・期限、dealer の transcript と各署名から二つの qualification root を再計算し、準備ブロックと close の commitment に照合する。READY は準備時の署名で、share の公開記録は別に検査する。[照合結果](fresh-qualification.json)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+python3 -B "$p/check_fresh_qualification.py" --openssl openssl | cmp - "$p/fresh-qualification.json"
+```
