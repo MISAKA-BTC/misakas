@@ -24,4 +24,4 @@ QF1の受入試験では、Minerへの追加質問なしで、正常なclaimの�
 
 ## 現在の到達点
 
-具体的な推論位置、37 vectorのReadout、整数型、Stop/End、Root/Ticketの論理codecを設計として固定した。実8B推論、変換品質、Qwen費用定理、本番wire/runtime/activationを完了扱いしない。旧資料の実測・実装済み記述は元のprofileでの履歴であり、QF1の証拠へ転用しない。
+Qwen3-8Bの固定整数実行について、隔離3ピアで通常のPanel承認、Endの直接裁定、資料欠落時の承認不足と元期限を確認した。QF1-10の一貫検証、変換後の実用性、適合する費用定理、公開有効化は未完了である。各試験が確認した範囲は[RFC-0066 §12](../rfc/0066-qwen3-fow1-execution-and-readout.md#12-受入試験と完成判定)に記録する。
