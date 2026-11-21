@@ -18,6 +18,8 @@ QF1の具体的な数値・shape・Readout・codecはRFC0066が所有する。FO
 
 instanceの全artifact・TIR・scale・tokenizer・StateMapを固定し、資源上限と完全Court catalog、G-EXEC/G-COLL/G-COST/G-USE、MAS1停止状態、native実装・移行・activationが全て成立するまでは採掘不可とする。公式重みや小規模vectorの成功を条件の代替にしない。
 
+QF1の受入試験では、Minerへの追加質問なしで、正常なclaimの完全再実行、不一致の直接反証、必要資料が欠けたまま元期限に達した場合の未検証終了を確認する。対話による局所化を提供するかは任意で、実装はfenceの開始条件に含めない。[RFC-0062 §3.1](../rfc/0062-palw-function-output-and-work-admissibility.md#fow1-panel-dialogue)
+
 非報酬評価はMAS1のMODEL_AUDITと後続独立PANELを使う。一般登録と追加モデルの市場原子生成はそのままで、評価からcredit/weight/受賞権利/報酬を発行しない。後日合格しても過去の評価に遡って報酬を付与しない。
 
 ## 現在の到達点
