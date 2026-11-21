@@ -556,6 +556,27 @@ impl DerivedExecInput<'_> {
         Ok(())
     }
 
+    /// Produce from the signed registration and live EXEC without a declared T.
+    pub fn produce_qf1_original(
+        &self,
+        native: &dyn ConsensusApi,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+        open: Option<u64>,
+    ) -> Result<LocalOriginal<'_, '_>, String> {
+        self.check_qf1_instance(native, instance)?;
+        let trace = instance.produce_trace(
+            &self.tokens,
+            self.terms.decode_tokens,
+            self.terms.max_leaves,
+            Hash64::from_bytes(self.registration_key),
+            self.attempt,
+            self.context_digest,
+            open,
+        )?;
+        self.check_live(native).map_err(|e| e.to_string())?;
+        Ok(LocalOriginal { input: self, trace })
+    }
+
     /// Re-execute and disclose a typed trace leaf against the same owner-pinned
     /// job. T comes from the original output; truncation or extension fails.
     pub fn replay_qf1_original(

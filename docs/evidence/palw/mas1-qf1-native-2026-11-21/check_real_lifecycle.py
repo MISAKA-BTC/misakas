@@ -367,6 +367,7 @@ if __name__ == "__main__":
     mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
+    parser.add_argument("--one-pass-original", action="store_true", help="require the producer to discover length and open Init in its one-pass Original before receipt")
     parser.add_argument("--retained-end", action="store_true", help="verify the retained final chunk, End and direct Court")
     parser.add_argument("--inconsistent-readout", action="store_true", help="require a signed contradictory Readout root, withheld replies and a direct End refutation")
     args=parser.parse_args()
@@ -392,4 +393,15 @@ if __name__ == "__main__":
         expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
     log = args.log.read_text()
     result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end, args.inconsistent_readout, args.missing_material, args.undisputed, args.recorded_replies) if verify is check else verify(log, expected)
+    if args.one_pass_original:
+        matches = list(re.finditer(r"QF1 one-pass producer pid=(\d+) attempt=([0-9a-f]{64}) length=(\d+)", log))
+        disclosures = [json.loads(row) for row in re.findall(r"QF1 disclosure (\{[^\n]+\})", log)]
+        init_pids = [row["pid"] for row in disclosures if row["index"] == 0]
+        if len(matches) != 1:
+            raise ValueError("expected one single-pass Original producer")
+        producer, attempt, length = matches[0].groups()
+        if (init_pids != [int(producer)] or attempt != result["attempt"] or int(length) != len(result["output_ids"])
+                or matches[0].end() >= log.index("QF1 receipt pid=")):
+            raise ValueError("single-pass producer or signed Original mismatch")
+        result["one_pass_producer"] = int(producer)
     print(json.dumps(result, indent=2))

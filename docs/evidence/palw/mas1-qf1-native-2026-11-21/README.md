@@ -1060,3 +1060,25 @@ python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "
 RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --online-stop "$parent" "$out/scales.section" "$out/varied-plan.json" > "$out/online-run.jsonl"
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --online-log "$p/g-cost-online-stop-run.jsonl" | cmp - "$p/g-cost-online-stop.json"
 ```
+
+### 新規Originalを1回推論で生成する隔離3ピア試験
+
+登録者が署名したclass・descriptor・tokenizerとEXECから導いた入力を取得し、producerは回答長の事前申告なしにQwen3-8Bを実行した。実際の停止位置から四Root・Ticket、Init・Stop・最後のReadout chunk・Endのopeningを構成してOriginalに署名した。Panelは登録済みモデルで個別に完全再実行した。producerのTRACE記録バッファ上限は1 GiBで、ホストのメモリ予約器を使用する場合は実行前の予約額に含める。
+
+正常系では承認がDAA 27で受理され、元の排他期限DAA 60でも参照できた。別の試行で、保持していたStop・EndをCourtが直接検査し、両caseで反証不成立となった。負の対照では、producerがReadoutだけを差し替えて署名すると、Panelが完全承認を出せず、Endの裁定が計算を反証した。各試行のOriginal・PANEL・caseは独立であり、それぞれの結果を[正常系](native-one-pass-accepted.json)・[正規Originalの直接裁定](native-one-pass-court.json)・[矛盾したOriginalの直接裁定](native-one-pass-refuted.json)に収録した。
+
+[実行ログとMOE2の帳簿](native-one-pass-run.tar.zst)には同一バイナリの隔離市場試験も含む。市場生成・永久LP・余剰burn・MinerとPanelへの配分はこの市場試験の決済で確認した。[帳簿の検算](native-one-pass-book.json)。新規Qwen claimのFinal・採掘資格・受賞・決済は未検証である。
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/native-one-pass-run.tar.zst" -C "$out"
+for name in accepted court refuted; do
+    case "$name" in
+        accepted) set -- --undisputed ;;
+        court) set -- --retained-stop --retained-end ;;
+        refuted) set -- --retained-stop --retained-end --inconsistent-readout ;;
+    esac
+    python3 -B "$p/check_real_lifecycle.py" "$out/$name.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --one-pass-original "$@" | cmp - "$p/native-one-pass-$name.json" || exit 1
+done
+python3 -B "$p/check_studio_moe2_book.py" "$out/moe2-original-book" | cmp - "$p/native-one-pass-book.json"
+```

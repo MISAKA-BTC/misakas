@@ -163,6 +163,25 @@ impl<'a> LocalInstance<'a> {
         trace.finish(answer)
     }
 
+    /// Construct the Original with one numerical execution. Stop fixes the
+    /// final tree geometry; no prior answer or predicted length is required.
+    pub fn produce_trace(
+        &self,
+        prompt: &[u32],
+        limit: u32,
+        max_leaves: u64,
+        job: Hash64,
+        seed: [u8; 32],
+        context_digest: Hash64,
+        open: Option<u64>,
+    ) -> Result<LocalTrace, String> {
+        let request = TraceRequest { context_digest, answer_len: limit, open };
+        let mut trace = Trace::begin(self, prompt, limit, max_leaves, seed, request)?;
+        trace.buffer_until_stop();
+        let answer = self.drive(prompt, limit, max_leaves, job, seed, Some(&mut trace), None)?;
+        trace.finish(answer)
+    }
+
     fn drive(
         &self,
         prompt: &[u32],
@@ -199,7 +218,9 @@ impl<'a> LocalInstance<'a> {
             "tir-qf1-local",
             self.identity.class,
             &ctx,
-            need.checked_add(extra).ok_or("QF1 memory quote overflow")?,
+            need.checked_add(extra)
+                .and_then(|n| n.checked_add(trace.as_deref().map_or(0, Trace::buffer_reservation)))
+                .ok_or("QF1 memory quote overflow")?,
         )?;
         let mut exec = TirExecutor::new(plan, self.artifact.params()).map_err(|e| e.to_string())?;
         // The typed executor only fuses regions preserving every committed output.

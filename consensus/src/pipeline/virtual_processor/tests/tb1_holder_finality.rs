@@ -985,28 +985,28 @@ async fn run(stable: bool, registered: bool) {
         let substituted = prediction::bind_scale(artifact, *norm, b"other scale");
         assert!(matches!(r.replay_qf1_local(api, &substituted), Err(e) if e.contains("owner-signed registration")));
         assert!(request.replay_qf1_local(api, bound).is_err());
-        let answer = r.replay_qf1_local(api, bound).unwrap();
-        if full.is_none() {
-            prediction::check(r.tokens(), terms.decode_tokens, &answer);
-            assert_eq!(answer.tokens, [7, 151643]);
-        }
-        // Only the producer signs the Original. Readers use its declared T
-        // for the tree length and independently execute and authenticate it.
-        let declared = if let Some(s) = parent_socket.as_mut() {
-            receive::<u32>(s)
+        let (replay, opened) = if let Some(s) = parent_socket.as_mut() {
+            let declared = receive::<u32>(s);
+            let opened = if slot == 1 {
+                64
+            } else {
+                bound.trace_leaf_count(r.tokens().len().try_into().unwrap(), declared, terms.max_leaves).unwrap() - 1
+            };
+            (r.replay_qf1_original(api, bound, declared, Some(opened)).unwrap(), opened)
         } else {
-            let t = answer.tokens.len() as u32;
+            let replay = r.produce_qf1_original(api, bound, Some(0)).unwrap();
+            let t = replay.trace().answer.tokens.len() as u32;
             for (_, s) in &mut peers {
                 send(s, &t);
             }
-            t
+            peer_log!("QF1 one-pass producer pid={} attempt={} length={}", std::process::id(), faster_hex::hex_string(r.attempt()), t);
+            (replay, 0)
         };
-        let opened = match slot {
-            0 => 0,
-            1 => 64,
-            _ => bound.trace_leaf_count(r.tokens().len().try_into().unwrap(), declared, terms.max_leaves).unwrap() - 1,
-        };
-        let replay = r.replay_qf1_original(api, bound, declared, Some(opened)).unwrap();
+        let answer = &replay.trace().answer;
+        if full.is_none() {
+            prediction::check(r.tokens(), terms.decode_tokens, answer);
+            assert_eq!(answer.tokens, [7, 151643]);
+        }
         let (body, sig, stop_material, end_material) = if let Some(s) = parent_socket.as_mut() {
             let (body, bytes, stop, end) =
                 receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>, Vec<u8>, Vec<u8>)>(s);
@@ -1068,8 +1068,6 @@ async fn run(stable: bool, registered: bool) {
         assert!(replay.verify(api, &body, &owner_sig).is_err());
         assert!(r.read_qf1_original(api, certificate.hash(), &body, &sig).is_err());
         let trace = replay.trace();
-        assert_eq!(trace.answer.tokens, answer.tokens);
-        assert_eq!(trace.answer.z, answer.z);
         let opening = trace.opening.as_ref().unwrap();
         assert!(trace.roots[3].verify_opening(opened, &opening.record, &opening.siblings));
         assert!(!trace.roots[3].verify_opening(opened, b"wrong", &opening.siblings));
@@ -1083,7 +1081,7 @@ async fn run(stable: bool, registered: bool) {
         for line in [format!("QF1 original {observed}\n"), format!("QF1 disclosure {witness}\n")] {
             std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
         }
-        let report = (answer.tokens, answer.processed_positions, Hash64::from_bytes(answer.z));
+        let report = (answer.tokens.clone(), answer.processed_positions, Hash64::from_bytes(answer.z));
         let line = format!(
             "QF1 fixture pid={} class={} descriptor={} positions={} tokens={:?} stop={:?} z={}\n",
             std::process::id(),

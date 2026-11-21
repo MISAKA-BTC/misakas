@@ -1,6 +1,6 @@
-//! RFC-0066 logical records, streamed directly from the TIR executor. Since
-//! every leaf commits the final count, the producer supplies T from its first
-//! execution. A checker can use the declared T; any disagreement fails replay.
+//! RFC-0066 logical records from the TIR executor. Each leaf binds the final
+//! count. Replay can stream directly with the signed answer length; a producer
+//! can buffer canonical records until numerical execution determines Stop.
 use super::{LocalAnswer, LocalInstance};
 use crate::{NodeValue, StepSink, TirExecutor};
 use kaspa_consensus_core::{
@@ -149,11 +149,17 @@ impl Trace {
         Ok(trace)
     }
 
-    /// Offline cost route. Init has already been encoded by begin; retain it
+    /// Producer route. Init has already been encoded by begin; retain it
     /// along with subsequent records until numerical stopping fixes the count.
     pub(super) fn buffer_until_stop(&mut self) {
         self.buffered = Some(self.record.clone());
     }
+
+    pub(super) fn buffer_reservation(&self) -> u64 {
+        if self.buffered.is_some() { Self::BUFFER_LIMIT as u64 } else { 0 }
+    }
+
+    const BUFFER_LIMIT: usize = 1 << 30;
 
     pub(super) fn resolve_length(&mut self, instance: &LocalInstance<'_>, steps: u32, cap: u64) -> Result<(), String> {
         let Some(records) = self.buffered.take() else { return Ok(()) };
@@ -163,7 +169,12 @@ impl Trace {
             TreeKind::Trace,
             layout.count,
             cap,
-            [None, Some(layout.count - 2 - u64::from(layout.chunks)), Some(layout.count - 2), Some(layout.count - 1)],
+            [
+                self.opening.as_ref().map(|(i, _)| *i),
+                Some(layout.count - 2 - u64::from(layout.chunks)),
+                Some(layout.count - 2),
+                Some(layout.count - 1),
+            ],
         )?;
         let mut rest = records.as_slice();
         while !rest.is_empty() {
@@ -188,14 +199,13 @@ impl Trace {
         let len = u32::try_from(self.record.len() - 5).map_err(|_| "QF1 record length")?;
         self.record[1..5].copy_from_slice(&len.to_le_bytes());
         if let Some(buffer) = &mut self.buffered {
-            const MAX_BYTES: usize = 1 << 30;
             let required = buffer.len().checked_add(self.record.len()).ok_or("QF1 buffer size overflow")?;
-            if required > MAX_BYTES {
-                return Err("QF1 offline trace buffer exceeds 1 GiB");
+            if required > Self::BUFFER_LIMIT {
+                return Err("QF1 producer trace buffer exceeds 1 GiB");
             }
             if required > buffer.capacity() {
-                let target = required.max(buffer.capacity().saturating_mul(2)).min(MAX_BYTES);
-                buffer.try_reserve_exact(target - buffer.len()).map_err(|_| "QF1 offline trace allocation failed")?;
+                let target = required.max(buffer.capacity().saturating_mul(2)).min(Self::BUFFER_LIMIT);
+                buffer.try_reserve_exact(target - buffer.len()).map_err(|_| "QF1 producer trace allocation failed")?;
             }
             buffer.extend_from_slice(&self.record);
         } else {
