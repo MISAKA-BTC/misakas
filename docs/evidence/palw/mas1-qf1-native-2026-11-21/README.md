@@ -579,3 +579,5 @@ python3 -B "$p/check_real_lifecycle.py" "$out/qf1-stop-end.log" "$p/qf1-native-t
 zstd -dc "$p/qf1-signed-readout-refuted.txt.zst" > "$out/refuted.log"
 python3 -B "$p/check_real_lifecycle.py" "$out/refuted.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end --inconsistent-readout
 ```
+
+同じバイナリ・モデルで、正しい Readout root に署名する対照試験も実施した。各試験で EXEC・PANEL を新しく抽選した。対照試験の選出2名は完全再実行後に承認を署名し、3ピアすべてが承認の受付と End への異議棄却を確認した。[同一バイナリの対照試験](qf1-signed-readout-control.json)・[生ログ](qf1-signed-readout-control.txt.zst)
