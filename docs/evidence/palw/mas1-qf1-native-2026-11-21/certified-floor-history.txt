@@ -1,0 +1,58 @@
+test_binary_sha256=987a99a2aa9dae3f6e1620721c64123b6393c35947235f34b33ea14c1b89aecb
+
+running 1 test
+TB1 prior floor verifier pool initial_daa=0 maturity_daa=5040 draws=75 quorum=41
+[t12-e2e]   … original verifier pool maturity: 500 heartbeats, sink DAA 250
+[t12-e2e]   … original verifier pool maturity: 1000 heartbeats, sink DAA 500
+[t12-e2e]   … original verifier pool maturity: 1500 heartbeats, sink DAA 750
+[t12-e2e]   … original verifier pool maturity: 2000 heartbeats, sink DAA 1000
+[t12-e2e]   … original verifier pool maturity: 2500 heartbeats, sink DAA 1250
+[t12-e2e]   … original verifier pool maturity: 3000 heartbeats, sink DAA 1500
+[t12-e2e]   … original verifier pool maturity: 3500 heartbeats, sink DAA 1750
+[t12-e2e]   … original verifier pool maturity: 4000 heartbeats, sink DAA 2000
+[t12-e2e]   … original verifier pool maturity: 4500 heartbeats, sink DAA 2250
+[t12-e2e]   … original verifier pool maturity: 5000 heartbeats, sink DAA 2500
+[t12-e2e]   … original verifier pool maturity: 5500 heartbeats, sink DAA 2750
+[t12-e2e]   … original verifier pool maturity: 6000 heartbeats, sink DAA 3000
+[t12-e2e]   … original verifier pool maturity: 6500 heartbeats, sink DAA 3250
+[t12-e2e]   … original verifier pool maturity: 7000 heartbeats, sink DAA 3500
+[t12-e2e]   … original verifier pool maturity: 7500 heartbeats, sink DAA 3750
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::private_tb1_certified_floor_history has been running for over 60 seconds
+[t12-e2e]   … original verifier pool maturity: 8000 heartbeats, sink DAA 4000
+[t12-e2e]   … original verifier pool maturity: 8500 heartbeats, sink DAA 4250
+[t12-e2e]   … original verifier pool maturity: 9000 heartbeats, sink DAA 4500
+[t12-e2e]   … original verifier pool maturity: 9500 heartbeats, sink DAA 4750
+[t12-e2e]   … original verifier pool maturity: 10000 heartbeats, sink DAA 5000
+[t12-e2e] original verifier pool maturity: reached after 10081 heartbeats (DAA 0 -> 5040)
+[real-attempt] unchanged class target 00eac24fffffffffffffffffffffffff, pwu 6042506112, witness chunks 0
+[real-attempt] 122 executions before accepted claim b5f3c6e16a261238e4989c9a278e289cba79a3143add52d97389df321375e6d907b38e671b063c28b8b24dec85c2c0e88afea6e2529b02b4353a1cdbeb046f6c
+TB1 prior floor accepted claim=b5f3c6e16a261238e4989c9a278e289cba79a3143add52d97389df321375e6d907b38e671b063c28b8b24dec85c2c0e88afea6e2529b02b4353a1cdbeb046f6c block=f2f942d861fdf1f36b48820af8fcc9209f9e7ed90d8599ed726d5ac1e816eb27c1bbaf6f57903005c5da2040941ba6ba70302b493f0d1e2b35b9cd0dd3d73625 daa=5040
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 5040 -> 5060)
+[t12-e2e] first claim Final: reached after 242 heartbeats (DAA 5061 -> 5182)
+[t12-e2e]   … approved Gate C window: 500 heartbeats, sink DAA 5443
+[t12-e2e]   … approved Gate C window: 1000 heartbeats, sink DAA 5693
+2026-11-21 14:39:51.520+09:00 [WARN ] PALW: block 595081b98bc4e0817a572e06d3b1b254abcf135266d655bd97aba977d2490b85c03ab7b7fe117968b218cce349b8b996898c7727525f33750b34035648c312f2 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[t12-e2e]   … approved Gate C window: 1500 heartbeats, sink DAA 5943
+[t12-e2e]   … approved Gate C window: 2000 heartbeats, sink DAA 6193
+2026-11-21 14:40:14.708+09:00 [WARN ] PALW: block 8855e8126b9ed4880b57980aa3e511cd410058ea051a8f595aee0bba071fe1a32ab9533df309e7585fc8894a147da5890a7424ab043a4f646ffecda50c90cd24 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[t12-e2e]   … approved Gate C window: 2500 heartbeats, sink DAA 6443
+[t12-e2e]   … approved Gate C window: 3000 heartbeats, sink DAA 6693
+[t12-e2e]   … approved Gate C window: 3500 heartbeats, sink DAA 6943
+[t12-e2e]   … approved Gate C window: 4000 heartbeats, sink DAA 7193
+[t12-e2e]   … approved Gate C window: 4500 heartbeats, sink DAA 7443
+[t12-e2e]   … approved Gate C window: 5000 heartbeats, sink DAA 7693
+[t12-e2e]   … approved Gate C window: 5500 heartbeats, sink DAA 7943
+[t12-e2e]   … approved Gate C window: 6000 heartbeats, sink DAA 8193
+[t12-e2e]   … approved Gate C window: 6500 heartbeats, sink DAA 8443
+[t12-e2e]   … approved Gate C window: 7000 heartbeats, sink DAA 8693
+[t12-e2e]   … approved Gate C window: 7500 heartbeats, sink DAA 8943
+[t12-e2e]   … approved Gate C window: 8000 heartbeats, sink DAA 9193
+[t12-e2e]   … approved Gate C window: 8500 heartbeats, sink DAA 9443
+[t12-e2e]   … approved Gate C window: 9000 heartbeats, sink DAA 9693
+[t12-e2e]   … approved Gate C window: 9500 heartbeats, sink DAA 9943
+[t12-e2e]   … approved Gate C window: 10000 heartbeats, sink DAA 10193
+[t12-e2e] approved Gate C window: reached after 10058 heartbeats (DAA 5193 -> 10222)
+TB1 prior floor certified claim=b5f3c6e16a261238e4989c9a278e289cba79a3143add52d97389df321375e6d907b38e671b063c28b8b24dec85c2c0e88afea6e2529b02b4353a1cdbeb046f6c accepted=f2f942d861fdf1f36b48820af8fcc9209f9e7ed90d8599ed726d5ac1e816eb27c1bbaf6f57903005c5da2040941ba6ba70302b493f0d1e2b35b9cd0dd3d73625 frontier=f2f942d861fdf1f36b48820af8fcc9209f9e7ed90d8599ed726d5ac1e816eb27c1bbaf6f57903005c5da2040941ba6ba70302b493f0d1e2b35b9cd0dd3d73625 positions=75 quorum=41 transcript=10fe0862e2b391a74c39ba72836aef7d43b837f1c82627144e6c5a9a61ea1327b285bf78f57887f100327389b468255a0d4b6e30d9a55a8614ee3fbb35453ed8
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::private_tb1_certified_floor_history ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1500 filtered out; finished in 278.78s

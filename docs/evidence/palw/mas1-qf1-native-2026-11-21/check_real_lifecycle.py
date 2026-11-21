@@ -71,9 +71,42 @@ def check(log, artifact):
                 readout_z=z_hex,panel=panel,court=verify_case(log,panel))
 
 
+def check_pending_freeze(log, artifact):
+    peers, (registered, model, inventory, state, daa, blue) = shared_rows(
+        log, r"QF1 registered pid=(\d+) block=(\w+) class=(\w+) artifact=(\w+) state=(\w+) daa=(\d+) blue=(\d+)")
+    linked, (block, prepared, parent_state) = shared_rows(
+        log, r"QF1 registered EXEC pid=(\d+) registration=(\w+) preparation=(\w+) parent_state=([0-9a-f]{128})")
+    qualified, (preparation, exec_root, panel_root, consumer) = shared_rows(
+        log, r"TB1 qualification pid=(\d+) preparation=(\w+) exec=(\w+) panel=(\w+) consumer=(\w+)")
+    observations = re.findall(
+        r"TB1 pending registered freeze pid=(\d+) slot=(\d+) registration=(\w+) preparation=(\w+) close=(\w+) "
+        r"generation=(\w+) daa=(\d+) from=(\d+) deadline=(\d+) publication=WouldBlock signing=WouldBlock", log)
+    if (peers != linked or peers != qualified or len(observations) != 3 or {x[0] for x in observations} != peers
+            or {x[1] for x in observations} != {"0", "1", "2"} or len({x[2:] for x in observations}) != 1):
+        raise ValueError("different peer, holder or selected-chain observations")
+    close, generation = observations[0][4:6]
+    observed, release, deadline = map(int, observations[0][6:])
+    if not release <= observed < deadline:
+        raise ValueError("observation outside the original signing window")
+    if (registered != block or prepared != preparation or observations[0][2:4] != (registered, prepared)
+            or state != parent_state or state == "0" * 128 or len({registered, preparation, close, generation}) != 4
+            or model != artifact["class_id"] or inventory != artifact["artifact_root"] or exec_root == panel_root):
+        raise ValueError("registration, pinned header state, qualification or freeze mismatch")
+    binary = re.search(r"^test_binary_sha256=([0-9a-f]{64})$", log, re.MULTILINE)
+    if binary is None or "TB1 publication pid" in log:
+        raise ValueError("missing build identity or unexpected release")
+    return dict(binary_sha256=binary[1], pids=sorted(map(int, peers)), class_id=model, artifact_root=inventory,
+                registration=registered, registration_daa=int(daa), registration_blue=int(blue), state_root=state,
+                preparation=preparation, exec_qual_root=exec_root, panel_qual_root=panel_root, consumer_root=consumer,
+                close=close, generation=generation, observed_daa=observed, release_daa=release, deadline=deadline,
+                publication="WouldBlock", signing="WouldBlock")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log",type=Path)
     parser.add_argument("class_check",type=Path)
+    parser.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
     args=parser.parse_args()
-    print(json.dumps(check(args.log.read_text(),json.loads(args.class_check.read_bytes())),indent=2))
+    verify = check_pending_freeze if args.pending_freeze else check
+    print(json.dumps(verify(args.log.read_text(), json.loads(args.class_check.read_bytes())), indent=2))

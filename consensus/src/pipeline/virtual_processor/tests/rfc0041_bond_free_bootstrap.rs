@@ -282,7 +282,7 @@ async fn rfc0041_production_recovery_pays_then_public_bonds_start_palw() {
     assert_eq!(panel.anchor, anchor.header.hash);
     assert_eq!(panel.seats.len(), chain.bundle.panel.seat_count() as usize);
     assert!(panel.seats.iter().all(|seat| chain.bonds.contains(&seat.bond) && seat.bond != chain.bonds[0]));
-    authenticate(&mut chain, &mut funding, claim).await;
+    authenticate(&mut chain, &mut funding, claim, |_, card| [0xC0 | card as u8; 64]).await;
 
     // Shut down the node and load the same database, without genesis import or
     // replacing state. The helper derives only genesis bonds, so restore the
@@ -357,7 +357,14 @@ fn certification(
         .map(|raw| borsh::from_slice(raw).unwrap())
 }
 
-async fn authenticate(chain: &mut T12Chain, funding: &mut (TransactionOutpoint, UtxoEntry), claim: Hash64) {
+/// Drive the normal seat and Gate C carriers, with the verdict material supplied
+/// by the caller for each signer. The bootstrap-only test checks identities.
+async fn authenticate(
+    chain: &mut T12Chain,
+    funding: &mut (TransactionOutpoint, UtxoEntry),
+    claim: Hash64,
+    review: impl Fn(&T12Chain, usize) -> [u8; 64],
+) {
     use kaspa_consensus_core::palw_kernel_route_v1::*;
     use kaspa_consensus_core::palw_panel_v2::*;
     use kaspa_consensus_core::palw_security_certification_v1::*;
@@ -370,6 +377,7 @@ async fn authenticate(chain: &mut T12Chain, funding: &mut (TransactionOutpoint, 
         .take(chain.bundle.panel.quorum() as usize)
         .map(|seat| {
             let card = chain.bonds.iter().position(|bond| *bond == seat.bond).unwrap();
+            review(chain, card);
             let message = palw_receipt_message_v2(chain.network_domain, claim, PalwReceiptVerdictV2::Valid, signed_daa);
             let signature = libcrux_ml_dsa::ml_dsa_87::sign(
                 &card_key(card).signing_key,
@@ -426,7 +434,7 @@ async fn authenticate(chain: &mut T12Chain, funding: &mut (TransactionOutpoint, 
             exam: palw_certification_id_v1(&claim),
             verifier,
             verdict: EligibilityVerdictV1::Reproduced,
-            transcript: [0xC0 | card as u8; 64],
+            transcript: review(chain, card),
             claim_mismatches: vec![],
         };
         let bytes = misaka_palw_kernel::route::KernelRouteObjectV1::AttestEligibilityExamV1 { attestation }.encode();
@@ -451,4 +459,42 @@ async fn authenticate(chain: &mut T12Chain, funding: &mut (TransactionOutpoint, 
         .await;
     assert_eq!(certification(chain, claim).unwrap().outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified));
     assert!(certified(chain, claim));
+}
+
+pub(in crate::pipeline::virtual_processor::tests) async fn certified_floor_history(
+    chain: &mut T12Chain,
+    funding: &mut (TransactionOutpoint, UtxoEntry),
+) -> Hash64 {
+    let step = chain.config.params.target_time_per_block();
+    let policy = chain.bundle.state.rfc0018_v1().expect("Gate C mirror").certification;
+    assert!(policy.is_approved_v1((86_400_000 / step.max(1)).max(1)));
+    let last = chain.tip_state().1.bonds_iter().map(|(_, bond)| bond.registered_daa).max().unwrap();
+    let mature = last + policy.verifier_maturity_daa;
+    let initial = chain.sink_daa();
+    eprintln!("TB1 prior floor verifier pool initial_daa={initial} maturity_daa={mature} draws={} quorum={}", policy.m, policy.k);
+    chain.beat_until(4 * mature.saturating_sub(initial) + 400, "original verifier pool maturity", |c| c.sink_daa() >= mature).await;
+    let real = chain.real_attempt(0, step).await;
+    let initial_replay = real.replay_transcript(chain).expect("replay accepted floor work");
+    eprintln!("TB1 prior floor accepted claim={} block={} daa={}", real.claim, real.block.hash(), real.block.header.daa_score);
+    chain.attempt_at_the_anchor_slot(real.claim, 7).await;
+    authenticate(chain, funding, real.claim, |chain, _| {
+        let replay = real.replay_transcript(chain).expect("every positive verdict requires full floor replay");
+        assert_eq!(replay, initial_replay);
+        replay
+    })
+    .await;
+    let row = certification(chain, real.claim).unwrap();
+    let state = chain.tip_state().1;
+    let c = state.claim(&real.claim).unwrap();
+    assert!(state.safe_frontier().0 >= c.accepted_blue_score);
+    eprintln!(
+        "TB1 prior floor certified claim={} accepted={} frontier={} positions={} quorum={} transcript={}",
+        real.claim,
+        c.accepted_block,
+        state.safe_frontier().1,
+        row.positive_positions(),
+        policy.k,
+        Hash64::from_bytes(initial_replay)
+    );
+    real.claim
 }

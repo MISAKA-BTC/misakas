@@ -103,7 +103,7 @@ fn receive<T: serde::de::DeserializeOwned>(socket: &mut UnixStream) -> T {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-fn child_reader(dir: &Path, slot: usize, stable: bool) -> (Child, UnixStream) {
+fn child_reader(dir: &Path, slot: usize, stable: bool, registered: bool) -> (Child, UnixStream) {
     let (parent, child_input) = UnixStream::pair().unwrap();
     let timeout = if std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some() { 3600 } else { 60 };
     for s in [&parent, &child_input] {
@@ -111,7 +111,9 @@ fn child_reader(dir: &Path, slot: usize, stable: bool) -> (Child, UnixStream) {
         s.set_write_timeout(Some(Duration::from_secs(timeout))).unwrap();
     }
     let mut command = Command::new(std::env::current_exe().unwrap());
-    if stable {
+    if registered {
+        command.args(["private_registered_tb1_pending_freeze", "--ignored"]);
+    } else if stable {
         command.args(["private_tb1_stable_panel", "--ignored"]);
     } else {
         command.arg("native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected");
@@ -218,7 +220,7 @@ fn qualified<'a>(
 
 #[tokio::test]
 async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected() {
-    run(false).await;
+    run(false, false).await;
 }
 
 #[tokio::test]
@@ -228,16 +230,95 @@ async fn private_tb1_stable_panel() {
     if std::env::var_os("MISAKA_PRIVATE_QF1_ATTENTION").is_some() {
         assert!(std::env::var_os("MISAKA_PRIVATE_QF1_EMBEDDING").is_some(), "the attention check needs authenticated input rows");
     }
-    run(true).await;
+    run(true, false).await;
 }
 
-async fn run(stable: bool) {
-    let parts = parts(Some(FENCE));
+#[tokio::test]
+#[ignore = "validates ordinary verifier maturity and generates genuine certified history"]
+async fn private_tb1_certified_floor_history() {
+    use super::super::{g14_registration_e2e::private_moe2::arm_private_registration, t12_round_lane_e2e::certified_floor_history};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    let mut node = Rig::new(&(config.clone(), bundle.clone(), premine, floats.clone()), 0x12_c500_0000);
+    stable_panel::arm(&mut node);
+    certified_floor_history(&mut node.chain, &mut floats[0].clone()).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the full registered QF1 artifact and tokenizer"]
+async fn private_registered_tb1_pending_freeze() {
+    assert!(std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some());
+    run(true, true).await;
+}
+
+async fn run(stable: bool, registered: bool) {
+    use super::super::g14_registration_e2e::{private_moe2::arm_private_registration, tb1_registration_prefix};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let child_dir = std::env::var_os(READER_DIR).map(std::path::PathBuf::from);
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let full = std::env::var_os("MISAKA_PRIVATE_QF1_FULL");
+    let tokenizer = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER");
+    assert!(full.is_none() || (stable && tokenizer.is_some()), "the full class uses the stable round and pinned tokenizer");
+    let held = full.as_ref().map(|p| misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(p)).unwrap());
+    let parts = if registered {
+        let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+        let bundle = bundle.clone();
+        (config, bundle, premine, floats)
+    } else {
+        parts(Some(FENCE))
+    };
     let mut node = Rig::new(&parts, 0x12_c500_0000);
     let genesis = node.chain.sink();
     if stable {
         stable_panel::arm(&mut node);
     }
+    let registration = if registered {
+        let artifact = held.as_ref().unwrap();
+        let class = artifact.class().unwrap();
+        let inventory = artifact.inventory_root().unwrap().0;
+        let class_id = class.class_id(&inventory);
+        let filename = "held-registration.json";
+        let prefix: Vec<Block> = if let Some(path) = &child_dir {
+            let raw: Vec<RpcRawBlock> = serde_json::from_reader(File::open(path.join(filename)).unwrap()).unwrap();
+            raw.into_iter().map(|r| Block::try_from(r).unwrap()).collect()
+        } else {
+            let blocks = tb1_registration_prefix(&parts, class.clone(), inventory).await;
+            let raw: Vec<_> = blocks.iter().map(RpcRawBlock::from).collect();
+            serde_json::to_writer(File::create_new(dir.path().join(filename)).unwrap(), &raw).unwrap();
+            blocks
+        };
+        assert!(node.api().palw_tir_class_record_v1(class_id).is_none());
+        for block in prefix {
+            stable_panel::arrive(&mut node, block, "native model registration prefix").await;
+        }
+        let (fold, state) = node.chain.tip_state();
+        assert_eq!(fold, node.chain.sink());
+        let registered = state.class(&class_id).expect("model registration on the EXEC chain");
+        assert_eq!(registered.artifact_root, inventory);
+        assert!(state.model_market(&class_id).is_some());
+        let native = node.api().palw_tir_class_record_v1(class_id).unwrap();
+        assert_eq!(
+            (native.graph_ir_root, native.layout_digest, native.tokenizer_id),
+            (class.graph_ir_root(), class.layout_digest(), class.tokenizer_id)
+        );
+        peer_log!(
+            "QF1 registered pid={} block={} class={} artifact={} state={} daa={} blue={}",
+            std::process::id(),
+            fold,
+            class_id,
+            inventory,
+            state.state_root(),
+            node.chain.daa_of(fold),
+            node.api().get_header(fold).unwrap().blue_score
+        );
+        Some((fold, class_id))
+    } else {
+        None
+    };
+    let prefix_tip = node.api().get_header(node.chain.sink()).unwrap();
+    let (daa_offset, blue_offset) = if registration.is_some() { (prefix_tip.daa_score, prefix_tip.blue_score) } else { (0, 0) };
     let template = node.beat();
     let keys: Vec<_> = (1..=4).map(|i| ml_dsa_65::generate_key_pair([i; 32])).collect();
     let public: Vec<_> = keys.iter().map(|kp| kp.verification_key.clone()).collect();
@@ -251,8 +332,8 @@ async fn run(stable: bool) {
         purpose: Tb1MiningPurpose::Exec,
         schedule_id: [9; 64],
         close_blue_score: template.header.blue_score + 1,
-        release_from_daa: if stable { 4 } else { template.header.daa_score + 1 },
-        deadline_exclusive_daa: if stable { 32 } else { template.header.daa_score + 11 },
+        release_from_daa: if stable { daa_offset + 4 } else { template.header.daa_score + 1 },
+        deadline_exclusive_daa: if stable { daa_offset + 32 } else { template.header.daa_score + 11 },
     };
     let round_ref = round.id();
     let round_ref = round_ref.as_slice();
@@ -262,15 +343,13 @@ async fn run(stable: bool) {
         logical_round: 3,
         // Seven selected blocks take EXEC close to its certificate; the
         // next two carry the signed Original and the private PANEL close.
-        close_blue_score: if stable { 25 } else { round.close_blue_score + 9 },
-        release_from_daa: if stable { 26 } else { 20 },
-        deadline_exclusive_daa: if stable { 50 } else { 30 },
+        close_blue_score: if stable { blue_offset + 25 } else { round.close_blue_score + 9 },
+        release_from_daa: if stable { daa_offset + 26 } else { 20 },
+        deadline_exclusive_daa: if stable { daa_offset + 50 } else { 30 },
         ..round
     };
     let panel_id = panel.id();
     let q = qualified(round_ref, roster, &keys, &dealers, 7, None);
-    let child_dir = std::env::var_os(READER_DIR).map(std::path::PathBuf::from);
-    let dir = kaspa_database::utils::get_kaspa_tempdir();
     let slot = if child_dir.is_some() { std::env::var(READER_SLOT).unwrap().parse::<usize>().unwrap() } else { 0 };
     let setup = stable.then(|| stable_panel::provision(dir.path(), child_dir.as_deref(), slot, &panel_id));
     let panel_q = qualified(&panel_id, roster, &keys, &dealers, 29, setup.as_ref().map(|p| &p.roots));
@@ -294,7 +373,7 @@ async fn run(stable: bool) {
     assert_eq!(node.chain.sink(), parent);
     let mut terms = exec_input::terms(parent);
     if stable {
-        terms.deadline_exclusive_daa = 60;
+        terms.deadline_exclusive_daa = daa_offset + 60;
     }
     let owner = ml_dsa_65::generate_key_pair([82; 32]);
     let key = terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap();
@@ -357,22 +436,30 @@ async fn run(stable: bool) {
         .is_err()
     );
     // Optional non-rewarding RFC-0066 exercise, with the real pinned tokenizer.
-    let full = std::env::var_os("MISAKA_PRIVATE_QF1_FULL");
-    let tokenizer = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER");
-    assert!(full.is_none() || tokenizer.is_some(), "the full model requires its pinned tokenizer");
-    let exercise = tokenizer.as_ref().map(|_| match &full {
-        Some(path) => {
-            let a = misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(path)).unwrap();
-            let model = misaka_palw_sdk::qf1_local::program().unwrap();
-            (a, model.final_norm)
-        }
+    let exercise = tokenizer.as_ref().map(|_| match held {
+        Some(a) => (a, misaka_palw_sdk::qf1_local::program().unwrap().final_norm),
         None => prediction::artifact(&dir.path().join("schedule.palwtir")),
     });
     let instance = exercise.as_ref().map(|(a, norm)| match &full {
         Some(_) => misaka_palw_sdk::qf1_local::bind(a).unwrap(),
         None => prediction::bind(a, *norm),
     });
-    let qf1 = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|path| {
+    if let Some((block, class_id)) = registration {
+        assert_eq!(instance.as_ref().unwrap().identity().class, class_id);
+        assert!(node.api().is_chain_ancestor_of(block, parent).unwrap());
+        let bound = instance.as_ref().unwrap();
+        // The folding block's header still commits its parent, before the class was installed.
+        assert!(misaka_palw_sdk::qf1_local::registration_at(node.api().as_ref(), block, bound).is_err());
+        let root = misaka_palw_sdk::qf1_local::registration_at(node.api().as_ref(), parent, bound).unwrap();
+        peer_log!(
+            "QF1 registered EXEC pid={} registration={} preparation={} parent_state={}",
+            std::process::id(),
+            block,
+            parent,
+            root
+        );
+    }
+    let qf1 = tokenizer.as_ref().map(|path| {
         use misaka_palw_remote::tb1_exposure::qf1::Qf1Prompt;
         let bytes = std::fs::read(path).unwrap();
         let expected: Hash64 = QF1_TEST_TOKENIZER.parse().unwrap();
@@ -439,6 +526,79 @@ async fn run(stable: bool) {
         Hash64::from_bytes(panel_q.root()),
         Hash64::from_bytes(inputs.root())
     );
+    if let Some((model_block, _)) = registration {
+        let file = "pending-freeze-blocks.json";
+        let anchor = if let Some(dir) = &child_dir {
+            let raw: Vec<RpcRawBlock> = serde_json::from_reader(File::open(dir.join(file)).unwrap()).unwrap();
+            let mut blocks = raw.into_iter().map(|r| Block::try_from(r).unwrap());
+            let close = blocks.next().unwrap();
+            let anchor = close.hash();
+            stable_panel::arrive(&mut node, close, "registered EXEC close").await;
+            for block in blocks {
+                stable_panel::arrive(&mut node, block, "registered release window").await;
+            }
+            anchor
+        } else {
+            let mut miner = new_miner_data();
+            miner.extra_data = freeze_id.to_vec();
+            let t = stable_panel::heartbeat(&mut node, miner);
+            let close = node.take(t, "registered EXEC close").await;
+            let mut blocks = vec![RpcRawBlock::from(&close)];
+            while node.chain.daa_of(node.chain.sink()) < round.release_from_daa {
+                assert!(blocks.len() < 120, "native release DAA did not advance");
+                blocks.push(RpcRawBlock::from(&stable_panel::next(&mut node, 0).await));
+            }
+            serde_json::to_writer(File::create_new(dir.path().join(file)).unwrap(), &blocks).unwrap();
+            close.hash()
+        };
+        let before = snapshot_of(&node).unwrap();
+        let daa = node.chain.daa_of(before.generation);
+        assert!((round.release_from_daa..round.deadline_exclusive_daa).contains(&daa));
+        assert_eq!(before.generation, node.chain.sink());
+        let api = node.api().as_ref();
+        assert!(before.finalized.is_none());
+        let ready = readiness_of(&node);
+        assert_eq!(ready.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
+        let freeze = Tb1HolderFreeze::resolve(api, anchor, &closure, &q).unwrap();
+        let err = inputs.observe(api, anchor, &closure, &q).err().expect("publication must wait for certified history");
+        assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
+        let values = dealers.map(|d| (d, field(10 + d + slot + 1)));
+        let row = Tb1HolderRelease {
+            context: Tb1ReleaseContext { round_ref, qual_root: q.root(), freeze_id },
+            holder_slot: slot,
+            shares: &values,
+        };
+        Tb1ExposureJournal::provision(dir.path(), round_ref, &public[slot], slot as u32).unwrap();
+        let mut journal = Tb1ExposureJournal::resume(dir.path(), round_ref, &public[slot], slot as u32).unwrap();
+        let signing = journal.reserve_signing_message(api, freeze, &q, &row, 2048).unwrap_err();
+        assert_eq!(signing.kind(), std::io::ErrorKind::WouldBlock);
+        let observation = (model_block, parent, anchor, before.generation);
+        peer_log!(
+            "TB1 pending registered freeze pid={} slot={} registration={} preparation={} close={} generation={} daa={} from={} deadline={} publication={:?} signing={:?}",
+            std::process::id(),
+            slot,
+            observation.0,
+            parent,
+            anchor,
+            before.generation,
+            daa,
+            round.release_from_daa,
+            round.deadline_exclusive_daa,
+            err.kind(),
+            signing.kind()
+        );
+        if child_dir.is_some() {
+            let mut socket = UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap());
+            send(&mut socket, &observation);
+        } else {
+            let mut peers: Vec<_> = (1..3).map(|i| child_reader(dir.path(), i, true, true)).collect();
+            for (child, socket) in &mut peers {
+                assert_eq!(receive::<(Hash64, Hash64, Hash64, Hash64)>(socket), observation);
+                assert!(child.wait().unwrap().success());
+            }
+        }
+        return;
+    }
     let (prefix, work, tip) = if let Some(dir) = &child_dir {
         let raw: [RpcRawBlock; 6] = serde_json::from_reader(File::open(dir.join("blocks.json")).unwrap()).unwrap();
         let [close, e1, e7, e2, work, tip] = raw.map(|r| Block::try_from(r).unwrap());
@@ -548,7 +708,7 @@ async fn run(stable: bool) {
     } else {
         let raw: Vec<_> = prefix.iter().chain([&work, &tip]).map(RpcRawBlock::from).collect();
         serde_json::to_writer(File::create_new(dir.path().join("blocks.json")).unwrap(), &raw).unwrap();
-        peers.extend((1..3).map(|s| child_reader(dir.path(), s, stable)));
+        peers.extend((1..3).map(|s| child_reader(dir.path(), s, stable, false)));
         let mut records = vec![own_record];
         records.extend(peers.iter_mut().map(|(_, s)| receive::<ReleaseRecord>(s)));
         let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();

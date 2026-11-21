@@ -14,18 +14,24 @@ use kaspa_consensus_core::{
 use kaspa_rpc_core::RpcRawBlock;
 use std::{fs::File, process::Command};
 
-fn registration_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
-    let (config, _, premine, floats) = t12_tir_config(0);
-    let mut params = config.params;
+pub(in crate::pipeline::virtual_processor::tests) fn arm_private_registration(
+    params: &mut kaspa_consensus_core::config::params::Params,
+    current_tir: bool,
+) {
     let base = params.genesis.clone();
     let isolation = Hash64::from_u64_word(64);
     let from = Some(ForkActivation::new(1));
-    if std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some() {
+    if current_tir {
         // The launch harness predates the shipped range evaluator (t12 DAA 3600).
         // The first heartbeat can still have DAA zero when registration is priced.
-        (kaspa_consensus_core::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY.set)(&mut params, Some(ForkActivation::new(0)));
+        let first = ForkActivation::new(0);
+        params.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(first));
+        params.sync_palw_tir_v1();
+        (kaspa_consensus_core::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY.set)(params, Some(first));
     }
-    params.palw_model_market = from;
+    // The native TB1 rig retains the shipped model EVM at genesis. Its market
+    // must already exist then; MOE2 registration still starts with the tier at 1.
+    params.palw_model_market = Some(ForkActivation::new(params.palw_model_evm.map_or(1, |f| f.daa_score().min(1))));
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     for fence in [
         PALW_T12_FULL_BOND_BUDGET_ENTRY,
@@ -34,12 +40,18 @@ fn registration_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
         PALW_T12_G14_MODEL_TIER_ENTRY,
         PALW_T12_FULL_GATE_C_ENTRY,
     ] {
-        (fence.set)(&mut params, from);
+        (fence.set)(params, from);
     }
     params.genesis = palw_isolated_g14_genesis_v1(&base, isolation).unwrap();
     assert_eq!(params.private_moe2_registration_from(), None);
     params.genesis = palw_private_moe2_genesis(&base, isolation).unwrap();
     assert_eq!(params.private_moe2_registration_from(), Some(1));
+}
+
+fn registration_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let (config, _, premine, floats) = t12_tir_config(0);
+    let mut params = config.params;
+    arm_private_registration(&mut params, std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some());
     params.validate_palw_v2().expect("the entire private ruleset validates");
     let config = ConfigBuilder::new(params).skip_proof_of_work().build();
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };

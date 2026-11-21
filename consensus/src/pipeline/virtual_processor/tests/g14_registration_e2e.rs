@@ -2129,4 +2129,20 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
 #[path = "g14_registration_e2e/tokenizer_registration.rs"]
 pub(super) mod tokenizer_registration;
 
-mod private_moe2;
+pub(super) mod private_moe2;
+
+/// Native signed class registration prefix for the private TB1 peer exercise.
+pub(super) async fn tb1_registration_prefix(
+    parts: &(Config, PalwConsensusParamsV2, Premine, Premine),
+    class: PalwTirClassV1,
+    root: Hash64,
+) -> Vec<Block> {
+    let env = Env::over(parts.clone());
+    env.chain.ctx.consensus.set_validation_time_for_test(env.chain.ctx.simulated_time);
+    let case = Case { class, root, name: "TB1 held model".into(), real_root: true };
+    let mined = mine_registration_on(env, &case, 2).await;
+    let (_, state) = mined.env.chain.tip_state();
+    assert_eq!(state.class(&mined.class_id).unwrap().artifact_root, root);
+    assert!(state.model_market(&mined.class_id).is_some());
+    mined.blocks
+}

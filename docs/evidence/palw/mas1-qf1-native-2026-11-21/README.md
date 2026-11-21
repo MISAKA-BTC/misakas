@@ -193,7 +193,7 @@ python "$p/check_class.py" "$OUT/qwen3-8b.palwtir"
 
 二つの隔離チェーンで同じ実モデルを検査した。一つでは署名付きの追加モデル登録を3ピアが受理し、同じ登録ブロックの状態に市場が生成された。隔離チェーンの最初の heartbeat の事前検査にも現行 t12 の range evaluator を適用した。最初に DAA 1 から適用した実行では事前検査が旧規則を選び、terminal close の計算量が上限を超えた。[登録・市場・再編成の3ピア記録](real-market.txt)
 
-もう一つでは3ピアが同じ署名付き EXEC の 111 入力から全36層を実行した。回答は `[17068, 31943, 473]`、停止は Limit。Original は 1,967,418 個の TRACE leaf を束縛し、3ピアは Init、位置64、End の opening を1件ずつ開いた。後続の独立した PANEL で抽選された2者が全再実行して署名し、Stop に関する反証は公開 opening から `ChallengeNotEstablished` と裁定された。Python 検査は3者の一致、公開された値と root、抽選、Stop witness を照合する。[3ピアの生ログ](real-three-peer.txt)・[独立照合](real-lifecycle.json)
+もう一つでは3ピアが同じ署名付き EXEC の 111 入力から全36層を実行した。回答は `[74, 130998, 488]`、停止は Limit。Original は 1,967,418 個の TRACE leaf を束縛し、3ピアは Init、位置64、End の opening を1件ずつ開いた。後続の独立した PANEL で抽選された2者が全再実行して署名し、Stop に関する反証は公開 opening から `ChallengeNotEstablished` と裁定された。Python 検査は3者の一致、公開された値と root、抽選、Stop witness を照合する。[3ピアの生ログ](real-three-peer.txt)・[独立照合](real-lifecycle.json)
 
 仕事は RFC-0066 の private local inference で、事前固定した隔離用 D=1 を使う。報酬原資、新規採掘適格性、Final、Gate C、受賞ブロックをこの実行で認定していない。MODEL_AUDIT・G-COLL・G-COST・G-USE は別途必要である。
 
@@ -206,4 +206,27 @@ bin="$1"
 "$bin" private_qf1_8b_archived_readout --ignored --nocapture
 { echo "test_binary_sha256=$(shasum -a 256 "$bin" | cut -d' ' -f1)"; "$bin" private_tb1_stable_panel --ignored --nocapture; } > "$OUT/three-peers.txt" 2>&1
 python3 -B "$p/check_real_lifecycle.py" "$OUT/three-peers.txt" "$p/class-check.json"
+```
+
+## 同じ選択鎖の登録、市場、EXEC 準備と freeze
+
+3ピアは、署名付き class 登録を畳み込んだブロック `5b2dfee9b6cc2243…`（DAA 1、blue score 3）を受理した。各 DB の市場と class に対して、ノードの TIR record の graph・layout・tokenizer と保持する実重みを照合した。EXEC 準備ブロック `38e2fd9a968c0b38…` のハッシュを固定し、そのヘッダーが親についてコミットする classes テーブルから、SDK が登録済み class と inventory root を読み直した。登録ブロック自身のヘッダーはさらに一つ前の状態をコミットするため、この読み取りを正しく拒否した。
+
+同じ3ピアが EXEC close `1ab19aa282d91bbc…` を受理した。登録後は通常の heartbeat で進め、frontier・成熟済み仕事・pruning の試験値を注入していない。公開期間 DAA 5〜33 の初日（DAA 5）に、native settlement は close を覆う認証済み frontier を確認できず、finalized head を返さなかった。全 holder で公開と署名前の journal 予約がともに `WouldBlock` になった。この一連の試験は実モデルの登録と EXEC の接続、finality 待ちでの停止を示す。[3プロセスの記録](registered-freeze.txt)・[登録、準備、close の独立照合](registered-freeze.json)
+
+```sh
+"$bin" private_registered_tb1_pending_freeze --ignored --nocapture
+python3 -B "$p/check_real_lifecycle.py" --pending-freeze "$p/registered-freeze.txt" "$p/class-check.json"
+```
+
+### 別の隔離チェーンでの認証済み frontier
+
+既存の t12 規則が認証済み frontier を進める条件を、BASE-0 の実行から別の native DB で確認した。検証者の成熟期間を DAA 5,040 まで通常の heartbeat で満たした。設定された class target のまま122回実行し、受理された floor claim `b5f3c6e16a26…` の Panel 署名者と Gate C 承認者がそれぞれ、受理ヘッダーとローカルに保持する実行資料から計算を再実行した。受理は DAA 5,040、Final は 5,182、Gate C の判定は 10,222。75抽選位置に対し必要な承認は41で、検査した鍵の署名は75位置を満たした。複数位置が同じ鍵を抽選し得る。認証後の frontier は実際の受付ブロックに一致した。[条件・再実行・判定のログ](certified-floor-history.txt)
+
+これは1プロセスの旧規則の履歴試験である。native settlement の mature useful work 集計は BASE-0 を明示的に除外している。実モデルの TB1 freeze には、その close を覆う認証済み frontier に加え、元の期限内に native settlement が計上できる非 floor の成熟仕事を同じ履歴で確立する必要がある。[native settlement の計上規則](../../../../consensus/core/src/palw_native_settlement_v1.rs)
+
+再実行には同じ consensus テスト実行ファイルを使う。
+
+```sh
+"$bin" private_tb1_certified_floor_history --ignored --nocapture
 ```

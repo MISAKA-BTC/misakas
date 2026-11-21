@@ -1,7 +1,8 @@
-test_binary_sha256=515d084233cad7ecfeab9ffa6f958651a1484cd93ede33c56a9fa3529992577e
+test_binary_sha256=987a99a2aa9dae3f6e1620721c64123b6393c35947235f34b33ea14c1b89aecb
 
 running 1 test
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::prediction::private_qf1_8b_archived_readout has been running for over 60 seconds
 QF1 held replay class=64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260 inventory=4f049b89bc96796d6c69f30b97067082553b03c4207b270203ee28e962fd00a94ca87a4feaf533b69851880d4fbf2cc1a462245e329d45f52e2a2d104d30a7bd tokens=[8820, 67942, 21856] stop=Limit positions=113 z=80eb4dc1c8d3af19bfec5ce36ad2de3fb83a33e2808aed8de4957841ff1fd107f0551c1f813c968d0e924b8c857f2d709dfaf60bf5ba84a29cb69b2b15b83c1f
 test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::prediction::private_qf1_8b_archived_readout ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1498 filtered out; finished in 56.27s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1500 filtered out; finished in 62.34s

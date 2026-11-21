@@ -55,3 +55,24 @@ pub fn bind(a: &TirArtifactV1) -> Result<LocalInstance<'_>, String> {
     scales[ROLES - 1] = blake2b_512_keyed(b"MISAKA/private/QF1/scale/v1", b"i16 Q10");
     LocalInstance::bind(a, manifest, model.final_norm, &scales)
 }
+
+/// Check the class row in the state committed by the selected EXEC preparation header.
+/// This authenticates registration for local replay; admission to new mining is a separate decision.
+pub fn registration_at(
+    native: &dyn kaspa_consensus_core::api::ConsensusApi,
+    preparation: kaspa_hashes::Hash64,
+    model: &LocalInstance<'_>,
+) -> Result<kaspa_hashes::Hash64, String> {
+    use kaspa_consensus_core::palw_state_proof_v1::{PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_class_v1};
+    if !native.is_chain_ancestor_of(preparation, native.get_sink()).map_err(|e| e.to_string())? {
+        return Err("QF1 preparation is outside selected history".into());
+    }
+    let (header, classes) = native.palw_state_proof_v1(preparation, PALW_PROOF_LABEL_CLASSES)?;
+    let root = state_root_of_pinned_header_v1(&header, preparation).map_err(|e| e.to_string())?;
+    let id = model.identity();
+    let row = verify_class_v1(&classes, root, &id.class).map_err(|e| e.to_string())?;
+    if row.artifact_root != id.inventory {
+        return Err("QF1 registered artifact differs from the held inventory".into());
+    }
+    Ok(root)
+}
