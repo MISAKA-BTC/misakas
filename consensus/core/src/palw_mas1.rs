@@ -23,7 +23,7 @@ pub enum Admission {
 pub struct Assessment {
     pub execution: Verdict,
     pub collision: Verdict,
-    /// Independently resolved from the candidate, rule generation and frozen cost suite.
+    /// Resolved by the owner from the frozen candidate/suite and its scheduled audit inputs.
     pub required_cost_scope: Option<[u8; 64]>,
     pub cost: CostReview,
     pub usefulness: Verdict,
@@ -100,24 +100,26 @@ pub fn new_mining_allowed(
 mod tests {
     use super::*;
 
-    fn checked_cost() -> CostReview {
+    fn checked_cost() -> ([u8; 64], CostReview) {
         use cost::{CostPlan, CostRun, RouteRun};
         let inputs = [[1; 64], [2; 64]];
         let routes = [[3; 64]];
         let plan = CostPlan { scope: [4; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
-        let run = |input| CostRun { scope: plan.scope, input, ticket_input: input, units: 10..=10 };
+        let scope = plan.measurement_scope();
+        let run = |input| CostRun { scope, input, ticket_input: input, units: 10..=10 };
         let references = inputs.map(run);
         let candidates = inputs.map(|input| RouteRun { route: routes[0], run: run(input) });
-        CostReview::assess(&plan, &references, &candidates, &[])
+        (scope, CostReview::assess(&plan, &references, &candidates, &[]))
     }
 
     #[test]
     fn mas1_new_mining_checks_every_gate_and_keeps_timeout_closed() {
+        let (scope, cost) = checked_cost();
         let mut a = Assessment {
             execution: Verdict::Pass,
             collision: Verdict::Pass,
-            required_cost_scope: Some([4; 64]),
-            cost: checked_cost(),
+            required_cost_scope: Some(scope),
+            cost,
             usefulness: Verdict::Pass,
             structure: Verdict::Pass,
             current_rules_and_evidence: Verdict::Pass,
@@ -128,7 +130,7 @@ mod tests {
             assert_eq!(a.decision(), Admission::ReviewHold);
             assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], true));
         }
-        a.required_cost_scope = Some([4; 64]);
+        a.required_cost_scope = Some(scope);
         for stop in [
             StopReason::AdmissionHold,
             StopReason::StructuralFailure,

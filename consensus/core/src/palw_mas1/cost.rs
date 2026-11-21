@@ -2,6 +2,7 @@
 //! single frozen suite. Transport, evidence authentication and the choice of
 //! suite and measurement unit belong to the owning admission reducer.
 use super::Verdict;
+use sha3::{Digest as _, Sha3_512};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::RangeInclusive,
@@ -10,8 +11,8 @@ use std::{
 type Digest = [u8; 64];
 
 pub struct CostPlan<'a> {
-    /// Binds the descriptor, generation, rules, unit, routes, trial schedule
-    /// and cutoff. Fresh trial inputs are resolved after the audit draw.
+    /// Owner-authenticated pre-draw contract: descriptor, generation, rules,
+    /// unit, route definitions, schedule, budget and cutoff.
     pub scope: Digest,
     pub inputs: &'a [Digest],
     pub routes: &'a [Digest],
@@ -19,7 +20,27 @@ pub struct CostPlan<'a> {
     pub cutoff_permille: u16,
 }
 
+impl CostPlan<'_> {
+    /// Read the expected contract and resolve its scheduled inputs from the
+    /// audit draw before deriving this ID. Bind the actual reducer arguments
+    /// so measurements cannot move to a different cutoff or a reduced suite.
+    pub fn measurement_scope(&self) -> Digest {
+        let mut hash = Sha3_512::new();
+        hash.update(b"MISAKA/private/MAS1/resolved-cost-plan/v1");
+        hash.update(self.scope);
+        hash.update(self.cutoff_permille.to_be_bytes());
+        for ids in [self.inputs, self.routes] {
+            hash.update((ids.len() as u64).to_be_bytes());
+            for id in ids {
+                hash.update(id);
+            }
+        }
+        hash.finalize().into()
+    }
+}
+
 pub struct CostRun {
+    /// Resolved measurement ID, pinned by the evidence owner.
     pub scope: Digest,
     pub input: Digest,
     /// Digest of the canonical pre-hash Ticket input, including all four roots.
@@ -65,12 +86,13 @@ impl CostReview {
         {
             return Self::default();
         }
+        let scope = plan.measurement_scope();
         let regression_inputs: BTreeSet<_> = prior_failures.iter().map(|(input, _)| input).collect();
         let covers_history = prior_failures.iter().all(|(input, route)| inputs.contains(input) && routes.contains(route))
             && inputs.difference(&regression_inputs).take(2).count() == 2;
         let mut baseline = BTreeMap::new();
         for run in references {
-            if run.scope != plan.scope
+            if run.scope != scope
                 || !inputs.contains(&run.input)
                 || run.units.is_empty()
                 || *run.units.start() == 0
@@ -85,7 +107,7 @@ impl CostReview {
         for candidate in candidates {
             let run = &candidate.run;
             let Some(reference) = baseline.get(&run.input) else { return Self::default() };
-            if run.scope != plan.scope
+            if run.scope != scope
                 || run.units.is_empty()
                 || !routes.contains(&candidate.route)
                 || !seen.insert((run.input, candidate.route))
@@ -99,9 +121,9 @@ impl CostReview {
             }
         }
         if cheap {
-            Self(Some((plan.scope, Verdict::Fail)))
+            Self(Some((scope, Verdict::Fail)))
         } else if !uncertain && covers_history && inputs.len().checked_mul(routes.len()) == Some(seen.len()) {
-            Self(Some((plan.scope, Verdict::Pass)))
+            Self(Some((scope, Verdict::Pass)))
         } else {
             Self::default()
         }
@@ -117,7 +139,8 @@ mod tests {
         let inputs = [[1; 64], [2; 64]];
         let routes = [[3; 64], [4; 64]];
         let plan = CostPlan { scope: [9; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
-        let run = |i: usize, units| CostRun { scope: plan.scope, input: inputs[i], ticket_input: inputs[i], units: units..=units };
+        let scope = plan.measurement_scope();
+        let run = |i: usize, units| CostRun { scope, input: inputs[i], ticket_input: inputs[i], units: units..=units };
         let references = [run(0, 100), run(1, 100)];
         let mut rows = [
             RouteRun { route: routes[0], run: run(0, 50) },
@@ -132,14 +155,14 @@ mod tests {
         assert_eq!(review(&rows), Verdict::Unknown);
         rows[0].run.units = 48..=49;
         let failed = CostReview::assess(&plan, &references, &rows[..1], &[]);
-        assert_eq!(failed.verdict_for(Some(plan.scope)), Verdict::Fail);
+        assert_eq!(failed.verdict_for(Some(scope)), Verdict::Fail);
         assert_eq!(failed.verdict_for(Some([8; 64])), Verdict::Unknown);
         assert_eq!(failed.verdict_for(None), Verdict::Unknown);
         rows[0].run.ticket_input = [8; 64];
         assert_eq!(review(&rows), Verdict::Pass);
         rows[0].run.scope = [8; 64];
         assert_eq!(review(&rows), Verdict::Unknown);
-        rows[0].run.scope = plan.scope;
+        rows[0].run.scope = scope;
         rows[0].route = routes[1];
         assert_eq!(review(&rows), Verdict::Unknown);
         rows[0].route = routes[0];
@@ -155,11 +178,38 @@ mod tests {
     }
 
     #[test]
+    fn measurements_cannot_be_regraded_with_a_different_cutoff_or_schedule() {
+        let inputs = [[1; 64], [2; 64], [3; 64]];
+        let routes = [[4; 64], [5; 64]];
+        let original = CostPlan { scope: [9; 64], inputs: &inputs, routes: &routes, cutoff_permille: 800 };
+        let scope = original.measurement_scope();
+        let run = |input, units| CostRun { scope, input, ticket_input: input, units: units..=units };
+        let references = inputs.map(|input| run(input, 100));
+        let rows: Vec<_> = inputs.iter().flat_map(|&input| routes.map(|route| RouteRun { route, run: run(input, 70) })).collect();
+        assert_eq!(CostReview::assess(&original, &references, &rows, &[]).verdict(), Verdict::Fail);
+        for revised in [
+            CostPlan { cutoff_permille: 500, ..original },
+            CostPlan { inputs: &inputs[..2], ..original },
+            CostPlan { routes: &routes[..1], ..original },
+            CostPlan { inputs: &[inputs[1], inputs[0], inputs[2]], ..original },
+        ] {
+            let subset: Vec<_> = rows
+                .iter()
+                .filter(|r| revised.inputs.contains(&r.run.input) && revised.routes.contains(&r.route))
+                .map(|r| RouteRun { route: r.route, run: run(r.run.input, 70) })
+                .collect();
+            assert_ne!(revised.measurement_scope(), scope);
+            assert_eq!(CostReview::assess(&revised, &references[..revised.inputs.len()], &subset, &[]).verdict(), Verdict::Unknown);
+        }
+    }
+
+    #[test]
     fn repaired_suite_keeps_the_failure_and_two_fresh_inputs() {
         let inputs = [[1; 64], [2; 64], [3; 64]];
         let routes = [[4; 64]];
         let plan = CostPlan { scope: [9; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
-        let run = |input| CostRun { scope: plan.scope, input, ticket_input: input, units: 100..=100 };
+        let scope = plan.measurement_scope();
+        let run = |input| CostRun { scope, input, ticket_input: input, units: 100..=100 };
         let references = inputs.map(run);
         let candidates = inputs.map(|i| RouteRun { route: routes[0], run: run(i) });
         let review = |cases: &[(Digest, Digest)]| CostReview::assess(&plan, &references, &candidates, cases).verdict();
