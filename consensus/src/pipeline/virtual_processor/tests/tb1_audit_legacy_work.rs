@@ -246,14 +246,14 @@ pub(super) async fn await_pruning_capture(node: &Rig, point: Hash64) {
     }
 }
 
-async fn follow_release_window(
+pub(super) async fn follow_release_window(
     node: &mut Rig,
     cut: &PreparedAudit<'_>,
     close: Hash64,
     q: &Tb1Qualification<'_>,
     deadline: u64,
     path: &Path,
-) {
+) -> u64 {
     let base = node.chain.sink();
     let step = node.config.params.target_time_per_block();
     let mut archive = std::io::BufWriter::new(File::create_new(path).unwrap());
@@ -307,6 +307,7 @@ async fn follow_release_window(
     }
     archive.flush().unwrap();
     archive.get_ref().sync_all().unwrap();
+    blocks
 }
 
 pub(super) async fn exercise(

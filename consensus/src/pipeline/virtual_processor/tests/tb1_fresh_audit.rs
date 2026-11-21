@@ -170,17 +170,23 @@ pub(super) async fn replay_window(
     assert!(readiness.sink_daa < maturity && maturity < round.deadline_exclusive_daa);
     let mut crossed = false;
     let mut count = 0;
+    let mut point = node.api().get_header(base).unwrap().pruning_point;
     for line in BufReader::new(File::open(path).unwrap()).lines() {
         let raw: RpcRawBlock = serde_json::from_str(&line.unwrap()).unwrap();
         let daa = raw.header.daa_score;
         let block = Block::try_from(raw).unwrap();
         let parent = node.chain.sink();
+        let header_point = block.header.pruning_point;
         let hash = block.hash();
         node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(block.header.timestamp);
         stable_panel::arm(node);
         let status = node.api().validate_and_insert_block(block).virtual_state_task.await.unwrap();
         assert!(status.has_block_body());
         assert_eq!((node.chain.sink(), node.api().get_ghostdag_data(hash).unwrap().selected_parent), (hash, parent));
+        if header_point != point {
+            legacy_work::await_pruning_capture(node, header_point).await;
+            point = header_point;
+        }
         count += 1;
         if !crossed && daa >= maturity {
             crossed = true;
@@ -201,11 +207,15 @@ pub(super) async fn replay_window(
         }
     }
     assert!(crossed);
-    let (tip, state) = node.chain.tip_state();
     let expected: Hash64 = std::env::var("MISAKA_PRIVATE_FRESH_WINDOW_TIP").unwrap().parse().unwrap();
-    assert_eq!(tip, expected, "truncated or different window");
-    let point = node.api().get_header(tip).unwrap().pruning_point;
-    legacy_work::await_pruning_capture(node, point).await;
+    assert_eq!(node.chain.sink(), expected, "truncated or different window");
+    // The pruning worker can finish after the last selected block committed its
+    // settlement snapshot. Carry that same branch forward until custody observes
+    // publication or the original deadline, and retain every successor for peers.
+    if let Some(output) = std::env::var_os("MISAKA_PRIVATE_FRESH_EXTEND_WINDOW") {
+        count += legacy_work::follow_release_window(node, cut, close, q, round.deadline_exclusive_daa, Path::new(&output)).await;
+    }
+    let (tip, state) = node.chain.tip_state();
     let api = node.api().as_ref();
     let gate = cut.observe(api, close, q);
     peer_log!(
