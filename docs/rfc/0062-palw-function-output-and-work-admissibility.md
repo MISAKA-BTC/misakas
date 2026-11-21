@@ -103,7 +103,7 @@ Nodeは全重みを取得せず、既存の認証されたregistration/program i
 
 [RFC0065](0065-model-admission-screening-and-bft-stop.md)のKernelAnalysisProfile、LoweringManifest、UsefulStateMap、PracticalSuite、WorkCostContract、AdmissionPolicy、AdmissionGenerationをdescriptorへ結合する。ModelRegisteredからFOW1Admissibleへの遷移には、全必須検査PASS、G-USE及び安全停止なしを加える。
 
-UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否する。自動検査やBFT署名をG-COLL/G-COSTの証明としない。全重みの未認証属性は引き続き不適格であり、BFTはそれを認定する委員会ではない。評価実行は非報酬とし、採掘資格を前提にしない独立control経路で検査する。
+UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否する。G-COLLは§4.2の適合条件、G-COSTは§4.3の反復費用検査で判定する。BFTは未確認の条件をPASSにできない。全重みの未認証属性は引き続き不適格であり、BFTはそれを認定する委員会ではない。評価実行は非報酬とし、採掘資格を前提にしない独立control経路で検査する。
 
 ## 3. TB1を使う入力・実行・公開の順序
 

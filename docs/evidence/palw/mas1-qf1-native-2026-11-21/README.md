@@ -683,6 +683,12 @@ nativeで再生するには、上の認証readerの設定に `MISAKA_PRIVATE_AUD
 python3 -B "$p/check_g_cost_readout_reuse.py"
 ```
 
+先頭の署名済み試行の回答と数値 Readout を固定し、残り5件の試行IDでそれぞれの Root を再計算した。9 token の回答列と回答 Root は5件すべてで元の値に一致し、数値 Readout の Root は5件とも異なった。同じ回答が出た過去の標本を使っており、未知の仕事で停止位置を予測できる頻度や、初回 Ticket までの費用は未測定である。[再計算した Root と照合結果](g-cost-cached-answer.json)
+
+```sh
+python3 -B "$p/check_g_cost_cached_answer.py" | cmp - "$p/g-cost-cached-answer.json"
+```
+
 ### 共通 prefix の計算を共有する経路の費用
 
 3組すべてで、共通 prefix の数値計算を共有しても6件の元の Ticket を再現できた。Apple M1 Max・3スレッドでの合計は独立実行475.835秒、共有実行447.899秒で、経過時間は5.87%短縮した。初期化は23.651秒だった。各組の実測を以下に示す。[照合結果](g-cost-shared-prefix.json)・[実行生ログ](g-cost-shared-prefix-run.jsonl)・[実行環境とハッシュ](g-cost-shared-prefix-environment.json)

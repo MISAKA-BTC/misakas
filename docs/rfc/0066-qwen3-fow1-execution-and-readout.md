@@ -356,7 +356,9 @@ cache keyは少なくともnumeric artifact/program/profile、実入力prefix全
 
 2026-11-21の非報酬評価では、同じ回答を返した署名済み6試行で二つの経路を調べた。別試行の数値Readout `z` をそのまま流用した場合、全15組で値が異なった。[Readoutの比較記録](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-readout-reuse.json)
 
-同じ6試行を3組に分け、各組で共通prefixの数値計算を共有した場合は、全試行の回答・数値Readout・四Root・Ticketが独立実行と一致した。3組の合計経過時間は、独立実行475.835秒、共有実行447.899秒で、5.87%短縮した。各組1回ずつの測定であり、採択済みの費用閾値と誤差範囲は未設定のため、G-COSTはUNKNOWNを維持する。[測定結果と対象入力](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-shared-prefix.json)
+先頭試行の回答を固定し、残り5件それぞれの試行IDでcommitmentを計算し直すと、回答の9 tokenと回答Rootは5件すべて元の値に一致した。同じ方法で先頭試行の数値Readoutを使って作ったReadout Rootは0件一致だった。この入力集合では回答と停止位置を予測できたが、それだけで正規Ticketの全入力は揃わない。[回答キャッシュの比較記録](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-cached-answer.json)
+
+同じ6試行を3組に分け、各組で共通prefixの数値計算を共有した場合は、全試行の回答・数値Readout・四Root・Ticketが独立実行と一致した。3組の合計経過時間は、独立実行475.835秒、共有実行447.899秒で、5.87%短縮した。どちらの計測にも生成の停止位置を求める実行と、元のTicketに照合するtrace生成の2回が含まれる。初回Ticket照会の費用を判定するには、停止位置の予測で最初の実行を省ける場合も調べ、予測を外した試行の費用も計上する。各組1回ずつの測定であり、採択済みの費用閾値と誤差範囲は未設定のため、G-COSTはUNKNOWNを維持する。[測定結果と対象入力](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-shared-prefix.json)
 
 ## 10. MAS1登録・有用性・停止への接続
 

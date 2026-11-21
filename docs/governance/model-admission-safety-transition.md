@@ -27,7 +27,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 UI/SDK/RPC/native登録・import/repair・snapshot/IBD・miner・Panel・Final・reward・credit・weight・permit・受賞権利消費は、RFC0065の同じEffectiveMiningAllowedを読む。別API、owner変更、同一artifactの別名、burn Resume、core指定で安全停止を回避させない。
 
-UNASSESSED/CHECKING/UNKNOWN/FAILは採掘不可。全PASSに加えてG-EXEC/G-COLL/G-COST/G-USE、現行rule・停止集合・既存gateを必要とする。単なるBFT賛成票はどの数学的gateも置換しない。
+UNASSESSED/CHECKING/UNKNOWN/FAILは採掘不可。全PASSに加えてG-EXEC/G-COLL/G-COST/G-USE、現行rule・停止集合・既存gateを必要とする。BFTの停止・解除後も、新規採掘には各gateの根拠が必要である。G-COSTでは、現在の対象と検査世代に結び付いた反復費用検査の結果を参照する。
 
 追加モデルのModelRegisteredは市場生成と原子的に成立する。MAS1の未適格は「市場が未準備」という状態ではない。市場取引、既確定残高、永久LPの意味を安全停止で変更しない。
 

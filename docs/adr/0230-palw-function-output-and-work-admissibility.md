@@ -39,7 +39,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 4. **三つのgateを必須化する。** 全実行関係と局所反証の完全性、コア採掘値の非衝突性、初回Ticket照会前の複数試行での費用比較を別々に確認する。MOR1のhash衝突定理、TB1の予測不能性、Panelによる正当性を費用定理へ読み替えない。
 5. **乱数生成はTB1に固定する。** EXEC/PANELは独立秘密と別freeze。最初の正直share公開前の固定、全qualified dealer、曝露journal、no fallbackを継承する。BFT台帳finality、BLS候補、旧anchor fold／seal-revealを新規FOW1の代替乱数源にしない。
 6. **一試行一Ticketを四Rootへ結合する。** `T=H_FOW1-ticket(Enc(s,R_x,R_y,R_z,R_tau))`。新family/domainを用い、旧三Root codecの意味を変えない。future R_ticket、Final後receipt抽選、旧quantum複数drawを重ねない。
-7. **追加計算と再利用を費用検査へ含める。** cache、batch、prefix、前処理、外注、特殊モデル、入力選別を含む最良アルゴリズムの費用を分析する。正しい最適化を自動的にslashせず、高価な証明・検証・罰金でLLM評価下界を代替しない。
+7. **追加計算と再利用を費用検査へ含める。** cache、batch、prefix、前処理、外注、特殊モデル、入力選別について、試す経路と費用配分を先に固定する。各経路で新しい正規Ticket入力を生成できたか、基準と比べていくらかかったかを複数の入力で記録する。閾値未満で再現した経路は、その入力とともに修正後の回帰試験に残す。正しい最適化をしたMinerへのslashは行わない。
 8. **新規受付の移行を閉じる。** 明示したactivation A以後の新規PALW採掘はFOW1＋TB1を必要とし、旧profileの新規受付を閉じる。既受理旧claimは原期限・旧署名・固定drain規則で処理する。旧履歴readerから新規乱数・Ticket・creditを生成させない。
 
 ## 証明と未完成事項
