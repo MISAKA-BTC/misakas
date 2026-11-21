@@ -988,3 +988,14 @@ Qwen3-8Bの隔離3ピアは、DAA 27で受理した2席の公開鍵と署名（�
 zstd -dc "$p/public-reply-evidence.txt.zst" > "$out/public-reply-evidence.log"
 python3 -B "$p/check_recorded_reply_signatures.py" "$out/public-reply-evidence.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/public-reply-evidence.json"
 ```
+
+### 公開時と原期限の native データベースからの復元
+
+隔離3ピアはそれぞれ、PANEL share を公開する前と、Original の排他期限DAA 60で、RocksDB の一貫したチェックポイントを作成した。期限到達後、別の consensus インスタンスで公開前のDBを開き、保存された選択鎖・決済状態から close の確定を再確認した。期限側のDBも新たに開き、前者から再構成した公開条件と保存済みの2署名を使って、DAA 27で収録した承認を検証できた。期限側のDBから新しい公開条件を取得する試みと、期限ブロックで同じ承認を収録する試みは拒否された。[両世代と署名の照合結果](checkpoint-panel-replies.json)・[3ピアの元ログ](checkpoint-panel-replies.txt.zst)
+
+この試験は各ピアのプロセス内でDBを開き直した。元のcut・qualification・公開行は試験プロセスが保持しており、DB単独から全資料を復元したという結果ではない。隔離fixtureは成熟仕事を供給する。同じバイナリでStudioの市場生成・配分・巻き戻しも再検証した。[MOE2の帳簿とログ](checkpoint-panel-market.tar.zst)
+
+```sh
+zstd -dc "$p/checkpoint-panel-replies.txt.zst" > "$out/checkpoint-panel-replies.log"
+python3 -B "$p/check_recorded_reply_signatures.py" "$out/checkpoint-panel-replies.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --checkpoints | cmp - "$p/checkpoint-panel-replies.json"
+```

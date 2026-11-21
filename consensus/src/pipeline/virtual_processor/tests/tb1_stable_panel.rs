@@ -193,6 +193,16 @@ fn replay_from_store(
     replay(&instance)
 }
 
+fn reopen_checkpoint(config: &Config, path: &Path) -> TestConsensus {
+    use kaspa_database::prelude::ConnBuilder;
+    let db =
+        ConnBuilder::default().with_files_limit(20).with_db_path(path.to_path_buf()).with_create_if_missing(false).build().unwrap();
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, _rx) = async_channel::unbounded();
+    TestConsensus::with_db(db, &resumed, sender)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn release(
     node: &mut Rig,
@@ -255,6 +265,11 @@ pub(super) async fn release(
     }
     let release_daa = node.chain.daa_of(node.chain.sink());
     let gate = cut.observe(node.api().as_ref(), close.hash(), q).unwrap();
+    let checkpoint_replay = std::env::var_os("MISAKA_PRIVATE_QF1_CHECKPOINT_REPLAY").is_some();
+    let observed_at = node.chain.sink();
+    if checkpoint_replay {
+        node.api().checkpoint_database(&dir.join("before-panel-release"));
+    }
     let msg = journal.reserve_signing_message(node.api().as_ref(), gate.holder_freeze(), q, &row, 2048).unwrap();
     let sig = ml_dsa_65::sign(&key.signing_key, &msg, RELEASE_CONTEXT, rand::random()).unwrap();
     let record = ReleaseRecord {
@@ -474,6 +489,41 @@ pub(super) async fn release(
             let recovered = actors.policy.read_reply_evidence(File::open(&evidence).unwrap()).unwrap();
             let recovered: Vec<_> = recovered.iter().map(|(key, sig)| (key, sig)).collect();
             recorded(accepted.hash(), recovered.as_slice()).unwrap();
+            if checkpoint_replay {
+                node.api().checkpoint_database(&dir.join("at-original-deadline"));
+                let observed = reopen_checkpoint(&node.config, &dir.join("before-panel-release"));
+                assert_eq!(observed.get_sink(), observed_at);
+                let restored_gate = cut.observe(observed.as_ref(), close.hash(), q).unwrap();
+                drop(observed);
+                let expired = reopen_checkpoint(&node.config, &dir.join("at-original-deadline"));
+                assert_eq!(expired.get_sink(), late.hash());
+                let read = |block| {
+                    cut.read_recorded_replies(
+                        expired.as_ref(),
+                        close.hash(),
+                        &restored_gate,
+                        batch.hash(),
+                        cert.hash(),
+                        &rows,
+                        q,
+                        LIMITS,
+                        original,
+                        actors.policy,
+                        block,
+                        &recovered,
+                    )
+                };
+                read(accepted.hash()).unwrap();
+                assert_eq!(read(late.hash()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+                assert!(cut.observe(expired.as_ref(), close.hash(), q).is_err());
+                peer_log!(
+                    "QF1 reopened checkpoints pid={} observed={} deadline_tip={} accepted={}",
+                    std::process::id(),
+                    observed_at,
+                    late.hash(),
+                    accepted.hash()
+                );
+            }
             let bytes = std::fs::read(&evidence).unwrap();
             assert!(actors.policy.read_reply_evidence(&bytes[..bytes.len() - 1]).is_err());
             assert!(actors.policy.read_reply_evidence(std::io::Read::chain(bytes.as_slice(), &[0u8][..])).is_err());

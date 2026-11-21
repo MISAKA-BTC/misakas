@@ -609,6 +609,10 @@ impl TestConsensus {
         MutableBlock::from_header(self.build_header_with_parents(hash, parents))
     }
 
+    pub(crate) fn checkpoint_database(&self, path: &std::path::Path) {
+        rocksdb::checkpoint::Checkpoint::new(&self.consensus.db).unwrap().create_checkpoint(path).unwrap();
+    }
+
     pub fn init(&self) -> Vec<JoinHandle<()>> {
         self.consensus.run_processors()
     }
