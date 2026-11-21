@@ -7,6 +7,16 @@ from check_g_cost_shared_prefix import frozen_plan
 from check_legacy_work import require
 
 
+def check_retry(guess, actual, reason):
+    if guess == actual:
+        require(reason is None, "unexpected retry at the correct length")
+    elif guess > actual:
+        require(reason == "QF1 executed trace geometry differs from Original", "missing short-answer trace diagnostic")
+    else:
+        require(reason in ("Operand: QF1 extra leaf", "QF1 extra leaf", "QF1 decision outside original trace length"),
+                "missing overlength trace diagnostic")
+
+
 def check_runs(plan, raw):
     first, *targets = plan["trials"]
     header, calibration, *runs, control = map(json.loads, raw.read_text().splitlines())
@@ -28,18 +38,19 @@ def check_runs(plan, raw):
             require(row["predict"] is predict and row["target"] == index and
                     bytes(row["verified_ticket"]).hex() == original["ticket"], "wrong order, target, timing or Ticket")
             reason = row["retry_reason"]
-            retried = isinstance(reason, str) and bool(reason)
-            require((reason is None or retried) and retried == (predict and actual != guess), "wrong retry")
-            if retried:
+            if predict:
+                check_retry(guess, actual, reason)
+            else:
+                require(reason is None, "unexpected retry on the reference route")
+            if reason is not None:
                 pair["retry_reason"] = reason
             pair["predicted_us" if predict else "reference_us"] = row["elapsed_us"]
         records.append(pair)
     forced = 2 if guess == 1 else guess-1
     reason = control["retry_reason"]
     require(control["control_target"] == 0 and control["predicted"] == forced and
-            (reason is None or (isinstance(reason, str) and bool(reason))) and
-            (reason is not None) == (forced != records[0]["observed_length"]) and
-            bytes(control["verified_ticket"]).hex() == targets[0]["ticket"], "wrong shifted prediction or retry")
+            bytes(control["verified_ticket"]).hex() == targets[0]["ticket"], "wrong shifted prediction or Ticket")
+    check_retry(forced, records[0]["observed_length"], reason)
     return header, calibration, records, control
 
 
