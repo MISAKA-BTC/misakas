@@ -1177,3 +1177,7 @@ python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" -
 ```
 
 上のコマンドに `--openssl "$(brew --prefix openssl@3)/bin/openssl"` を加えると、元ブロックの各Panel署名について、network・claim・Valid判定・署名DAAからメッセージを再構成してML-DSA-87を検証する。算術監査枝のカード4・6・2で成功した。カード4の署名について署名の1ビット、カード、メッセージの1ビット、署名contextを個別に置換すると、4件すべてで検証に失敗した。Gate Cではネットワーク・bond・元のattestationバイト列を使用する。以前の認証済み8K枝では、署名付き7取引も同じOpenSSLで検証できた。[隔離用カード公開鍵8件](isolated-card-public-keys.bin)は `TestConsensus::palw_v2_registry_keypair` のカード番号順で、1鍵2,592バイト。実際の算術監査枝のGate C認証は `--arithmetic-work --writer-only --openssl` とOpenSSLのパスで生成ノードから、続いて `--writer-only` を外して2台の再読込ノードと照合する。
+
+算術提出物の読込では、監査証明書を選択親とする提出ブロックを先に受理し、元の期限、後続Panelの締切blue score、選択鎖上の位置、提出digestを検査する。生成側は停止位置を推論しながら記録を保持する。読込側は提出された回答長でMerkle木を準備し、登録モデルと抽選された入力から全演算を再実行して記録を順次処理する。回答・停止理由・位置数・Readout・四Root・Ticketの全フィールドを元の提出物と照合し、各問の実行後も監査challengeと提出ブロックの有効性を確認する。
+
+この読込処理を含むビルド `5aea69b7…` で、remote試験213件成功・1件ignored、別途Studioの3プロセス市場試験とholder撤回試験が成功した。実際の算術roundの読み取り結果はseed公開後に記録する。[ビルドの回帰試験](qf1-arithmetic-stream-replay-tests.tar.zst)

@@ -4,7 +4,7 @@ use super::*;
 use crate::tb1_exposure::exec_input::LocalOriginalBody;
 use crate::tb1_exposure::qf1::Qf1Prompt;
 use kaspa_consensus_core::palw_qf1::{Stop, is_eos};
-use misaka_palw_tir_exec::node::qf1::LocalInstance;
+use misaka_palw_tir_exec::node::qf1::{LocalInstance, TraceRequest};
 
 pub const CASES: u32 = 2;
 const LIMIT: u32 = 16;
@@ -77,14 +77,25 @@ impl ArithmeticCase {
         if self.index == 0 { (format!("{PREFIX}{a} + {b}{SUFFIX}"), a + b) } else { (format!("{PREFIX}{} - {b}{SUFFIX}", a + b), a) }
     }
 
-    fn execute(&self, model: &LocalInstance<'_>, tokenizer: &[u8]) -> io::Result<ArithmeticEvaluation> {
+    fn execute(&self, model: &LocalInstance<'_>, tokenizer: &[u8], submitted_length: Option<u32>) -> io::Result<ArithmeticEvaluation> {
         let id = model.identity();
         let (job, digit) = self.job();
         let prompt = Qf1Prompt::from_registered_tokenizer(tokenizer, id.tokenizer, id.descriptor, &job, 32 << 20, 256)?;
         let tokens = prompt.frame(&self.challenge);
         let expected = prompt.digit_token(digit);
-        let trace =
-            model.produce_trace(&tokens, LIMIT, LEAVES, suite_id(), self.challenge, suite_id(), None).map_err(io::Error::other)?;
+        let suite = suite_id();
+        let trace = match submitted_length {
+            None => model.produce_trace(&tokens, LIMIT, LEAVES, suite, self.challenge, suite, None),
+            Some(answer_len) => model.replay_trace(
+                &tokens,
+                LIMIT,
+                LEAVES,
+                suite,
+                self.challenge,
+                TraceRequest { context_digest: suite, answer_len, open: None },
+            ),
+        }
+        .map_err(io::Error::other)?;
         let original = LocalOriginalBody::from_trace(&trace);
         Ok(ArithmeticEvaluation {
             case: self.index,
@@ -105,6 +116,79 @@ pub fn exact_digit_score(expected: u32, output: &[u32]) -> bool {
 }
 
 impl FrozenAudit<'_> {
+    fn check_arithmetic_model(&self, candidate: u32, model: &LocalInstance<'_>) -> io::Result<()> {
+        if self.cut.plan.suite != suite_id() || self.cut.plan.tests_per_candidate != CASES {
+            return Err(invalid("different frozen arithmetic suite or case count"));
+        }
+        let admitted = self.cut.candidates.get(candidate as usize).ok_or_else(|| invalid("unknown audit candidate"))?;
+        let id = model.identity();
+        if (id.class, id.inventory, id.descriptor) != (admitted.class, admitted.artifact, admitted.descriptor) {
+            return Err(invalid("different model from frozen arithmetic candidate"));
+        }
+        Ok(())
+    }
+
+    /// Read the exact ordered preimages from the native submission commitment.
+    pub fn read_arithmetic_submission(
+        &self,
+        native: &dyn ConsensusApi,
+        certificate: Hash64,
+        submission: Hash64,
+        originals: &[ArithmeticEvaluation; CASES as usize],
+    ) -> io::Result<[u8; 64]> {
+        let marker = submission_marker(certificate, originals)?;
+        let tip = native.get_sink();
+        let parent = native.get_ghostdag_data(submission).map_err(io::Error::other)?.selected_parent;
+        let header = native.get_header(submission).map_err(io::Error::other)?;
+        if parent != certificate
+            || header.daa_score >= self.cut.plan.case_deadline_exclusive_daa
+            || header.blue_score >= self.cut.panel_close_blue_score
+            || !native.is_chain_ancestor_of(submission, tip).map_err(io::Error::other)?
+            || !native.palw_coinbase_commits_to(self.cut.closure.round.chain_id, submission, &marker).map_err(io::Error::other)?
+        {
+            return Err(invalid("arithmetic submission outside the original assessment cut"));
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(marker)
+    }
+
+    /// Independently stream the two numerical traces against the Original carried
+    /// on the selected branch. Only their lengths are supplied to the executor.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replay_arithmetic_submission(
+        &self,
+        native: &dyn ConsensusApi,
+        batch: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        candidate: u32,
+        submission: Hash64,
+        originals: &[ArithmeticEvaluation; CASES as usize],
+        model: &LocalInstance<'_>,
+        tokenizer: &[u8],
+    ) -> io::Result<()> {
+        self.check_arithmetic_model(candidate, model)?;
+        let check_receipt = || self.read_arithmetic_submission(native, certificate, submission, originals);
+        for row in originals {
+            check_receipt()?;
+            let challenge = || self.challenge(native, batch, certificate, releases, q, limits, candidate, row.case);
+            let expected = challenge()?;
+            if expected != row.challenge {
+                return Err(invalid("arithmetic submission differs from drawn challenge"));
+            }
+            let length = u32::try_from(row.output.len()).map_err(|_| invalid("arithmetic output length"))?;
+            let actual = ArithmeticCase { challenge: expected, index: row.case }.execute(model, tokenizer, Some(length))?;
+            if actual != *row || challenge()? != expected {
+                return Err(invalid("arithmetic re-execution differs from submitted Original"));
+            }
+        }
+        check_receipt().map(|_| ())
+    }
+
     /// Recheck the selected branch, certificate, candidate and original deadline
     /// on both sides of inference. No local score grants admission or credit.
     #[allow(clippy::too_many_arguments)]
@@ -121,17 +205,10 @@ impl FrozenAudit<'_> {
         model: &LocalInstance<'_>,
         tokenizer: &[u8],
     ) -> io::Result<ArithmeticEvaluation> {
-        if self.cut.plan.suite != suite_id() || self.cut.plan.tests_per_candidate != CASES {
-            return Err(invalid("different frozen arithmetic suite or case count"));
-        }
-        let admitted = self.cut.candidates.get(candidate as usize).ok_or_else(|| invalid("unknown audit candidate"))?;
-        let id = model.identity();
-        if (id.class, id.inventory, id.descriptor) != (admitted.class, admitted.artifact, admitted.descriptor) {
-            return Err(invalid("different model from frozen arithmetic candidate"));
-        }
+        self.check_arithmetic_model(candidate, model)?;
         let current = || self.challenge(native, batch, certificate, rows, q, limits, candidate, case);
         let challenge = current()?;
-        let result = ArithmeticCase { challenge, index: case }.execute(model, tokenizer)?;
+        let result = ArithmeticCase { challenge, index: case }.execute(model, tokenizer, None)?;
         if current()? != challenge {
             return Err(invalid("arithmetic challenge changed during evaluation"));
         }

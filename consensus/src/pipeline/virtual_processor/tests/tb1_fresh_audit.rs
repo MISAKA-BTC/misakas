@@ -310,33 +310,48 @@ pub(super) async fn replay_window(
             ArithmeticEvaluation, CASES, exact_digit_score, submission_marker,
         };
         let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
-        let results: [ArithmeticEvaluation; CASES as usize] = std::array::from_fn(|index| {
-            let row =
-                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, index as u32, model, &tokenizer).unwrap();
+        assert_eq!(node.chain.sink(), certificate);
+        let (block, results) = if let Some(path) = submission_source {
+            let (raw, originals): (RpcRawBlock, [ArithmeticEvaluation; CASES as usize]) =
+                serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            let block = Block::try_from(raw).unwrap();
+            assert_eq!(block.header.direct_parents(), &[certificate]);
+            stable_panel::arrive(node, block.clone(), "archived arithmetic submission").await;
+            frozen
+                .replay_arithmetic_submission(
+                    node.api().as_ref(),
+                    batch,
+                    certificate,
+                    &rows,
+                    q,
+                    LIMITS,
+                    0,
+                    block.hash(),
+                    &originals,
+                    model,
+                    &tokenizer,
+                )
+                .unwrap();
+            (block, originals)
+        } else {
+            let results = std::array::from_fn(|index| {
+                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, index as u32, model, &tokenizer).unwrap()
+            });
+            let marker = submission_marker(certificate, &results).unwrap();
+            let block = local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic evaluation submission").await;
+            (block, results)
+        };
+        let marker = frozen.read_arithmetic_submission(node.api().as_ref(), certificate, block.hash(), &results).unwrap();
+        for (index, row) in results.iter().enumerate() {
             assert_eq!(row.challenge, cases[index]);
             peer_log!(
                 "fresh arithmetic evaluation {}",
                 serde_json::json!({"pid":std::process::id(),
                 "certificate":certificate,"evaluation":row,"correct":exact_digit_score(row.expected,&row.output)})
             );
-            row
-        });
-        let marker = submission_marker(certificate, &results).unwrap();
-        let parent = node.chain.sink();
-        assert_eq!(parent, certificate);
-        let block = if let Some(path) = submission_source {
-            let (raw, original): (RpcRawBlock, [ArithmeticEvaluation; CASES as usize]) =
-                serde_json::from_reader(File::open(path).unwrap()).unwrap();
-            assert_eq!(original, results, "full re-execution differs from the archived submission");
-            let block = Block::try_from(raw).unwrap();
-            assert_eq!(block.header.direct_parents(), &[parent]);
-            stable_panel::arrive(node, block.clone(), "archived arithmetic submission").await;
-            block
-        } else {
-            local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic evaluation submission").await
-        };
+        }
         assert_eq!(node.chain.sink(), block.hash());
-        assert!(node.api().palw_coinbase_commits_to(round.chain_id, block.hash(), &marker).unwrap());
+
         for (i, expected) in cases.iter().enumerate() {
             assert_eq!(frozen.challenge(node.api().as_ref(), batch, certificate, &rows, q, LIMITS, 0, i as u32).unwrap(), *expected);
         }

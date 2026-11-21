@@ -45,6 +45,8 @@ pub struct PreparedAudit<'a> {
     candidates: &'a [AuditCandidate],
     plan: AuditPlan,
     closure: Tb1MiningClosure,
+    #[cfg(feature = "private-tb1-tir")]
+    panel_close_blue_score: u64,
 }
 
 impl<'a> PreparedAudit<'a> {
@@ -132,7 +134,14 @@ impl<'a> PreparedAudit<'a> {
             consumer_set_root: h.finalize().into(),
             policy_root: plan.suite.as_bytes(),
         };
-        Ok(Self { preparation, candidates, plan, closure })
+        Ok(Self {
+            preparation,
+            candidates,
+            plan,
+            closure,
+            #[cfg(feature = "private-tb1-tir")]
+            panel_close_blue_score: panel.close_blue_score,
+        })
     }
 
     pub fn close_commitment(&self, parent: Hash64) -> [u8; 64] {
