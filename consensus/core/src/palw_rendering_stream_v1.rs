@@ -10,7 +10,7 @@ use crate::palw_step_leg::{PalwStepOpeningV1, step_opening_root_capped_v1};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const PALW_RENDERING_STREAM_PART_BYTES_V1: usize = 65_536;
-const IV: [u64; 8] = [
+pub(crate) const IV: [u64; 8] = [
     0x6A09E667F3BCC908,
     0xBB67AE8584CAA73B,
     0x3C6EF372FE94F82B,
@@ -49,7 +49,7 @@ fn mix(v: &mut [u64; 16], a: usize, b: usize, c: usize, d: usize, x: u64, y: u64
     v[c] = v[c].wrapping_add(v[d]);
     v[b] = (v[b] ^ v[c]).rotate_right(63);
 }
-fn compress(block: &[u8; 128], words: &mut [u64; 8], count: u128, last: bool) {
+pub(crate) fn compress(block: &[u8; 128], words: &mut [u64; 8], count: u128, last: bool) {
     let mut v = [0u64; 16];
     v[..8].copy_from_slice(words);
     v[8..].copy_from_slice(&IV);

@@ -14,6 +14,7 @@ pub(super) fn terms(anchor: Hash64) -> ExecInputTerms<'static> {
     let mut target = [0; 33];
     target[1] = 0x80; // Private strict 256-bit ticket threshold. This test issues no ticket.
     ExecInputTerms {
+        qf1: None,
         registration_anchor: anchor,
         candidate_set: [18; 64],
         beneficiary: [19; 64],

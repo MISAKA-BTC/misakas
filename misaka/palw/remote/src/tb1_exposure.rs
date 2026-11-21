@@ -17,7 +17,9 @@ use std::{
 };
 
 pub mod exec_input;
+pub mod mas1_control;
 pub mod publication;
+pub mod qf1;
 
 const MAGIC: &[u8; 8] = b"TB1EXP01";
 const HEADER: usize = 8 + 64 + 4;

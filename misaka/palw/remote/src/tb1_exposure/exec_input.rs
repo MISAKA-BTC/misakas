@@ -1,4 +1,4 @@
-//! Private RFC-0059/0062 input stage. The close block commits to the entire
+//! Private RFC-0059/0062 and RFC-0066 input stage. The close block commits to the entire
 //! supplied registration batch. This reader does not admit funded mining work.
 use super::{
     AnchorState, anchor_state, invalid,
@@ -22,9 +22,10 @@ use std::{
 
 pub const REGISTRATION_DOMAIN: &[u8] = b"MISAKA/private/FOW1/input-owner/v2";
 
-/// The fixed token interface of this private profile is BOS=0, POW=1, SEP=2,
-/// ByteToken[b]=3+b. The exact model/class and its tokenizer are bound before release.
+/// The legacy input uses BOS=0, POW=1, SEP=2 and ByteToken[b]=3+b. QF1 uses
+/// its separately registered HEX64 frame. Both bind the model, class and tokenizer.
 pub struct ExecInputTerms<'a> {
+    pub qf1: Option<super::qf1::Qf1Use<'a>>,
     pub registration_anchor: Hash64,
     pub candidate_set: [u8; 64],
     pub beneficiary: [u8; 64],
@@ -56,10 +57,25 @@ impl ExecInputTerms<'_> {
         max_tokens: usize,
     ) -> io::Result<Vec<u8>> {
         let n = u32::try_from(self.job_tokens.len()).map_err(|_| invalid("TB1 job too long"))?;
-        let positions = n.checked_add(35).and_then(|n| n.checked_add(self.decode_tokens.checked_sub(1)?));
+        let frame = self.qf1.map(|requested| requested.admitted()).transpose()?;
+        let input_len = if let Some(frame) = frame {
+            if self.tokenizer != frame.tokenizer
+                || self.job_tokens != frame.job_tokens()
+                || self.vocab != kaspa_consensus_core::palw_qf1::VOCAB
+                || self.max_positions != kaspa_consensus_core::palw_qf1::CONTEXT
+            {
+                return Err(invalid("QF1 registration differs from bound frame or geometry"));
+            }
+            let len = frame.length()?;
+            kaspa_consensus_core::palw_qf1::check_capacity(len, self.decode_tokens).map_err(invalid)?;
+            Some(len)
+        } else {
+            n.checked_add(35)
+        };
+        let positions = input_len.and_then(|n| n.checked_add(self.decode_tokens.checked_sub(1)?));
         if self.vocab < 259
             || self.max_leaves == 0
-            || n == 0
+            || (n == 0 && self.qf1.is_none())
             || self.job_tokens.len() > max_tokens
             || positions.is_none_or(|n| n > self.max_positions)
             || self.job_tokens.iter().any(|&id| id >= self.vocab)
@@ -72,7 +88,13 @@ impl ExecInputTerms<'_> {
         }
         let job = prompt_token_ids_root_v1(self.job_tokens).map_err(|_| invalid("invalid job token commitment"))?;
         let mut c = Vec::new();
-        c.extend_from_slice(b"MISAKA/private/FOW1/TIR-input/012-byte3/v2");
+        if let Some(frame) = frame {
+            c.extend_from_slice(b"MISAKA/private/FOW1/QF1-Q3-8B-A16-8K-v1/local-inference/context/v1");
+            c.extend_from_slice(frame.instance_descriptor.as_byte_slice());
+            c.extend_from_slice(&frame.source_digest);
+        } else {
+            c.extend_from_slice(b"MISAKA/private/FOW1/TIR-input/012-byte3/v2");
+        }
         for field in [
             preparation.as_bytes(),
             rounds.commitment(),
@@ -358,17 +380,24 @@ impl<'a> FrozenExecInputs<'a> {
             return Err(invalid("EXEC job is outside its original window"));
         }
         let seed = self.gate.read_seed(native, publication, certificate, rows, q, limits)?;
-        let attempt: [u8; 32] = Sha3_256::new()
-            .chain_update(b"MISAKA/private/FOW1/attempt/v1")
-            .chain_update(c)
-            .chain_update(seed.as_bytes())
-            .finalize()
-            .into();
-        let mut tokens = Vec::with_capacity(35 + terms.job_tokens.len());
-        tokens.extend([0, 1]);
-        tokens.extend(attempt.iter().map(|&b| 3 + u32::from(b)));
-        tokens.push(2);
-        tokens.extend_from_slice(terms.job_tokens);
+        let (attempt, tokens) = if let Some(mode) = terms.qf1 {
+            let frame = mode.admitted()?;
+            let attempt = kaspa_consensus_core::palw_qf1::attempt(c, &seed).map_err(invalid)?;
+            (attempt, frame.frame(&attempt))
+        } else {
+            let attempt: [u8; 32] = Sha3_256::new()
+                .chain_update(b"MISAKA/private/FOW1/attempt/v1")
+                .chain_update(c)
+                .chain_update(seed.as_bytes())
+                .finalize()
+                .into();
+            let mut tokens = Vec::with_capacity(35 + terms.job_tokens.len());
+            tokens.extend([0, 1]);
+            tokens.extend(attempt.iter().map(|&b| 3 + u32::from(b)));
+            tokens.push(2);
+            tokens.extend_from_slice(terms.job_tokens);
+            (attempt, tokens)
+        };
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC job generation moved"));
         }
@@ -401,6 +430,9 @@ impl DerivedExecInput<'_> {
         use misaka_palw_tir_exec::node::TirClassRunnerV1;
         self.check_live(native).map_err(|e| e.to_string())?;
         let terms = self.terms;
+        if terms.qf1.is_some() {
+            return Err("QF1 requires its registered 36-layer A16 program and readout".into());
+        }
         let (root, _) = artifact.inventory_root()?;
         let class = artifact.class()?;
         let class_id = class.class_id(&root);

@@ -8,6 +8,7 @@ mod exec_input;
 use kaspa_rpc_core::RpcRawBlock;
 use misaka_palw_remote::tb1_exposure::exec_input::{ExecInputBatch, QualifiedExecPanel, REGISTRATION_DOMAIN, SignedExecInput};
 use misaka_palw_remote::tb1_exposure::publication::{PublicationLimits, PublishedRelease, batch_commitment};
+use misaka_palw_remote::tb1_exposure::qf1::Qf1Use;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
@@ -21,6 +22,8 @@ use std::{
     time::Duration,
 };
 
+const QF1_TEST_TOKENIZER: &str =
+    "10ed14bc48937bd836b309447040a8d43d38f103fde39682f7f9f2c4cbb6b4b4666658ab71ed3d90de7c6e2e00cce21c01863b4403ae41dab361b099fdfe2ec5";
 const READER_DIR: &str = "MISAKA_PRIVATE_TB1_FREEZE_READER";
 const READER_SLOT: &str = "MISAKA_PRIVATE_TB1_FREEZE_SLOT";
 
@@ -275,7 +278,46 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         )
         .is_err()
     );
-    let inputs = ExecInputBatch::from_signed(node.api().as_ref(), parent, &rounds, &[entry], 4, 16).unwrap();
+    // Optional non-rewarding RFC-0066 exercise, with the real pinned tokenizer.
+    // No registered QF1 weights/program are present in this rig.
+    let qf1 = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|path| {
+        use misaka_palw_remote::tb1_exposure::qf1::Qf1Prompt;
+        let bytes = std::fs::read(path).unwrap();
+        let expected: Hash64 = QF1_TEST_TOKENIZER.parse().unwrap();
+        Qf1Prompt::from_registered_tokenizer(&bytes, expected, Hash64::from_u64_word(234), "2 + 2?", 16_000_000, 128).unwrap()
+    });
+    let qf1_terms = qf1.as_ref().map(|prompt| misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms {
+        qf1: Some(Qf1Use::LocalInference(prompt)),
+        tokenizer: QF1_TEST_TOKENIZER.parse().unwrap(),
+        job_tokens: prompt.job_tokens(),
+        vocab: 151936,
+        max_positions: 8192,
+        model_root: Hash64::from_u64_word(235),
+        class_id: Hash64::from_u64_word(236),
+        ..terms
+    });
+    if let (Some(prompt), Some(terms)) = (&qf1, &qf1_terms) {
+        let mining = misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms { qf1: Some(Qf1Use::NewMining(prompt)), ..*terms };
+        assert!(
+            mining.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap_err().to_string().contains("REVIEW_HOLD")
+        );
+    }
+    let mut entries = vec![entry];
+    let qf1_sig;
+    if let Some(terms) = &qf1_terms {
+        let key = terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap();
+        // Readers verify the producer's original signature.
+        let file = child_dir.as_deref().unwrap_or(dir.path()).join("qf1.sig");
+        qf1_sig = if child_dir.is_some() {
+            ml_dsa_65::MLDSA65Signature::new(std::fs::read(file).unwrap().as_slice().try_into().unwrap())
+        } else {
+            let sig = ml_dsa_65::sign(&owner.signing_key, &key, REGISTRATION_DOMAIN, [85; 32]).unwrap();
+            std::fs::write(file, sig.as_slice()).unwrap();
+            sig
+        };
+        entries.push(SignedExecInput { terms, owner: &owner.verification_key, signature: &qf1_sig, slot: 9, funding_ref: [24; 64] });
+    }
+    let inputs = ExecInputBatch::from_signed(node.api().as_ref(), parent, &rounds, &entries, 4, 16).unwrap();
     let closure = Tb1MiningClosure { round, qual_root: q.root(), consumer_set_root: inputs.root(), policy_root: terms.policy };
 
     let freeze_id = closure.commitment(parent);
@@ -414,6 +456,21 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert_eq!(request.tokens().len(), 38);
     assert_eq!(&request.tokens()[35..], terms.job_tokens);
     assert!(jobs.derive(api, 8, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
+    if let Some(terms) = &qf1_terms {
+        let r = jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+        assert_eq!(r.registration_key(), &terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap());
+        assert_ne!(r.attempt(), request.attempt());
+        // One write keeps the record intact when all three processes report at once.
+        let line =
+            format!("QF1 input pid={} attempt={} tokens={:?}\n", std::process::id(), faster_hex::hex_string(r.attempt()), r.tokens());
+        std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
+        if let Some(socket) = parent_socket.as_mut() {
+            send(socket, &r.tokens());
+        }
+        for (_, socket) in &mut peers {
+            assert_eq!(receive::<Vec<u32>>(socket), r.tokens());
+        }
+    }
     let ids = request.tokens().to_vec();
     eprintln!(
         "TB1 EXEC input pid {} slot 7 attempt {} tokens {:?}",

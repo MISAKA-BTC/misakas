@@ -1,4 +1,6 @@
 use super::*;
+#[path = "mas1_stop.rs"]
+mod mas1_stop;
 use kaspa_consensus_core::{
     config::params::{
         PALW_T12_FULL_BOND_BUDGET_ENTRY, PALW_T12_FULL_GATE_C_ENTRY, PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
@@ -46,6 +48,7 @@ struct RegistrationReplay {
     root: Hash64,
     fork: Vec<RpcRawBlock>,
     fork_root: Hash64,
+    control: mas1_stop::ControlReplay,
 }
 
 async fn heavier_fork(env: &Env, common: &Block) -> (Vec<Block>, Hash64) {
@@ -53,7 +56,7 @@ async fn heavier_fork(env: &Env, common: &Block) -> (Vec<Block>, Hash64) {
     arrive(&chain, common.clone(), "common parent").await;
     chain.ctx.simulated_time = common.header.timestamp;
     let mut blocks = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..9 {
         blocks.push(chain.heartbeat(env.config.params.target_time_per_block(), Vec::new()).await);
     }
     (blocks, chain.tip_state().1.state_root())
@@ -70,14 +73,14 @@ async fn private_moe2_three_process_registration() {
     assert!(genesis.classes_iter().all(|(key, _)| genesis.model_market(key).is_none()));
     const PEER_INPUT: &str = "MISAKA_TEST_MOE2_REGISTRATION_BLOCKS";
     let peer_input = std::env::var_os(PEER_INPUT);
-    let (class_id, artifact_root, blocks, expected, fork, fork_root) = if let Some(ref path) = peer_input {
+    let (class_id, artifact_root, blocks, expected, fork, fork_root, remote_control) = if let Some(ref path) = peer_input {
         let replay: RegistrationReplay = serde_json::from_reader(File::open(path).unwrap()).unwrap();
         let decode = |raw: Vec<RpcRawBlock>| raw.into_iter().map(|row| Block::try_from(row).unwrap()).collect::<Vec<_>>();
         let blocks = decode(replay.blocks);
         for block in &blocks {
             arrive(&env.chain, block.clone(), "MOE2 registration").await;
         }
-        (replay.class_id, replay.artifact_root, blocks, Some(replay.root), decode(replay.fork), replay.fork_root)
+        (replay.class_id, replay.artifact_root, blocks, Some(replay.root), decode(replay.fork), replay.fork_root, Some(replay.control))
     } else {
         let c = match std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT") {
             Some(path) => {
@@ -94,7 +97,7 @@ async fn private_moe2_three_process_registration() {
         let m = mine_registration_on(env, &c, card).await;
         env = m.env;
         let (fork, fork_root) = heavier_fork(&env, &m.blocks[0]).await;
-        (m.class_id, c.root, m.blocks, None, fork, fork_root)
+        (m.class_id, c.root, m.blocks, None, fork, fork_root, None)
     };
     let (tip, state) = env.chain.tip_state();
     assert_eq!(tip, blocks.last().unwrap().hash());
@@ -115,12 +118,12 @@ async fn private_moe2_three_process_registration() {
         std::process::id(),
         class.registered_daa
     );
-    for block in &fork {
-        arrive(&env.chain, block.clone(), "branch without the registration").await;
-    }
+    let control = mas1_stop::exercise(&mut env, class_id, artifact_root, tip, remote_control.as_ref(), &fork).await;
+    let stop_hash = Block::try_from(control.blocks[2].clone()).unwrap().hash();
     let (fork_tip, reverted) = env.chain.tip_state();
     assert_eq!(fork_tip, fork.last().unwrap().hash());
     assert_eq!(reverted.state_root(), fork_root);
+    assert!(!env.chain.ctx.consensus.is_chain_ancestor_of(stop_hash, fork_tip).unwrap());
     assert!(reverted.class(&class_id).is_none() && reverted.model_market(&class_id).is_none());
     assert_eq!(reverted.bond(&bond).unwrap().collateral, collateral);
     println!("pid={} reverted_tip={fork_tip} reverted_root={fork_root} collateral_restored={burn}", std::process::id());
@@ -139,6 +142,7 @@ async fn private_moe2_three_process_registration() {
         root,
         fork: fork.iter().map(RpcRawBlock::from).collect(),
         fork_root,
+        control,
     };
     serde_json::to_writer(File::create(&path).unwrap(), &replay).unwrap();
     let mut peers = Vec::new();
