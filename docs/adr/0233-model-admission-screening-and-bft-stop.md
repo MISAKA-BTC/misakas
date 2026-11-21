@@ -3,7 +3,7 @@
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。Qwenの具体例QF1でも、G-USE・構造解析・費用定理・現行停止状態の全条件を維持する。
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。Qwenの具体例QF1でも、G-USE・構造解析・反復費用検査・現行停止状態の全条件を維持する。
 
 QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
@@ -17,7 +17,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 ## 背景
 
-FOW1はG-EXEC・G-COLL・G-COSTを要求するが、既存のQwenや任意の学習済み重みについて完成した費用定理を提供していない。計算graphの形、zの長さ、モデルの評判又は有限testだけで採掘資格を付与すると、定数化、cache、軽いReadout、採掘専用の無用な重い枝、未知の短絡を使うモデルが費用認定をすり抜けるおそれがある。
+FOW1はG-EXEC・G-COLL・G-COSTを要求するが、新規採掘のG-COSTは、対象となる重みと規則を固定して複数の入力で費用を比較する。計算graphの形、zの長さ、モデルの評判又は有限testだけで採掘資格を付与すると、定数化、cache、軽いReadout、採掘専用の無用な重い枝、未知の短絡を使うモデルが費用認定をすり抜けるおそれがある。
 
 ユーザーは、実用性を保ったモデルを対象に、登録段階のkernel/graph解析と、不明時のBFT停止を追加するよう指示した。旧「モデル単位の検査をしない」「品質審査をしない」「BFTを使わない」という包括的な記述は、今回採択する限定用途について修正する必要がある。
 

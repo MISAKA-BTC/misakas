@@ -33,7 +33,7 @@ coreのworker報酬Rは、購入0、永久LP0、owner0、報酬由来burn0、R�
 
 追加model登録、pair identity、初期virtual reserve・実reserve・Position在庫・owner参照を同じnative遷移で生成する。失敗時は全体をrollbackし、外部seedがなければ実reserve初期値0を許す。別の市場作成、後続open、seed/deepen又はmarket-ready待機を前提にしない。seed/deepenは登録後の任意増強である。GENESIS/FORK_DESIGNATED登録では市場を生成しない。登録済み追加モデルの市場欠落はstate invariant違反として拒否し、正常な未準備状態へ分類しない。
 
-一般登録はモデルの人気・品質・保有者数・取得ACKによる審査へ戻さない。固定artifactの不変性を保持する。新FOW1に対する数学的・構造的な適格性は[RFC0062](../rfc/0062-palw-function-output-and-work-admissibility.md)の別の共通ruleで確認する。モデルtier1.0を費用定理の証明にしない。
+一般登録はモデルの人気・品質・保有者数・取得ACKによる審査へ戻さない。固定artifactの不変性を保持する。新FOW1に対する数学的・構造的な適格性は[RFC0062](../rfc/0062-palw-function-output-and-work-admissibility.md)の別の共通ruleで確認する。tier 1.0 のモデルにも同じG-COST検査を適用する。
 
 全分類のclaimは同じ元実行binding、選出Panelの完全再実行、資料・異議機会、認証された局所Court、反証優先、成功条件を満たす。genesis・fork指定への100%Miner配分は、これらの免除ではない。Position移転でclaim責任・bond・owner権が移ることもない。
 

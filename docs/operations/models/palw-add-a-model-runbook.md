@@ -24,7 +24,7 @@
 <!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 新規profileの適用範囲
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。既存の一般登録・FamilyCertified・着席の手順はFOW1採掘適格性の完了を意味しない。新規採掘にはRFC0062の具体的系列・定理・有界適合checkerとTB1対応が必要である。現状のQwen登録に必要な費用定理が存在すると表示しない。
+**ADOPTED_DESIGN_NOT_ACTIVATED**。既存の一般登録・FamilyCertified・着席の手順はFOW1採掘適格性の完了を意味しない。新規採掘にはRFC0062に従い、対象系列のG-COLL適合定理、G-COSTの反復費用検査、有界な適合checker、TB1対応が必要である。QwenのG-COSTは未判定である。
 
 [TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
 <!-- TB1-FOW1-ADOPTED-20261120-END -->

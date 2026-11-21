@@ -27,7 +27,7 @@ ADDITIONALの対象worker報酬Rを、30%のPosition買付、20%のBILI流動性
 
 R、分類、事前資金、旧claim、通常AMMのburn5%・owner側総額3%・net残差、holder間の直接移転はRFC0063から継承する。ModelPositionの直接移転にAMM手数料を課さず、通常network feeだけを適用する。GENESIS/FORK_DESIGNATEDのRからPanel、Verifier、prefix worker、ownerその他の役務費を控除せず、必要な検証役務は別の事前確保原資で賄う。
 
-二階層係数、資本配分、発行・export上限、成熟、liability hold、完全検証・反証優先、TB1/FOW1の条件を変更しない。経済的な30/20配分は、LLMの費用定理やDAG安全性の代わりにはならない。
+二階層係数、資本配分、発行・export上限、成熟、liability hold、完全検証・反証優先、TB1/FOW1の条件を変更しない。経済的な30/20配分は、LLMの反復費用検査やDAG安全性の代わりにはならない。
 
 ## 1. 登録identity、初期状態、適用時点
 
@@ -227,4 +227,4 @@ B+Aのreserve流出も同じRのexport capへ合算する。Dの分配と別枠�
 
 有効化前に、分類・登録原子性、B/A/D端数、q/ell/d、LiquidityDust、minOut単位、上限・overflow、LP0の境界、receipt権限制限、同root迂回、旧cohort、全保存則、hold/export、元期限、二重決済、EVM revert、reorg/restart/IBD、quote・価格操作を確認する。既存doc checkerの成功又は小規模算術検査だけを、このgateの完了としない。
 
-状態は**ADOPTED_DESIGN_NOT_ACTIVATED**のままである。TB1/FOW1、全実行検証、Court、費用定理、共通consensusの未完了条件を本経済改訂から免除しない。
+状態は**ADOPTED_DESIGN_NOT_ACTIVATED**のままである。TB1/FOW1、全実行検証、Court、反復費用検査、共通consensusの未完了条件を本経済改訂から免除しない。
