@@ -952,3 +952,10 @@ python3 -B "$p/check_fresh_audit_seed.py" "$out" --openssl "$(brew --prefix open
 p=docs/evidence/palw/mas1-qf1-native-2026-11-21
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" > "$out/varied-plan.json"
 ```
+
+3問合計では、基準経路244.377秒、予測経路368.101秒（50.63%増）だった。モデルの準備23.112秒と予測値を決めた元の算術1件79.611秒を両方に加えた合計は347.100秒と470.824秒。別枠で第1問に長さ8を指定した対照は、再試行を含め117.769秒だった。計時は各問・各経路1回で、実行順は問ごとに交替した。採択済みの閾値はなく、同じ算術問題の5試行で観測した短縮も回帰対象に残る。[検証済みの問別費用](g-cost-varied-jobs.json)・[生の計時記録](g-cost-varied-jobs-run.jsonl)・[環境とバイナリのSHA-256](g-cost-varied-jobs-environment.json)
+
+```sh
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --log "$p/g-cost-varied-jobs-run.jsonl" | cmp - "$p/g-cost-varied-jobs.json"
+RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --predict-length "$parent" "$out/scales.section" "$out/varied-plan.json" > "$out/varied-run.jsonl"
+```

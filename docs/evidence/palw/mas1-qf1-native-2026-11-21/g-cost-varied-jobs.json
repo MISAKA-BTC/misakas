@@ -1,0 +1,68 @@
+{
+  "descriptor": "c1f12903e1ca7b611d2285fdba39bc45d0d6ff95c7b4ae83135540c21cff47155c461675545de13c5149ba13ccc3be021405b1a1cfc829de0168301c7914edb6",
+  "native_binary": "ad5f222ab528727e43c36517a54756fdf09bdc080782984c4667fef325a62375",
+  "fixed_length": 9,
+  "setup_ms": 23112,
+  "calibration_us": 79610967,
+  "trials": [
+    {
+      "job": "\u65e5\u672c\u306e\u9996\u90fd\u3092\u90fd\u5e02\u540d\u3060\u3051\u3067\u7b54\u3048\u3066\u304f\u3060\u3055\u3044\u3002",
+      "ticket": "471c584bb1587658f3fc8e2df90e9e90297b9d88ab691406c26689a4ab89a5d4",
+      "native_peers": [
+        24514,
+        25007,
+        25008
+      ],
+      "attempt": "58223c068099e78ff8c62ee311a04aa8c89729aeb64470172ef9cab3ae0066e2",
+      "observed_length": 2,
+      "retry_reason": "QF1 executed trace geometry differs from Original",
+      "predicted_us": 117816818,
+      "reference_us": 77623532,
+      "stop": "EOS",
+      "retry": true
+    },
+    {
+      "job": "Answer with only one digit: what is three minus two?",
+      "ticket": "0de7d8bbbf0f54ba06a380d1d0ff2e6128df0da71ae2f424afee63c671dda069",
+      "native_peers": [
+        25812,
+        25978,
+        25979
+      ],
+      "attempt": "cd3a72d351c4ef46a36da9cbad32ba3dcdde9859dce669d466a6eb9fd7fe00cb",
+      "observed_length": 2,
+      "reference_us": 78787100,
+      "retry_reason": "QF1 executed trace geometry differs from Original",
+      "predicted_us": 119770688,
+      "stop": "EOS",
+      "retry": true
+    },
+    {
+      "job": "Write one sentence explaining why leaves look green.",
+      "ticket": "2788bffb35be5f79a980f284cb981c320d4807848aa2f04d2aa799e2d45c10eb",
+      "native_peers": [
+        26151,
+        26175,
+        26176
+      ],
+      "attempt": "23097a38eaddb27ec1d4b90e888d0001bcbf2b87d4791684262acfa7e6601e62",
+      "observed_length": 16,
+      "retry_reason": "Operand: QF1 extra leaf",
+      "predicted_us": 130513052,
+      "reference_us": 87966654,
+      "stop": "LIMIT",
+      "retry": true
+    }
+  ],
+  "target_reference_us": 244377286,
+  "target_predicted_us": 368100558,
+  "with_calibration_reference_us": 347100253,
+  "with_calibration_predicted_us": 470823525,
+  "control": {
+    "job": "\u65e5\u672c\u306e\u9996\u90fd\u3092\u90fd\u5e02\u540d\u3060\u3051\u3067\u7b54\u3048\u3066\u304f\u3060\u3055\u3044\u3002",
+    "length": 8,
+    "retry_reason": "QF1 executed trace geometry differs from Original",
+    "elapsed_us": 117769020
+  },
+  "g_cost": "UNKNOWN"
+}

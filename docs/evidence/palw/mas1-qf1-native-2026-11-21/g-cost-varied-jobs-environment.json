@@ -1,0 +1,26 @@
+{
+  "hw.model": "Mac13,1",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "hw.memsize": "34359738368",
+  "hw.logicalcpu": "10",
+  "os": "26.7.1",
+  "architecture": "arm64",
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "rayon_threads": 3,
+  "cost_unit": "elapsed wall-clock microseconds, one warmed process, one sample per route and target",
+  "profile": "dev",
+  "tir_exec_opt_level": 3,
+  "registered_scales_sha256": "b7033ed73613fe58b1d96948564454ceaf47bb678bab603f0277f48e14988f55",
+  "benchmark_source_commit": "956337f764c6a682280cf38c9380d0e4a3d39b05",
+  "benchmark_source_sha256": {
+    "misaka/palw/sdk/examples/qf1-paired-cost.rs": "30f318bec4b93feb57e71c722dd212d78003ea8487f1c463f49f876d35a4c941",
+    "misaka/palw/tir/exec/src/node/qf1/cost_review.rs": "a5ebefbe9005868fa4df847b8a355f80139470aa6eef21d7c9a716fd447381c9"
+  },
+  "native_binary_sha256": "ad5f222ab528727e43c36517a54756fdf09bdc080782984c4667fef325a62375",
+  "cost_binary_sha256": "8a6cf67445f2563e2556167f8beee3bd0ba4d35a76485defa5a73909ba95e574",
+  "schedule_commit": "0ed64ae949c6457fe4c2a034c98887d3fba3f11e",
+  "schedule_sha256": "0d07a93a2980ff3be2ea4612aa15139107b95122628fd99dbcc6b0c83b32e6dd",
+  "plan_sha256": "ebf752802d705f92fe4657a5911f15c7d311e0adfb95bd625597fed45fe2e33f",
+  "process_elapsed_seconds": 833.03,
+  "maximum_resident_set_bytes": 17793613824
+}
