@@ -203,6 +203,67 @@ fn reopen_checkpoint(config: &Config, path: &Path) -> TestConsensus {
     TestConsensus::with_db(db, &resumed, sender)
 }
 
+// Only public PANEL evidence and the two native database checkpoints cross
+// the process boundary. Holder journals and signing keys stay in the writer.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ColdPanelReceipt {
+    writer: u32,
+    observed: Hash64,
+    deadline_tip: Hash64,
+    close: Hash64,
+    batch: Hash64,
+    certificate: Hash64,
+    accepted: Hash64,
+    marker: Hash64,
+    close_marker: Hash64,
+    domain: Hash64,
+    deadline: u64,
+}
+
+#[tokio::test]
+#[ignore = "requires the two completed native checkpoints of a private QF1 peer"]
+async fn private_read_cold_panel_receipt() {
+    let dir = std::path::PathBuf::from(std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_DIR").unwrap());
+    let meta: ColdPanelReceipt = serde_json::from_slice(&std::fs::read(dir.join("receipt.json")).unwrap()).unwrap();
+    assert_ne!(meta.writer, std::process::id());
+    let config = parts(Some(FENCE)).0;
+    let observation = reopen_checkpoint(&config, &dir.join("before-panel-release"));
+    assert_eq!(observation.get_sink(), meta.observed);
+    let snapshot = observation.get_native_settlement_snapshot().unwrap().unwrap();
+    assert_eq!(snapshot.generation, meta.observed);
+    assert!(observation.is_chain_ancestor_of(meta.close, snapshot.finalized.unwrap()).unwrap());
+    assert!(observation.palw_coinbase_commits_to(meta.domain.as_bytes(), meta.close, &meta.close_marker.as_bytes()).unwrap());
+    drop(observation);
+    let expired = reopen_checkpoint(&config, &dir.join("at-original-deadline"));
+    assert_eq!(expired.get_sink(), meta.deadline_tip);
+    let current = expired.get_native_settlement_snapshot().unwrap().unwrap();
+    assert_eq!(current.generation, meta.deadline_tip);
+    assert!(expired.is_chain_ancestor_of(meta.close, current.finalized.unwrap()).unwrap());
+    for (ancestor, child) in [
+        (meta.close, meta.observed),
+        (meta.observed, meta.batch),
+        (meta.batch, meta.certificate),
+        (meta.certificate, meta.accepted),
+        (meta.accepted, meta.deadline_tip),
+    ] {
+        assert_ne!(ancestor, child);
+        assert!(expired.is_chain_ancestor_of(ancestor, child).unwrap());
+    }
+    for block in [meta.accepted, meta.deadline_tip] {
+        assert!(expired.palw_coinbase_commits_to(meta.domain.as_bytes(), block, &meta.marker.as_bytes()).unwrap());
+    }
+    assert!(expired.get_header(meta.accepted).unwrap().daa_score < meta.deadline);
+    assert_eq!(expired.get_header(meta.deadline_tip).unwrap().daa_score, meta.deadline);
+    let path = dir.join("accepted-panel-replies");
+    assert_eq!(LocalReplayPolicy::new(2).unwrap().read_reply_evidence(File::open(&path).unwrap()).unwrap().len(), 2);
+    println!(
+        "QF1 cold reader pid={} receipt={} replies={}",
+        std::process::id(),
+        serde_json::to_string(&meta).unwrap(),
+        faster_hex::hex_string(&std::fs::read(path).unwrap())
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn release(
     node: &mut Rig,
@@ -267,8 +328,15 @@ pub(super) async fn release(
     let gate = cut.observe(node.api().as_ref(), close.hash(), q).unwrap();
     let checkpoint_replay = std::env::var_os("MISAKA_PRIVATE_QF1_CHECKPOINT_REPLAY").is_some();
     let observed_at = node.chain.sink();
+    let archive_dir =
+        std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_WRITE").map(|root| std::path::PathBuf::from(root).join(slot.to_string()));
+    if let Some(path) = &archive_dir {
+        assert!(checkpoint_replay);
+        std::fs::create_dir(path).unwrap();
+    }
+    let checkpoint_dir = archive_dir.as_deref().unwrap_or(dir);
     if checkpoint_replay {
-        node.api().checkpoint_database(&dir.join("before-panel-release"));
+        node.api().checkpoint_database(&checkpoint_dir.join("before-panel-release"));
     }
     let msg = journal.reserve_signing_message(node.api().as_ref(), gate.holder_freeze(), q, &row, 2048).unwrap();
     let sig = ml_dsa_65::sign(&key.signing_key, &msg, RELEASE_CONTEXT, rand::random()).unwrap();
@@ -457,7 +525,7 @@ pub(super) async fn release(
             accepted.hash()
         );
         if normal_trial {
-            let evidence = dir.join("accepted-panel-replies");
+            let evidence = checkpoint_dir.join("accepted-panel-replies");
             let mut file = File::create_new(&evidence).unwrap();
             for (public, signature) in &replies {
                 std::io::Write::write_all(&mut file, public.as_slice()).unwrap();
@@ -490,12 +558,12 @@ pub(super) async fn release(
             let recovered: Vec<_> = recovered.iter().map(|(key, sig)| (key, sig)).collect();
             recorded(accepted.hash(), recovered.as_slice()).unwrap();
             if checkpoint_replay {
-                node.api().checkpoint_database(&dir.join("at-original-deadline"));
-                let observed = reopen_checkpoint(&node.config, &dir.join("before-panel-release"));
+                node.api().checkpoint_database(&checkpoint_dir.join("at-original-deadline"));
+                let observed = reopen_checkpoint(&node.config, &checkpoint_dir.join("before-panel-release"));
                 assert_eq!(observed.get_sink(), observed_at);
                 let restored_gate = cut.observe(observed.as_ref(), close.hash(), q).unwrap();
                 drop(observed);
-                let expired = reopen_checkpoint(&node.config, &dir.join("at-original-deadline"));
+                let expired = reopen_checkpoint(&node.config, &checkpoint_dir.join("at-original-deadline"));
                 assert_eq!(expired.get_sink(), late.hash());
                 let read = |block| {
                     cut.read_recorded_replies(
@@ -516,6 +584,22 @@ pub(super) async fn release(
                 read(accepted.hash()).unwrap();
                 assert_eq!(read(late.hash()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
                 assert!(cut.observe(expired.as_ref(), close.hash(), q).is_err());
+                if let Some(path) = &archive_dir {
+                    let record = ColdPanelReceipt {
+                        writer: std::process::id(),
+                        observed: observed_at,
+                        deadline_tip: late.hash(),
+                        close: close.hash(),
+                        batch: batch.hash(),
+                        certificate: cert.hash(),
+                        accepted: accepted.hash(),
+                        marker: Hash64::from_bytes(commitment),
+                        close_marker: Hash64::from_bytes(marker),
+                        domain: node.domain,
+                        deadline,
+                    };
+                    std::fs::write(path.join("receipt.json"), serde_json::to_vec(&record).unwrap()).unwrap();
+                }
                 peer_log!(
                     "QF1 reopened checkpoints pid={} observed={} deadline_tip={} accepted={}",
                     std::process::id(),

@@ -999,3 +999,19 @@ python3 -B "$p/check_recorded_reply_signatures.py" "$out/public-reply-evidence.l
 zstd -dc "$p/checkpoint-panel-replies.txt.zst" > "$out/checkpoint-panel-replies.log"
 python3 -B "$p/check_recorded_reply_signatures.py" "$out/checkpoint-panel-replies.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --checkpoints | cmp - "$p/checkpoint-panel-replies.json"
 ```
+
+### 元の3プロセス終了後のPANEL承認ブロックの照合
+
+各peerはPANEL公開前と期限時のRocksDBチェックポイント、公開鍵・署名、参照するブロックIDを保存した。元の3プロセスが終了した後、同一バイナリの別の3プロセスが各peerのファイルを開いた。各readerは公開前と期限時の両DBでcloseが確定点の祖先であること、選択鎖上に公開前世代・batch・certificate・承認・期限ブロックが順に存在することを確認した。DAA 27の承認とDAA 60の期限ブロックに同じ承認集合のcommitmentが入っていた。元の排他期限を満たしたのは前者である。独立照合器はディスクから読み出した10,522 bytesを元の公開記録と照合し、選出2席の署名を検証した。markerの変更、期限ブロックの承認への差し替え、二つのDBの交換はnative readerが拒否した。[プロセスと照合結果](cold-panel-receipts.json)・[元のログ、否定例、同一バイナリのMOE2帳簿](cold-panel-run.tar.zst)
+
+[再現用の6つのDB](cold-panel-databases.tar.zst)を新しいディレクトリに展開し、さらに別の3プロセスでも同じ承認と期限を再現した。新しいreaderが直接確かめた範囲はnativeの確定状態、選択鎖、commitment、期限と保存された承認である。抽選前の全資料からqualificationとseedを構築し直す部分は元の実行記録を参照する。
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/cold-panel-run.tar.zst" -C "$out"
+tar -xf "$p/cold-panel-databases.tar.zst" -C "$out"
+for slot in 0 1 2; do
+    MISAKA_PRIVATE_COLD_PANEL_DIR="$out/peers/$slot" RUST_MIN_STACK=67108864 "$TEST_BINARY" private_read_cold_panel_receipt --ignored --test-threads=1 --nocapture > "$out/fresh-$slot.log" 2>&1 || break
+done
+python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
+```
