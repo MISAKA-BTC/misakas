@@ -14,7 +14,7 @@ Qwenの「任意の内部状態」から採掘値を取るという未指定部�
 
 **選択する状態は、回答の各tokenを予測する位置における全36 blockの第二残差加算後の4096要素と、最終RMSNorm・gain・A16 narrowing後の4096要素である。** これら37本の整数vectorを順序どおりにhashする。最終hidden state一本だけ、8層おきのsample、全MACのprefix trace、外付けnonceだけのdigestへ置換しない。
 
-この選択は、どの関数を実行・再現・反証するかを確定する。**その関数を安く予測できないこと、異なる試行の数値状態が重ならないことは新たに証明していない。** G-EXEC/G-COLL/G-COST/G-USEとMAS1の全条件を残す。Qwen用の適合TheoremRuleが未完成の間は、非報酬評価だけを許し、採掘、credit、weight、受賞権利を発生させない。
+この選択は、どの関数を実行・再現・反証するかを確定する。**新しい正規Ticketを安く作れるかは、固定した仕事・経路・費用条件で繰り返し測る（G-COST）。異なる試行の数値状態が重なる確率には、別途G-COLLの適合条件を適用する。** G-EXEC/G-COLL/G-COST/G-USEとMAS1の全条件を残す。Qwen用のG-COLLの適合TheoremRuleが未完成の間は、非報酬評価だけを許し、採掘、credit、weight、受賞権利を発生させない。
 
 ### 0.1 採用した範囲と旧条項の限定置換
 
@@ -119,7 +119,7 @@ L = len(x)
 
 64個のchallenge tokenは固定長・単射である。連結後に再BPE・文字正規化・chat templateの再適用をしない。JobTokensは登録tokenizerのordinary-text規則で正規UTF-8の利用者文をtoken化する。追加special-token解釈、任意system/tool message、画像・audio token、soft prompt、embedding直入力、job中からtemplateを差し替える解釈はこの版では拒否する。JobTokensと元UTF-8の束縛・上限検査は[登録tokenizer契約](0051-funded-preclaim-tokenizer-registration.md)を使う。
 
-**`x`の最初から全部が実入力であり、challengeだけmetadataとしてモデルの外に置かない。** それでもQwenがchallengeを無視したり量子化後の数値が重なったりする可能性は残る。入力の単射性はG-COLL/G-COSTの証明ではない。
+**`x`の最初から全部が実入力であり、challengeだけmetadataとしてモデルの外に置かない。** それでもQwenがchallengeを無視したり量子化後の数値が重なったりする可能性は残る。G-COLLは実際の数値状態を、G-COSTは新しい正規Ticketを得るまでの費用を調べる。
 
 ### 3.2 位置・mask・長さ
 

@@ -77,7 +77,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 | traceとTicket | 自由salt、可変padding、偽のgraph位置、同じ仕事の複数ticket | canonicalな実行・一回会計に反すればFAIL |
 | 実行の再現 | 未固定sampling、外部API、正規profile間で異なる丸め | 確定違反はFAIL、未実装検査器はUNKNOWN |
 
-「dense」「full-rank」「パラメータが多い」「Qwenと同形」「出力が高entropyに見える」「多数のtestで衝突しなかった」だけをG-COLL/G-COSTの証明として受理しない。認識できる短絡の検出範囲を`DetectionCoverage`として公開する。任意の悪意あるモデルを完全に自動排除できるとは宣言しない。
+「dense」「full-rank」「パラメータが多い」「Qwenと同形」「出力が高entropyに見える」「多数のtestで衝突しなかった」だけでG-COLLの適合条件やG-COSTの反復費用検査を満たしたと扱わない。認識できる短絡の検出範囲を`DetectionCoverage`として公開する。任意の悪意あるモデルを完全に自動排除できるとは宣言しない。
 
 ### 3.2 安い経路の検査と修正後の再検査
 
