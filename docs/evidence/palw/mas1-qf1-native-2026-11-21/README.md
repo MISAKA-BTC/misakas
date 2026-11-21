@@ -523,6 +523,8 @@ cargo +1.93.0 run --locked --offline -p misaka-palw-base0 --example check-8k-cap
 
 旧 8K の元ブロックを受け付けたプロセスで、Qwen2.5 の全入力から数値計算をやり直した。claim `8748971c…` の trace・output・execution と、元ヘッダに束縛した再実行 transcript `82bb8e54…` が一致した。DAA 6,491 の claim は `Provisional`。この検査は1プロセスで完走した。[再実行ログ抜粋](genesis-draw-reexecution.txt)・[元ブロックとの照合](genesis-draw-reexecution.json)
 
+当初の受付だけを検証するバイナリでも、3プロセスで同じ元ブロックの完全再実行が完了した。3者は受付時の Provisional、state root、trace・output・execution、再実行 transcript で一致した。[受付時点の3ピア照合](genesis-intake-three-peer.json)
+
 ```sh
 python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p/genesis-draw-receipt.txt" --peer "$p/genesis-draw-reexecution.txt"
 ```
