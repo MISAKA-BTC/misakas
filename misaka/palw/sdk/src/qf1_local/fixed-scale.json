@@ -1,0 +1,11 @@
+{
+  "source": "Qwen/Qwen3-8B",
+  "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "integer_inventory_sha256": "b05a9dfc493f131e7bd2ca86dd8712cecee93e017bb0959faaa4427abfe59830",
+  "program_sha256": "3932d762042031d53f431104e384a91ab96dadc6803b578fcf2969aa26fc02ce",
+  "post_block_readout": "i16 Q15",
+  "final_norm_readout": "i16 Q10",
+  "source_epsilon": "1/1000000",
+  "rope_theta": 1000000,
+  "context_limit": 8192
+}

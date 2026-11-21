@@ -78,6 +78,7 @@ name = "palw-tir-equiv"
 path = "src/bin/palw-tir-equiv.rs"
 
 [dev-dependencies]
+tempfile.workspace = true
 # `census::onboarding`'s tokens are the lifecycle's `OnboardingFailureV1::code()` (a test compares them).
 misaka-palw-challenge.workspace = true
 misaka-palw-tir-sketch = { path = "../tir/sketch" }

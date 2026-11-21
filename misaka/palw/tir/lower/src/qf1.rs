@@ -1,6 +1,8 @@
 //! RFC-0066 dense Qwen3 lowering. All numeric operands come from the
 //! descriptor's conversion recipe. These builders only emit ordinary TIR.
 mod program;
+mod weights;
+pub use weights::{INVENTORY, visit_fixed_scale_weights};
 pub use program::{Qf1Program, fixed_scale_program};
 
 use crate::{LowerError, Result};
@@ -100,8 +102,11 @@ pub fn decoder_block_output(
     {
         return Err(LowerError::not_lowerable("QF1 post-attention gain or rotary table geometry"));
     }
-    let cos = b.gather(p.rope_cos, Ref::Input(INPUT_POS), 0, 0);
-    let sin = b.gather(p.rope_sin, Ref::Input(INPUT_POS), 0, 0);
+    // Admission ranges over the TIR history bound, which exceeds the QF1
+    // context. In the registered context every legal position passes unchanged.
+    let rope_pos = b.clamp(Ref::Input(INPUT_POS), 0, 8191, DType::Idx);
+    let cos = b.gather(p.rope_cos, rope_pos, 0, 0);
+    let sin = b.gather(p.rope_sin, rope_pos, 0, 0);
     let query = b.rope_half(input.q_norm, cos, sin, -32767, 32767, DType::I16);
     let key = b.rope_half(input.k_norm, cos, sin, -32767, 32767, DType::I16);
     let key_row = b.reshape_fixed(key, &[1024]);

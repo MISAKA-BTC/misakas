@@ -3,10 +3,10 @@
 //! VSS outcomes, allocated resources and the schedule are fixture inputs.
 //! Each native database resolves the closure from the same accepted close block.
 use super::*;
-#[path = "tb1_exec_input.rs"]
-mod exec_input;
 #[path = "tb1_qf1_embedding_fixture.rs"]
 mod embedding;
+#[path = "tb1_exec_input.rs"]
+mod exec_input;
 #[path = "tb1_qf1_prediction_fixture.rs"]
 mod prediction;
 use kaspa_rpc_core::RpcRawBlock;
@@ -105,9 +105,10 @@ fn receive<T: serde::de::DeserializeOwned>(socket: &mut UnixStream) -> T {
 
 fn child_reader(dir: &Path, slot: usize, stable: bool) -> (Child, UnixStream) {
     let (parent, child_input) = UnixStream::pair().unwrap();
+    let timeout = if std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some() { 3600 } else { 60 };
     for s in [&parent, &child_input] {
-        s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
-        s.set_write_timeout(Some(Duration::from_secs(60))).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(timeout))).unwrap();
+        s.set_write_timeout(Some(Duration::from_secs(timeout))).unwrap();
     }
     let mut command = Command::new(std::env::current_exe().unwrap());
     if stable {
@@ -356,10 +357,21 @@ async fn run(stable: bool) {
         .is_err()
     );
     // Optional non-rewarding RFC-0066 exercise, with the real pinned tokenizer.
-    // Each peer builds and opens the same small numerical schedule fixture.
-    let exercise =
-        std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|_| prediction::artifact(&dir.path().join("schedule.palwtir")));
-    let instance = exercise.as_ref().map(|(a, norm)| prediction::bind(a, *norm));
+    let full = std::env::var_os("MISAKA_PRIVATE_QF1_FULL");
+    let tokenizer = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER");
+    assert!(full.is_none() || tokenizer.is_some(), "the full model requires its pinned tokenizer");
+    let exercise = tokenizer.as_ref().map(|_| match &full {
+        Some(path) => {
+            let a = misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(path)).unwrap();
+            let model = misaka_palw_sdk::qf1_local::program().unwrap();
+            (a, model.final_norm)
+        }
+        None => prediction::artifact(&dir.path().join("schedule.palwtir")),
+    });
+    let instance = exercise.as_ref().map(|(a, norm)| match &full {
+        Some(_) => misaka_palw_sdk::qf1_local::bind(a).unwrap(),
+        None => prediction::bind(a, *norm),
+    });
     let qf1 = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|path| {
         use misaka_palw_remote::tb1_exposure::qf1::Qf1Prompt;
         let bytes = std::fs::read(path).unwrap();
@@ -391,6 +403,7 @@ async fn run(stable: bool) {
             terms.target
         },
         decode_tokens: 3,
+        max_leaves: if full.is_some() { 32_000_000 } else { terms.max_leaves },
         ..terms
     });
     if let (Some(prompt), Some(terms)) = (&qf1, &qf1_terms) {
@@ -595,8 +608,10 @@ async fn run(stable: bool) {
         assert!(matches!(r.replay_qf1_local(api, &substituted), Err(e) if e.contains("owner-signed registration")));
         assert!(request.replay_qf1_local(api, bound).is_err());
         let answer = r.replay_qf1_local(api, bound).unwrap();
-        prediction::check(r.tokens(), terms.decode_tokens, &answer);
-        assert_eq!(answer.tokens, [7, 151643]);
+        if full.is_none() {
+            prediction::check(r.tokens(), terms.decode_tokens, &answer);
+            assert_eq!(answer.tokens, [7, 151643]);
+        }
         // Only the producer signs the Original. Readers use its declared T
         // for the tree length and independently execute and authenticate it.
         let declared = if let Some(s) = parent_socket.as_mut() {
@@ -611,15 +626,7 @@ async fn run(stable: bool) {
         let opened = match slot {
             0 => 0,
             1 => 64,
-            _ => {
-                // Last leaf is End. Pre and 36 bodies each produce 64
-                // tiles; decision post adds final norm, logits and TopK.
-                let tiles = u64::from(answer.processed_positions) * 37 * 64 + u64::from(declared) * (64 + 151936 / 64 + 1);
-                tiles
-                    + u64::from(declared)
-                    + u64::from(kaspa_consensus_core::palw_qf1::readout_chunks::record_count(declared).unwrap())
-                    + 2
-            }
+            _ => bound.trace_leaf_count(r.tokens().len().try_into().unwrap(), declared, terms.max_leaves).unwrap() - 1,
         };
         let replay = r.replay_qf1_original(api, bound, declared, Some(opened)).unwrap();
         let (body, sig) = if let Some(s) = parent_socket.as_mut() {

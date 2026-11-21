@@ -20,6 +20,11 @@ fn registration_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let base = params.genesis.clone();
     let isolation = Hash64::from_u64_word(64);
     let from = Some(ForkActivation::new(1));
+    if std::env::var_os("MISAKA_PRIVATE_QF1_FULL").is_some() {
+        // The launch harness predates the shipped range evaluator (t12 DAA 3600).
+        // The first heartbeat can still have DAA zero when registration is priced.
+        (kaspa_consensus_core::palw_tir_fence2_v1::PALW_T12_TIR_FENCE2_ENTRY.set)(&mut params, Some(ForkActivation::new(0)));
+    }
     params.palw_model_market = from;
     params.palw_reorg_strict_economic_win = Some(ForkActivation::new(0));
     for fence in [
@@ -95,7 +100,7 @@ async fn private_moe2_three_process_registration() {
                 Some(replay.economics),
             )
         } else {
-            let c = match std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT") {
+            let c = match std::env::var_os("MISAKA_PRIVATE_QF1_FULL").or_else(|| std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT")) {
                 Some(path) => {
                     let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(std::path::Path::new(&path)).unwrap();
                     Case {

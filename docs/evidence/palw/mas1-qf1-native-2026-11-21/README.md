@@ -170,3 +170,40 @@ python "$p/check_full_decoder.py" "$OUT/result.json" "$p/decoder-run.txt" "$OUT/
   "$SHARDS/source-model.safetensors.index.json" "$SHARDS/qwen-source-gains/model.norm.weight.bf16" \
   "$SHARDS/model-00005-of-00005.safetensors"
 ```
+
+## 通常の PALWTIR1 読み込みと登録検査
+
+全層の単独実行を記録したコミットは `c6465c9a4`。そのグラフを登録検査に通すと、位置入力は TIR の上限 262,143 まで取り得るため、8,192 行の RoPE 表の Gather が拒否された。登録用グラフでは位置を 0〜8,191 に絞ってから表を引く。QF1 の受理可能な入力位置は同じである。次の登録試験では Court が一度に扱う値が4,160個に達し、上限4,096個を超えた。Q 投影、因果 attention 出力、attention 後の残差、MLP の乗算・narrowing 後を追加で commit し、各部分の裁定が既存の上限に収まるようにした。回答の読出し位置は各層の第二残差と最終 norm の37本である。
+
+SDK の隔離用 reader は graph、layout、tokenizer、変換 manifest、実際のパラメータから計算する inventory root を照合する。重み・gain・整数スケール・RoPE 表は909個のテンソルとして通常の PALWTIR1 に格納される。各 shard の元データと整数変換を照合し、全パラメータがそろって通常の node reader を通過した後にファイルを公開する。格納されたソース由来の399テンソル、全1,721,967 inventory leaves、class ID を独立した Python 実装でも検査する。
+
+次のコマンドはリポジトリのルートで実行する。OUT は新しい生成先、SHARDS は固定 revision の元 shard を保存したディレクトリである。変換器は不足する shard を固定 revision から取得できる。
+
+```sh
+set -o pipefail
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+cargo +1.93.0 build --locked --offline -p misaka-palw-sdk --example qf1-8b-artifact
+python "$p/check_integer_weights.py" --local "$SHARDS" --stream |
+  "${CARGO_TARGET_DIR:-target}/debug/examples/qf1-8b-artifact" pack \
+    "$p/integer-weights.json" "$OUT/qwen3-8b.palwtir"
+python "$p/check_class.py" "$OUT/qwen3-8b.palwtir"
+```
+
+隔離用 class は `64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260`、PALWTIR1 ファイルの SHA-256 は `bdeb1aea5ba21c6b120874d1d2ab8b55f1c6acb24293829fca41df8bd4e96de4`。保存済みの111入力 token をノードで再生し、113位置・回答 `[8820, 67942, 21856]`・Limit・readout Z が独立参照に一致した。[全 inventory と class ID](class-check.json)・[ノードの再実行](registered-archived-replay.txt)
+
+二つの隔離チェーンで同じ実モデルを検査した。一つでは署名付きの追加モデル登録を3ピアが受理し、同じ登録ブロックの状態に市場が生成された。隔離チェーンの最初の heartbeat の事前検査にも現行 t12 の range evaluator を適用した。最初に DAA 1 から適用した実行では事前検査が旧規則を選び、terminal close の計算量が上限を超えた。[登録・市場・再編成の3ピア記録](real-market.txt)
+
+もう一つでは3ピアが同じ署名付き EXEC の 111 入力から全36層を実行した。回答は `[17068, 31943, 473]`、停止は Limit。Original は 1,967,418 個の TRACE leaf を束縛し、3ピアは Init、位置64、End の opening を1件ずつ開いた。後続の独立した PANEL で抽選された2者が全再実行して署名し、Stop に関する反証は公開 opening から `ChallengeNotEstablished` と裁定された。Python 検査は3者の一致、公開された値と root、抽選、Stop witness を照合する。[3ピアの生ログ](real-three-peer.txt)・[独立照合](real-lifecycle.json)
+
+仕事は RFC-0066 の private local inference で、事前固定した隔離用 D=1 を使う。報酬原資、新規採掘適格性、Final、Gate C、受賞ブロックをこの実行で認定していない。MODEL_AUDIT・G-COLL・G-COST・G-USE は別途必要である。
+
+```sh
+export MISAKA_PRIVATE_QF1_FULL="$OUT/qwen3-8b.palwtir" MISAKA_PRIVATE_QF1_TOKENIZER="$OUT/tokenizer.json"
+export RUST_MIN_STACK=67108864 RAYON_NUM_THREADS=3
+# 第1引数は同じビルドの kaspa_consensus テスト実行ファイルのパス
+bin="$1"
+"$bin" private_moe2_three_process_registration --nocapture
+"$bin" private_qf1_8b_archived_readout --ignored --nocapture
+{ echo "test_binary_sha256=$(shasum -a 256 "$bin" | cut -d' ' -f1)"; "$bin" private_tb1_stable_panel --ignored --nocapture; } > "$OUT/three-peers.txt" 2>&1
+python3 -B "$p/check_real_lifecycle.py" "$OUT/three-peers.txt" "$p/class-check.json"
+```

@@ -24,7 +24,10 @@ def race(anchor, original, actor, weight):
 
 
 def check_panel(log):
-    result = verify(log, 1 << 256)
+    return verify_draw(log, verify(log, 1 << 256))
+
+
+def verify_draw(log, result):
     hex64, hex32 = r"([0-9a-f]{128})", r"([0-9a-f]{64})"
     events = re.findall(r"TB1 stable PANEL pid=(\d+) slot=(\d+) close=" + hex64 + " stable=" + hex64
                         + r" stable_daa=(\d+) release_daa=(\d+) batch=" + hex64 + " certificate=" + hex64 + " seed=" + hex32, log)

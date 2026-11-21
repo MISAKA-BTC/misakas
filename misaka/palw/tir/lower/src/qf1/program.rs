@@ -72,6 +72,11 @@ pub fn fixed_scale_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
     let x = Ref::CarryIn(0);
     let a = attention_input(&mut block, x, &qkv)?;
     let y = decoder_block_output(&mut block, x, &a, &tail)?;
+    // Separate the two sides of the history reduction and the large MLP
+    // projections so each terminal dispute fits the shipped t12 court.
+    for site in [a.q, y.attention, y.after_attention, y.product] {
+        block.commit(site);
+    }
     let hidden = block.commit(y.residual);
     let decoder = block.finish(&[hidden]);
     let final_gain = p.param("model.norm.weight", DType::I32, &[4096], false);
@@ -86,5 +91,38 @@ pub fn fixed_scale_program(tiled_logits: [u8; 64]) -> Result<Qf1Program> {
     let mut program = p.finish(pre, vec![decoder; 36], post, logits_node);
     program.logits_scheme_id = tiled_logits;
     misaka_palw_tir::validate::validate(&program).map_err(|e| LowerError::not_lowerable(e.to_string()))?;
+    misaka_palw_tir::interval::analyze_ranges(&program).map_err(|e| LowerError::not_lowerable(e.to_string()))?;
     Ok(Qf1Program { program, final_norm })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_scale_program_has_in_range_reads_over_the_full_tir_position_domain() {
+        let model = fixed_scale_program([0; 64]).unwrap();
+        misaka_palw_tir::interval::analyze_ranges(&model.program).unwrap();
+        let decoder = &model.program.blocks[usize::from(model.program.schedule.layers[0])];
+        let rope: Vec<_> = model
+            .program
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.name.starts_with("rope."))
+            .map(|(i, _)| Ref::Param(i as u16))
+            .collect();
+        let indices: Vec<_> = decoder
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.prim, misaka_palw_tir::Prim::Gather { .. }) && rope.contains(&n.inputs[0]))
+            .map(|n| n.inputs[1])
+            .collect();
+        assert_eq!(indices.len(), 2);
+        assert_eq!(indices[0], indices[1]);
+        let Ref::Node(i) = indices[0] else { panic!("RoPE position must be bounded") };
+        let position = &decoder.nodes[usize::from(i)];
+        assert_eq!(position.inputs.as_slice(), &[Ref::Input(misaka_palw_tir::program::INPUT_POS)]);
+        assert_eq!(position.prim, misaka_palw_tir::Prim::Clamp { lo: 0, hi: 8191 });
+    }
 }

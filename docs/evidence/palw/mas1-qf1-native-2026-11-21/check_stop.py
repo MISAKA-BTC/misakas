@@ -9,7 +9,10 @@ from check_prediction import qf1, shared_rows
 
 
 def check(log):
-    panel = check_panel(log)
+    return verify_case(log, check_panel(log))
+
+
+def verify_case(log, panel):
     peers, fields = shared_rows(log, r"TB1 Court Stop pid=(\d+) original=([0-9a-f]{128}) case=([0-9a-f]{128}) "
                                 r"verdict=([0-9a-f]{128}) result=(\w+) witness=([0-9a-f]+)")
     original, case, verdict, outcome, wire = fields

@@ -147,6 +147,11 @@ fn qf1_stateful_prediction_boundaries() {
     assert!(instance.replay(&[9], 1, 1, Hash64::from_u64_word(1), [1; 32]).is_err());
     let h = Hash64::from_u64_word(7);
     assert!(LocalInstance::bind(&a, h, norm + 1, &[h; ROLES]).is_err());
+    let path = dir.path().join("fixture.palwtir");
+    let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+    file.set_len(file.metadata().unwrap().len() + 1).unwrap();
+    assert!(instance.replay(&[9], 1, 400000, h, [1; 32]).is_err());
+    assert!(LocalInstance::bind(&a, h, norm, &[h; ROLES]).is_err());
 }
 
 #[test]
@@ -168,4 +173,39 @@ fn qf1_original_requires_actual_stop_and_complete_trace_budget() {
     assert!(trace.roots[3].verify_opening(0, &o.record, &o.siblings));
     assert_eq!(o.record[0], 0);
     assert_eq!(&o.record[5..69], id.as_byte_slice());
+}
+
+/// Reopen the packed full model through the node. The archived independent reference used
+/// the same 111 tokens before the registration range and court commitment changes.
+#[test]
+#[ignore = "requires the verified private 8B PALWTIR1 artifact"]
+fn private_qf1_8b_archived_readout() {
+    let path = std::env::var_os("MISAKA_PRIVATE_QF1_FULL").expect("full QF1 PALWTIR1 path");
+    let a = TirArtifactV1::open(Path::new(&path)).unwrap();
+    let local = misaka_palw_sdk::qf1_local::bind(&a).unwrap();
+    let prompt: Vec<u32> = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/evidence/palw/mas1-qf1-native-2026-11-21/full-replay-input.json"
+    )))
+    .unwrap();
+    let reference: serde_json::Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/evidence/palw/mas1-qf1-native-2026-11-21/full-replay-check.json"
+    )))
+    .unwrap();
+    let answer = local.replay(&prompt, 3, 32_000_000, Hash64::from_u64_word(1), [0; 32]).unwrap();
+    assert_eq!(serde_json::json!(answer.tokens), reference["output_ids"]);
+    assert_eq!(serde_json::json!(answer.processed_positions), reference["positions"]);
+    assert_eq!(format!("{:?}", answer.stop), reference["stop"].as_str().unwrap());
+    let z = Hash64::from_bytes(answer.z);
+    assert_eq!(z.to_string(), reference["readout_z"].as_str().unwrap());
+    eprintln!(
+        "QF1 held replay class={} inventory={} tokens={:?} stop={:?} positions={} z={}",
+        local.identity().class,
+        local.identity().inventory,
+        answer.tokens,
+        answer.stop,
+        answer.processed_positions,
+        z
+    );
 }

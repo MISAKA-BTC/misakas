@@ -149,6 +149,42 @@ pub(crate) fn align(x: u64) -> u64 {
 /// The fixed prefix: magic, version, header length.
 pub(crate) const PREFIX: u64 = 8 + 2 + 4;
 
+/// Canonical PALWTIR1 offsets, including alignment, for converters that receive tensors
+/// in checkpoint order. The sequential writer uses the same header.
+pub fn container_header_v1(
+    program: &TirProgramV1,
+    layout: Vec<u8>,
+    tokenizer_id: [u8; 64],
+    meta: String,
+) -> Result<PalwTirContainerHeaderV1> {
+    misaka_palw_tir::validate::validate(program).map_err(|e| PalwTirContainerError::Program(e.to_string()))?;
+    let program_bytes = program.encode();
+    let instances = param_instances_v1(program);
+    // The table's size does not depend on the offsets (fixed-width fields), so lay it out with
+    // zeros first, then fill the offsets in.
+    let mut entries: Vec<PalwTirTensorEntryV1> = Vec::new();
+    for (j, inst) in instances.iter().enumerate() {
+        for l in inst {
+            entries.push(PalwTirTensorEntryV1 { param: j as u16, layer: *l, offset: 0, bytes: tensor_bytes_v1(program, j as u16) });
+        }
+    }
+    let mut header = PalwTirContainerHeaderV1 {
+        version: PALW_TIR_CONTAINER_VERSION_V1,
+        program: program_bytes,
+        layout,
+        tokenizer_id,
+        tensors: entries,
+        meta,
+    };
+    let header_len = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?.len() as u64;
+    let mut at = align(PREFIX + header_len);
+    for e in header.tensors.iter_mut() {
+        e.offset = at;
+        at = align(at + e.bytes);
+    }
+    Ok(header)
+}
+
 /// **Write a container**, one tensor at a time: `tensor(param, layer)` is asked for each instance
 /// in inventory order and must return exactly its declared bytes. Returns the file digest
 /// ([`file_digest_v1`]) of what was written.
@@ -179,33 +215,8 @@ pub fn write_container_v1_streamed(
     meta: String,
     tensor: &mut dyn FnMut(u16, Option<u16>, &mut dyn Write) -> std::result::Result<(), String>,
 ) -> Result<[u8; 64]> {
-    misaka_palw_tir::validate::validate(program).map_err(|e| PalwTirContainerError::Program(e.to_string()))?;
-    let program_bytes = program.encode();
-    let instances = param_instances_v1(program);
-    // The table's size does not depend on the offsets (fixed-width fields), so lay it out with
-    // zeros first, then fill the offsets in.
-    let mut entries: Vec<PalwTirTensorEntryV1> = Vec::new();
-    for (j, inst) in instances.iter().enumerate() {
-        for l in inst {
-            entries.push(PalwTirTensorEntryV1 { param: j as u16, layer: *l, offset: 0, bytes: tensor_bytes_v1(program, j as u16) });
-        }
-    }
-    let mut header = PalwTirContainerHeaderV1 {
-        version: PALW_TIR_CONTAINER_VERSION_V1,
-        program: program_bytes,
-        layout,
-        tokenizer_id,
-        tensors: entries,
-        meta,
-    };
-    let header_len = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?.len() as u64;
-    let mut at = align(PREFIX + header_len);
-    for e in header.tensors.iter_mut() {
-        e.offset = at;
-        at = align(at + e.bytes);
-    }
+    let header = container_header_v1(program, layout, tokenizer_id, meta)?;
     let hb = borsh::to_vec(&header).map_err(|e| PalwTirContainerError::Header(e.to_string()))?;
-    debug_assert_eq!(hb.len() as u64, header_len);
     let f = std::fs::File::create(path)?;
     let mut w = DigestWriter { inner: std::io::BufWriter::with_capacity(1 << 20, f), state: digest_state(), written: 0 };
     w.write_all(PALW_TIR_CONTAINER_MAGIC_V1)?;

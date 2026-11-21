@@ -90,7 +90,9 @@ impl<'a> LocalInstance<'a> {
             return Err("QF1 requires one committed TopK(1) on the full logits".into());
         };
         producers[ROLES - 1] = (p.schedule.post, final_norm);
+        artifact.check_weights_unmodified()?;
         let (inventory, _) = artifact.inventory_root()?;
+        artifact.check_weights_unmodified()?;
         let class_id = class.class_id(&inventory);
         let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
         hash.update(b"MISAKA/private/QF1/local-instance/v1\0").update(manifest.as_byte_slice()).update(class_id.as_byte_slice());
@@ -142,6 +144,7 @@ impl<'a> LocalInstance<'a> {
         seed: [u8; 32],
         mut trace: Option<&mut Trace>,
     ) -> Result<LocalAnswer, String> {
+        self.artifact.check_weights_unmodified()?;
         let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
         palw_qf1::check_capacity(len, limit)?;
         if prompt.iter().any(|&id| id >= VOCAB) {
@@ -170,6 +173,9 @@ impl<'a> LocalInstance<'a> {
             need.checked_add(extra).ok_or("QF1 memory quote overflow")?,
         )?;
         let mut exec = TirExecutor::new(plan, self.artifact.params()).map_err(|e| e.to_string())?;
+        // The typed executor only fuses regions preserving every committed output.
+        // An observer that needs internal nodes still selects the unfused route.
+        exec.set_fused(true);
         let (&last, prefix) = prompt.split_last().ok_or("QF1 empty input")?;
         let mut token = last;
         for &id in prefix {
@@ -221,6 +227,7 @@ impl<'a> LocalInstance<'a> {
         if let Some(trace) = trace {
             trace.end(&answer, &chunks)?;
         }
+        self.artifact.check_weights_unmodified()?;
         Ok(answer)
     }
 }

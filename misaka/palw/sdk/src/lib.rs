@@ -42,6 +42,7 @@
 
 #![cfg_attr(test, allow(warnings))]
 pub mod chain_registered;
+pub mod qf1_local;
 /// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
 pub mod check_architecture;
 pub mod class_manifest;

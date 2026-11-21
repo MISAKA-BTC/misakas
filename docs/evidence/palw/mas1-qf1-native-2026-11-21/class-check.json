@@ -1,0 +1,22 @@
+{
+  "artifact_bytes": 8833559232,
+  "source_tensors": 399,
+  "parameter_instances": 909,
+  "inventory_leaves": 1721967,
+  "artifact_root": "4f049b89bc96796d6c69f30b97067082553b03c4207b270203ee28e962fd00a94ca87a4feaf533b69851880d4fbf2cc1a462245e329d45f52e2a2d104d30a7bd",
+  "class_id": "64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260",
+  "graph_ir_root": "006e9a624990b0f994deb373df58950b335c257439224f6fe9b042e5ef722105b631216ad5cd6e18260ab10cf57814f68c359c61f296df8329cbbbfad3f50895",
+  "layout_digest": "7f138b1fa15e708ef66fa4fcd8580d996ed05067fb945af37cf3124116f693eba0364db448e4f021165293fa455bf6797c265f0adebc6711c6831359da942ef8",
+  "tokenizer": "10ed14bc48937bd836b309447040a8d43d38f103fde39682f7f9f2c4cbb6b4b4666658ab71ed3d90de7c6e2e00cce21c01863b4403ae41dab361b099fdfe2ec5",
+  "manifest": {
+    "source": "Qwen/Qwen3-8B",
+    "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+    "integer_inventory_sha256": "b05a9dfc493f131e7bd2ca86dd8712cecee93e017bb0959faaa4427abfe59830",
+    "program_sha256": "3932d762042031d53f431104e384a91ab96dadc6803b578fcf2969aa26fc02ce",
+    "post_block_readout": "i16 Q15",
+    "final_norm_readout": "i16 Q10",
+    "source_epsilon": "1/1000000",
+    "rope_theta": 1000000,
+    "context_limit": 8192
+  }
+}

@@ -64,6 +64,13 @@ impl Geometry {
     }
 }
 
+impl LocalInstance<'_> {
+    /// Logical TRACE length for a disclosure on this concrete layout.
+    pub fn trace_leaf_count(&self, prompt_len: u32, answer_len: u32, cap: u64) -> Result<u64, String> {
+        Ok(Geometry::new(self, prompt_len, answer_len, cap)?.count)
+    }
+}
+
 pub(super) struct Trace {
     s: [u8; 32],
     len: u32,
