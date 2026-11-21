@@ -869,12 +869,30 @@ async fn mine_registration(c: &Case, card: usize) -> Mined {
     mine_registration_on(Env::new(0), c, card).await
 }
 
-async fn mine_registration_on(mut env: Env, c: &Case, card: usize) -> Mined {
+async fn mine_registration_on(env: Env, c: &Case, card: usize) -> Mined {
+    mine_registration_with_share(env, c, card, 0).await
+}
+
+async fn mine_registration_with_share(mut env: Env, c: &Case, card: usize, requested: u16) -> Mined {
     let ttpb = env.config.params.target_time_per_block();
     let h1 = env.chain.heartbeat(ttpb, Vec::new()).await;
     let (block, state) = env.chain.tip_state();
     let daa = env.chain.daa_of(block);
-    let spec = spec_of(c, card, daa + ACTIVATION_AHEAD);
+    let mut spec = spec_of(c, card, daa + ACTIVATION_AHEAD);
+    if requested != 0 {
+        spec.share = requested;
+        let signed = signed(&env, &state, &spec);
+        let families = state.chain_certified_families(PalwCertifiedLaneV1::Attempt);
+        let verdict = palw_tir_registration_preflight_at_v1(&env.config.params, &env.bundle, &signed, daa, &families);
+        match verdict {
+            Ok(_) => {}
+            Err(E::NotEndToEndCertified { share }) if share == requested => {
+                eprintln!("legacy-work registration requested_share={share} native_preflight=NotEndToEndCertified");
+                spec.share = 0;
+            }
+            Err(e) => panic!("unexpected admission verdict for requested share {requested}: {e:?}"),
+        }
+    }
     let object = signed(&env, &state, &spec);
     let class_id = class_id_of(&object);
     // The terms a registrant builds from (`getPalwRegistrationTerms`) are the chain's own pricing — the numbers `build` used —
@@ -2145,4 +2163,20 @@ pub(super) async fn tb1_registration_prefix(
     assert_eq!(state.class(&mined.class_id).unwrap().artifact_root, root);
     assert!(state.model_market(&mined.class_id).is_some());
     mined.blocks
+}
+
+/// Register a held TIR model on the supplied selected branch, spending a separate
+/// card's original fee float. Return the same chain after the signed row folds.
+pub(super) async fn register_held_tir_on_branch(
+    chain: T12Chain,
+    parts: (Config, PalwConsensusParamsV2, Premine, Premine),
+    class: PalwTirClassV1,
+    root: Hash64,
+    card: usize,
+) -> T12Chain {
+    let env = Env::around(chain, parts);
+    let signed =
+        mine_registration_with_share(env, &Case { class, root, name: "held legacy TIR".into(), real_root: true }, card, 1).await;
+    assert_eq!(signed.env.chain.tip_state().1.class(&signed.class_id).unwrap().artifact_root, root);
+    signed.env.chain
 }

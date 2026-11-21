@@ -1,0 +1,73 @@
+{
+  "job": "2 + 2?",
+  "tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+  "signed_original": {
+    "attempt": "0a5011241d0558a191adaca5f498c0bc70ea139533c8356668d5d04ecc9e9b08",
+    "output_ids": [
+      14847,
+      108722,
+      60508
+    ],
+    "text": "fas联合会_COORD",
+    "stop": "Limit",
+    "contains_digit_four": false,
+    "original": "701e12dbc1bbc75d23e160503306c0bd80bc8636f287087dda84c997130b514a43be90c62a47df3a773e80a820dd6733bf793e21119480b28da4a283c550002b",
+    "processes": [
+      64280,
+      64285,
+      64286
+    ]
+  },
+  "independent_full_replay": {
+    "attempt": "fcec1885a8d5975ee6456713301890dda9bc902f52ef191b18468682c8dbbaa0",
+    "output_ids": [
+      8820,
+      67942,
+      21856
+    ],
+    "text": " whatever:inline profits",
+    "stop": "Limit",
+    "contains_digit_four": false
+  },
+  "readout_sha256": "7cadb316cb55455cc18243c144b87ab5ab25afba089cb5b9fceb0dff2de35a63",
+  "values_per_vector_across_positions": 12288,
+  "residual_endpoint_counts": [
+    70,
+    174,
+    494,
+    1861,
+    2839,
+    2183,
+    1375,
+    2490,
+    1253,
+    1426,
+    2101,
+    2046,
+    2176,
+    3492,
+    2429,
+    3861,
+    4368,
+    4087,
+    4601,
+    4856,
+    5188,
+    5813,
+    5662,
+    5830,
+    4680,
+    5789,
+    6102,
+    5928,
+    6316,
+    6554,
+    6663,
+    6675,
+    6755,
+    6687,
+    6822,
+    7152
+  ],
+  "final_norm_endpoint_count": 0
+}

@@ -289,3 +289,48 @@ python3 -B "$p/check_real_lifecycle.py" --certified-history "$p/registered-certi
 { echo "test_binary_sha256=$(shasum -a 256 "$bin" | cut -d' ' -f1)"; "$bin" private_registered_tb1_pending_freeze --ignored --nocapture; } > "$OUT/registered-exec-quote.txt" 2>&1
 python3 -B "$p/check_real_lifecycle.py" --exec-quote "$OUT/registered-exec-quote.txt" "$p/class-check.json"
 ```
+
+### Studio への署名付き資本割当と新規 claim の受付
+
+上記の長期 MODEL_AUDIT と同じ close から隔離分岐を作った。実 Studio TIR の登録時に旧 class の share を 1‰ にすると、native preflight は `NotEndToEndCertified` を返した。0‰ の登録は DAA 3 に受理された。この share は旧プロファイルの採掘枠であり、モデルの tier 係数とは別の値である。DAA 4 にカード0が署名した資本割当を通常の carrier で受理し、DAA 5,040 で元担保の半分 46,953,160,500,520 sompi が有効になった。7日平均資本は33,537,971,786,085 sompi、予算は720ブロック分だった。
+
+同じ時点の Studio の登録状態は `Active`、旧 registry の新規 claim 判定は `Candidate`。QF1 も `Candidate`、genesis の非 BASE 2クラスは `Prefetching` だった。各クラスについて8枚の producer カードすべてで通常の readiness が拒否を返した。全 claim 行は0件、safe と finalized は空で、holder の公開判定は `WouldBlock`。これは DAA 5,040 のこの分岐の観測である。元の20,448ブロックの履歴の BASE-0 claim と、期限 DAA 8,330 の別の Studio TFO3 claim はそれぞれ元の履歴に属する。[3ピアの状態・枝のハッシュ](legacy-work.json)
+
+同じバイナリ（SHA-256 `907cdaf06a13dd22b8465fd11a5b50721b45315609b134f2ce2b57ca801913e5`）で生成側1プロセスと raw block を独立に受理する2プロセスを実行した。旧監査の原署名を再検査した後、追加10,076ブロックをたどり、登録・割当・成熟の各状態と全32個の producer 判定を比較した。手元保存の `misaka-audit-studio-capital-20261121.json.zst` は4,570,219バイト、SHA-256 は `65a1c81246ee5066cd183161402af6b020dbf7c902d6638c1bf43d4f38289d3d`。展開後は20,459,485バイト、SHA-256 は `de6e24c40988136e26223d2ddd9183339fb9a279f3b0c653d80a9d4e6d48e3aa`。同じビルドで、元の20,448ブロックをもう一度読み、当初の認証済み frontier・Ready 署名18件・全 readiness 項目と一致した。別台帳の MOE2 市場登録・署名済み EXEC 見積もりも再検査し、実引落しは0だった。以下は前節のビルドとモデル環境変数を使用する。
+
+```sh
+zstd -dc "$capital_archive" > "$OUT/capital.json"
+export MISAKA_PRIVATE_CERTIFIED_AUDIT_READ="$OUT/audit.jsonl"
+MISAKA_PRIVATE_AUDIT_WORK_READ="$OUT/capital.json" "$bin" private_registered_audit_legacy_work --ignored --nocapture
+# 同じ close から別途生成する場合は未使用の出力パスを指定する
+MISAKA_PRIVATE_AUDIT_WORK_WRITE="$OUT/new-capital.json" "$bin" private_registered_audit_legacy_work --ignored --nocapture
+python3 -B "$p/check_legacy_work.py" "$OUT/capital.json" "$p"/legacy-work-{a,b,c}.txt
+```
+
+### 実 QF1 の回答と残差値の観測
+
+登録済み tokenizer で、署名付き Original の入力・回答の root、Panel、Court を照合した3ピアの実行と、別 challenge の全層再実行を復号した。両方の質問は `2 + 2?`、回答上限は3トークンである。署名付き Original の回答は `fas联合会_COORD`、別実行の回答は先頭空白に続く `whatever:inline profits` だった。どちらも上限で停止し、期待する答えの4を返さなかった。[入力ごとの出力 ID と復号結果](qf1-answer-check.json)
+
+別実行の保存済み readout で、各層につき3予測位置 × 4,096成分を数えた。整数コードが上端または下端（±32,767）にある成分は、第1層の第二残差で70/12,288、第36層の第二残差で7,152/12,288、最終 norm で0/12,288だった。端値数だけから回答誤りの原因は確定できない。2件は同じ質問の観測で、正式な PracticalSuite、独立の MODEL_AUDIT 抽選、G-USE の資格判定は未実施である。
+
+```sh
+uv run --no-project --with tokenizers==0.23.3 python -B "$p/check_qf1_answers.py" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```
+
+#### 残差スケールを変えた比較計算
+
+同じ整数化済み399テンソルを持つ登録 artifact の identity を検査し、各入力の先頭回答位置で全151,936 logits を計算した。基準の Q15 では署名付き Original の先頭 token と一致し、別入力では保存済み native logits の SHA-256 とも一致した。次にローカルの診断用に、残差の小数部を15から10 bit に変更し、embedding、O・down 投影と RMS epsilon を同じ単位へ変換した。実モデルの登録、署名した EXEC、採掘結果のいずれにもこの変更を適用していない。[予測 token・4の順位・層別の端値数](residual-scale-check.json)
+
+| 入力 | 基準 Q15 の先頭 token | 診断用 Q10 の先頭 token | 数字4の順位（Q15 → Q10） | 第36層末端の端値数（全4,096成分） |
+|---|---|---|---|---|
+| 署名付き Original | `fas` | `#%%` | 10,977 → 17,657 | 2,406 → 578 |
+| 別の保存済み入力 | 空白＋`whatever` | `++`＋改行 | 80,201 → 524 | 2,465 → 634 |
+
+同じ署名付き入力の比較用に、同じ変換済み重みと行ごとのスケールを読み、活性値・attention・MLPを FP32 で評価した。先頭 token は数字2、数字4は2位だった。この計算は変換済み重みを使った診断であり、上流 BF16 の成績には数えない。残差を一律 Q10 にすると端値は減ったが、両入力の先頭 token は回答の数字に至らなかった。ここで比較したのは先頭回答位置だけで、G-USE の採点には全回答・独立の評価入力・採択済み suite が必要になる。
+
+```sh
+for mode in '' '--archived' '--weight-reference'; do
+  uv run --no-project --with numpy --with requests --with tokenizers==0.23.3 \
+    python -B "$p/check_residual_scale.py" ${mode:+"$mode"} "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+done
+```

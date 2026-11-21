@@ -83,7 +83,7 @@ use std::sync::Arc;
 
 #[path = "rfc0041_bond_free_bootstrap.rs"]
 mod bond_free_bootstrap;
-pub(super) use bond_free_bootstrap::certified_floor_history;
+pub(super) use bond_free_bootstrap::{certified_floor_history, send as send_lifecycle};
 
 const T12_GENESIS_CARDS: usize = 8;
 

@@ -3,6 +3,8 @@
 use super::*;
 #[path = "tb1_audit_history.rs"]
 mod history;
+#[path = "tb1_audit_legacy_work.rs"]
+mod legacy_work;
 use misaka_palw_remote::tb1_exposure::model_audit::{AuditCandidate, AuditPlan, PreparedAudit};
 use misaka_palw_tir_exec::node::qf1::Identity;
 
@@ -195,6 +197,16 @@ pub(super) async fn registered_cut(
 #[tokio::test]
 #[ignore = "requires the full QF1 asset and ordinary verifier maturity and certification"]
 async fn private_registered_audit_certified_frontier() {
+    registered_audit_history(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the signed audit archive and both registered model artifacts"]
+async fn private_registered_audit_legacy_work() {
+    registered_audit_history(true).await;
+}
+
+async fn registered_audit_history(legacy: bool) {
     use super::super::super::{
         g14_registration_e2e::{private_moe2::arm_private_registration, tb1_registration_prefix},
         t12_round_lane_e2e::certified_floor_history,
@@ -321,6 +333,11 @@ async fn private_registered_audit_certified_frontier() {
         local_carrier(&mut node, &mut None, &mut [], 0, marker, "long audit close").await
     };
     cut.holder_freeze(node.api().as_ref(), close.hash(), &aq).unwrap();
+    if legacy {
+        assert!(reader.is_some(), "must start from the recorded audit close");
+        legacy_work::exercise(node, parts, close.hash(), identity.class, cut, &aq, deadline).await;
+        return;
+    }
     let floor = if let Some(r) = &mut reader {
         r.finish(&mut node).await;
         r.header.floor

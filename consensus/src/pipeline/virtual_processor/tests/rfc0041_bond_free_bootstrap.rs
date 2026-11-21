@@ -322,7 +322,11 @@ fn carry(chain: &T12Chain, funding: &(TransactionOutpoint, UtxoEntry), object: O
     tx
 }
 
-async fn send(chain: &mut T12Chain, funding: &mut (TransactionOutpoint, UtxoEntry), object: Obj) {
+pub(in crate::pipeline::virtual_processor::tests) async fn send(
+    chain: &mut T12Chain,
+    funding: &mut (TransactionOutpoint, UtxoEntry),
+    object: Obj,
+) {
     let tx = carry(chain, funding, object);
     let step = chain.config.params.target_time_per_block();
     let carrying = chain.heartbeat(step, vec![tx.clone()]).await;
