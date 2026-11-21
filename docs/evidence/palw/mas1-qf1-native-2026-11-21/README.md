@@ -1138,3 +1138,15 @@ python3 -B "$p/check_fresh_qualification.py" --arithmetic --openssl "$(brew --pr
 隔離用の提出処理では、監査seed公開後に各問を1回推論し、出力token列、停止理由、処理位置数、数値Readout、四Rootの件数・digest、Ticketを記録する。2件を出題順に並べてsuiteと元の監査証明書に結び付け、証明書の直後のブロックに格納したdigestを照合する。読み取り側は同じ登録モデルから全件再実行し、保存した全フィールドとブロックの一致を確認する。署名済み監査seedによる実測と後続の選出Panelによる判定は別途記録する。
 
 提出形式の回帰試験では、問題順の逆転を拒否し、証明書・回答・Rootの変更で別のdigestになることを確認した。remoteライブラリの試験は213件成功・1件ignored。提出処理を含むnativeビルド `456ec675…` でも、独立したStudio市場試験の3プロセスとholderのfinality撤回試験を再実行した。[検査ログ](qf1-arithmetic-submission-tests.tar.zst)
+
+### 算術監査の枝で8K claimがFinalに到達
+
+DAA 6491で受理した旧規則のQwen2.5-1.5B 8K claim `de2c19ea…` について、DAA 6511の抽選で選ばれたカード4・6・2がそれぞれ元の数値資料を再実行し、同じtranscriptで承認した。別のnativeプロセスが受付ブロックから285ブロック進め、DAA 6633のブロック `dd51ac1f…` でFinalを記録した。3席の再実行はこのプロセス内で行った。公開アーカイブを展開して全取引とヘッダーを照合し、Panel receipt末尾を1ビット変えた対照では元ヘッダーとの不一致を検出した。[Finalの照合結果](qf1-arithmetic-8k-final.json)・[285ブロックとnativeログ](qf1-arithmetic-8k-final.tar.zst)
+
+```sh
+out=$(mktemp -d)
+for name in qf1-arithmetic-audit-close-public qf1-arithmetic-audit-work-public qf1-arithmetic-8k-final; do
+    tar -xf "$p/$name.tar.zst" -C "$out"
+done
+python3 -B "$p/check_fresh_final.py" "$out" --arithmetic-work | cmp - "$p/qf1-arithmetic-8k-final.json"
+```
