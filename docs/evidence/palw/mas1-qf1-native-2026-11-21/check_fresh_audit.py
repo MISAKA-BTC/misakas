@@ -15,7 +15,7 @@ def records(log, prefix):
     return [(int(pid), json.loads(row)) for pid, row in re.findall(pattern, log, re.M)]
 
 
-def audit_binding(audit):
+def audit_binding(audit, suite=None):
     """Encode the fixed fixture plan at its original close, before either draw."""
     audit_id, panel_id = map(bytes.fromhex, audit["rounds"])
     audit_q, panel_q = map(bytes.fromhex, audit["qualifications"])
@@ -23,7 +23,9 @@ def audit_binding(audit):
     paired = hashlib.sha3_512(b"MISAKA/private/MAS1/qualified-evaluation-rounds/v1" +
                               audit_id + audit_q + panel_id + panel_q).digest()
     # Hash64::from_u64_word stores the final word in little-endian order.
-    suite, reservation = [bytes(56) + value.to_bytes(8, "little") for value in (0xa501, 0xa502)]
+    if suite is None:
+        suite = bytes(56) + (0xa501).to_bytes(8, "little")
+    reservation = bytes(56) + (0xa502).to_bytes(8, "little")
     plan = struct.pack(">IIQI", 1, 2, audit["panel_deadline"] + 1, 1)
     instance = b"".join(bytes.fromhex(audit[k]) for k in ("class", "inventory", "descriptor"))
     candidates = hashlib.sha3_512(b"MISAKA/private/MAS1/non-rewarding-candidates/v1" +
@@ -42,7 +44,7 @@ def coinbase_extra(block):
     return payload[19 + payload[18]:]
 
 
-def verify(root):
+def verify(root, arithmetic_close=False):
     archive, *blocks = [json.loads(x) for x in (root / "public.jsonl").read_text().splitlines()]
     require(archive["floor"] is None and archive["count"] == len(blocks) and
             [len(rows) for rows in archive["signatures"]] == [9, 9], "incomplete public audit")
@@ -70,6 +72,8 @@ def verify(root):
         binaries.add(binary)
         common = row if common is None else common
         require(common == row, "native registered cut differs")
+        if arithmetic_close:
+            continue
         [(seat_pid, seats), (renew_pid, later)] = records(log, "legacy genesis boundary")
         [(capital_pid, capital)] = records(log, "legacy genesis capital")
         [(initial_pid, initial)] = records(log, "legacy-work result")
@@ -101,12 +105,23 @@ def verify(root):
     walk(blocks)
     require(tip == archive["tip"] == common["tip"] and archive["registered"] == common["registered"] and
             len(checkpoints) == 4, "audit prefix not fully covered")
-    paired, _, freeze = audit_binding(common)
+    suite = None
+    if arithmetic_close:
+        spec = (b"MISAKA/private/MAS1/arithmetic/v1\0HEX64\0a=c[0]%5,b=c[1]%5\0add(a,b),sub(a+b,b)\0"
+                b"Answer with only one digit: what is \0 + \0 - \0?\0canonical-digit-token,one-QF1-EOS\0required-correct=2\0")
+        suite = hashlib.sha3_512(spec + struct.pack(">IIQ", 2, 16, 32_000_000)).digest()
+        legacy = json.loads((HERE / "fresh-retained-audit.json").read_bytes())["audit"]
+        require(set(legacy["rounds"]).isdisjoint(common["rounds"]), "reused legacy audit or panel round")
+    paired, _, freeze = audit_binding(common, suite)
     require(coinbase_extra(checkpoints[common["preparation"]][0]) == paired, "different qualified evaluation rounds")
     close = checkpoints[common["close"]][0]
     require(close["header"]["parentsByLevel"][0] == [common["preparation"]] and
             coinbase_extra(close) == freeze, "different close commitment")
 
+    if arithmetic_close:
+        return dict(audit=common, suite=suite.hex(), required_correct=2, cases=2, decode_limit=16, max_leaves=32_000_000,
+                    holder_processes=pids, binary_sha256=binaries.pop(), public_prefix_blocks=archive["count"],
+                    archive_sha256=hashlib.sha256((root/"public.jsonl").read_bytes()).hexdigest())
     state = common["state"]
     for name, stage in (("capital", "initial"), ("seats", "seats"), ("genesis-capital", "capital"), ("renew", "renewed")):
         ext = json.loads((root / f"{name}.json").read_bytes())
@@ -148,4 +163,6 @@ def verify(root):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="extracted public evidence")
-    print(json.dumps(verify(parser.parse_args().root), indent=2))
+    parser.add_argument("--arithmetic-close", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(verify(args.root, args.arithmetic_close), indent=2))

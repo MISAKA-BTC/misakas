@@ -83,6 +83,11 @@ impl Qf1Prompt {
         Ok(Self { tokenizer: expected, instance_descriptor, source_digest, prefix, middle, suffix, hex, job: job_ids })
     }
 
+    #[cfg(feature = "private-tb1-tir")]
+    pub(super) fn digit_token(&self, digit: u8) -> u32 {
+        self.hex[usize::from(digit)]
+    }
+
     pub fn job_tokens(&self) -> &[u32] {
         &self.job
     }

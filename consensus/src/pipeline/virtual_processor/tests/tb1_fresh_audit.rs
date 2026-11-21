@@ -123,6 +123,7 @@ pub(super) fn observe(
 /// retained shares are read only from this slot's original enrollment.
 pub(super) async fn replay_window(
     node: &mut Rig,
+    model: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     cut: &PreparedAudit<'_>,
     close: Hash64,
     q: &Tb1Qualification<'_>,
@@ -294,6 +295,20 @@ pub(super) async fn replay_window(
     let cases = [0, 1].map(|case| frozen.challenge(api, batch, certificate, &rows, q, LIMITS, 0, case).unwrap());
     assert_ne!(cases[0], cases[1]);
     assert!(frozen.challenge(api, batch, certificate, &rows, q, LIMITS, 1, 0).is_err());
+    if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some() {
+        use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{CASES, exact_digit_score};
+        let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
+        for case in 0..CASES {
+            let (job, expected, answer) =
+                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, case, model, &tokenizer).unwrap();
+            peer_log!(
+                "fresh arithmetic evaluation {}",
+                serde_json::json!({"pid":std::process::id(),"case":case,"certificate":certificate,
+                "challenge":faster_hex::hex_string(&cases[case as usize]),"job":job,"expected":expected,"output":answer.tokens,
+                "z":Hash64::from_bytes(answer.z),"correct":exact_digit_score(expected,&answer.tokens)})
+            );
+        }
+    }
     peer_log!(
         "fresh audit certificate {} {}",
         std::process::id(),

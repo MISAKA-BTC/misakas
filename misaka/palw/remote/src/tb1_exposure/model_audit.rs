@@ -1,6 +1,9 @@
 //! Private RFC-0065 pre-evaluation cut. The owning profile supplies the suite,
 //! generation rule, reserved capacity and candidate budget before disclosure.
 //! This reader produces evaluation challenges only.
+#[cfg(feature = "private-tb1-tir")]
+pub mod arithmetic;
+
 use super::{
     Tb1HolderFreeze, check_panel_schedule, invalid,
     publication::{NativePublicationGate, PublicationLimits, PublishedRelease},

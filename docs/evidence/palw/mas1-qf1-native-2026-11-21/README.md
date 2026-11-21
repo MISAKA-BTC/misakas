@@ -1099,3 +1099,15 @@ python3 -B "$p/check_real_lifecycle.py" "$out/positive.log" "$p/qf1-native-tile-
 ```
 
 初回の試験では待機中にも64バイトの値を格納し、走査が終了を保留した。修正版では次ブロックのDAAを確認し、待機ブロックを空にして再測定した。3ピアのMOE2市場決済も同じバイナリで再照合した。[市場帳簿](native-unverified-expiry-book.json)
+
+### G-USEの隔離算術試験を抽選前に固定する
+
+非報酬の算術2問に専用のMODEL_AUDIT（round 15）と評価PANEL（round 16）を準備した。challengeの先頭2バイトからそれぞれ0〜4の値を得て、1問目は加算、2問目は和から第2項を引く減算とする。HEX64を含む登録済みQF1入力を使う。正解は登録tokenizerの数字1 tokenにQF1 EOS 1 tokenが続く場合で、2問中2問を試験用の基準とした。問題文・演算・採点・最大16出力token・最大32,000,000 leafを固定したsuiteのdigestは `0ae87bea…`。この閾値と用途は隔離試験のもので、公開の採掘基準は未採択である。
+
+登録済みQwen3-8Bのclass・inventory・descriptorとこのsuiteを束縛したclose `8f9e2d10…` を生成し、3つの新規DBで元のREADY署名とブロックを再検証した。DAA 6で全holderが署名・公開を保留した。この記録は抽選前の条件を検証する。旧監査の既知seedからこのsuiteの採点結果を作ることはできない。新しい監査のseed公開、実出力の固定と採点、後続Panelによる独立再実行が残る。[登録・close・各holderの結果](qf1-arithmetic-audit-close.json)・[公開ブロックと4プロセスのログ](qf1-arithmetic-audit-close-public.tar.zst)
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/qf1-arithmetic-audit-close-public.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-close | cmp - "$p/qf1-arithmetic-audit-close.json"
+```

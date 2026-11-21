@@ -274,6 +274,14 @@ async fn registered_audit_history(mode: AuditHistory) {
     let roster = Tb1Roster { coordinates: &coordinates, holder_keys: &public, f: 1 };
     let certification_window = policy.verifier_maturity_daa + policy.prosecution_window_daa + policy.lifetime_daa();
     let fresh = mode == AuditHistory::Fresh;
+    let arithmetic = fresh && std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some();
+    let audit_number = if arithmetic {
+        15
+    } else if fresh {
+        13
+    } else {
+        11
+    };
     // Private scheduling allowance for the observed heartbeat chain. Release still
     // requires the node's actual finalized head, independently of either clock.
     let pruning_allowance = if fresh { config.params.pruning_depth() + config.params.finality_depth() } else { 0 };
@@ -282,15 +290,15 @@ async fn registered_audit_history(mode: AuditHistory) {
         chain_id: node.domain.as_bytes(),
         roster_root: roster.root().unwrap(),
         role_epoch: 1,
-        logical_round: if fresh { 13 } else { 11 },
+        logical_round: audit_number,
         purpose: Tb1MiningPurpose::ModelAudit,
-        schedule_id: [if fresh { 13 } else { 11 }; 64],
+        schedule_id: [audit_number as u8; 64],
         close_blue_score: before.blue_score + 2,
         release_from_daa: before.daa_score + 5,
         deadline_exclusive_daa: deadline,
     };
     let panel = Tb1MiningRound {
-        logical_round: if fresh { 14 } else { 12 },
+        logical_round: audit_number + 1,
         purpose: Tb1MiningPurpose::Panel,
         close_blue_score: 2 * deadline + 100,
         release_from_daa: deadline + 100,
@@ -361,7 +369,11 @@ async fn registered_audit_history(mode: AuditHistory) {
     let candidates =
         [AuditCandidate { class: identity.class, artifact: identity.inventory, descriptor: identity.descriptor, generation: 1 }];
     let plan = AuditPlan {
-        suite: Hash64::from_u64_word(0xa501),
+        suite: if arithmetic {
+            misaka_palw_remote::tb1_exposure::model_audit::arithmetic::suite_id()
+        } else {
+            Hash64::from_u64_word(0xa501)
+        },
         candidate_budget: 1,
         tests_per_candidate: 2,
         reservation: Hash64::from_u64_word(0xa502),
@@ -397,7 +409,20 @@ async fn registered_audit_history(mode: AuditHistory) {
                 "replay the signed audit and certified work before the release window"
             );
             let mut node = legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
-            fresh::replay_window(&mut node, &cut, close.hash(), &aq, audit, marker, roots[0], seals[0], &keys, Path::new(&path)).await;
+            fresh::replay_window(
+                &mut node,
+                &model,
+                &cut,
+                close.hash(),
+                &aq,
+                audit,
+                marker,
+                roots[0],
+                seals[0],
+                &keys,
+                Path::new(&path),
+            )
+            .await;
             return;
         }
         fresh::observe(
