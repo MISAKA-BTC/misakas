@@ -530,3 +530,16 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 同じ受付済み claim について、各席が待機中に保有証明を更新しない場合も調べた。DAA 6,491 から 40 heartbeat 後、DAA 6,511 の抽選位置へ進み、採掘した BASE-0 アンカーを受理した。ノードは元の claim ID について「必要5席、除外・operator 重複排除後は2席」と記録し、Panel を割り当てなかった。試験はここで失敗し、この枝でこの claim の Gate C 署名や支払いは生じていない。[対照試験のログ抜粋](genesis-unrenewed-panel.txt)
 
 同じ受付ブロック `3250abac…` から、保有証明を更新する別の隔離枝を検証した。両試験の元 claim・再実行 transcript・受付直後の state root は一致する。抽選 DAA 6,511 では既存の保有証明（有効期間 24 DAA）のうち 8席中6席が失効する。各席は登録済み Qwen2.5 の同じ artifact から新たな開示を取り、当該 span の challenge に署名し、通常の手数料を支払って提出した。抽選時の registry は ready 8、panel room 4。実行した BASE-0 アンカー `555089fe…` の受理後、元 claim は DAA 6,511 で `PanelBound` になった。この抜粋の終点は Panel の割当である。[保有証明の期限と PanelBound の記録](genesis-renewed-panel.txt)
+
+上記で Panel が割り当てられた旧 8K claim は、担当席 3・4・7 がそれぞれ元の推論をやり直し、同じ transcript を確認した上で、有効票を署名した。quorum の受付後、元 claim の `Final` を DAA 6,633 の選択鎖で確認した。これは Gate C の認証前の観測である。[同じ claim の署名前の再実行と Final](genesis-panel-final.txt)
+
+## 署名済み Original からの Stop 資料の受付
+
+Stop 資料を保管する際は、owner 署名、対象の attempt、答えと trace の opening を検査する。局所関係に矛盾がある場合も認証済みの資料として受け取れる。開示が空、長さが不正、または opening が root に一致しない場合には拒否する。数値再実行の結果との一致を検査する前にファイルと親ディレクトリを同期する。[受付・裁定の実装](../../../../misaka/palw/remote/src/tb1_exposure/exec_input/stop_case.rs)・[関連6試験](qf1-stop-intake-test.txt)
+
+Qwen3-8B の全重みを使った隔離3ピアの非報酬試験では、Original `c90c2128…` の1,622 bytesを3ピアが receipt 前に保持した。選出された2名が独立に完全再実行し、3ピアは保存済み資料から EOS への異議を退けた。答えは `2 + 2 = 4.` と EOS。対象はこの Original の Stop 関係である。[3ピアの生ログ](qf1-stop-intake-three-peer.txt.zst)・[独立照合](qf1-stop-intake-lifecycle.json)
+
+```sh
+zstd -dc "$p/qf1-stop-intake-three-peer.txt.zst" > "$out/stop-intake.txt"
+python3 -B "$p/check_real_lifecycle.py" "$out/stop-intake.txt" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop
+```
