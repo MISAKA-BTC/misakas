@@ -1,0 +1,25 @@
+{
+  "hw.model": "Mac13,1",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "hw.memsize": "34359738368",
+  "hw.logicalcpu": "10",
+  "os": "26.7.1",
+  "architecture": "arm64",
+  "rayon_threads": 3,
+  "profile": "dev",
+  "cargo_incremental": false,
+  "tir_exec_opt_level": 3,
+  "rustc": "1.93.0",
+  "binary_sha256": "bf1a5a16d3097ae2e4d53f0eaccce3595125b0f41aa261d2bca2327b8220cfb1",
+  "plan_sha256": "0a0dda2427717e37ef987495e02b4f4d4599e15c9600e7e9ad5c0c117752e62a",
+  "registered_scales_sha256": "b7033ed73613fe58b1d96948564454ceaf47bb678bab603f0277f48e14988f55",
+  "cost_unit": "elapsed wall-clock microseconds per pair in a single process",
+  "per_pair_repetitions_per_route": 1,
+  "route_order": [
+    "independent,shared",
+    "shared,independent",
+    "independent,shared"
+  ],
+  "process_elapsed_seconds": 947.97,
+  "maximum_resident_set_bytes": 17810505728
+}

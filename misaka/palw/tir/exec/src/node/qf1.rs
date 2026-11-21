@@ -1,6 +1,7 @@
 //! RFC-0066 prediction-position replay for an explicitly pinned, local TIR instance.
 //! A committed producer location identifies a value; accepting its intended Qwen
 //! semantics requires the separate lowering/instance assessment.
+pub mod cost_review;
 mod trace;
 use super::{TirArtifactV1, memory, positive_court::greedy_index};
 use crate::{NoSink, NodeValue, Slice, StepSink, TirExecutor};
@@ -145,7 +146,7 @@ impl<'a> LocalInstance<'a> {
     /// Non-paying replay from an empty KV history. The context supplies the
     /// pre-registered leaf budget and this attempt's local memory attribution.
     pub fn replay(&self, prompt: &[u32], limit: u32, max_leaves: u64, job: Hash64, seed: [u8; 32]) -> Result<LocalAnswer, String> {
-        self.drive(prompt, limit, max_leaves, job, seed, None)
+        self.drive(prompt, limit, max_leaves, job, seed, None, None)
     }
 
     pub fn replay_trace(
@@ -158,7 +159,7 @@ impl<'a> LocalInstance<'a> {
         request: TraceRequest,
     ) -> Result<LocalTrace, String> {
         let mut trace = Trace::begin(self, prompt, limit, max_leaves, seed, request)?;
-        let answer = self.drive(prompt, limit, max_leaves, job, seed, Some(&mut trace))?;
+        let answer = self.drive(prompt, limit, max_leaves, job, seed, Some(&mut trace), None)?;
         trace.finish(answer)
     }
 
@@ -170,6 +171,7 @@ impl<'a> LocalInstance<'a> {
         job: Hash64,
         seed: [u8; 32],
         mut trace: Option<&mut Trace>,
+        verified_prefix: Option<&misaka_palw_tir::RunState>,
     ) -> Result<LocalAnswer, String> {
         self.artifact.check_weights_unmodified()?;
         let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
@@ -204,8 +206,13 @@ impl<'a> LocalInstance<'a> {
         // An observer that needs internal nodes still selects the unfused route.
         exec.set_fused(true);
         let (&last, prefix) = prompt.split_last().ok_or("QF1 empty input")?;
+        // Only the offline paired replay supplies this state. Its prefix values
+        // have already been entered into each original's independent trace.
+        if let Some(state) = verified_prefix {
+            exec.import_state(state).map_err(|e| e.to_string())?;
+        }
         let mut token = last;
-        for &id in prefix {
+        for &id in prefix.get(exec.pos() as usize..).ok_or("QF1 checkpoint beyond prefill")? {
             trace::step(&mut exec, id, &mut NoSink, false, trace.as_deref_mut())?;
         }
         let mut sink = Prediction {

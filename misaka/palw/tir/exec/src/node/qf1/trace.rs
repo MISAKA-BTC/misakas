@@ -164,7 +164,7 @@ impl Trace {
         Ok(())
     }
 
-    fn node_value(&mut self, pos: u32, v: &NodeValue<'_>) -> Result<(), &'static str> {
+    pub(super) fn node_value(&mut self, pos: u32, v: &NodeValue<'_>) -> Result<(), &'static str> {
         if !v.commit || !v.dtype.committable() {
             return Err("QF1 invalid commit type");
         }

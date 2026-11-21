@@ -654,8 +654,38 @@ python3 -B "$p/check_audit_release_window.py" "$out/window.jsonl" "$out/window.l
 
 ### G-COST 改訂後の予備検査
 
-同一の整数 Qwen3-8B descriptor で、Panel が承認した過去の6回の隔離実行を生ログから照合した。6試行では EXEC seed と入力列が各回で異なり、回答列は同一だった。試行の全15組で数値 Readout `z` が異なり、別試行の `z` を変更せずに再利用すると正規値に一致する例は0件だった。先頭の共通入力は組ごとに14〜16 token あった。対象は採掘値全体の再利用で、部分計算・KV・batch の費用、正しい Ticket 入力を生成する経路の費用比は未測定。QF1 の G-COST は UNKNOWN である。[検査結果](g-cost-readout-reuse.json)・[生ログからの照合器](check_g_cost_readout_reuse.py)
+同一の整数 Qwen3-8B descriptor で、Panel が承認した過去の6回の隔離実行を生ログから照合した。6試行では EXEC seed と入力列が各回で異なり、回答列は同一だった。試行の全15組で数値 Readout `z` が異なり、別試行の `z` を変更せずに再利用すると正規値に一致する例は0件だった。先頭の共通入力は組ごとに14〜16 token あった。この照合は採掘値全体をそのまま再利用する場合を対象とする。共通 prefix の費用は次節で実測した。QF1 の G-COST は UNKNOWN である。[検査結果](g-cost-readout-reuse.json)・[生ログからの照合器](check_g_cost_readout_reuse.py)
 
 ```sh
 python3 -B "$p/check_g_cost_readout_reuse.py"
+```
+
+### 共通 prefix の計算を共有する経路の費用
+
+3組すべてで、共通 prefix の数値計算を共有しても6件の元の Ticket を再現できた。Apple M1 Max・3スレッドでの合計は独立実行475.835秒、共有実行447.899秒で、経過時間は5.87%短縮した。初期化は23.651秒だった。各組の実測を以下に示す。[照合結果](g-cost-shared-prefix.json)・[実行生ログ](g-cost-shared-prefix-run.jsonl)・[実行環境とハッシュ](g-cost-shared-prefix-environment.json)
+
+| 共通入力（token） | 独立実行（秒） | 共有実行（秒） |
+| ---: | ---: | ---: |
+| 16 | 158.924 | 148.457 |
+| 14 | 158.402 | 149.752 |
+| 14 | 158.510 | 149.690 |
+
+この入力集合では、共有によって同じ Ticket の検証を終えるまでの計算を実際に減らせた。公開採掘に使う事前閾値と誤差範囲は未採択であり、QF1 の G-COST 判定は `UNKNOWN` である。
+
+上の6件をログ順に2件ずつ組にし、同じ Qwen3-8B 整数実装で2通りの計算を比較する。基準は各入力を先頭から独立して計算する。もう一方は共通する入力位置を1回計算し、各入力固有の位置からは KV 状態を分ける。どちらの経路でも、まず回答の停止位置を計算で決め、次に trace を作る。各 Original の入力、回答、数値 Readout、4つの root、Ticket が保存済みの署名資料と一致した場合に限り、その測定行を出力する。
+
+2件分の経過時間には共有状態の生成・複製と、各試行に固有の trace の構築を含む。モデルの読み込みと照合は全組の前に1度だけ行い、その時間を別に記録する。各組で各経路を1回ずつ実行し、先に走る経路を組ごとに入れ替える。これは過去の Original を使うローカル評価で、費用比の採択閾値、同一入力での計測揺らぎ、新たな監査抽選は含まない。
+
+上記の Q15 全重みを `parent`、作業用ディレクトリを `out` に指定して再現できる。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+python3 -B "$p/check_g_cost_shared_prefix.py" > "$out/plan.json"
+zstd -dc "$p/qf1-residual-tiles.section.zst" > "$out/scales.section"
+export CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 RAYON_NUM_THREADS=3
+export CARGO_TARGET_DIR=target/protected-core-tests
+cargo +1.93.0 --config 'profile.dev.package.misaka-palw-tir-exec.opt-level=3' build \
+  --locked --offline -p misaka-palw-sdk --example qf1-paired-cost
+"$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" "$parent" "$out/scales.section" "$out/plan.json" > "$out/run.jsonl"
+python3 -B "$p/check_g_cost_shared_prefix.py" --log "$out/run.jsonl"
 ```
