@@ -80,6 +80,7 @@ pub mod ngram;
 /// Genesis 8: a streaming conversion written straight into a `PALWART3` artifact.
 pub mod palwart_out;
 pub mod prequant;
+pub mod qf1;
 pub mod quant;
 pub mod quantfmt;
 pub mod ram_account;

@@ -224,6 +224,9 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
 #[ignore = "requires the RFC-0066 tokenizer asset in MISAKA_PRIVATE_QF1_TOKENIZER"]
 async fn private_tb1_stable_panel() {
     assert!(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").is_some());
+    if std::env::var_os("MISAKA_PRIVATE_QF1_ATTENTION").is_some() {
+        assert!(std::env::var_os("MISAKA_PRIVATE_QF1_EMBEDDING").is_some(), "the attention check needs authenticated input rows");
+    }
     run(true).await;
 }
 

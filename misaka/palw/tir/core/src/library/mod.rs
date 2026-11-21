@@ -145,6 +145,15 @@ pub const LIBRARY_V1: &[LibraryEntry] = &[
 ];
 
 impl BlockBuilder<'_> {
+    /// RFC-0066 RMS with an explicit channel gain. The gain is applied to the
+    /// Q24 unit before the single narrowing to residual/QKV codes. A [width]
+    /// gain also broadcasts over [heads,width] for Q/K normalization.
+    pub fn rms_gain_codes(&mut self, x: Ref, eps: Ref, gain: Ref, narrow: &Narrowing) -> Ref {
+        let unit = self.rms_unit_q24(x, eps);
+        let scaled = self.mul(unit, gain, DType::I64);
+        self.narrow_codes(scaled, narrow)
+    }
+
     /// **The narrowing** `N[lo,hi](x; m, s, z) = clamp_[lo,hi]( sat64( HAFZ(x·m / 2^s) ) + z )` —
     /// [`Self::narrow_a16`] with the shift as a tensor of shift AMOUNTS (clamped into `[0, 62]`
     /// through the pinned `Pow2` table) and an optional `z`.

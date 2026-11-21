@@ -129,3 +129,11 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_output_head.py "$
 同じバイナリの3ピアが、その回の証明書から得た EXEC 入力111位置について、各位置の BF16 の4096要素と整数化後の4096要素を token 順に照合した。3ピアで双方のハッシュが一致し、独立の Python 有理数計算が両方を再現した。行の改変と未収録 token の読取りは拒否された。同じ実行で従来の試験重みに対する Panel と Stop Court の再検算も通った。実重みを使ったこの照合の終点は入力 embedding で、36層の実推論、署名した Original の実重みへの切替、採掘資格は未完である。[バイナリ、各ピアの入力と結果](embedding-run.txt)
 
 再現時はこのディレクトリの `check_embedding.py /tmp/qf1-embedding.rows` で行集合を作成する。既存の `private_tb1_stable_panel` の環境に `MISAKA_PRIVATE_QF1_EMBEDDING=/tmp/qf1-embedding.rows` を追加し、出力を保存する。`check_embedding.py /tmp/qf1-embedding.rows --check <ログ>` で独立照合できる。
+
+## 第0層の入力正規化・Q/K/V 投影
+
+`misaka-palw-tir-lower::qf1::attention_input` は第0層の入力 RMS と gain、Q/K/V の3投影、32個の Q head と8個の K head の RMS と gain を通常の整数 TIR に展開する。各 head の幅は128。Q/K の gain は head 間で共通の128要素を使う。隔離試験では上流6テンソルを個別にハッシュ照合し、入力行と変換済みの重みを PALWTIR1 に書き出した。3プロセスはそれぞれそのファイルを開き直して EXEC 入力111位置を実行した。
+
+入力 residual の scale は 2⁻¹⁵、正規化後と Q/K/V は 2⁻¹⁰、gain は整数 Q20 とした。epsilon は元の 1/1,000,000 から各入力の二乗単位の Q24 に変換した。いずれも今回の部分実行に固定した数値である。入力行は検証済み48行の集合を使い、元の token ID との対応を artifact に記録した。3ピアの同一 artifact と六つの段階の出力を、独立した整数計算で照合できる。[3ピアの入力とハッシュ](attention-run.txt)・[段階ごとの照合結果](attention-check.json)
+
+再現時は本ディレクトリで `python fetch_qf1_attention.py <重みディレクトリ>` を実行し、前節の試験環境に `MISAKA_PRIVATE_QF1_ATTENTION=<重みディレクトリ>` を追加する。`python check_attention.py <重みディレクトリ> <埋め込み行ファイル> <試験ログ>` で再計算する。ここで実重みを使った範囲は RoPE の直前までで、KV 履歴、因果 attention、MLP、各層の読出し、採掘用 Original は引き続き未検証である。

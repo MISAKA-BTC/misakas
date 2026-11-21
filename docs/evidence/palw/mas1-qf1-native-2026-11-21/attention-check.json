@@ -1,0 +1,14 @@
+{
+  "positions": 111,
+  "peers": 3,
+  "layer": 0,
+  "artifact_sha256": "a1b8fd848030164c433a51690ac6a09bf145f46fdb398dd50ebca9bfc481315b",
+  "sha256": {
+    "input_norm": "a1ad582605066467e70ef3d8960fd9ddf38116ea35a9024ffbf1d16e78362d68",
+    "q": "387796ea33d56fff3b55c6a5532addd4065304dc8fecdec13a2f9a48ef3f71f1",
+    "k": "6fcf09cabe15413e4ddf1b7dda18997f91c5c5da74985612d882bce812922d4b",
+    "v": "3d1cf7a3c61dfb97b53850cb8551fa104f21055eb16e94f9414f4d487f173caf",
+    "q_norm": "53d67993b8579e316af60d78dc1fa75ecb3a0b649a01d936d4e7c6f48bcbf0ee",
+    "k_norm": "e64c7baee41c98f21e6850d1046520ef4a98ed09e0f0d3d8524f7521a7ad0733"
+  }
+}
