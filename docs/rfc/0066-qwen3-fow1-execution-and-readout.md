@@ -410,7 +410,9 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 | QF1-09 eligibility | 未証明TheoremRule、UNKNOWN、停止中、評価専用のclaimが全成功consumerで拒否 |
 | QF1-10 end-to-end | 対話経路を無効または未実装とし、非報酬評価で元資料を取得してPanelが完全再実行する。一致時の承認、不一致時の直接反証と局所Court、資料欠落時の成功停止を個別に確認する。MAS1判定、同時停止・再起動/reorg/履歴復元も確認 |
 
-同梱の小規模Python参照はQF1-04/05/07の論理codecの一部と否定例を検査する。**Qwen weightsでの推論、QF1-03/06/08/10、G-COLL/G-COST、native wire・runtimeは未検証**である。toy vectorをQwenの実測と表示しない。
+同梱の小規模Python参照の対象は、QF1-04/05/07の論理codecの一部と否定例である。
+
+2026-11-21の隔離・非報酬試験では、同一バイナリの3ピアでQF1-10の3ケースを個別に確認した。正常時は選出2席がQwen3-8Bの整数実行を再現して承認した。署名済みReadoutとEndが矛盾する場合は追加質問を経ずに局所裁定した。1席の資料が欠けた場合は承認が1件にとどまり、元期限で新規受付が終了した。資料義務違反の裁定、合意状態での未検証終了、Final・決済を含む一貫検証は残る。これらの試験によるG-COST判定は行わない。[正常時](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-undisputed-replay.json)・[Endの直接裁定](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-replay-deadline-refuted.json)・[資料不足と元期限](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-missing-replay-material.json)
 
 有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、適合定理、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
 
