@@ -617,6 +617,8 @@ zstd -dc "$p/qf1-undisputed-replay.txt.zst" > "$out/undisputed.log"
 python3 -B "$p/check_real_lifecycle.py" "$out/undisputed.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --undisputed
 ```
 
+期限境界を検査した同一バイナリ（SHA-256 `1ff0718d227c8fe777e425225a13b8e8029360c59a1ef8ae84159020429e3c29`）で、署名済みの Readout が矛盾する Original `9a50bf6b…` も実行した。選出2席が完全再実行して承認を拒否し、3ピアは元の開示から、正しい Stop に対する異議を棄却し、End との不一致を `ComputationRefuted` と裁定した。正常・資料不足・不一致の3試験は、それぞれ新しい Original と3つの独立プロセスで実行した。[不一致の照合結果](qf1-replay-deadline-refuted.json)・[生ログ](qf1-replay-deadline-refuted.txt.zst)
+
 ### 8K の元の Final に対する Gate C 認証
 
 Qwen2.5 の claim `8748971c…` では、producer を除く抽選済み7名が元の計算を個別に再実行した。署名付き承認は DAA 7,933〜7,939 に収録され、75の抽選枠が承認された。元の Final DAA 6,633 から訴追期間 5,040 DAA が経過した DAA 11,673 で、書き込みピアの native 状態が `Certified` を返した。照合器は抽選後の7,481ブロックの親・ヘッダーハッシュ、7件の取引の署名形式・bond・対象 claim・実行 transcript を照合する。署名自体と承認の合意判定は native 実行で検査される。これは隔離チェーン上の旧形式の計算である。[認証結果と7件の収録位置](genesis-funded-certificate.json)・[書き込みピアのログ](genesis-funded-certificate-writer.txt.zst)・[追加の raw ブロック](genesis-funded-certificate-blocks.json.zst)
