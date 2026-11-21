@@ -873,3 +873,14 @@ out=$(mktemp -d)
 tar -xf "$p/studio-moe2-book.tar.zst" -C "$out"
 python3 -B "$p/check_studio_moe2_book.py" "$out" | cmp - "$p/studio-moe2-book.json"
 ```
+
+### 同じ確定ブロックでの2人目の監査 share 公開
+
+holder 1 は新しい native DB で元の認証と成熟を再生し、52,171 個の後続ブロックを受理した。DAA 37,758 の先端 `0f1fb6bf…` で確定点 `98da02e7…` を読み、監査 close `67a7b2b0…` に対して署名した。holder 0 と holder 1 は別プロセス・別鍵で、同じバイナリ、先端、確定点、状態 Root に到達した。2件とも元の custody seal と ML-DSA-65 署名を照合できた。最後の heartbeat は coinbase 全体からヘッダーの取引 Merkle root も再計算した。この時点で公開済みは2人。seed の公開条件は3人である。[holder 1 の公開行と連続ログ](fresh-holder-1-release.tar.zst)・[照合結果](fresh-holder-1-release.json)
+
+上の holder 0 のファイルを展開した同じディレクトリで検証できる。
+
+```sh
+tar -xf "$p/fresh-holder-1-release.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_holder_release.py" "$out" --holder 1 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-holder-1-release.json"
+```

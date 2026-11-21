@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -15,6 +16,16 @@ from check_legacy_work import HERE, require
 
 def block_hash(block):
     h = block["header"]
+    # These isolated carrier blocks have one empty-input, empty-output coinbase.
+    # Its transaction hash is the single-leaf Merkle root.
+    [coinbase] = block["transactions"]
+    require(coinbase["subnetworkId"] == "01" + "00"*19 and not coinbase["inputs"] and
+            not coinbase["outputs"] and coinbase["mass"] == 0, "different carrier transaction layout")
+    payload = bytes.fromhex(coinbase["payload"])
+    encoded = (struct.pack("<HQQQ", coinbase["version"], 0, 0, coinbase["lockTime"]) +
+               bytes.fromhex(coinbase["subnetworkId"]) + struct.pack("<QQ", coinbase["gas"], len(payload)) + payload)
+    require(hashlib.blake2b(encoded, key=b"TransactionHash64").hexdigest() == h["hashMerkleRoot"],
+            "carrier coinbase differs from its header commitment")
     return header_hash(h, bytes(h["palwCommitment"]), False).hex()
 
 
