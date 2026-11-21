@@ -409,3 +409,24 @@ python -B "$p/check_residual_scale.py" --stage-scales --reference-limit 12 "$MIS
 python -B "$p/check_residual_scale.py" --isolate-narrowing "$p/qf1-stage-scales.json" "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 python -B "$p/check_residual_scale.py" --stage-scales --preserve-mlp-range --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 ```
+
+### 64成分単位の残差スケールによる Qwen3 の回答
+
+元の署名付き入力だけを較正に使い、Q/K/V、MLP の up と積、残差の最大絶対値を層ごとに測った。第7層の残差には約22,076の値がある。層に一つの固定指数を与えると、ここから全4,096成分が Q0 になった。別の challenge を持つ `2 + 2?` に対する整数出力は48 token の上限で止まり、末尾で `2?` を反復した。[全層で一つの指数を使った結果](qf1-stage-maxima.json)
+
+同じ較正入力・重み・projection・greedy 規則で、残差だけを連続64成分ごとの固定指数にした。各層の指数64個を較正後に固定し、skip 加算は対応する指数へ丸め、RMSNorm に入る前に整数を共通指数へ正確に揃えた。別の challenge への回答は `2 + 2 = 4.` の後に EOS、9 token だった。元の Q15 実装についても同じ評価入力の3位置すべてで全 logit の SHA-256 が保存済み native 実行と一致した。[候補の指数・回答・logit hash](qf1-residual-tiles.json)
+
+この指数と変換済み重みを固定し、別の2問を同じ整数実装で評価した。質問と診断用 challenge は較正に使っていない。32 token を上限とし、両方とも EOS で終了した。
+
+| 質問 | 回答 | EOS を含む token 数 |
+|---|---|---:|
+| 3 + 5? | 3 + 5 = 8. | 9 |
+| What is the capital of France? | The capital of France is Paris. | 8 |
+
+各入力、候補の較正ファイル SHA-256、全出力 token と各位置の logit hash を[転用試験の記録](qf1-tile-transfer.json)に収録した。この数値候補には新しい実行グラフ・scale の登録が必要である。結果はオフライン評価であり、採択済み PracticalSuite の G-USE 判定、元の署名済み Original の更新、採掘適格性を意味しない。
+
+```sh
+python -B "$p/check_residual_scale.py" --stage-scales --preserve-stage-ranges --reference-limit 48 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+python -B "$p/check_residual_scale.py" --stage-scales --preserve-stage-ranges --residual-tiles --reference-limit 48 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+python -B "$p/check_qf1_tile_transfer.py" "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```

@@ -50,7 +50,8 @@ def project(tensors, layer, name, x, shift_delta=0, wide=False):
     for i in range(0, len(w), 512):
         sl = slice(i, i+512)
         dots = (x @ w[sl].astype(np.float64).T).astype(np.int64)
-        s = shift[sl].astype(np.int64) + shift_delta
+        extra = shift_delta[sl] if np.ndim(shift_delta) else shift_delta
+        s = shift[sl].astype(np.int64) + extra
         if np.any((s < 0) | (s > 62)):
             raise ValueError("narrowing shift out of bounds")
         out[:, sl] = narrow(dots, mult[sl], s, wide)
@@ -58,6 +59,14 @@ def project(tensors, layer, name, x, shift_delta=0, wide=False):
 
 
 def normalized(x, gain, frac):
+    if np.ndim(frac):
+        # Align tile codes exactly for the shared RMS. Bound each row's i64
+        # dot product by max(abs(x)) * sum(abs(x)) before calling the kernel.
+        common = int(np.max(frac))
+        x = np.left_shift(x, common-frac)
+        if any(int(np.max(np.abs(row))) * int(np.sum(np.abs(row))) >= 1 << 63 for row in x):
+            raise ValueError("aligned residual squares exceed the i64 accumulator")
+        frac = common
     return np.asarray([rms(row, gain, frac) for row in x])
 
 
@@ -86,7 +95,11 @@ def replay(tensors, ids, frac, expected_token, tokenizer, layer_bits=None, cache
         attention, _ = causal(queries, keys, v)
         if layer_bits is not None:
             next_frac = layer_bits[layer]
-            if not 0 <= next_frac <= frac:
+            if isinstance(next_frac, list):
+                if len(next_frac) != 64:
+                    raise ValueError("expected 64 residual tiles")
+                next_frac = np.repeat(np.asarray(next_frac, dtype=np.int64), 64)
+            if np.any(next_frac < 0) or np.any(next_frac > frac):
                 raise ValueError("residual scale must coarsen monotonically")
             x = narrow(x, 1, frac-next_frac)
             frac, change = next_frac, 15-next_frac
@@ -97,7 +110,8 @@ def replay(tensors, ids, frac, expected_token, tokenizer, layer_bits=None, cache
         product = narrow(silu(gate)*up, 1, 24+stage["up"]-stage["product"])
         x = np.clip(residual + project(tensors, layer, "mlp.down_proj", product, change+stage["product"]-10), -32767, 32767)
         endpoints.append(int(np.count_nonzero(np.abs(x[-1]) == 32767)))
-        print(f"Q{frac} layer {layer+1}/36", file=sys.stderr, flush=True)
+        scale_name = f"{frac.min()}..{frac.max()}" if np.ndim(frac) else str(frac)
+        print(f"Q{scale_name} layer {layer+1}/36", file=sys.stderr, flush=True)
     norm = normalized(x[-1:], tensors[None, "model.norm.weight"], frac)
     logits = project(tensors, None, "lm_head", norm, wide=True)[0]
     top = int(np.argmax(logits))
@@ -115,9 +129,10 @@ def percentile_bound(x):
     return float(np.partition(a, k)[k])
 
 
-def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibration=None, isolate=None, preserve_mlp=False):
+def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibration=None, isolate=None, preserve_mlp=False, preserve_all=False, tile_peaks=None):
     """Floating arithmetic over the exact quantized weight codes and their decoded row scales."""
     group, plan = isolate if isolate is not None else (None, None)
+    bound = (lambda x: float(np.max(np.abs(x)))) if preserve_all else percentile_bound
     clipping = [0] * 36
     def enabled(site):
         return group == site or group == "all_ranges" or (group is not None and group.startswith("except_") and group != "except_" + site)
@@ -169,7 +184,7 @@ def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibr
         if enabled("qkv"):
             q, k, v = (cast(t, layer, plan[layer][key]) for key, t in zip("qkv", (q, k, v)))
         if calibration is not None:
-            ranges = {name: percentile_bound(value) for name, value in zip("qkv", (q,k,v))}
+            ranges = {name: bound(value) for name, value in zip("qkv", (q,k,v))}
         q = rotate(norm(q, layer, "self_attn.q_norm"))
         k = rotate(norm(k, layer, "self_attn.k_norm"))
         if enabled("attention"):
@@ -194,10 +209,12 @@ def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibr
             x = cast(cast(x, layer, bits) + cast(o, layer, bits), layer, bits)
         else:
             x += o
+        if tile_peaks is not None:
+            max_tile = np.abs(x.reshape(count,64,64)).max(axis=(0,2))
         if residual_peaks is not None:
             attention_peak = float(np.abs(x).max())
         if calibration is not None:
-            ranges["residual"] = percentile_bound(x)
+            ranges["residual"] = bound(x)
         n = norm(x, layer, "post_attention_layernorm")
         gate = linear(n, layer, "mlp.gate_proj", 16384)
         if enabled("gate"):
@@ -212,7 +229,7 @@ def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibr
         if enabled("mlp_product"):
             product = cast(product, layer, plan[layer]["product"])
         if calibration is not None:
-            if preserve_mlp:
+            if preserve_mlp or preserve_all:
                 ranges.update(up=float(np.max(np.abs(up))), product=float(np.max(np.abs(product))))
             else:
                 ranges.update(up=percentile_bound(up), product=percentile_bound(product))
@@ -222,8 +239,10 @@ def weight_reference(tensors, ids, digit, tokenizer, residual_peaks=None, calibr
         else:
             x += down
         if calibration is not None:
-            ranges["residual"] = max(ranges["residual"], percentile_bound(x))
+            ranges["residual"] = max(ranges["residual"], bound(x))
             calibration.append(ranges)
+        if tile_peaks is not None:
+            tile_peaks.append(np.maximum(max_tile, np.abs(x.reshape(count,64,64)).max(axis=(0,2))).tolist())
         peaks.append(float(np.abs(x[-1]).max()))
         if residual_peaks is not None:
             residual_peaks.append(max(attention_peak, float(np.abs(x).max())))
@@ -283,13 +302,20 @@ if __name__ == "__main__":
                                 help="calibrate layer ranges on the original and measure them on the other recorded input")
     reference_mode.add_argument("--decode-reference", action="store_true", help="greedily decode the whole recorded three-token budget with floating arithmetic")
     reference_mode.add_argument("--weight-reference", action="store_true", help="read and apply the converted weights with floating arithmetic")
-    parser.add_argument("--preserve-mlp-range", action="store_true",
+    bounds = parser.add_mutually_exclusive_group()
+    bounds.add_argument("--preserve-stage-ranges", action="store_true",
+                        help="cover calibration extrema for Q/K/V, MLP up/product and both residual sums")
+    bounds.add_argument("--preserve-mlp-range", action="store_true",
                         help="cover the largest calibration values of the MLP up projection and its product")
+    parser.add_argument("--residual-tiles", action="store_true",
+                        help="give each fixed 64-lane residual tile its own calibration exponent")
     parser.add_argument("--reference-limit", type=int, default=3, metavar="N",
                         help="offline FP32 comparison length (the recorded Original has a three-token limit)")
     args = parser.parse_args()
-    if args.preserve_mlp_range and not args.stage_scales:
-        parser.error("--preserve-mlp-range requires --stage-scales")
+    if args.residual_tiles and not args.preserve_stage_ranges:
+        parser.error("--residual-tiles requires --preserve-stage-ranges")
+    if (args.preserve_stage_ranges or args.preserve_mlp_range) and not args.stage_scales:
+        parser.error("stage bound selection requires --stage-scales")
     if args.reference_limit != 3 and not (args.decode_reference or args.cross_input_scale or args.stage_scales):
         parser.error("--reference-limit requires a decoding comparison")
     raw = args.tokenizer.read_bytes()
@@ -330,10 +356,12 @@ if __name__ == "__main__":
             parser.error("--cross-input-scale selects both recorded inputs")
         peaks = []
         ranges = [] if args.stage_scales else None
-        weight_reference(tensors, prompt, four, tokenizer, peaks, ranges, preserve_mlp=args.preserve_mlp_range)
+        tile_peaks = [] if args.residual_tiles else None
+        weight_reference(tensors, prompt, four, tokenizer, peaks, ranges, preserve_mlp=args.preserve_mlp_range,
+                         preserve_all=args.preserve_stage_ranges, tile_peaks=tile_peaks)
         stages = None
         if ranges is not None:
-            stages = [{k: max(-12 if args.preserve_mlp_range and k in ("up", "product") else 0,
+            stages = [{k: max(-12 if (args.preserve_mlp_range or args.preserve_stage_ranges) and k in ("up", "product") else 0,
                                  min(15, math.floor(math.log2(32767/v)))) for k, v in row.items()}
                       for row in ranges]
             peaks = [row["residual"] for row in ranges]
@@ -343,6 +371,15 @@ if __name__ == "__main__":
                 raise ValueError("invalid calibration peak")
             previous = max(0, min(previous, math.floor(math.log2(32767 / peak))))
             bits.append(previous)
+        if tile_peaks is not None:
+            previous = np.full(64, 15, dtype=np.int64)
+            bits = []
+            for magnitudes in tile_peaks:
+                magnitudes = np.asarray(magnitudes)
+                if np.any(~np.isfinite(magnitudes)) or np.any(magnitudes <= 0):
+                    raise ValueError("invalid residual tile bounds")
+                previous = np.clip(np.floor(np.log2(32767/magnitudes)).astype(np.int64), 0, previous)
+                bits.append(previous.tolist())
         evaluation = json_file("full-replay-input.json")
         recorded = json_file("full-replay.json")
         baseline = decode_integer_reference(tensors, evaluation, four, tokenizer, None, 3)
@@ -356,7 +393,8 @@ if __name__ == "__main__":
         print(json.dumps(dict(class_id=run["class_id"], calibration_input_sha256=input_hash(prompt),
                               evaluation_input_sha256=input_hash(evaluation), calibration_residual_peaks=peaks,
                               baseline_logits_sha256=baseline["logits_sha256"], evaluation=held_out,
-                              **(dict(percentile="99.99", stage_bounds=ranges, stage_bits=stages) if stages else {}),
+                              **(dict(percentile="100" if args.preserve_stage_ranges else "99.99", stage_bounds=ranges, stage_bits=stages) if stages else {}),
+                              **(dict(residual_tile_width=64) if args.residual_tiles else {}),
                               **(dict(mlp_range="maximum") if args.preserve_mlp_range else {})), indent=2, ensure_ascii=False))
         sys.exit()
     if args.decode_reference:
