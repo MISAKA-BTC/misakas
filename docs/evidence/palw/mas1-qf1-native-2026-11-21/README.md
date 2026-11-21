@@ -520,3 +520,9 @@ cargo +1.93.0 run --locked --offline -p misaka-palw-base0 --example check-8k-cap
 ```
 
 旧 8K 枝の再生では、MODEL_AUDIT の preparation で認証済みの candidate・suite・予約を保持し、同じ close を後から参照する。以前の試験は DAA 5,040 で preparation の state を再取得し、履歴再構築上限 4,000 DAA に達した。修正後は同じ署名済み close、同じ tip/state に対して、その時点の枝と native publication gate を再検査できた。DAA 5,040 の判定は `WouldBlock`、原期限は 15,121 のまま。これは監査参照の検証結果である。[同じ枝での修正前後の記録](signed-audit-retained-preparation.json)
+
+旧 8K の元ブロックを受け付けたプロセスで、Qwen2.5 の全入力から数値計算をやり直した。claim `8748971c…` の trace・output・execution と、元ヘッダに束縛した再実行 transcript `82bb8e54…` が一致した。DAA 6,491 の claim は `Provisional`。この検査は1プロセスで完走した。[再実行ログ抜粋](genesis-draw-reexecution.txt)・[元ブロックとの照合](genesis-draw-reexecution.json)
+
+```sh
+python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p/genesis-draw-receipt.txt" --peer "$p/genesis-draw-reexecution.txt"
+```

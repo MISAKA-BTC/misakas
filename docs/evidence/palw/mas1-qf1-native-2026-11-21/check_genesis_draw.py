@@ -74,9 +74,38 @@ def verify(record, capture, producer):
                 template_target=target_hex, capture_sha256=hashlib.sha256(data).hexdigest(), capture_bytes=len(data))
 
 
+def verify_readers(draw, paths, count):
+    material = b"".join(bytes.fromhex(draw[k]) for k in ("claim", "anchor", "trace", "output", "execution"))
+    transcript = keyed("misaka-test/real-claim-replay/v1", le64(len(material)), material).hex()
+    peers = []
+    for path in paths:
+        log = path.read_text()
+        require("test result: ok. 1 passed;" in log, "peer did not complete its native run")
+        [(pid, raw)] = re.findall(r"^legacy genesis claim (\d+) (\{.*\})$", log, re.M)
+        [binary] = re.findall(r"^test_binary_sha256=([0-9a-f]{64})$", log, re.M)
+        native = json.loads(raw)
+        for local, archived in (("class", "class_id"), ("artifact", "inventory"), ("tip", "block"), ("base", "base"),
+                                ("claim", "claim"), ("daa", "daa"), ("trace", "trace"), ("output", "output"),
+                                ("execution", "execution"), ("capture_bytes", "capture_bytes"), ("capture_sha256", "capture_sha256")):
+            require(native[local] == draw[archived], "native readback differs for " + local)
+        require(native["replay"] == transcript, "re-execution transcript")
+        peers.append((int(pid), binary, native["state"], native["phase"]))
+    require(len(peers) == len({r[0] for r in peers}) == count, f"{count} distinct completed peer(s) required")
+    [common] = {r[1:] for r in peers}
+    return dict(processes=[r[0] for r in peers], binary_sha256=common[0], state=common[1], phase=common[2], replay=transcript)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ("record", "capture", "producer"):
         parser.add_argument(arg, type=Path)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--peer", type=Path, help="one completed native run for this draw")
+    group.add_argument("--peers", type=Path, nargs=3, help="three completed native readback logs for the same draw")
     args = parser.parse_args()
-    print(json.dumps(verify(args.record, args.capture, args.producer), indent=2))
+    result = verify(args.record, args.capture, args.producer)
+    if args.peer:
+        result["reexecution"] = verify_readers(result, [args.peer], 1)
+    if args.peers:
+        result["reexecution"] = verify_readers(result, args.peers, 3)
+    print(json.dumps(result, indent=2))
