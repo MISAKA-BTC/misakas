@@ -884,3 +884,18 @@ holder 1 は新しい native DB で元の認証と成熟を再生し、52,171 �
 tar -xf "$p/fresh-holder-1-release.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_holder_release.py" "$out" --holder 1 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-holder-1-release.json"
 ```
+
+### 3件の公開行からの MODEL_AUDIT seed と評価 challenge
+
+holder 2 も独立した DB で先端 `0f1fb6bf…` と確定点 `98da02e7…` を再現し、元の監査 close に署名した。3人の公開行をまとめた batch は blue score 75,522、その直後の certificate は 75,523 で受理された。いずれも隔離チェーンの DAA 37,759 で、監査の公開期限 DAA 90,641 の内側にある。
+
+公開行の署名と元の custody seal を照合し、3 dealer の多項式を復元して、各 dealer が登録時に固定した値と比較した。coinbase の marker と両ヘッダー、batch から certificate への親子関係を再計算した。独立に導出した seed は `295579de916fffa6989aa64670953af0006f33add45becb3084916439d0267a5`。1候補に割り当てた2件の challenge も、certificate を受理した peer 2 の native 結果と一致した。公開行を2件に減らす、署名を変える、certificate の coinbase を変える各対照は拒否された。[署名行・両ブロック・連続ログ](fresh-audit-publication.tar.zst)・[seed・各 challenge・照合したプロセス](fresh-audit-publication.json)
+
+この記録で certificate を読んだ native プロセスは1件。残る2ピアでの再生は別に記録する。対象は非報酬の監査抽選で、監査 suite の採点や新規 claim の採掘資格は未確定である。
+
+```sh
+for file in fresh-holder-0-release fresh-holder-1-release fresh-audit-publication; do
+    tar -xf "$p/$file.tar.zst" -C "$out"
+done
+python3 -B "$p/check_fresh_audit_seed.py" "$out" --publisher-only --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-audit-publication.json"
+```
