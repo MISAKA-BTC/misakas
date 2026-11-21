@@ -533,9 +533,9 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 
 上記で Panel が割り当てられた旧 8K claim は、担当席 3・4・7 がそれぞれ元の推論をやり直し、同じ transcript を確認した上で、有効票を署名した。quorum の受付後、元 claim の `Final` を DAA 6,633 の選択鎖で確認した。これは Gate C の認証前の観測である。[同じ claim の署名前の再実行と Final](genesis-panel-final.txt)
 
-同じ試験で Final 後にも BASE-0 を実行し、互いに異なる64件のアンカー用 claim を受理した。各回の8 heartbeat 後に元の 8K claim の認証行を確認したが、64回の上限でも抽選アンカーが空だった。試験は Gate C 承認の署名前で失敗した。[受理した64件と停止箇所](genesis-post-final-draw.txt)
+同じ試験で Final 後にも BASE-0 を実行し、異なる実行済み attempt を含む64ブロックを受理した。各回の8 heartbeat 後に元の 8K claim の認証行を確認したが、64回の上限でも抽選アンカーが空だった。試験は Gate C 承認の署名前で失敗した。[受理した64件と停止箇所](genesis-post-final-draw.txt)
 
-試験終了前に保存した隔離 DB のコピーを読み取り専用で開き、元の受付ブロックから DAA 6,857 までの選択鎖789ブロックを取り出した。各ヘッダのハッシュを保存済みキーと照合し、ブロック本体を raw 形式に往復した。収録した Final 後のアンカー用 claim のうち、後続ブロックも収録した56件では、すべて後続ヘッダの DAA が元と同じだった。保存した範囲は64回の試験の途中までである。[raw ブロック](genesis-exported-suffix.json.zst)・[範囲と SHA-256](genesis-exported-suffix.json)
+試験終了前に保存した隔離 DB のコピーを読み取り専用で開き、元の受付ブロックから DAA 6,857 までの選択鎖789ブロックを取り出した。各ヘッダのハッシュを保存済みキーと照合し、ブロック本体を raw 形式に往復した。収録した Final 後の attempt ブロックのうち、後続ブロックも収録した56件では、すべて後続ヘッダの DAA が元と同じだった。保存した範囲は64回の試験の途中までである。[raw ブロック](genesis-exported-suffix.json.zst)・[範囲と SHA-256](genesis-exported-suffix.json)
 
 ## 署名済み Original からの Stop 資料の受付
 
@@ -553,3 +553,10 @@ python3 -B "$p/check_real_lifecycle.py" "$out/stop-intake.txt" "$p/qf1-native-ti
 非報酬の QF1 試験では、元の trace 生成時に最終 chunk と End の開示を保持できる。Node は、両レコードが署名済み trace に含まれることを確認してから、最終 chunk の番号・消費バイト数・終端フラグ、採掘値 `z` と署名済み Readout root、End の各 root・件数を照合する。検証者は保管した資料から直接 Court に提出できる。この関係が検査する範囲は終端の結合で、各 chunk の圧縮・全層の算術は個別の検査対象である。
 
 単体試験では、認証済みの誤った counter・終端フラグ・digest・End を反証として裁定し、開示の改変・欠落を裁定前に拒否した。[関連7試験の結果](qf1-readout-end-unit.txt)
+
+Qwen3-8B の非報酬 Original `3c484ceb…` で、同じ実行ファイルの3ピアが receipt 前に End 資料を各3,069 bytes 保持した。選出された2名が固定入力から回答・四 root・Ticket を独立に再現した。回答は `2 + 2 = 4.` と EOS。3ピアは、同じ署名済み Original に対する Stop と End の異議をそれぞれの資料から直接裁定し、両方とも棄却した。独立した照合では、2,728,013 bytes の Readout の最終 chunk（77 bytes）・End の両方から trace root を再現し、末尾の digest と署名済み Readout root も照合した。この実行は正しい Original に対する異議を対象とする。[3ピアの生ログ](qf1-stop-end-three-peer.txt.zst)・[独立照合](qf1-stop-end-lifecycle.json)
+
+```sh
+zstd -dc "$p/qf1-stop-end-three-peer.txt.zst" > "$out/qf1-stop-end.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/qf1-stop-end.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end
+```
