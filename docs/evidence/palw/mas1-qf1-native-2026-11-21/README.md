@@ -911,3 +911,14 @@ python3 -B "$p/check_fresh_audit_seed.py" "$out" --publisher-only --openssl "$(b
 python3 -B "$p/check_g_cost_predicted_length.py" "$out/length-run.jsonl"
 python3 -B "$p/check_g_cost_predicted_length.py" "$p/g-cost-predicted-length-run.jsonl" | cmp - "$p/g-cost-predicted-length.json"
 ```
+
+### 異なる仕事の費用検査で使うバイナリの MOE2 再検証
+
+新しい3問の EXEC 抽選前に、仕事の本文・生成上限16・比較方法・固定予測長9を記録した。隔離試験では各本文を元の tokenizer で符号化し、EXEC 受付の署名対象へ含める。[事前に固定した3問と測定手順](g-cost-varied-jobs-schedule.json)
+
+この試験用の native バイナリ（SHA-256 `ad5f222a…`）で Studio モデルの登録・市場生成・報酬配分と巻き戻しを3プロセスから再検証した。3者が保存した帳簿から、対象160に対する買付48・永久LP向け32・worker残額80、Position 2単位のうち1単位を永久LPに、1単位をburn、残額のうちminer64・Panel16を再計算できた。原資は隔離試験の worker 予算である。[3者の結果](varied-jobs-moe2-book.json)・[生ログと両方の帳簿](varied-jobs-moe2-book.tar.zst)
+
+```sh
+tar -xf "$p/varied-jobs-moe2-book.tar.zst" -C "$out"
+python3 -B "$p/check_studio_moe2_book.py" "$out" | cmp - "$p/varied-jobs-moe2-book.json"
+```
