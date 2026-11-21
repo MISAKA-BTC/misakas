@@ -979,3 +979,12 @@ python3 -B "$p/check_real_lifecycle.py" "$out/varied-build-direct-court.log" "$p
 zstd -dc "$p/historical-replies.txt.zst" > "$out/historical-replies.log"
 python3 -B "$p/check_real_lifecycle.py" "$out/historical-replies.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --recorded-replies | cmp - "$p/historical-replies.json"
 ```
+
+### ディスクから読み戻したPanel承認署名の独立検証
+
+Qwen3-8Bの隔離3ピアは、DAA 27で受理した2席の公開鍵と署名（計10,522 bytes）を各自のファイルに保存し、DAA 60で開き直して履歴に照合した。別プロセスの検証器は試行・受付・PANEL certificate・seedから署名対象を再計算し、2件のML-DSA-65署名、抽選順、nativeで収録を確認したcommitmentを照合した。切り詰め、末尾への追加、席の入れ替え、署名の1ビット変更を個別に拒否した。抽選時の確定状態はnativeの観測を使用しており、ノード自体を終了してからの履歴再構成は未検証である。[照合結果](public-reply-evidence.json)・[公開署名を含む3ピアログ](public-reply-evidence.txt.zst)・[同じバイナリでのMOE2帳簿と巻き戻し](public-reply-evidence-market.tar.zst)
+
+```sh
+zstd -dc "$p/public-reply-evidence.txt.zst" > "$out/public-reply-evidence.log"
+python3 -B "$p/check_recorded_reply_signatures.py" "$out/public-reply-evidence.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/public-reply-evidence.json"
+```

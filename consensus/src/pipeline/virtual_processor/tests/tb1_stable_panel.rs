@@ -442,6 +442,14 @@ pub(super) async fn release(
             accepted.hash()
         );
         if normal_trial {
+            let evidence = dir.join("accepted-panel-replies");
+            let mut file = File::create_new(&evidence).unwrap();
+            for (public, signature) in &replies {
+                std::io::Write::write_all(&mut file, public.as_slice()).unwrap();
+                std::io::Write::write_all(&mut file, signature.as_slice()).unwrap();
+            }
+            file.sync_all().unwrap();
+            drop(file);
             let deadline = input.terms().deadline_exclusive_daa;
             carry_to_daa(node, parent, peers, deadline - 1, [84; 64]).await;
             let late = carry_to_daa(node, parent, peers, deadline, commitment).await;
@@ -463,7 +471,19 @@ pub(super) async fn release(
                     signatures,
                 )
             };
-            recorded(accepted.hash(), replies.as_slice()).unwrap();
+            let recovered = actors.policy.read_reply_evidence(File::open(&evidence).unwrap()).unwrap();
+            let recovered: Vec<_> = recovered.iter().map(|(key, sig)| (key, sig)).collect();
+            recorded(accepted.hash(), recovered.as_slice()).unwrap();
+            let bytes = std::fs::read(&evidence).unwrap();
+            assert!(actors.policy.read_reply_evidence(&bytes[..bytes.len() - 1]).is_err());
+            assert!(actors.policy.read_reply_evidence(std::io::Read::chain(bytes.as_slice(), &[0u8][..])).is_err());
+            peer_log!(
+                "QF1 public replies pid={} block={} marker={} data={}",
+                std::process::id(),
+                accepted.hash(),
+                faster_hex::hex_string(&commitment),
+                faster_hex::hex_string(&bytes)
+            );
             assert!(recorded(accepted.hash(), &replies[..1]).is_err());
             assert_eq!(recorded(late.hash(), replies.as_slice()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
             assert!(

@@ -28,6 +28,22 @@ impl LocalReplayPolicy {
         }
         Ok(Self { seats })
     }
+    /// Private evidence file, in draw order: one ML-DSA-65 public key and
+    /// signature per seat. The native receipt authenticates the decoded rows.
+    pub fn read_reply_evidence(self, mut input: impl io::Read) -> io::Result<Vec<(MLDSA65VerificationKey, MLDSA65Signature)>> {
+        let mut rows = Vec::new();
+        for _ in 0..self.seats {
+            let mut key = [0; 1952];
+            let mut signature = [0; 3309];
+            input.read_exact(&mut key)?;
+            input.read_exact(&mut signature)?;
+            rows.push((MLDSA65VerificationKey::new(key), MLDSA65Signature::new(signature)));
+        }
+        if input.bytes().next().transpose()?.is_some() {
+            return Err(invalid("extra local PANEL reply evidence"));
+        }
+        Ok(rows)
+    }
     pub fn id(self) -> Hash64 {
         Hash64::from_bytes(
             Sha3_512::new()
