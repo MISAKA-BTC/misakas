@@ -425,10 +425,30 @@ pub fn palw_isolated_g14_genesis_v1(
     base: &crate::config::genesis::GenesisBlock,
     isolation: Hash64,
 ) -> Result<crate::config::genesis::GenesisBlock, &'static str> {
+    isolated_g14_genesis(base, isolation, &[])
+}
+
+const MOE2_REGISTRATION_MARKER: &[u8] = b"MISAKA/PRIVATE/MOE2-REGISTRATION/V1";
+
+/// Private registration drill. The genesis commits the opt-in; the model catalog
+/// and native market keep the activation heights of this isolated ruleset.
+pub fn palw_private_moe2_genesis(
+    base: &crate::config::genesis::GenesisBlock,
+    isolation: Hash64,
+) -> Result<crate::config::genesis::GenesisBlock, &'static str> {
+    isolated_g14_genesis(base, isolation, MOE2_REGISTRATION_MARKER)
+}
+
+fn isolated_g14_genesis(
+    base: &crate::config::genesis::GenesisBlock,
+    isolation: Hash64,
+    profile: &[u8],
+) -> Result<crate::config::genesis::GenesisBlock, &'static str> {
     if isolation == Hash64::default() || base.coinbase_payload.len() > 4096 {
         return Err("an isolated G14 genesis needs a non-zero isolation digest and a bounded base payload");
     }
     let mut raw = base.coinbase_payload.to_vec();
+    raw.extend_from_slice(profile);
     raw.extend_from_slice(PALW_G14_TEST_GENESIS_MARKER_V1);
     raw.extend_from_slice(isolation.as_bytes().as_slice());
     let mut g = base.clone();
@@ -454,6 +474,17 @@ impl Params {
             && isolation.iter().any(|b| *b != 0)
             && self.genesis.hash_merkle_root == crate::merkle::calc_hash_merkle_root(self.genesis.build_genesis_transactions().iter())
             && crate::header::Header::from(&self.genesis).hash == self.genesis.hash
+    }
+
+    /// First DAA at which this private network creates the market with the registration.
+    pub fn private_moe2_registration_from(&self) -> Option<u64> {
+        let payload = self.genesis.coinbase_payload;
+        let profile_end = payload.len().checked_sub(PALW_G14_TEST_GENESIS_MARKER_V1.len() + 64)?;
+        if !payload[..profile_end].ends_with(MOE2_REGISTRATION_MARKER) || !self.has_isolated_g14_genesis_v1() {
+            return None;
+        }
+        let market = self.palw_model_market_fence().filter(|f| *f != ForkActivation::never())?;
+        Some(market.daa_score().max(self.palw_model_tier_v1_from_daa()?))
     }
 
     /// **Is this a testnet-12 drill genesis?** The coinbase is the drill marker, the merkle root

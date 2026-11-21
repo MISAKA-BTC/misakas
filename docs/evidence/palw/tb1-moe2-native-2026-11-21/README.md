@@ -38,6 +38,16 @@ VSS の終了記録、資源予約参照、consumer と policy の内容、成�
 
 報酬原資を 100,000,000,000,000 sompi とした試験では、30%で 14,563 Position を購入した。20%と 9,425 Position を永久 LP に入れ、残る 5,138 Position を burn した。試験の配分プランに従い、残額のうち 40,000,000,000,000 sompi を miner、10,000,000,000,000 sompi を Panel に計上した。独立に3回実行した登録後の state root と金額を記録した。報酬原資と対象 claim は fixture で、検証範囲は状態遷移とローカル決済帳簿まで。新規 claim の原資拘束、3ノードでの worker UTXO 生成・決済は未検証。[市場と配分の観測値](market-observation.json)
 
+### Studio と同じモデルの署名付き登録と再編成
+
+Studio で使った `model.palwtir` を登録者が開き、実際の重みから inventory root を読み、class とともに新しい隔離チェーンへの登録に署名した。登録は mempool とブロックテンプレートを経由し、DAA 1 の遷移で class と市場の両方が記録された。市場の初期値は実準備金 0 sompi、仮想準備金 1,000,000,000,000,000 sompi、在庫 500,000 Position。登録者の bond から 100,000,000 sompi が差し引かれた。
+
+同一バイナリの3プロセスは別々の DB を使い、登録ブロックで同じ state root を得た。受信側の2プロセスにはモデルファイルを渡さず、ファイルで受け渡した RPC raw block を通常のブロック検証に投入した。登録を含まない重い分岐に切り替えると、3者とも同じ state root に収束し、class と市場が消え、登録時の担保差引が戻った。[バイナリ・モデルの SHA-256、3プロセスの記録](studio-model-registration.txt)
+
+同じバイナリとモデルで別の TB1 EXEC 試験も再実行した。3プロセスの回答 token はいずれも 76 で、入力・実行・trace・出力 root と 191,967 枚の trace leaf 数が一致した。登録試験と推論試験はそれぞれ専用の隔離チェーンを使用した。
+
+市場の生成を選択するのは、この試験用の識別子を持つ隔離 genesis で、native 市場とモデル catalog が両方とも有効になった時点から。試験は fixture の鍵・残高と proof-of-work 省略設定を使った。通常 P2P 配信、新規 claim の受賞と、その原資からの買付・永久 LP・worker UTXO 決済は未検証である。
+
 ## 再現コマンド
 
 TB1 の core 9件、holder の custody 5件、native の3プロセス試験1件、MOE2 の8件が通った。次のコマンドをリポジトリのルートで実行する。[core と MOE2 の検証ログ](core-tests.txt)
@@ -49,4 +59,13 @@ cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib palw_tb1 -- 
 cargo +1.93.0 test --locked --offline -p misaka-palw-remote --lib tb1_exposure -- --nocapture
 cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib native_withdrawal_halts_an_exposed_holder -- --nocapture
 cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib moe2 -- --nocapture
+```
+
+登録テスト群は同じバイナリで計25件を検証した。一括実行で24件が成功し、RocksDB 計測は保存先の指定漏れで停止した。未使用の `TKR_DB_MEASUREMENT_DIR` を指定した再実行で、この1件も成功した。
+
+上記と同じ環境変数設定で、3プロセスでの署名付き登録と再編成を再現する。引数のパスは上記 SHA-256 のモデルを指定する。モデル指定を省略すると同じ手順を小さい TIR コーパスで実行する。
+
+```sh
+MISAKA_PRIVATE_TB1_TIR_ARTIFACT=/path/to/model.palwtir \
+  cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib private_moe2_three_process_registration -- --nocapture
 ```
