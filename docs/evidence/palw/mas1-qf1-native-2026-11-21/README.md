@@ -922,3 +922,16 @@ python3 -B "$p/check_g_cost_predicted_length.py" "$p/g-cost-predicted-length-run
 tar -xf "$p/varied-jobs-moe2-book.tar.zst" -C "$out"
 python3 -B "$p/check_studio_moe2_book.py" "$out" | cmp - "$p/varied-jobs-moe2-book.json"
 ```
+
+### MODEL_AUDIT の certificate を隔離3ピアで再生
+
+公開した peer 2 に続き、peer 0 と peer 1 が別々の新しい DB で元の認証・成熟・後続ブロックを再生し、同じ batch と certificate を受理した。3者は同一バイナリ（SHA-256 `8b08e725…`）で、公開済みの3署名から、同じ seed `295579de…`、2ケースの challenge、受理後の状態 Root `0ca846c3…` を得た。再生した2者は新たな share 公開に署名していない。再生側ログに署名行を加える、seed または状態 Root を変える対照は、いずれも照合器が拒否した。この段階で確定したのは非報酬評価の検査入力である。[3ピアの照合結果](fresh-audit-readback.json)・[追加2ピアの連続ログ](fresh-audit-readback.tar.zst)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+for file in fresh-holder-0-release fresh-holder-1-release fresh-audit-publication fresh-audit-readback; do
+    tar -xf "$p/$file.tar.zst" -C "$out"
+done
+python3 -B "$p/check_fresh_audit_seed.py" "$out" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-audit-readback.json"
+```

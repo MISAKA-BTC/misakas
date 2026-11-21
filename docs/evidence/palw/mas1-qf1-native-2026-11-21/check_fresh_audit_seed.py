@@ -69,6 +69,8 @@ def verify(root, window, openssl, publisher_only=False):
         path = root / ("reader-2.log" if slot == 2 else f"publication-{slot}.log")
         maturity = check_maturity(window, path)
         log = path.read_text()
+        if slot != 2:
+            require("fresh audit signed holder=" not in log, "readback signed a new release")
         [(pid, native)] = records(log, "fresh audit certificate")
         [(end_pid, end)] = records(log, "fresh audit window end")
         snapshot = end["committed_snapshot"]["Ok"]
