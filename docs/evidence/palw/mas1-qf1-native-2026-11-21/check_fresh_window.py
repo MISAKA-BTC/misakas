@@ -111,7 +111,9 @@ def check_maturity(window, native_log):
 
 
 def check_held_endpoint(window, native_log):
-    maturity = json.loads((HERE / "fresh-work-maturity.json").read_bytes())
+    maturity = check_maturity(window, native_log)
+    require(maturity == json.loads((HERE / "fresh-work-maturity.json").read_bytes()),
+            "terminal transcript does not reproduce the earlier funded work observation")
     log = native_log.read_text()
     [(pid, end)] = records(log, "fresh audit window end")
     [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log, re.M)
