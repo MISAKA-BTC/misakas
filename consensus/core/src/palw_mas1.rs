@@ -23,6 +23,8 @@ pub enum Admission {
 pub struct Assessment {
     pub execution: Verdict,
     pub collision: Verdict,
+    /// Independently resolved from the candidate, rule generation and frozen cost suite.
+    pub required_cost_scope: Option<[u8; 64]>,
     pub cost: CostReview,
     pub usefulness: Verdict,
     pub structure: Verdict,
@@ -35,6 +37,7 @@ impl Default for Assessment {
         Self {
             execution: Verdict::Unknown,
             collision: Verdict::Unknown,
+            required_cost_scope: None,
             cost: CostReview::default(),
             usefulness: Verdict::Unknown,
             structure: Verdict::Unknown,
@@ -45,8 +48,14 @@ impl Default for Assessment {
 
 impl Assessment {
     pub fn decision(&self) -> Admission {
-        let gates =
-            [self.execution, self.collision, self.cost.verdict(), self.usefulness, self.structure, self.current_rules_and_evidence];
+        let gates = [
+            self.execution,
+            self.collision,
+            self.cost.verdict_for(self.required_cost_scope),
+            self.usefulness,
+            self.structure,
+            self.current_rules_and_evidence,
+        ];
         if gates.contains(&Verdict::Fail) {
             Admission::Rejected
         } else if gates.contains(&Verdict::Unknown) {
@@ -107,12 +116,19 @@ mod tests {
         let mut a = Assessment {
             execution: Verdict::Pass,
             collision: Verdict::Pass,
+            required_cost_scope: Some([4; 64]),
             cost: checked_cost(),
             usefulness: Verdict::Pass,
             structure: Verdict::Pass,
             current_rules_and_evidence: Verdict::Pass,
         };
         assert!(new_mining_allowed(true, a.decision(), &a, &[], true));
+        for other_generation in [Some([5; 64]), None] {
+            a.required_cost_scope = other_generation;
+            assert_eq!(a.decision(), Admission::ReviewHold);
+            assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], true));
+        }
+        a.required_cost_scope = Some([4; 64]);
         for stop in [
             StopReason::AdmissionHold,
             StopReason::StructuralFailure,

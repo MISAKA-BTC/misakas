@@ -81,7 +81,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 
 ### 3.2 安い経路の検査と修正後の再検査
 
-G-COSTは[RFC-0062 §4.3](0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復費用検査で判定する。再現された正規Ticket入力の費用が事前閾値を下回れば当該世代はFAIL。旧世代のPASSは新しいartifact・suiteへ引き継がない。
+G-COSTは[RFC-0062 §4.3](0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復費用検査で判定する。再現された正規Ticket入力の費用が事前閾値を下回れば当該世代はFAIL。採掘判定時には、現在の候補・規則世代・採択済みsuiteから検査対象のdigestを求め、計測記録が束縛するdigestと照合する。現在の対象を特定できない場合、または両者が異なる場合、G-COSTはUNKNOWNとする。
 
 安価な経路が再現された場合は、対象の入力・経路・計測記録を保存し、修正後に同じ条件と新しい入力で再検査する。既知の失敗例を除いたsuiteでは停止解除の根拠を満たさない。特定の機材で見つかった正しい高速化は、その適用範囲を記載して新規採掘の適格性と停止で扱う。
 

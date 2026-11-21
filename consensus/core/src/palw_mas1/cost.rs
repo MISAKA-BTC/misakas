@@ -35,18 +35,21 @@ pub struct RouteRun {
     pub run: CostRun,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CostReview(Verdict);
-
-impl Default for CostReview {
-    fn default() -> Self {
-        Self(Verdict::Unknown)
-    }
-}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CostReview(Option<(Digest, Verdict)>);
 
 impl CostReview {
+    /// The result of this particular measurement, for reporting.
     pub fn verdict(self) -> Verdict {
-        self.0
+        self.0.map_or(Verdict::Unknown, |(_, verdict)| verdict)
+    }
+
+    /// Admission supplies its own required scope from the current instance and suite.
+    pub(super) fn verdict_for(self, required: Option<Digest>) -> Verdict {
+        match self.0 {
+            Some((scope, verdict)) if Some(scope) == required => verdict,
+            _ => Verdict::Unknown,
+        }
     }
 
     /// The owning reducer supplies the applicable failed input/route pairs
@@ -96,9 +99,9 @@ impl CostReview {
             }
         }
         if cheap {
-            Self(Verdict::Fail)
+            Self(Some((plan.scope, Verdict::Fail)))
         } else if !uncertain && covers_history && inputs.len().checked_mul(routes.len()) == Some(seen.len()) {
-            Self(Verdict::Pass)
+            Self(Some((plan.scope, Verdict::Pass)))
         } else {
             Self::default()
         }
@@ -128,7 +131,10 @@ mod tests {
         rows[0].run.units = 49..=50;
         assert_eq!(review(&rows), Verdict::Unknown);
         rows[0].run.units = 48..=49;
-        assert_eq!(review(&rows[..1]), Verdict::Fail);
+        let failed = CostReview::assess(&plan, &references, &rows[..1], &[]);
+        assert_eq!(failed.verdict_for(Some(plan.scope)), Verdict::Fail);
+        assert_eq!(failed.verdict_for(Some([8; 64])), Verdict::Unknown);
+        assert_eq!(failed.verdict_for(None), Verdict::Unknown);
         rows[0].run.ticket_input = [8; 64];
         assert_eq!(review(&rows), Verdict::Pass);
         rows[0].run.scope = [8; 64];
