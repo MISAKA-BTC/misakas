@@ -1,0 +1,91 @@
+"""Check the funded branch through the first pruning transition and its recorded template refusal."""
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+from pathlib import Path
+
+from check_fresh_audit import records
+from check_genesis_draw import header_hash
+from check_legacy_work import HERE, require
+
+
+def check_pruning_header(audit, point):
+    """Trace the first covering pruning point on the original public registration branch."""
+    archive = HERE / "fresh-retained-audit-public.tar.zst"
+    def member(name):
+        return subprocess.check_output(["tar", "-xOf", archive, name])
+    meta, *prefix = map(json.loads, member("public.jsonl").splitlines())
+    capital = json.loads(member("capital.json"))
+    require(capital["base"] == meta["tip"], "wrong capital branch")
+    tips = {meta["genesis"]: 0}
+    parent = meta["genesis"]
+    for block in prefix + capital["blocks"]:
+        h = block["header"]
+        require(h["parentsByLevel"][0] == [parent] and h["blueScore"] == tips[parent] + 1, "disconnected audit prefix")
+        parent = header_hash(h, bytes(h["palwCommitment"]), False).hex()
+        tips[parent] = h["blueScore"]
+    require(audit["close"] in tips and point in tips and tips[audit["close"]] <= tips[point],
+            "header pruning point does not descend from the signed close")
+    return dict(close_blue=tips[audit["close"]], point=point, blue=tips[point])
+
+
+def verify(branch, log):
+    source = json.loads((HERE / "fresh-8k-certificate.json").read_bytes())
+    audit = source["audit"]
+    start = audit["readiness"]
+    tip, blue, daa = start["generation"], start["sinkBlue"], start["sinkDaa"]
+    require(tip == audit["tip"] == source["native"]["tip"], "wrong funded certificate")
+    [maturity] = [w["readyDaa"] for w in start["blocking"]["waits"] if w["kind"] == "waitingMaturity"]
+    log_text = log.read_text()
+    [(pid, initial)] = records(log_text, "signed audit release window")
+    [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log_text, re.M)
+    require((initial["close"], initial["base"], initial["deadline"], initial["tip"], initial["blue"], initial["daa"]) ==
+            (audit["close"], audit["tip"], audit["deadline"], tip, blue, daa) and initial["readiness"] == start and
+            initial["blocks"] == 0 and initial["publication"] == "held" and binary == source["panel"]["binary_sha256"],
+            "expected the original held gate and writer build")
+    previous_pruning = start["finalized"]["pruningPoint"]
+    changes = []
+    digest = hashlib.sha256()
+    crossing = None
+    count = 0
+    with branch.open("rb") as stream:
+        for count, raw in enumerate(stream, 1):
+            digest.update(raw)
+            block = json.loads(raw)
+            header = block["header"]
+            require(header["parentsByLevel"][0] == [tip] and header["blueScore"] == blue + 1 and
+                    daa <= header["daaScore"] <= audit["deadline"], "disconnected or out-of-window header")
+            require(header["version"] == 2 and header["powAlgoId"] == 8 and len(block["transactions"]) == 1 and
+                    block["transactions"][0]["subnetworkId"] == "01" + "00" * 19, "expected an ordinary heartbeat")
+            if count == 1:
+                require(header["palwStateRoot"] == source["native"]["state"], "different starting state")
+            if crossing and count == crossing["blocks"] + 1:
+                crossing["next_header_parent_state"] = header["palwStateRoot"]
+            tip = header_hash(header, bytes(header["palwCommitment"]), False).hex()
+            blue, daa = header["blueScore"], header["daaScore"]
+            if crossing is None and daa >= maturity:
+                crossing = dict(blocks=count, tip=tip, daa=daa)
+            if header["pruningPoint"] != previous_pruning:
+                previous_pruning = header["pruningPoint"]
+                changes.append(dict(blocks=count, tip=tip, daa=daa, pruning=previous_pruning))
+    reason = "LocalNativeStateContextUnavailable(HistoryUnavailable)"
+    require("a template: " + reason in log_text and "test result: FAILED. 0 passed; 1 failed" in log_text,
+            "expected initial hold and template refusal before a terminal gate observation")
+    require(len(changes) == 1 and changes[0]["blocks"] == count and
+            f"Pruning deferred before snapshot readiness at {previous_pruning}:" in log_text, "wrong transition endpoint")
+    require(crossing and "next_header_parent_state" in crossing, "missing maturity boundary")
+    return dict(base=audit["tip"], close=audit["close"], deadline=audit["deadline"], blocks=count, tip=tip, daa=daa, blue=blue,
+                pruning_header=check_pruning_header(audit, previous_pruning), forecast_maturity=maturity, maturity_header=crossing,
+                template_refusal=reason, terminal_gate_observed=False, writer=pid, binary_sha256=binary, stream_sha256=digest.hexdigest())
+
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("branch", type=Path)
+    parser.add_argument("writer_log", type=Path)
+    args = parser.parse_args()
+    print(json.dumps(verify(args.branch, args.writer_log), indent=2))

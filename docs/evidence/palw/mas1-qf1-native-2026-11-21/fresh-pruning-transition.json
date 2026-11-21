@@ -1,0 +1,26 @@
+{
+  "base": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e",
+  "close": "67a7b2b03deaec69c39452c7645a9ae245cc890bcc5329e2f52366e838a97a2c94a6d680e0d0ad27fbef78c3623e2c5f7283766e992ae4bf121c1fe1b6eb0b04",
+  "deadline": 90641,
+  "blocks": 52170,
+  "tip": "50f5791a36918ef8e486edcf4893144016bc469ebbd8115b8103cf6d3cccae490a6a9ff3bb9fc4b9073a6b3a173f203caeb4f2bd88a750dbf9e2dd3bce2bf95f",
+  "daa": 37758,
+  "blue": 75520,
+  "pruning_header": {
+    "close_blue": 5,
+    "point": "98da02e77e744c1f2545e906a5117b132267d8fb120f3dfcaab1e583536a93200f7a99cbca84ef261ee0550cd4b3ce252ab68eb6b817d4cbd1ee02a4235ed09d",
+    "blue": 600
+  },
+  "forecast_maturity": 17931,
+  "maturity_header": {
+    "blocks": 12516,
+    "tip": "31634cfed646428e556f8526bda44ab745c46b047b9d069647e80dab907f2a56794a172e984f6355627e17bc46f43c34d2ebe41b9d758e8822aebc1047a67365",
+    "daa": 17931,
+    "next_header_parent_state": "fddb7edd105a9348ae203f4d3c6c26d5abf804948b327b26cd2122c0ce3ea7bd7b2cd15c57bec0c2384ddb8e6058ae40d592d8ef40b9b406a53fe799089d59c8"
+  },
+  "template_refusal": "LocalNativeStateContextUnavailable(HistoryUnavailable)",
+  "terminal_gate_observed": false,
+  "writer": 6230,
+  "binary_sha256": "399e147f1b83b4d1a248a4a73e8c6554138d52be8018be58b80dbc95ad954c87",
+  "stream_sha256": "bb6e7295d66538a4be80945794b256d4e855406ddd4b6b55d885f876aa4e599e"
+}

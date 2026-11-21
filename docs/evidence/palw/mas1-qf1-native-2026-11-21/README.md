@@ -799,3 +799,16 @@ with (root / "accepted-to-certified.json").open("x") as output:
     json.dump(chain, output, separators=(",", ":"))
 PYTHON
 ```
+
+### 監査 close を含む最初の pruning point
+
+隔離チェーンで、8K claim の Gate C 認証ブロック `0b30c252…` から通常の heartbeat を52,170個受理した。最後のヘッダー `50f5791a…` は DAA 37,758、blue score 75,520。ヘッダーに記録された pruning point `98da02e7…` は blue score 600 で、同じ選択鎖上の監査 close `67a7b2b0…`（blue score 5）を含む。照合器は各ヘッダーのハッシュと親を再計算し、この包含関係を登録時の公開ブロックまで遡って検査する。[照合結果](fresh-pruning-transition.json)・[公開ブロックと生成ログ](fresh-pruning-transition.tar.zst)
+
+次のテンプレートを要求した時点でノードが `LocalNativeStateContextUnavailable(HistoryUnavailable)` を返し、生成試験は失敗した。生成側が最後に観測した公開判定は認証直後の保留で、先端での holder の署名可否はこのログからは確定できない。署名済み期限は DAA 90,641。この記録は非報酬監査の履歴である。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+tar -xf "$p/fresh-pruning-transition.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" | cmp - "$p/fresh-pruning-transition.json"
+```
