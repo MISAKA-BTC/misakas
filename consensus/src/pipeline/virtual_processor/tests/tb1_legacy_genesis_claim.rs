@@ -220,7 +220,31 @@ fn export_genesis_claim_suffix() {
     let ghost = DbGhostdagStore::new(db.clone(), 0, Empty, Empty);
     let bodies = DbBlockTransactionsStore::new(db.clone(), Empty);
     let payloads = DbEvmPayloadStore::new(db.clone(), Empty);
-    let point = DbPalwStateV2Store::new(db, Empty).tip_record().unwrap().unwrap();
+    use crate::pipeline::virtual_processor::tests::g14_registration_e2e::private_moe2::arm_private_registration;
+    use kaspa_consensus_core::{
+        palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2},
+        palw_mode_v2::PalwConsensusMode,
+        palw_security_certification_v1::*,
+        palw_state_v2::PalwDeltaEntryV2,
+    };
+    let (config, _, _, _) = parts_custom(Some(FENCE), false, |params| arm_private_registration(params, true));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    let store = DbPalwStateV2Store::new(db, Empty)
+        .with_uncertified_weightless(config.params.palw_uncertified_weightless)
+        .with_canonical_work_daa(config.params.palw_canonical_work_daa())
+        .with_native39_frontier_context_v1(&config.params);
+    let point = store.tip_record().unwrap().unwrap();
+    let (tip, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!((tip, state.state_root()), (point.block, point.state_root));
+    let route = state.kernel_route_state_v1().unwrap();
+    let row: PalwClaimCertificationRowV1 = route
+        .aux_row(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_claim_key_v1(&palw_certification_id_v1(&winning.claim)))
+        .unwrap();
+    let network: PalwCertificationNetworkRowV1 =
+        route.aux_row(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_network_key_v1()).unwrap_or_default();
+    let mut candidates = 0usize;
+    let mut admitted = 0usize;
+    let mut seeded = 0usize;
     let start_daa = headers.get_header(base).unwrap().daa_score;
     let mut at = point.block;
     let mut blocks = Vec::new();
@@ -228,6 +252,18 @@ fn export_genesis_claim_suffix() {
         let header = headers.get_header(at).unwrap();
         assert_eq!(kaspa_consensus_core::hashing::header::hash(&header), at);
         assert!(header.daa_score >= start_daa);
+        if header.daa_score >= row.final_daa && !header.palw_commitment.is_empty() {
+            let envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+            let claim = attempt_id_v2(&envelope.attempt);
+            let (_, delta) = store.delta_of(at).unwrap();
+            candidates += 1;
+            admitted += usize::from(delta.entries.iter().any(|e| {
+                matches!(e, PalwDeltaEntryV2::Claim { key, old: None, new: Some(_) } if *key == claim)
+            }));
+            seeded += usize::from(delta.entries.iter().any(|e| {
+                matches!(e, PalwDeltaEntryV2::RoundSeedAnchor { new: Some(a), .. } if a.block == at)
+            }));
+        }
         let block = Block {
             header,
             transactions: bodies.get(at).unwrap(),
@@ -242,6 +278,17 @@ fn export_genesis_claim_suffix() {
     assert!(!blocks.is_empty());
     let count = blocks.len();
     let end_daa = blocks.last().unwrap().header.daa_score;
+    peer_log!(
+        "legacy genesis journal {}",
+        serde_json::json!({
+            "claim": winning.claim, "tip": tip, "state_root":point.state_root, "daa":end_daa,
+            "final_daa":row.final_daa,"committed_span":row.committed_span,"drawn_daa":row.drawn_daa,
+            "draws":row.draws.len(),"outcome":format!("{:?}",row.outcome),"approvals":row.positive_positions(),
+            "epoch":network.epoch,"network_draws":network.draws,"epoch_cap":bundle.state.rfc0018_v1().unwrap().certification.draws_per_epoch,
+            "post_final_attempt_blocks":candidates,"attempt_claims_created":admitted,"seed_anchor_writes":seeded,
+            "latest_seed":state.round_seed_anchor().map(|a| (a.span,a.block))
+        })
+    );
     let mut writer =
         std::io::BufWriter::new(File::create_new(std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_WRITE").unwrap()).unwrap());
     serde_json::to_writer(&mut writer, &CertifiedBranch { base, claim: winning.claim, tip: point.block, blocks }).unwrap();
