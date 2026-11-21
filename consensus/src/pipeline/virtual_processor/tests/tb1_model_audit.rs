@@ -242,7 +242,10 @@ async fn registered_audit_history(mode: AuditHistory) {
         (&held, misaka_palw_sdk::qf1_local::bind(&held).unwrap())
     };
     let identity = model.identity();
-    let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+    let (mut config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+    if mode == AuditHistory::Fresh && std::env::var_os("MISAKA_PRIVATE_FRESH_ARCHIVAL").is_some() {
+        config.is_archival = true;
+    }
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
     let parts = (config.clone(), bundle.clone(), premine, floats.clone());
     let mut node = Rig::new(&parts, 0x12_c500_0000);

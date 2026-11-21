@@ -204,6 +204,8 @@ pub(super) async fn replay_window(
     let (tip, state) = node.chain.tip_state();
     let expected: Hash64 = std::env::var("MISAKA_PRIVATE_FRESH_WINDOW_TIP").unwrap().parse().unwrap();
     assert_eq!(tip, expected, "truncated or different window");
+    let point = node.api().get_header(tip).unwrap().pruning_point;
+    legacy_work::await_pruning_capture(node, point).await;
     let api = node.api().as_ref();
     let gate = cut.observe(api, close, q);
     peer_log!(

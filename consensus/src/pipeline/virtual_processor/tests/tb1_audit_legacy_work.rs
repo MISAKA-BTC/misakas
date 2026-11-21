@@ -224,6 +224,28 @@ async fn replay_work_retirement(
 
 /// Continue the original signed audit on its certified branch, without
 /// replacing the candidate, pruning point, clock policy or native work facts.
+/// The pruning worker installs the checkpoint asynchronously. Keep the same
+/// selected tip and simulated clock while it captures an eligible new point.
+pub(super) async fn await_pruning_capture(node: &Rig, point: Hash64) {
+    if point == node.config.params.genesis.hash || !node.vp().palw_pruning_point_allowed_v2(point) {
+        return;
+    }
+    let tip = node.chain.sink();
+    let vp = node.vp();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    loop {
+        assert_eq!(node.chain.sink(), tip, "selected history moved during checkpoint capture");
+        let actual = node.chain.ctx.consensus.pruning_point();
+        let captured = vp.palw_state_v2_store.try_read().and_then(|store| store.pruning_snapshot_key().unwrap());
+        if captured.is_some_and(|(block, _)| block == actual) && node.api().is_chain_ancestor_of(point, actual).unwrap() {
+            peer_log!("fresh audit pruning checkpoint tip={tip} header_point={point} captured={actual}");
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "native pruning checkpoint unavailable at {tip} for {point}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
 async fn follow_release_window(
     node: &mut Rig,
     cut: &PreparedAudit<'_>,
@@ -237,9 +259,14 @@ async fn follow_release_window(
     let mut archive = std::io::BufWriter::new(File::create_new(path).unwrap());
     let mut blocks = 0u64;
     let mut last_pruning = None;
+    let mut last_header_point = node.config.params.genesis.hash;
     loop {
         let tip = node.chain.sink();
         let h = node.api().get_header(tip).unwrap();
+        if h.pruning_point != last_header_point {
+            await_pruning_capture(node, h.pruning_point).await;
+            last_header_point = h.pruning_point;
+        }
         let pruning = node.chain.ctx.consensus.pruning_point();
         let covers = node.api().is_chain_ancestor_of(close, pruning).unwrap();
         // Native finality is bounded by the node's validated pruning point.
