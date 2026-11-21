@@ -176,22 +176,7 @@ impl QualifiedExecPanel {
         panel: Tb1MiningRound,
         panel_q: &Tb1Qualification<'_>,
     ) -> io::Result<Self> {
-        if exec.purpose != Tb1MiningPurpose::Exec
-            || panel.purpose != Tb1MiningPurpose::Panel
-            || exec.chain_id != panel.chain_id
-            || exec.close_blue_score >= panel.close_blue_score
-            || exec.release_from_daa >= panel.release_from_daa
-        {
-            return Err(invalid("invalid private EXEC/PANEL schedule"));
-        }
-        for (round, q) in [(&exec, exec_q), (&panel, panel_q)] {
-            if q.round_ref() != round.id()
-                || q.roster().root().ok() != Some(round.roster_root)
-                || round.release_from_daa >= round.deadline_exclusive_daa
-            {
-                return Err(invalid("qualification does not match the scheduled round"));
-            }
-        }
+        super::check_panel_schedule(Tb1MiningPurpose::Exec, &exec, exec_q, &panel, panel_q)?;
         let marker = Sha3_512::new()
             .chain_update(b"MISAKA/private/TB1/qualified-exec-panel/v1")
             .chain_update(exec.id())

@@ -1,0 +1,63 @@
+test_binary_sha256=350b7bd6c14e58a921410590cc6d8f03edfabe4b75d05db7abee94047721eb9b
+
+running 1 test
+2026-11-21 14:59:59.234+09:00 [WARN ] PALW V2 state tip stood at 51e1c3599b5c6a57a4557a86ee9f2070671a20c83f35447a905689f2f1ad785e138dddafa8206617e73a67c18eb9a0bcb302226846dae524fc3f9a14324e74e7 while the template selected parent is ccc5ee30cc6603703f364087ce177318e2d326af01de682e8153fa796369c5b11e115da9238c7b87907af7162404eea876973e32ab601253716cabe6f96ae27b; re-derived the parent state over 1 reverted and 0 applied deltas so the committed root matches the validating walk
+2026-11-21 14:59:59.234+09:00 [WARN ] PALW V2 state tip stood at 51e1c3599b5c6a57a4557a86ee9f2070671a20c83f35447a905689f2f1ad785e138dddafa8206617e73a67c18eb9a0bcb302226846dae524fc3f9a14324e74e7 while the template selected parent is ccc5ee30cc6603703f364087ce177318e2d326af01de682e8153fa796369c5b11e115da9238c7b87907af7162404eea876973e32ab601253716cabe6f96ae27b; re-derived the parent state over 1 reverted and 0 applied deltas so the committed root matches the validating walk
+TB1 prior floor verifier pool initial_daa=2 maturity_daa=5040 draws=75 quorum=41
+[t12-e2e]   … original verifier pool maturity: 500 heartbeats, sink DAA 252
+[t12-e2e]   … original verifier pool maturity: 1000 heartbeats, sink DAA 502
+[t12-e2e]   … original verifier pool maturity: 1500 heartbeats, sink DAA 752
+[t12-e2e]   … original verifier pool maturity: 2000 heartbeats, sink DAA 1002
+[t12-e2e]   … original verifier pool maturity: 2500 heartbeats, sink DAA 1252
+[t12-e2e]   … original verifier pool maturity: 3000 heartbeats, sink DAA 1502
+[t12-e2e]   … original verifier pool maturity: 3500 heartbeats, sink DAA 1752
+[t12-e2e]   … original verifier pool maturity: 4000 heartbeats, sink DAA 2002
+[t12-e2e]   … original verifier pool maturity: 4500 heartbeats, sink DAA 2252
+[t12-e2e]   … original verifier pool maturity: 5000 heartbeats, sink DAA 2502
+[t12-e2e]   … original verifier pool maturity: 5500 heartbeats, sink DAA 2752
+[t12-e2e]   … original verifier pool maturity: 6000 heartbeats, sink DAA 3002
+[t12-e2e]   … original verifier pool maturity: 6500 heartbeats, sink DAA 3252
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::model_audit::private_registered_audit_certified_frontier has been running for over 60 seconds
+[t12-e2e]   … original verifier pool maturity: 7000 heartbeats, sink DAA 3502
+[t12-e2e]   … original verifier pool maturity: 7500 heartbeats, sink DAA 3752
+[t12-e2e]   … original verifier pool maturity: 8000 heartbeats, sink DAA 4002
+[t12-e2e]   … original verifier pool maturity: 8500 heartbeats, sink DAA 4252
+[t12-e2e]   … original verifier pool maturity: 9000 heartbeats, sink DAA 4502
+[t12-e2e]   … original verifier pool maturity: 9500 heartbeats, sink DAA 4752
+[t12-e2e]   … original verifier pool maturity: 10000 heartbeats, sink DAA 5002
+[t12-e2e] original verifier pool maturity: reached after 10076 heartbeats (DAA 2 -> 5040)
+[real-attempt] unchanged class target 00eac24fffffffffffffffffffffffff, pwu 6042506112, witness chunks 0
+[real-attempt] 128 actual executions, 7.445977666s elapsed
+[real-attempt] 256 actual executions, 14.952031708s elapsed
+[real-attempt] 374 executions before accepted claim 8bb66d1b154271d9ce56e418764a067ad3dc611c1045c5f2bc15fd9b07bd5f117c2463f962c6b6f86a0ae4a7e45ecfa3736cbe2e1825e51b24f978840a2ba0ba
+TB1 prior floor accepted claim=8bb66d1b154271d9ce56e418764a067ad3dc611c1045c5f2bc15fd9b07bd5f117c2463f962c6b6f86a0ae4a7e45ecfa3736cbe2e1825e51b24f978840a2ba0ba block=e220913b1b1e09e49eaf4afd3d406a05f731bbbdb78126376cb8860b72f436e3229044059f44ae381eb4e9e7b45219be79262b4823a693fadb5ec514f856ec80 daa=5040
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 5040 -> 5060)
+[t12-e2e] first claim Final: reached after 242 heartbeats (DAA 5061 -> 5182)
+[t12-e2e]   … approved Gate C window: 500 heartbeats, sink DAA 5443
+[t12-e2e]   … approved Gate C window: 1000 heartbeats, sink DAA 5693
+2026-11-21 15:02:59.738+09:00 [WARN ] PALW: block 3ce60f96895656f1aa53408c054c542f249350ed334b07ac867294b0d79eded7b3d6f5ff7559f85eb8c02567b0bea2cbb713351adff7d0db892e4a91f4bfbde1 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[t12-e2e]   … approved Gate C window: 1500 heartbeats, sink DAA 5943
+[t12-e2e]   … approved Gate C window: 2000 heartbeats, sink DAA 6193
+2026-11-21 15:03:45.781+09:00 [WARN ] PALW: block a7271f283572160e4e7ebf37d86f1cba09059e012e434efde1445a151b3596900cdc15c583a5698dd8bad596501302ff53919e6f49a9ad0ef33a1134dfcd4a2a voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[t12-e2e]   … approved Gate C window: 2500 heartbeats, sink DAA 6443
+[t12-e2e]   … approved Gate C window: 3000 heartbeats, sink DAA 6693
+[t12-e2e]   … approved Gate C window: 3500 heartbeats, sink DAA 6943
+[t12-e2e]   … approved Gate C window: 4000 heartbeats, sink DAA 7193
+[t12-e2e]   … approved Gate C window: 4500 heartbeats, sink DAA 7443
+[t12-e2e]   … approved Gate C window: 5000 heartbeats, sink DAA 7693
+[t12-e2e]   … approved Gate C window: 5500 heartbeats, sink DAA 7943
+[t12-e2e]   … approved Gate C window: 6000 heartbeats, sink DAA 8193
+[t12-e2e]   … approved Gate C window: 6500 heartbeats, sink DAA 8443
+[t12-e2e]   … approved Gate C window: 7000 heartbeats, sink DAA 8693
+[t12-e2e]   … approved Gate C window: 7500 heartbeats, sink DAA 8943
+[t12-e2e]   … approved Gate C window: 8000 heartbeats, sink DAA 9193
+[t12-e2e]   … approved Gate C window: 8500 heartbeats, sink DAA 9443
+[t12-e2e]   … approved Gate C window: 9000 heartbeats, sink DAA 9693
+[t12-e2e]   … approved Gate C window: 9500 heartbeats, sink DAA 9943
+[t12-e2e]   … approved Gate C window: 10000 heartbeats, sink DAA 10193
+[t12-e2e] approved Gate C window: reached after 10058 heartbeats (DAA 5193 -> 10222)
+TB1 prior floor certified claim=8bb66d1b154271d9ce56e418764a067ad3dc611c1045c5f2bc15fd9b07bd5f117c2463f962c6b6f86a0ae4a7e45ecfa3736cbe2e1825e51b24f978840a2ba0ba accepted=e220913b1b1e09e49eaf4afd3d406a05f731bbbdb78126376cb8860b72f436e3229044059f44ae381eb4e9e7b45219be79262b4823a693fadb5ec514f856ec80 frontier=e220913b1b1e09e49eaf4afd3d406a05f731bbbdb78126376cb8860b72f436e3229044059f44ae381eb4e9e7b45219be79262b4823a693fadb5ec514f856ec80 positions=75 quorum=41 transcript=dffd3270495ba49e337bc1d5f7c9eaed3e53d9503851b8f8506f36b55ede17accff76afd71d0e1890f47acb88a5151c773dd571ae1b90e1255cd842dd84103ff
+MAS1 certified audit frontier pid=62376 registration=ccc5ee30cc6603703f364087ce177318e2d326af01de682e8153fa796369c5b11e115da9238c7b87907af7162404eea876973e32ab601253716cabe6f96ae27b preparation=51e1c3599b5c6a57a4557a86ee9f2070671a20c83f35447a905689f2f1ad785e138dddafa8206617e73a67c18eb9a0bcb302226846dae524fc3f9a14324e74e7 close=f97f5cd558b03fda0b2d39598b5cacd7e6106ffd00158c7ec29f923c7c4889fad0da3dc1306eddc3e8f95bf66bddf43f4ceb03e5835cb12bc94640622976a3d7 class=64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260 floor=8bb66d1b154271d9ce56e418764a067ad3dc611c1045c5f2bc15fd9b07bd5f117c2463f962c6b6f86a0ae4a7e45ecfa3736cbe2e1825e51b24f978840a2ba0ba frontier=e220913b1b1e09e49eaf4afd3d406a05f731bbbdb78126376cb8860b72f436e3229044059f44ae381eb4e9e7b45219be79262b4823a693fadb5ec514f856ec80 tip=909ed5a0a4dd258b5ea68a481c9bfa6e65659ecf24c2704c23b2bc3f922c6dba4552ef14da657039674fb74c165767e0098acc410df382d9cacd8ed734cb7e8c daa=10222 deadline=15121 readiness={"version":1,"generation":"909ed5a0a4dd258b5ea68a481c9bfa6e65659ecf24c2704c23b2bc3f922c6dba4552ef14da657039674fb74c165767e0098acc410df382d9cacd8ed734cb7e8c","sinkDaa":10222,"sinkBlue":20448,"policy":{"settledAnchorDepth":1,"uniqueMatureWork":"1","maxOperatorPermille":1000,"maxClassPermille":1000},"maturity":{"rule":"v1","claimRetirementDaa":3000,"quantumMaturityDaa":120},"executedEffects":20448,"safe":null,"safeLagDaa":null,"safeLagBlue":null,"stop":"insufficientDepth","stoppedEarly":null,"blocking":{"block":"84b9a6ceff007f1a5fe6793c4556a085330212cce0583d694b0d17b58555585f9ed397bf0553c5479b1928d02168ff145aa29a0afe1cf715b95449c568f05a43","daa":0,"blue":1,"inSafePrefix":false,"waits":[{"kind":"insufficientDepth","have":0,"need":1},{"kind":"insufficientWork","have":"0","need":"1"}],"openClaimsTotal":0,"openSessionsTotal":0,"earliestReadyInDaa":null,"evidence":{"anchors":0,"work":"0","maturedFacts":0,"pendingFacts":0,"pendingWork":"0"}},"tip":{"block":"909ed5a0a4dd258b5ea68a481c9bfa6e65659ecf24c2704c23b2bc3f922c6dba4552ef14da657039674fb74c165767e0098acc410df382d9cacd8ed734cb7e8c","daa":10222,"blue":20448,"inSafePrefix":false,"waits":[{"kind":"frontierBehind","frontierBlue":10082,"effectBlue":20448,"frontierOnBranch":true},{"kind":"openClaim","claim":"8bb66d1b154271d9ce56e418764a067ad3dc611c1045c5f2bc15fd9b07bd5f117c2463f962c6b6f86a0ae4a7e45ecfa3736cbe2e1825e51b24f978840a2ba0ba","stage":"final","acceptedBlue":10082,"retentionDaa":16480,"nextDeadlineDaa":10222,"waitDaa":6258},{"kind":"insufficientDepth","have":0,"need":1},{"kind":"insufficientWork","have":"0","need":"1"}],"openClaimsTotal":1,"openSessionsTotal":0,"earliestReadyInDaa":null,"evidence":{"anchors":0,"work":"0","maturedFacts":0,"pendingFacts":0,"pendingWork":"0"}},"finalized":{"finalized":null,"pruningPoint":"20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69","pruningBlue":0,"wait":{"kind":"noSafePrefix"},"withdrawnFrom":null},"skipped":{"voided":0,"baseClass":1,"openDa":0,"unpriced":0,"bondNotHeld":0,"uncertified":1,"missingReceipt":0}}
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::model_audit::private_registered_audit_certified_frontier ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1501 filtered out; finished in 534.83s

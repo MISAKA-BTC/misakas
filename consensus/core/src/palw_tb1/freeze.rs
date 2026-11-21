@@ -1,4 +1,4 @@
-//! Private EXEC/PANEL round and closure commitments. Each round commits to its
+//! Private TB1 round and closure commitments. Each round commits to its
 //! schedule before dealer preparation. Consumer roots come from the owning
 //! registration or Original fold. No public network recognizes this codec.
 use sha3::{Digest, Sha3_512};
@@ -7,6 +7,7 @@ use sha3::{Digest, Sha3_512};
 pub enum Tb1MiningPurpose {
     Exec,
     Panel,
+    ModelAudit,
 }
 
 #[derive(Clone, Copy)]
@@ -27,6 +28,7 @@ impl Tb1MiningRound {
         let purpose = match self.purpose {
             Tb1MiningPurpose::Exec => b"EXEC".as_slice(),
             Tb1MiningPurpose::Panel => b"PANEL".as_slice(),
+            Tb1MiningPurpose::ModelAudit => b"MODEL_AUDIT".as_slice(),
         };
         Sha3_512::new()
             .chain_update(b"MISAKA/private/TB1/BGW-PQ/round/v1")

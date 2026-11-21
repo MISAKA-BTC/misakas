@@ -64,6 +64,12 @@ pub(super) struct Provision {
     shares: Vec<Vec<u8>>,
 }
 
+impl Provision {
+    pub(super) fn holder_shares(&self) -> Vec<(usize, Tb1Field)> {
+        self.shares.iter().enumerate().map(|(d, b)| (d, Tb1Field::from_bytes(b.as_slice().try_into().unwrap()).unwrap())).collect()
+    }
+}
+
 fn random_coefficient() -> Tb1Field {
     loop {
         let mut bytes = [0; 66];
@@ -174,8 +180,7 @@ pub(super) async fn release(
 ) {
     let marker = cut.commitment(close_parent);
     let context = Tb1ReleaseContext { round_ref: id, qual_root: q.root(), freeze_id: marker };
-    let shares: Vec<_> =
-        setup.shares.iter().enumerate().map(|(d, b)| (d, Tb1Field::from_bytes(b.as_slice().try_into().unwrap()).unwrap())).collect();
+    let shares = setup.holder_shares();
     let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
     Tb1ExposureJournal::provision(dir, id, &key.verification_key, slot as u32).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir, id, &key.verification_key, slot as u32).unwrap();

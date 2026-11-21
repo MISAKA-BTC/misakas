@@ -1,5 +1,6 @@
 """Check the real-model Original disclosures, later PANEL draw and public Stop witness."""
 import argparse
+import hashlib
 import json
 import re
 import struct
@@ -102,11 +103,57 @@ def check_pending_freeze(log, artifact):
                 publication="WouldBlock", signing="WouldBlock")
 
 
+def check_model_audit(log, artifact):
+    registered = check_pending_freeze(log, artifact)
+    plans, plan = shared_rows(
+        log, r"MAS1 audit plan pid=(\d+) audit=(\w+) panel=(\w+) generation=(\d+) suite=(\w+) reservation=(\w+) "
+             r"candidates=(\d+) tests=(\d+) case_deadline=(\d+)")
+    observed = re.findall(
+        r"MAS1 registered audit pid=(\d+) slot=(\d+) class=(\w+) descriptor=(\w+) preparation=(\w+) close=(\w+) "
+        r"freeze=(\w+) audit_qual=(\w+) evaluation_panel_qual=(\w+) daa=(\d+) from=(\d+) deadline=(\d+) "
+        r"publication=WouldBlock signing=WouldBlock", log)
+    if (sorted(map(int, plans)) != registered["pids"] or {r[0] for r in observed} != plans
+            or sorted(int(r[1]) for r in observed) != [0, 1, 2] or len({r[2:] for r in observed}) != 1):
+        raise ValueError("different observers, slots or model audit cuts")
+    cls, descriptor, prep, close, marker, audit_q, panel_q, daa, release, deadline = observed[0][2:]
+    audit, panel, generation, suite, reservation, candidates, tests, case_deadline = plan
+    if (cls != registered["class_id"] or len({registered["preparation"], registered["close"], prep, close}) != 4
+            or len({audit_q, panel_q, registered["exec_qual_root"], registered["panel_qual_root"]}) != 4 or audit == panel
+            or not int(release) <= int(daa) < int(deadline) <= int(case_deadline) or int(candidates) != 1 or int(tests) < 1):
+        raise ValueError("wrong registered class, budget, round or disclosure window")
+    raw = bytes.fromhex
+    def digest(tag, *inputs):
+        return hashlib.sha3_512(tag + b"".join(inputs)).digest()
+    rounds = digest(b"MISAKA/private/MAS1/qualified-evaluation-rounds/v1", raw(audit), raw(audit_q), raw(panel), raw(panel_q))
+    consumer = digest(b"MISAKA/private/MAS1/non-rewarding-candidates/v1", raw(prep), rounds, raw(suite), raw(reservation),
+                      struct.pack(">IIQI", int(candidates), int(tests), int(case_deadline), 1),
+                      raw(cls), raw(registered["artifact_root"]), raw(descriptor), struct.pack(">Q", int(generation)))
+    freeze = digest(b"MISAKA/private/TB1/mining-freeze/v1", raw(audit), raw(audit_q), raw(prep), consumer, raw(suite))
+    if freeze.hex() != marker:
+        raise ValueError("native close differs from the frozen plan and independently qualified rounds")
+    expired, end = shared_rows(
+        log, r"MAS1 audit expiry pid=(\d+) tip=(\w+) daa=(\d+) blocks=(\d+) close_daa=(\d+) prosecution_daa=(\d+) "
+             r"earliest_attempt_cert_daa=(\d+) finalized=none")
+    tip, end_daa, blocks, close_daa, window, earliest = end
+    if (expired != plans or int(blocks) < 1 or int(end_daa) < max(registered["deadline"], int(deadline))
+            or int(close_daa) + int(window) != int(earliest) or int(earliest) < int(deadline)):
+        raise ValueError("expiry or original certification window mismatch")
+    expiry = dict(tip=tip, daa=int(end_daa), selected_blocks=int(blocks), close_daa=int(close_daa),
+                  prosecution_window_daa=int(window), earliest_governed_attempt_certification_daa=int(earliest))
+    return dict(expiry=expiry, registered_exec=registered, audit_round=audit, evaluation_panel_round=panel, audit_qualification=audit_q,
+                panel_qualification=panel_q, descriptor=descriptor, model_generation=int(generation), suite=suite,
+                reservation=reservation, candidate_budget=int(candidates), tests_per_candidate=int(tests), preparation=prep,
+                close=close, candidate_root=consumer.hex(), freeze=marker, observed_daa=int(daa), release_daa=int(release),
+                deadline=int(deadline), case_deadline=int(case_deadline), publication="WouldBlock", signing="WouldBlock")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log",type=Path)
     parser.add_argument("class_check",type=Path)
-    parser.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
+    mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
     args=parser.parse_args()
-    verify = check_pending_freeze if args.pending_freeze else check
+    verify = check_model_audit if args.model_audit else check_pending_freeze if args.pending_freeze else check
     print(json.dumps(verify(args.log.read_text(), json.loads(args.class_check.read_bytes())), indent=2))

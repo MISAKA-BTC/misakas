@@ -35,6 +35,9 @@ macro_rules! peer_log {
     }};
 }
 
+#[path = "tb1_model_audit.rs"]
+mod model_audit;
+
 #[path = "tb1_stable_panel.rs"]
 mod stable_panel;
 
@@ -587,15 +590,32 @@ async fn run(stable: bool, registered: bool) {
             err.kind(),
             signing.kind()
         );
-        if child_dir.is_some() {
-            let mut socket = UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap());
-            send(&mut socket, &observation);
+        let mut parent_socket = child_dir.as_ref().map(|_| UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap()));
+        let mut peers = Vec::new();
+        if let Some(s) = &mut parent_socket {
+            send(s, &observation);
         } else {
-            let mut peers: Vec<_> = (1..3).map(|i| child_reader(dir.path(), i, true, true)).collect();
-            for (child, socket) in &mut peers {
-                assert_eq!(receive::<(Hash64, Hash64, Hash64, Hash64)>(socket), observation);
-                assert!(child.wait().unwrap().success());
+            peers.extend((1..3).map(|i| child_reader(dir.path(), i, true, true)));
+            for (_, s) in &mut peers {
+                assert_eq!(receive::<(Hash64, Hash64, Hash64, Hash64)>(s), observation);
             }
+        }
+        model_audit::registered_cut(
+            &mut node,
+            &mut parent_socket,
+            &mut peers,
+            dir.path(),
+            child_dir.as_deref(),
+            slot,
+            roster,
+            &keys,
+            instance.as_ref().unwrap().identity(),
+            round,
+            &q,
+        )
+        .await;
+        for (child, _) in &mut peers {
+            assert!(child.wait().unwrap().success());
         }
         return;
     }

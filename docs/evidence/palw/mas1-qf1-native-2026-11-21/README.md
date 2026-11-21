@@ -230,3 +230,26 @@ python3 -B "$p/check_real_lifecycle.py" --pending-freeze "$p/registered-freeze.t
 ```sh
 "$bin" private_tb1_certified_floor_history --ignored --nocapture
 ```
+
+### MODEL_AUDIT の候補固定と原期限
+
+同じ隔離チェーンの登録済み Qwen3-8B について、モデル評価用の `MODEL_AUDIT` と後続の評価用 `PANEL` に別々の dealer 多項式を生成した。3プロセスは各自の DB から準備ブロックを読み、ヘッダーの親状態で class と実重みの inventory を照合した。close は候補集合、descriptor と世代、suite、試験件数、容量予約参照、case の原期限、両 round の資格記録を固定する。保持者は元の EXEC 資格や別 round の資格を流用できず、close 後に suite、世代、descriptor、試験件数、予約、期限を変えた読み取りも拒否された。
+
+この試験の suite・予約は隔離入力である。候補は1件、試験枠は2件。監査の close は DAA 6、公開期間は DAA 9 以上21未満。開始時に3者とも署名予約と公開を保留した。通常の heartbeat で DAA 33 まで進め、48個すべての追加ブロックで finalized head がないことを確認した。close 以降に受理される通常の attempt が frontier を進めるには、Final の後に Gate C の異議申立期間 5,040 DAA が必要である。DAA 6 にすでに Final だったと仮定した下限でも 5,046 となり、この監査の期限を過ぎる。独立照合では、3者の記録から候補集合と close のハッシュを再計算した。[監査のブロックと holder の記録](registered-model-audit.txt)・[候補と期限の独立照合](registered-model-audit.json)
+
+この履歴では監査 seed の公開、suite の採点、評価用 PANEL の抽選には達していない。QF1 の G-USE・G-COLL・G-COST は UNKNOWN のままである。再実行には前節と同じ実モデル環境変数を使う。
+
+```sh
+{ echo "test_binary_sha256=$(shasum -a 256 "$bin" | cut -d' ' -f1)"; "$bin" private_registered_tb1_pending_freeze --ignored --nocapture; } > "$OUT/model-audit.txt" 2>&1
+python3 -B "$p/check_real_lifecycle.py" --model-audit "$OUT/model-audit.txt" "$p/class-check.json"
+```
+
+### 登録済みモデルと同じ鎖で frontier が close を覆った試験
+
+別の隔離 round では最初から監査期限を DAA 15,121 に固定した。Qwen3-8B を署名付きで登録し、監査準備ブロックの親状態から登録済み class を読み、候補 close を受理した。同じノードで通常の heartbeat を積み、検証者成熟後に元の target で BASE-0 を374回実行した。受け付けた floor claim は DAA 5,182 に Final、10,222 に Gate C 認証に達した。検証した承認は抽選75位置分、必要数は41。認証済み frontier が受付ブロックと一致し、登録 → 監査準備 → 監査 close → floor 受付 → frontier → 選択先端の祖先関係を native DB で検査した。[登録・認証・native readiness の全記録](registered-certified-frontier.txt)
+
+このケースは1プロセスで、試験用の成熟済み仕事、frontier、pruning point は注入していない。DAA 10,222 の最初の未決済ブロック（blue score 1）には、必要な anchor 1件に対して0件、必要な仕事量1に対して0という二つの待ち理由が記録された。成熟待ちの fact も0で、BASE-0 は集計から1件除外された。safe と finalized はともに空で、監査 share の公開は保留となった。close を決済するには、計上対象の仕事の受付がその effect の DAA・blue score 以降にあり、深度に数える anchor も同じ条件を満たす必要がある。[仕事と anchor を数える条件](../../../../consensus/core/src/palw_native_settlement_v1.rs)
+
+```sh
+"$bin" private_registered_audit_certified_frontier --ignored --nocapture
+```
