@@ -841,3 +841,16 @@ p=docs/evidence/palw/mas1-qf1-native-2026-11-21
 # macOS / Homebrew。PATH 上の openssl が ML-DSA-65 対応なら --openssl openssl でも実行できる。
 python3 -B "$p/check_fresh_qualification.py" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-qualification.json"
 ```
+
+### 元の監査で最初の holder が署名したブロック
+
+同じ holder 0 を新しい DB から再起動し、元の52,170ブロックと pruning checkpoint を再検証した。先端 `50f5791a…` では、署名時の settlement snapshot の finalized は空だった。通常の後続ブロック `0f1fb6bf…` を追加すると、DAA は同じ37,758、blue score は75,520から75,521となり、次の snapshot に finalized `98da02e7…` が記録された。元期限 DAA 90,641 の内側で holder 0 は元の3 dealer に対する share に署名した。
+
+署名メッセージの round・qualification・freeze ID・slot・3つの share を再構成し、元の holder 公開鍵と release 専用の署名 domain で ML-DSA-65 を独立検証した。各 share を含む登録時の custody seal も一致した。この記録の公開者は1人。seed の採用には残り2人の公開とネイティブの batch・certificate 検証が必要になる。[後続ブロック・公開された署名行・連続ログ](fresh-holder-0-release.tar.zst)・[検証結果](fresh-holder-0-release.json)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+tar -xf "$p/fresh-holder-0-release.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_holder_release.py" "$out" --holder 0 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-holder-0-release.json"
+```
