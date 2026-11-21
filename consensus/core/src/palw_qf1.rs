@@ -107,7 +107,7 @@ pub enum TreeKind {
     Trace = 4,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TreeRoot {
     kind: TreeKind,
     attempt: [u8; 32],
@@ -151,33 +151,24 @@ impl TreeRoot {
         budget: u64,
     ) -> Result<Self, &'static str> {
         let count = u64::try_from(leaves.len()).map_err(|_| "QF1 tree length")?;
-        if count == 0 || count > budget || (kind == TreeKind::Readout && count != 1) {
-            return Err("QF1 tree length");
+        let mut tree = TreeBuilder::new(attempt, kind, count, budget, None)?;
+        for leaf in leaves {
+            tree.push(leaf)?;
         }
-        let size = count.checked_next_power_of_two().ok_or("QF1 tree size overflow")?;
-        let mut result = Self { kind, attempt, count, digest: [0; 64] };
-        let mut stack: Vec<[u8; 64]> = Vec::new();
-        let mut leaves = leaves;
-        for i in 0..size {
-            let mut node = if i < count {
-                result.leaf(i, leaves.next().ok_or("QF1 missing leaf")?)?
-            } else {
-                *result.hash(1).update(&i.to_le_bytes()).finalize().as_array()
-            };
-            let mut pos = i;
-            let mut height = 0;
-            while pos & 1 == 1 {
-                pos >>= 1;
-                height += 1;
-                node = result.parent(height, pos, &stack.pop().expect("completed left sibling"), &node);
-            }
-            stack.push(node);
+        Ok(tree.finish()?.0)
+    }
+
+    /// Interpret the digest asserted by an Original with externally expected
+    /// kind, attempt and length. Authenticating a value still needs its opening.
+    pub fn from_claimed_digest(attempt: [u8; 32], kind: TreeKind, count: u64, digest: [u8; 64]) -> Result<Self, &'static str> {
+        if count == 0 || count.checked_next_power_of_two().is_none() || (kind == TreeKind::Readout && count != 1) {
+            return Err("QF1 claimed tree shape");
         }
-        if leaves.next().is_some() {
-            return Err("QF1 extra leaf");
-        }
-        result.digest = stack.pop().expect("nonempty tree");
-        Ok(result)
+        Ok(Self { kind, attempt, count, digest })
+    }
+
+    pub fn count(&self) -> u64 {
+        self.count
     }
 
     pub fn verify_opening(&self, index: u64, value: &[u8], siblings: &[[u8; 64]]) -> bool {
@@ -194,6 +185,74 @@ impl TreeRoot {
             node = self.parent(depth as u32 + 1, pos, left, right);
         }
         node == self.digest
+    }
+}
+
+/// Stream a tree of known logical length, optionally collecting the siblings of
+/// one index for later disclosure. Space is logarithmic in the padded length.
+pub struct TreeBuilder {
+    root: TreeRoot,
+    padded: u64,
+    next: u64,
+    path_for: Option<u64>,
+    stack: Vec<[u8; 64]>,
+    path: Vec<[u8; 64]>,
+}
+
+impl TreeBuilder {
+    pub fn new(attempt: [u8; 32], kind: TreeKind, count: u64, budget: u64, path_for: Option<u64>) -> Result<Self, &'static str> {
+        if count == 0 || count > budget || (kind == TreeKind::Readout && count != 1) || path_for.is_some_and(|i| i >= count) {
+            return Err("QF1 tree length or opening index");
+        }
+        Ok(Self {
+            root: TreeRoot { kind, attempt, count, digest: [0; 64] },
+            padded: count.checked_next_power_of_two().ok_or("QF1 tree size overflow")?,
+            next: 0,
+            path_for,
+            stack: Vec::new(),
+            path: Vec::new(),
+        })
+    }
+
+    pub fn push(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+        if self.next >= self.root.count {
+            return Err("QF1 extra leaf");
+        }
+        self.append_hash(self.root.leaf(self.next, bytes)?);
+        Ok(())
+    }
+
+    fn append_hash(&mut self, mut node: [u8; 64]) {
+        let mut pos = self.next;
+        let mut height = 0;
+        while pos & 1 == 1 {
+            let left = self.stack.pop().expect("completed left sibling");
+            if let Some(target) = self.path_for {
+                let owner = target >> height;
+                if owner == pos {
+                    self.path.push(left);
+                }
+                if owner == pos - 1 {
+                    self.path.push(node);
+                }
+            }
+            pos >>= 1;
+            height += 1;
+            node = self.root.parent(height, pos, &left, &node);
+        }
+        self.stack.push(node);
+        self.next += 1;
+    }
+
+    pub fn finish(mut self) -> Result<(TreeRoot, Vec<[u8; 64]>), &'static str> {
+        if self.next != self.root.count {
+            return Err("QF1 missing leaf");
+        }
+        while self.next < self.padded {
+            self.append_hash(*self.root.hash(1).update(&self.next.to_le_bytes()).finalize().as_array());
+        }
+        self.root.digest = self.stack.pop().expect("nonempty tree");
+        Ok((self.root, self.path))
     }
 }
 
@@ -215,6 +274,27 @@ pub fn ticket(roots: [&TreeRoot; 4]) -> Result<[u8; 32], &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn streamed_disclosures_verify_for_every_index_in_ragged_trees() {
+        for count in 1usize..18 {
+            let leaves: Vec<_> = (0..count as u32).map(u32::to_le_bytes).collect();
+            let reference = TreeRoot::build([8; 32], TreeKind::Answer, leaves.iter().map(|l| l.as_slice()), 20).unwrap();
+            for i in 0..count {
+                let mut tree = TreeBuilder::new([8; 32], TreeKind::Answer, count as u64, 20, Some(i as u64)).unwrap();
+                for leaf in &leaves {
+                    tree.push(leaf).unwrap();
+                }
+                assert!(tree.push(&[0; 4]).is_err());
+                let (root, path) = tree.finish().unwrap();
+                assert_eq!(root, reference);
+                assert!(root.verify_opening(i as u64, &leaves[i], &path));
+                assert!(!root.verify_opening(i as u64, &[255; 4], &path));
+            }
+        }
+        let tree = TreeBuilder::new([0; 32], TreeKind::Trace, 1, 1, None).unwrap();
+        assert!(tree.finish().is_err());
+    }
+
     #[test]
     fn qf1_native_readout_matches_supplied_vector_and_generation_boundaries() {
         let vectors: Vec<Vec<i16>> =

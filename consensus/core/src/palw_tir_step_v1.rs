@@ -741,8 +741,8 @@ impl PalwTirStepSpaceV1 {
         }
     }
 
-    /// **The leaves of positions `[0, a)`**, in closed form.
-    pub fn running_total(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
+    /// Tiles of committed node outputs only, excluding fixed and history checkpoints.
+    pub fn running_commit_tiles(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
         let a64 = a as u64;
         let post_occ = self.occurrences.len() - 1;
         let post_block = self.occurrences[post_occ].0;
@@ -767,6 +767,12 @@ impl PalwTirStepSpaceV1 {
         for c in &self.blocks[post_block as usize].commits {
             total = total.saturating_add(Self::node_leaves_over(c, self.blocks[post_block as usize].window, post_lo, a64));
         }
+        total
+    }
+
+    /// The leaves of positions `[0, a)`, including state checkpoints.
+    pub fn running_total(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
+        let mut total = self.running_commit_tiles(job, a);
         total = total.saturating_add(
             ((a / self.layout.checkpoint_interval) as u128).saturating_mul(self.fixed_leaves_per_checkpoint() as u128),
         );

@@ -49,6 +49,16 @@ pub struct ExecInputTerms<'a> {
 }
 
 impl ExecInputTerms<'_> {
+    fn threshold(&self) -> io::Result<kaspa_consensus_core::palw_an1_input_binding_and_panel_court_v1::An1TargetThreshold257V1> {
+        use kaspa_consensus_core::palw_an1_input_binding_and_panel_court_v1::An1TargetThreshold257V1 as Threshold;
+        let [high, low @ ..] = &self.target;
+        match *high {
+            0 => Ok(Threshold::BelowTwoPow256(*low)),
+            1 if low.iter().all(|&b| b == 0) => Ok(Threshold::MaxTwoPow256),
+            _ => Err(invalid("invalid private EXEC target")),
+        }
+    }
+
     fn context(
         &self,
         preparation: Hash64,
@@ -81,11 +91,10 @@ impl ExecInputTerms<'_> {
             || self.job_tokens.iter().any(|&id| id >= self.vocab)
             || rounds.panel.release_from_daa >= self.deadline_exclusive_daa
             || self.open_daa >= self.deadline_exclusive_daa
-            || self.target[0] > 1
-            || (self.target[0] == 1 && self.target[1..].iter().any(|&b| b != 0))
         {
             return Err(invalid("invalid private EXEC registration context"));
         }
+        self.threshold()?;
         let job = prompt_token_ids_root_v1(self.job_tokens).map_err(|_| invalid("invalid job token commitment"))?;
         let mut c = Vec::new();
         if let Some(frame) = frame {
@@ -150,10 +159,13 @@ pub struct SignedExecInput<'a> {
 /// The two signed qualification cuts of the private input profile. Dealer
 /// termination and resource references are inputs to qualification. The
 /// commitment authenticates those inputs as of the preparation block.
+#[derive(Clone, Copy)]
 pub struct QualifiedExecPanel {
     exec: Tb1MiningRound,
     panel: Tb1MiningRound,
     exec_qual: [u8; 64],
+    #[cfg(feature = "private-tb1-tir")]
+    panel_qual: [u8; 64],
     marker: [u8; 64],
 }
 
@@ -188,7 +200,14 @@ impl QualifiedExecPanel {
             .chain_update(panel_q.root())
             .finalize()
             .into();
-        Ok(Self { exec, panel, exec_qual: exec_q.root(), marker })
+        Ok(Self {
+            exec,
+            panel,
+            exec_qual: exec_q.root(),
+            #[cfg(feature = "private-tb1-tir")]
+            panel_qual: panel_q.root(),
+            marker,
+        })
     }
 
     pub fn commitment(&self) -> [u8; 64] {
@@ -196,14 +215,20 @@ impl QualifiedExecPanel {
     }
 }
 
+struct RegisteredInput<'a> {
+    context: Vec<u8>,
+    terms: &'a ExecInputTerms<'a>,
+    #[cfg(feature = "private-tb1-tir")]
+    owner: &'a MLDSA65VerificationKey,
+    #[cfg(feature = "private-tb1-tir")]
+    funding_ref: [u8; 64],
+}
+
 pub struct ExecInputBatch<'a> {
     root: [u8; 64],
-    round: [u8; 64],
-    exec_qual: [u8; 64],
+    rounds: QualifiedExecPanel,
     preparation: Hash64,
-    #[cfg(feature = "private-tb1-tir")]
-    chain: [u8; 64],
-    entries: BTreeMap<u64, (Vec<u8>, &'a ExecInputTerms<'a>)>,
+    entries: BTreeMap<u64, RegisteredInput<'a>>,
 }
 
 impl<'a> ExecInputBatch<'a> {
@@ -243,7 +268,15 @@ impl<'a> ExecInputBatch<'a> {
             }
             let c = row.terms.context(preparation, rounds, row.owner, max_job_tokens)?;
             let key = reg_key(&c);
-            if !keys.insert(key) || entries.insert(row.slot, (c, row.terms)).is_some() {
+            let registered = RegisteredInput {
+                context: c,
+                terms: row.terms,
+                #[cfg(feature = "private-tb1-tir")]
+                owner: row.owner,
+                #[cfg(feature = "private-tb1-tir")]
+                funding_ref: row.funding_ref,
+            };
+            if !keys.insert(key) || entries.insert(row.slot, registered).is_some() {
                 return Err(invalid("duplicate EXEC slot or RegKey"));
             }
             ml_dsa_65::verify(row.owner, &key, REGISTRATION_DOMAIN, row.signature)
@@ -263,15 +296,7 @@ impl<'a> ExecInputBatch<'a> {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC registration view moved"));
         }
-        Ok(Self {
-            preparation,
-            exec_qual: rounds.exec_qual,
-            root: h.finalize().into(),
-            round: exec.id(),
-            #[cfg(feature = "private-tb1-tir")]
-            chain: exec.chain_id,
-            entries,
-        })
+        Ok(Self { preparation, rounds: *rounds, root: h.finalize().into(), entries })
     }
 
     pub fn root(&self) -> [u8; 64] {
@@ -286,8 +311,8 @@ impl<'a> ExecInputBatch<'a> {
         q: &Tb1Qualification<'_>,
     ) -> io::Result<FrozenExecInputs<'a>> {
         if closure.round.purpose != Tb1MiningPurpose::Exec
-            || closure.round.id() != self.round
-            || closure.qual_root != self.exec_qual
+            || closure.round.id() != self.rounds.exec.id()
+            || closure.qual_root != self.rounds.exec_qual
             || closure.consumer_set_root != self.root
         {
             return Err(invalid("EXEC input set differs from closure"));
@@ -297,7 +322,8 @@ impl<'a> ExecInputBatch<'a> {
         if !native.is_chain_ancestor_of(self.preparation, parent).map_err(io::Error::other)? {
             return Err(invalid("EXEC close does not descend from its preparation"));
         }
-        for (_, terms) in self.entries.values() {
+        for entry in self.entries.values() {
+            let terms = entry.terms;
             if terms.policy != closure.policy_root
                 || !(terms.open_daa..terms.deadline_exclusive_daa).contains(&header.daa_score)
                 || !native.is_chain_ancestor_of(terms.registration_anchor, parent).map_err(io::Error::other)?
@@ -321,6 +347,12 @@ pub struct DerivedExecInput<'a> {
     certificate: Hash64,
     attempt: [u8; 32],
     registration_key: [u8; 64],
+    #[cfg(feature = "private-tb1-tir")]
+    context_digest: Hash64,
+    #[cfg(feature = "private-tb1-tir")]
+    owner: &'a MLDSA65VerificationKey,
+    #[cfg(feature = "private-tb1-tir")]
+    slot: u64,
     tokens: Vec<u32>,
     #[cfg(feature = "private-tb1-tir")]
     chain: [u8; 64],
@@ -373,7 +405,8 @@ impl<'a> FrozenExecInputs<'a> {
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
     ) -> io::Result<DerivedExecInput<'a>> {
-        let (c, terms) = self.batch.entries.get(&slot).ok_or_else(|| invalid("unknown closed EXEC slot"))?;
+        let entry = self.batch.entries.get(&slot).ok_or_else(|| invalid("unknown closed EXEC slot"))?;
+        let (c, terms) = (&entry.context, entry.terms);
         let tip = native.get_sink();
         let header = native.get_header(tip).map_err(io::Error::other)?;
         if !(terms.open_daa..terms.deadline_exclusive_daa).contains(&header.daa_score) {
@@ -406,10 +439,16 @@ impl<'a> FrozenExecInputs<'a> {
             certificate,
             attempt,
             registration_key: reg_key(c),
+            #[cfg(feature = "private-tb1-tir")]
+            context_digest: Hash64::from_bytes(*blake2b_simd::blake2b(c).as_array()),
+            #[cfg(feature = "private-tb1-tir")]
+            owner: entry.owner,
+            #[cfg(feature = "private-tb1-tir")]
+            slot,
             tokens,
             terms,
             #[cfg(feature = "private-tb1-tir")]
-            chain: self.batch.chain,
+            chain: self.batch.rounds.exec.chain_id,
         })
     }
 }
@@ -472,15 +511,8 @@ impl DerivedExecInput<'_> {
         native: &dyn ConsensusApi,
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> Result<misaka_palw_tir_exec::node::qf1::LocalAnswer, String> {
-        self.check_live(native).map_err(|e| e.to_string())?;
+        self.check_qf1_instance(native, instance)?;
         let terms = self.terms;
-        let frame = terms.qf1.ok_or("signed EXEC input has no QF1 frame")?.admitted().map_err(|e| e.to_string())?;
-        let id = instance.identity();
-        if (id.descriptor, id.inventory, id.class, id.tokenizer)
-            != (frame.instance_descriptor, terms.model_root, terms.class_id, terms.tokenizer)
-        {
-            return Err("local QF1 instance differs from owner-signed registration".into());
-        }
         let answer = instance.replay(
             &self.tokens,
             terms.decode_tokens,
@@ -491,4 +523,50 @@ impl DerivedExecInput<'_> {
         self.check_live(native).map_err(|e| e.to_string())?;
         Ok(answer)
     }
+    fn check_qf1_instance(
+        &self,
+        native: &dyn ConsensusApi,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> Result<(), String> {
+        self.check_live(native).map_err(|e| e.to_string())?;
+        let terms = self.terms;
+        let frame = terms.qf1.ok_or("signed EXEC input has no QF1 frame")?.admitted().map_err(|e| e.to_string())?;
+        let id = instance.identity();
+        if (id.descriptor, id.inventory, id.class, id.tokenizer)
+            != (frame.instance_descriptor, terms.model_root, terms.class_id, terms.tokenizer)
+        {
+            return Err("local QF1 instance differs from owner-signed registration".into());
+        }
+        Ok(())
+    }
+
+    /// Re-execute and disclose a typed trace leaf against the same owner-pinned
+    /// job. T comes from the original output; truncation or extension fails.
+    pub fn replay_qf1_original(
+        &self,
+        native: &dyn ConsensusApi,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+        answer_len: u32,
+        open: Option<u64>,
+    ) -> Result<LocalOriginal<'_, '_>, String> {
+        self.check_qf1_instance(native, instance)?;
+        let trace = instance.replay_trace(
+            &self.tokens,
+            self.terms.decode_tokens,
+            self.terms.max_leaves,
+            Hash64::from_bytes(self.registration_key),
+            self.attempt,
+            misaka_palw_tir_exec::node::qf1::TraceRequest { context_digest: self.context_digest, answer_len, open },
+        )?;
+        self.check_live(native).map_err(|e| e.to_string())?;
+        Ok(LocalOriginal { input: self, trace })
+    }
 }
+
+#[cfg(feature = "private-tb1-tir")]
+mod original;
+#[cfg(feature = "private-tb1-tir")]
+pub use original::{LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody};
+
+#[cfg(feature = "private-tb1-tir")]
+pub mod panel_cut;

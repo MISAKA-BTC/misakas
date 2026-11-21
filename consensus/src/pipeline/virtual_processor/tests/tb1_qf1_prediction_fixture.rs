@@ -148,3 +148,24 @@ fn qf1_stateful_prediction_boundaries() {
     let h = Hash64::from_u64_word(7);
     assert!(LocalInstance::bind(&a, h, norm + 1, &[h; ROLES]).is_err());
 }
+
+#[test]
+fn qf1_original_requires_actual_stop_and_complete_trace_budget() {
+    use misaka_palw_tir_exec::node::qf1::TraceRequest;
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let (a, norm) = artifact(&dir.path().join("budget.palwtir"));
+    let instance = bind(&a, norm);
+    let id = Hash64::from_u64_word(1);
+    let run =
+        |t, cap, open| instance.replay_trace(&[9], 3, cap, id, [2; 32], TraceRequest { context_digest: id, answer_len: t, open });
+    for t in [0, 1, 3, 4] {
+        assert!(run(t, 400000, None).is_err());
+    }
+    assert!(run(2, 100, None).is_err());
+    assert!(run(2, 400000, Some(u64::MAX)).is_err());
+    let trace = run(2, 400000, Some(0)).unwrap();
+    let o = trace.opening.unwrap();
+    assert!(trace.roots[3].verify_opening(0, &o.record, &o.siblings));
+    assert_eq!(o.record[0], 0);
+    assert_eq!(&o.record[5..69], id.as_byte_slice());
+}

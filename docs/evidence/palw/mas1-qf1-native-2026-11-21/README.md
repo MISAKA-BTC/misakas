@@ -52,3 +52,18 @@ cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib qf
 cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib native_withdrawal_halts_an_exposed_holder -- --nocapture > /tmp/qf1-prediction.log 2>&1
 python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_prediction.py /tmp/qf1-prediction.log "$TEST_BINARY"
 ```
+
+## 署名済み Original の受領と PANEL 対象の固定
+
+この隔離試験では、前節の状態付き試験用 TIR が実行中に出力する全 commit を、RFC-0066 の順序で記録する。Init に続いて各位置の pre・36層・予測位置の post の値を64 lane ごとに符号化し、greedy 選択、停止、Readout の各 chunk、End を記録する。署名者は回答長を最初の実行で確定する。各ピアは登録時の上限を検査し、同じ入力から再実行して宣言された回答長と実際の停止を照合する。四つの root と Ticket はパディングを含めて逐次計算する。
+
+登録者の ML-DSA-65 署名は、チェーン、登録キー、スロット、試行、四つの leaf 数と root、Ticket を束縛する。受領を確認するノードは EXEC 証明書より後の選択鎖ブロックにその Original ID が含まれることを検査する。後続の PANEL 凍結ブロックは、時刻表で決まる位置に、対象 Original と受領ブロック、候補と重み、方針、予約参照を固定する。登録資金・資料予約・候補者の適格性はこの隔離試験の入力である。試験後に親ピアを別の分岐へ切り替えると、元の受領ブロックと PANEL 凍結ブロックの読み取りはいずれも拒否された。
+
+[3ピアの記録](original-run.txt)と[Python による照合結果](original-check.json)を収録した。照合には受領した仕様に付属する Merkle・Readout・Ticket の参照関数を使う。Init の登録コンテキスト digest は記録から取り込み、残りの Init フィールドと後続全レコードは入力 token と試験用 TIR の数式から再構成する。次のコマンドは保存済みの記録にも適用できる。
+
+```sh
+python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_original.py \
+  docs/evidence/palw/mas1-qf1-native-2026-11-21/original-run.txt
+```
+
+この記録の再実行は3つの試験プロセスによるもの。PANEL 凍結の native finality と公開開始 DAA が揃わず、PANEL share の公開は保留された。このローカル推論では登録前に固定した閾値 2^255 と Ticket の 256 ビット値を比較して記録する。比較結果による報酬・権利の発行は行わない。抽選された担当者による承認、Court、採掘 claim の Final・受賞・決済は未検証である。

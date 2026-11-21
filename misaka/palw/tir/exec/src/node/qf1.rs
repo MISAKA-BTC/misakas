@@ -1,6 +1,7 @@
 //! RFC-0066 prediction-position replay for an explicitly pinned, local TIR instance.
 //! A committed producer location identifies a value; accepting its intended Qwen
 //! semantics requires the separate lowering/instance assessment.
+mod trace;
 use super::{TirArtifactV1, memory, positive_court::greedy_index};
 use crate::{NoSink, NodeValue, Slice, StepSink, TirExecutor};
 use kaspa_consensus_core::{
@@ -10,6 +11,8 @@ use kaspa_consensus_core::{
     palw_tir_step_v1::PalwTirStepSpaceV1,
 };
 use misaka_palw_tir::{Block, DType, Dim, Prim, Ref, TensorType};
+use trace::Trace;
+pub use trace::{LocalTrace, TraceOpening, TraceRequest};
 
 /// The manifest digest binds source inventory and conversion recipe. Scale
 /// references are in POST_BLOCK[0..36], FINAL_NORM order in that manifest.
@@ -113,6 +116,32 @@ impl<'a> LocalInstance<'a> {
     /// Non-paying replay from an empty KV history. The context supplies the
     /// pre-registered leaf budget and this attempt's local memory attribution.
     pub fn replay(&self, prompt: &[u32], limit: u32, max_leaves: u64, job: Hash64, seed: [u8; 32]) -> Result<LocalAnswer, String> {
+        self.drive(prompt, limit, max_leaves, job, seed, None)
+    }
+
+    pub fn replay_trace(
+        &self,
+        prompt: &[u32],
+        limit: u32,
+        max_leaves: u64,
+        job: Hash64,
+        seed: [u8; 32],
+        request: TraceRequest,
+    ) -> Result<LocalTrace, String> {
+        let mut trace = Trace::begin(self, prompt, limit, max_leaves, seed, request)?;
+        let answer = self.drive(prompt, limit, max_leaves, job, seed, Some(&mut trace))?;
+        trace.finish(answer)
+    }
+
+    fn drive(
+        &self,
+        prompt: &[u32],
+        limit: u32,
+        max_leaves: u64,
+        job: Hash64,
+        seed: [u8; 32],
+        mut trace: Option<&mut Trace>,
+    ) -> Result<LocalAnswer, String> {
         let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
         palw_qf1::check_capacity(len, limit)?;
         if prompt.iter().any(|&id| id >= VOCAB) {
@@ -144,7 +173,7 @@ impl<'a> LocalInstance<'a> {
         let (&last, prefix) = prompt.split_last().ok_or("QF1 empty input")?;
         let mut token = last;
         for &id in prefix {
-            exec.step_opt(id, &mut NoSink, false).map_err(|e| e.to_string())?;
+            trace::step(&mut exec, id, &mut NoSink, false, trace.as_deref_mut())?;
         }
         let mut sink = Prediction {
             argmax: self.argmax,
@@ -158,7 +187,7 @@ impl<'a> LocalInstance<'a> {
         loop {
             sink.next = 0;
             sink.selected = None;
-            exec.step_opt(token, &mut sink, true).map_err(|e| e.to_string())?;
+            trace::step(&mut exec, token, &mut sink, true, trace.as_deref_mut())?;
             if sink.next != ROLES {
                 return Err("QF1 incomplete producer sequence".into());
             }
@@ -177,14 +206,22 @@ impl<'a> LocalInstance<'a> {
             if sink.selected != Some(token) {
                 return Err("QF1 committed TopK differs from greedy selection".into());
             }
+            if let Some(trace) = trace.as_mut() {
+                let max = i32::try_from(data.get(token as usize)).map_err(|_| "QF1 winning logit outside i32")?;
+                trace.decision(tokens.len() as u32, exec.pos() - 1, token, max, self.argmax.1)?;
+            }
             tokens.push(token);
             if palw_qf1::is_eos(token) || tokens.len() == limit as usize {
                 break;
             }
         }
         let stop = palw_qf1::stop_reason(len, &tokens, limit)?;
-        let (z, _) = readout.finish(len, &tokens, limit)?;
-        Ok(LocalAnswer { tokens, stop, processed_positions: exec.pos(), z })
+        let (z, chunks) = readout.finish(len, &tokens, limit)?;
+        let answer = LocalAnswer { tokens, stop, processed_positions: exec.pos(), z };
+        if let Some(trace) = trace {
+            trace.end(&answer, &chunks)?;
+        }
+        Ok(answer)
     }
 }
 

@@ -15,6 +15,14 @@ pub struct HashChunk {
     pub chain_after: [u8; 64],
 }
 
+/// Number of authenticatable compression records at a successful QF1 stop.
+pub fn record_count(steps: u32) -> Result<u32, &'static str> {
+    if !(1..=MAX_NEW).contains(&steps) {
+        return Err("QF1 readout step count");
+    }
+    Ok((DOMAIN.len() as u32 + steps * (5 + 2 * (ROLES * WIDTH) as u32) + 5).div_ceil(CHUNK as u32))
+}
+
 fn initial() -> [u64; 8] {
     let mut state = IV;
     state[0] ^= 0x01010040;
