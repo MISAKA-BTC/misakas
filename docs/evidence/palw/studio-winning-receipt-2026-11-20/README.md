@@ -109,3 +109,13 @@ cmp "$result_dir/1.json" "$result_dir/2.json" && cmp "$result_dir/1.json" "$resu
 DAA 3927 のブロックでは決済深度 1、決済判定は false だった。次の DAA 3928 のブロックで safe frontier が 2726 に達し、同じ worker UTXO が決済済みになった。元の5,473ブロックの全行がバイト単位で一致することを照合し、拡張後の7,879ブロックを同一バイナリの独立3プロセスがそれぞれ genesis から受理した。3つの DB で claim、消費した index 0、受賞ブロック、UTXO の受理ブロック・金額、決済状態が一致した。これは Gate C 有効化前の T-N1 の記録で、Studio main の TFO3 claim の当落は別記した。[決済前後と3プロセスの照合結果](tn1-native-settlement.json)・[Studio main の当落](../studio-main-claim-2026-11-20/result.json)
 
 拡張履歴のファイル名は `misaka-tn1-settled-receipt-20261121.jsonl.zst`。上の再読コマンドで `archive` にこのファイルを指定すると、各 reader は決済 anchor と worker UTXO を照合する。元の履歴から延長を再実行する場合は、1つの reader に `MISAKA_TN1_SETTLED_ARCHIVE` で新しい JSONL の出力先を指定する。
+
+## 実装台帳に記録した経過
+
+2026-11-20 の隔離実行では、同じ Studio claim の受付と抽選 Panel 承認に続き、公開検証者6人がそれぞれ再実行と開示資料を照合して予約を返上した。3ピアとも DAA 474 で生存予約0件、預託を保持した返上7件、受賞権利消費0/21を観測した。[Studio claim の観測記録](./README.md)
+
+
+
+## 2026-11-20　隔離 T12 での Studio claim と独立 Panel 承認
+
+追加登録済みモデルを Studio で実行した claim `9d08847f…26ccb68c` は DAA 318 で受理された。DAA 323 で選出された seat 7 は実行者と別のピアで 85,938 leaves を再実行した。承認取引は DAA 325 の選択鎖に含まれ、同一の受付に `fullReplayApprovalRecorded = true` を確認した。この時点で Gate C は `pending`、21 量子の消費数は 0。同じ claim は通知期限を通過し、DAA 3439 で3ピアが Final を確認した。Final 時点は Gate C が pending、消費は 0/21。[隔離実行の記録](./README.md)

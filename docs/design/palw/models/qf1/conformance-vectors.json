@@ -1,0 +1,93 @@
+{
+  "scope": "synthetic byte conformance only; not Qwen output or an admissible claim",
+  "generator": "synthetic_step(j): ((j+1)*257+role*31+channel*17)%65535-32767",
+  "synthetic_one_step": {
+    "state_shape": [
+      1,
+      37,
+      4096
+    ],
+    "s_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "readout_message_bytes": 303141,
+    "z_hex": "12b0abd6d6dbb101b23f1632788ead6e5bfbf29ecde3a064213db6736bdf2ded4de1d1584da2793b62a90b1ac8376c341be56db18d175e2831d72909efa3d54d",
+    "input_root_hex": "bf42725521a213528338578fb1c4793ca719bd14f2deb575c1f26f05058ca32f1b7d693c1ba45e1027a326fe1926a23233df13bdef57b89aaa1c7ea98784afda",
+    "roots_hex": [
+      "bf42725521a213528338578fb1c4793ca719bd14f2deb575c1f26f05058ca32f1b7d693c1ba45e1027a326fe1926a23233df13bdef57b89aaa1c7ea98784afda",
+      "6611a95e5b11f055b656eed17e821aad092315e3b7fbb287b533dbb0c18ce704174620d484b977ba4e9dcb9064ca4f74ff38659199f6a950f2e2b021ab9f0f35",
+      "08c8ad9db054a41def7e15a195a6f2ad38c6b51f5ed4ae4a69e635cc205a54e360f94bfde439ad09ed9cc62b5ab7604f62c6654a3cb542ef586f344fc6a31879",
+      "140c57eaae143d5fad8efb2c023e4b9ae89730f61effc75e50d5f9707993a541b59391ba9c35fb46b27cd8ed5a984a36d3bb996f17ebe62b300af62446507fc1"
+    ],
+    "leaf_counts": [
+      3,
+      1,
+      1,
+      1
+    ],
+    "ticket_hex": "7378a339732fad519e7bf6437ecaacd0bee81d598565c68bacef742246e85edb"
+  },
+  "schedule_examples": [
+    {
+      "decision_positions": [
+        2
+      ],
+      "decision_input_tokens": [
+        5
+      ],
+      "processed_positions": 3,
+      "last_selected_token_is_forwarded": false,
+      "stop_reason": "EOS"
+    },
+    {
+      "decision_positions": [
+        1,
+        2,
+        3
+      ],
+      "decision_input_tokens": [
+        4,
+        100,
+        101
+      ],
+      "processed_positions": 4,
+      "last_selected_token_is_forwarded": false,
+      "stop_reason": "LIMIT"
+    }
+  ],
+  "compression_boundary_vectors": [
+    {
+      "message_length": 1,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "2fa3f686df876995167e7c2e5d74c4c7b6e48f8068fe0e44208344d480f7904c36963e44115fe3eb2a3ac8694c28bcb4f5a0f3276f2e79487d8219057a506e4b"
+    },
+    {
+      "message_length": 127,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "b6292669ccd38d5f01caae96ba272c76a879a45743afa0725d83b9ebb26665b731f1848c52f11972b6644f554c064fa90780dbbbf3a89d4fc31f67df3e5857ef"
+    },
+    {
+      "message_length": 128,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "2319e3789c47e2daa5fe807f61bec2a1a6537fa03f19ff32e87eecbfd64b7e0e8ccff439ac333b040f19b0c4ddd11a61e24ac1fe0f10a039806c5dcc0da3d115"
+    },
+    {
+      "message_length": 129,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "f59711d44a031d5f97a9413c065d1e614c417ede998590325f49bad2fd444d3e4418be19aec4e11449ac1a57207898bc57d76a1bcf3566292c20c683a5c4648f"
+    },
+    {
+      "message_length": 4095,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "d745504d13996a7960709a8061b8be4010e32c1294a8e6372e55069587e967e1766d95c75099ac4742f881ef02820d8fecc6bdbfa0c4340370f290a7dd2989aa"
+    },
+    {
+      "message_length": 4096,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "c7a3d6a53bd11772ecf077c1dc9633a39c6fe691ec07a530e0e765c0a9d5a01a16f00995536578b83e54c2821766ac7ac6ae86e22269a5d14208ccac954cc95f"
+    },
+    {
+      "message_length": 4097,
+      "message_rule": "byte[i]=i mod 251",
+      "digest_hex": "a1aca2bd515e5a87ed22476d9209f748754ebaeddef9cd1e1d57c12cc4b9029342cb74899a9f23cfece0ee8be2fd86e9e72a9289921231a6e40883d01694e0dd"
+    }
+  ]
+}

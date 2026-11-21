@@ -4,6 +4,10 @@
 
 > **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。
 
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
+
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## Consensus / architecture
@@ -124,6 +128,7 @@
 - [ADR-0224 — 全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md)
 - [ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する](0226-staged-work-commitments-and-consensus-eligibility.md)
 - [ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md)
+- [ADR-0234 — Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する](0234-qwen3-fow1-execution-and-readout.md)
 
 ## EVM / wallet
 
@@ -204,6 +209,7 @@
 - [ADR-0220 — Hugging Face取得とclaim固有の資料供給を分離する](0220-hugging-face-model-acquisition-and-claim-materials.md)
 - [ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md)
 - [ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md)
+- [ADR-0233 — モデル追加時の構造・実用性検査と限定BFT停止を採択する](0233-model-admission-screening-and-bft-stop.md)
 
 ## Operations / interfaces / recovery
 

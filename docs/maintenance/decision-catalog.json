@@ -1391,7 +1391,7 @@
       "path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
       "title": "ADR-0180 — PALW のみの合意:BFT の validator を使わない",
       "topic": "Consensus / architecture",
-      "status": "Accepted / BFT不使用の設計"
+      "status": "台帳BFT禁止を維持 / ADR0233のモデル安全停止を限定追加"
     },
     {
       "kind": "adr",
@@ -1824,6 +1824,22 @@
       "title": "ADR-0232 — 30%買付・20%永久流動性・余剰Position burnを採択する",
       "topic": "Economics / budgets",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約"
+    },
+    {
+      "kind": "adr",
+      "number": "0233",
+      "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "title": "ADR-0233 — モデル追加時の構造・実用性検査と限定BFT停止を採択する",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAS1限定停止権限・UNKNOWN閉鎖"
+    },
+    {
+      "kind": "adr",
+      "number": "0234",
+      "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "title": "ADR-0234 — Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する",
+      "topic": "Consensus / architecture",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定"
     },
     {
       "kind": "rfc",
@@ -2344,6 +2360,22 @@
       "title": "RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn",
       "topic": "Economics / budgets",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn"
+    },
+    {
+      "kind": "rfc",
+      "number": "0065",
+      "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "title": "RFC-0065 — MAS1：モデル追加時の構造検査・実用性条件とBFT停止",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAS1構造・実用性検査・BFT安全停止"
+    },
+    {
+      "kind": "rfc",
+      "number": "0066",
+      "path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "title": "RFC-0066 — QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout",
+      "topic": "Consensus / architecture",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・37-vector Readout"
     }
   ]
 }

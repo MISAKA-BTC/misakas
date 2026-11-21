@@ -1,0 +1,25 @@
+# QF1適用・移行 — Qwen3のFOW1実行具体化
+
+- 日付: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
+- 正本: [RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)
+
+## 適用先
+
+QF1-Q3-8B-A16-8K-v1を明示する新しいdescriptorと試行だけに適用する。Qwen3-8Bの名前だけで一般登録・既存claim・genesis/forkモデルを切り替えない。旧claimは受付時のprofileと責任でdrainし、新しいReadout・入力・Ticketで再計算して権利を増やさない。
+
+## 優先順位
+
+QF1の具体的な数値・shape・Readout・codecはRFC0066が所有する。FOW1のG-EXEC/G-COLL/G-COST、MAS1のG-USEとUNKNOWN/BFT停止、TB1のfreezeと用途独立性、MOE2経済は継承する。QF1はこれらの必須gateを弱めない。
+
+限定置換は、AN1/RFC0062の35-token byte frameをQF1用HEX64 chat frameに変える点と、未指定の具体Readout/数値/codecを固定する点である。FOW1全体の入力adapterを一括変更するものではない。旧native wire番号やHash64の意味を置換しない。
+
+## 開始条件
+
+instanceの全artifact・TIR・scale・tokenizer・StateMapを固定し、資源上限と完全Court catalog、G-EXEC/G-COLL/G-COST/G-USE、MAS1停止状態、native実装・移行・activationが全て成立するまでは採掘不可とする。公式重みや小規模vectorの成功を条件の代替にしない。
+
+非報酬評価はMAS1のMODEL_AUDITと後続独立PANELを使う。一般登録と追加モデルの市場原子生成はそのままで、評価からcredit/weight/受賞権利/報酬を発行しない。後日合格しても過去の評価に遡って報酬を付与しない。
+
+## 現在の到達点
+
+具体的な推論位置、37 vectorのReadout、整数型、Stop/End、Root/Ticketの論理codecを設計として固定した。実8B推論、変換品質、Qwen費用定理、本番wire/runtime/activationを完了扱いしない。旧資料の実測・実装済み記述は元のprofileでの履歴であり、QF1の証拠へ転用しない。

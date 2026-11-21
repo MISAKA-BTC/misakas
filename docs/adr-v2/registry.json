@@ -99,7 +99,7 @@
       "related_rfcs": [
         "RFC-v2-0010"
       ],
-      "authored_section_sha256": "517638580e03eb0ee22e1dbedeb08e17effba9dc36a4b8cbc86359847338734e"
+      "authored_section_sha256": "f20579ed21f1940c38ce0d8ac3b57b3efd40a4e047b3d8628e2f48356e5daffc"
     },
     {
       "id": "ADR-v2-0006",
@@ -117,7 +117,7 @@
       "related_rfcs": [
         "RFC-v2-0010"
       ],
-      "authored_section_sha256": "e319b3b227f9ae1e6d551b7a6532874795acfc55ad2a564b085cc3b197c91366"
+      "authored_section_sha256": "86fded9f9f8ce97bdf34b98a3e764ed7918f9d83602633c901322c45fa36163f"
     },
     {
       "id": "ADR-v2-0007",
@@ -239,7 +239,7 @@
       "related_rfcs": [
         "RFC-v2-0002"
       ],
-      "authored_section_sha256": "80a76dd24c4030e158749792ceebcb687bb0f3d48de10b21d1d5a5989f782876"
+      "authored_section_sha256": "801f7b0ef8d279b67505d44d6514bd6348175fa01917f2bf76d54ce2cea18ed7"
     },
     {
       "id": "ADR-v2-0014",
@@ -256,7 +256,7 @@
         "RFC-v2-0002",
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "4fb6958cec6ae62b6c2e1f02c8c5fc4131fe90a9f9776a88f032d8dbd9b21e14"
+      "authored_section_sha256": "f7b5da43fe23a7d86d4ecc80a0bc061645276293aa55dc4f72aefc1c92968e8d"
     },
     {
       "id": "ADR-v2-0015",
@@ -273,7 +273,7 @@
       "related_rfcs": [
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "1c06fdff25d9815a66f3b06e02acd12748f58b1d2223f98713d12909bd94a476"
+      "authored_section_sha256": "1701974d0f3d84849a2bbaeb1b2f39ca23f94d20630813a8f898bc4c8b66f0b7"
     },
     {
       "id": "ADR-v2-0016",
@@ -288,7 +288,7 @@
       "related_rfcs": [
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "20f0c709b19b4cb49cd4ff3132f2f47aac6d30e60c5a0b10e2b281a9aaa5895e"
+      "authored_section_sha256": "bacd8955d664db0fab4e3e6382dce6e56ccfb5448c3cafc4beea06993d448e97"
     },
     {
       "id": "ADR-v2-0017",
@@ -323,7 +323,7 @@
         "RFC-v2-0003",
         "RFC-v2-0005"
       ],
-      "authored_section_sha256": "cbca2a55f0016731337182f31d7a2475234390309473ecd6802018772a4321cf"
+      "authored_section_sha256": "6fb19276ba61911eff39846a364a8a00ec5e62a6feafa4213d051ce574f73c3a"
     },
     {
       "id": "ADR-v2-0019",
@@ -338,7 +338,7 @@
         "RFC-v2-0004",
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "197837c41354a07c4b8dfe4018c04e979ee81c42ad8c0e6299355c1f16f99daf"
+      "authored_section_sha256": "bfd87eee2bc3b42473e538ca65e2bcf1576b32c10ebb32a5ffe9b5f06e6c0204"
     },
     {
       "id": "ADR-v2-0020",
@@ -403,7 +403,7 @@
       "related_rfcs": [
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "fdfdf6f52c8e9e3aa2dff78ea10a669dc3653c7d7b4abd303aa18d66fc955e7b"
+      "authored_section_sha256": "0d4545b2f518b237515dbca349a9e9d015639b5ddefb0d4496018ee7c953f405"
     },
     {
       "id": "ADR-v2-0024",
@@ -417,7 +417,7 @@
       "related_rfcs": [
         "RFC-v2-0001"
       ],
-      "authored_section_sha256": "4e51359465c764e5c4c1cafcac3fe05c80c86093df74c9536a6a9bd204c59248"
+      "authored_section_sha256": "c74260f9102afaa76deafac47e87188c6abf41e8826ed49b287352c95437f458"
     },
     {
       "id": "ADR-v2-0025",
@@ -433,7 +433,7 @@
         "RFC-v2-0001",
         "RFC-v2-0008"
       ],
-      "authored_section_sha256": "2789c60dff79cf9c8874dfb069abb3ac98b2e6d4d926e18f46ceca9997941646"
+      "authored_section_sha256": "7341e52a639fdbad75f57beb076975fb138f7383ddb48750c3f80df004733524"
     },
     {
       "id": "ADR-v2-0026",
@@ -455,7 +455,7 @@
         "RFC-v2-0007",
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "85083397488c87b8993b03bf78cd4166875959819a4dafab6d6c80b9c6a63a75"
+      "authored_section_sha256": "c1dafacae921b5f590c378ed7966a9e95f42d86981ead5f56d7ed25b027add83"
     },
     {
       "id": "ADR-v2-0027",
@@ -487,7 +487,7 @@
       "related_rfcs": [
         "RFC-v2-0007"
       ],
-      "authored_section_sha256": "ff76ed64617e21800c6de9ccb5d3582c59552bce8a524bf33c12efe7cf6d177e"
+      "authored_section_sha256": "82ef6d7437ecfd3bc47fab15401e2fd882b5a71fb45de8e09e1b3dadd3ad2a5b"
     },
     {
       "id": "ADR-v2-0029",
@@ -564,7 +564,7 @@
         "RFC-v2-0006",
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "d5df71a073571131a5f3597ff1d1106b0d8d8bb8444239eaa29d079f9dfb2015"
+      "authored_section_sha256": "defcb772429e32931543befe0bf1d629fb04a154a773b56aff8b467470ccd22c"
     },
     {
       "id": "ADR-v2-0034",
@@ -656,7 +656,7 @@
       "related_rfcs": [
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "61ac00a7420e1b64d60e5075856cf44a94195bf76f566aaa7b010f90a18c3f5f"
+      "authored_section_sha256": "b43f42220449199e7c480a1449df89d60ac16cd7fda5d51497440a56ae7fe7db"
     },
     {
       "id": "ADR-v2-0040",
@@ -673,7 +673,7 @@
         "RFC-v2-0002",
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "6c62153458052e0dc1a95cd7e763787c39267df265001e0b990b4519dc3837e2"
+      "authored_section_sha256": "651a78f37998ced522fac112448f81f3cad20d68a057d1d6886c87f494118d69"
     },
     {
       "id": "ADR-v2-0041",
@@ -703,7 +703,7 @@
       "related_rfcs": [
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "8d82a5a42b390fafeb8e06a2f5aae139880f26eca4cd2208d6be755b8afe13de"
+      "authored_section_sha256": "5fc8b1b98e3ae92260826fa43e00031653e200d353fec439b9090f30c0e1d981"
     },
     {
       "id": "ADR-v2-0043",
@@ -759,7 +759,7 @@
       "related_rfcs": [
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "affc49727e8258f79e02fcb194488150f4bfbce01b0b772b86daa3cc60124150"
+      "authored_section_sha256": "b0fe60d952663fb1b9ecef650ad2ddc48c73a66aa25e7e8ebacb2e240f227319"
     },
     {
       "id": "ADR-v2-0047",
@@ -801,7 +801,7 @@
       "related_rfcs": [
         "RFC-v2-0012"
       ],
-      "authored_section_sha256": "784b09559c10e01eb7d1bd5cd133af4bba88a72b802031fb32893598e1437208"
+      "authored_section_sha256": "557f0e09fef646d9f1583b9c0eeefed35871c110a0c461c482856b2f1a15427c"
     },
     {
       "id": "ADR-v2-0050",
@@ -1167,15 +1167,43 @@
       "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "provenance": "2026-11-20 explicit MOE2 30/20/50 permanent-liquidity instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0065",
+      "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MAS1 instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0233",
+      "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MAS1 instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0066",
+      "path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0234",
+      "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
     }
   ],
   "current_revision": {
     "date": "2026-11-20",
-    "revision": "2026-11-20-permanent-liquidity",
+    "revision": "2026-11-20-qwen-fow1",
     "current_rfc_book_count": 20,
     "current_adr_book_count": 50,
     "adopted_decision_records": [
-      "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+      "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
     ],
     "historical_consolidation_metadata_retained": true,
     "runtime_changed": false,
@@ -1320,32 +1348,68 @@
       "core_option_market_enabled": false,
       "permanent_lp_core_promotion_allowed": false,
       "all_states_paired_liquidity_liveness_proved": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-model-admission-safety",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction: screen model kernels/graphs and practical usefulness before mining; route unresolved risk to BFT stopping.",
+      "rfc_records": [
+        "docs/rfc/0065-model-admission-screening-and-bft-stop.md"
+      ],
+      "decision_records": [
+        "docs/adr/0233-model-admission-screening-and-bft-stop.md"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false,
+      "new_profile": "MAS1",
+      "automatic_detection_complete": false,
+      "qwen_cost_theorem_proved": false,
+      "unknown_mining_allowed": false,
+      "bft_approval_replaces_cost_theorem": false,
+      "bft_ledger_finality": false,
+      "moe2_changed": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-qwen-fow1",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
+      "rfc_records": [
+        "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
+      ],
+      "decision_records": [
+        "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
+      ],
+      "new_profile": "QF1",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "qwen_cost_theorem_proved": false,
+      "qwen_quality_measured": false,
+      "unknown_mining_allowed": false,
+      "bft_approval_replaces_cost_theorem": false,
+      "moe2_changed": false
     }
   ],
   "latest_adoption": {
     "date": "2026-11-20",
-    "revision": "2026-11-20-permanent-liquidity",
+    "revision": "2026-11-20-qwen-fow1",
     "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
-    "authority": "Explicit user instruction: 30% Position purchase + 20% permanent liquidity + 50% residual rewards; inherited additional-only scope and atomic market creation.",
+    "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
     "rfc_records": [
-      "docs/rfc/0064-reward-buy-and-permanent-liquidity.md"
+      "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
     ],
     "decision_records": [
-      "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+      "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
     ],
+    "new_profile": "QF1",
     "runtime_changed": false,
     "activation_changed": false,
-    "new_profile": "MOE2",
-    "purchase_additional_permille": 300,
-    "permanent_liquidity_additional_permille": 200,
-    "residual": "R-floor(300R/1000)-floor(200R/1000)",
-    "amm_burn_permille": 50,
-    "amm_owner_total_permille": 30,
-    "core_miner_permille": 1000,
-    "registration_creates_market_atomically": true,
-    "core_option_market_enabled": false,
-    "permanent_lp_core_promotion_allowed": false,
-    "all_states_paired_liquidity_liveness_proved": false
+    "qwen_cost_theorem_proved": false,
+    "qwen_quality_measured": false,
+    "unknown_mining_allowed": false,
+    "bft_approval_replaces_cost_theorem": false,
+    "moe2_changed": false
   },
   "revision_history": [
     {
@@ -1383,6 +1447,30 @@
       "current_adr_book_count": 50,
       "adopted_decision_records": [
         "docs/adr/0231-additional-model-option-economics.md"
+      ],
+      "historical_consolidation_metadata_retained": true,
+      "runtime_changed": false,
+      "activation_changed": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-permanent-liquidity",
+      "current_rfc_book_count": 20,
+      "current_adr_book_count": 50,
+      "adopted_decision_records": [
+        "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+      ],
+      "historical_consolidation_metadata_retained": true,
+      "runtime_changed": false,
+      "activation_changed": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-model-admission-safety",
+      "current_rfc_book_count": 20,
+      "current_adr_book_count": 50,
+      "adopted_decision_records": [
+        "docs/adr/0233-model-admission-screening-and-bft-stop.md"
       ],
       "historical_consolidation_metadata_retained": true,
       "runtime_changed": false,

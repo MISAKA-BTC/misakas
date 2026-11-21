@@ -1,0 +1,49 @@
+# MAS1 — モデル追加時の検査とBFT安全停止の適用・移行
+
+- 日付: 2026-11-20（Asia/Tokyo）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
+- 正本: [RFC0065](../rfc/0065-model-admission-screening-and-bft-stop.md) / [ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)
+- 基礎: [TB1/FOW1移行](palw-tb1-fow1-transition.md) / [MOE2移行](model-option-economics-transition.md)
+
+## 1. 今回の権限と優先関係
+
+ユーザーの明示指示により、安価な予測・再利用を使うモデルの採掘を防ぐ追加検査と、自動判定不能な危険に対する限定BFT停止を採択する。本契約は、MAS1を適用する新しいFOW1採掘資格の範囲で、旧「モデル単位の検査不採用」「品質審査なし」「BFTを一切使わない」の包括的表現を置換する。
+
+一般登録の自由、モデルIDの不変性、モデル非保有Node、Panel＋Court、計算validity proof不使用、TB1の乱数源、MOE2、既存の署名済み責任は維持する。停止担当は台帳finality・fork choice・reorg・既確定資産への権限を持たない。
+
+## 2. 入口の一本化
+
+UI/SDK/RPC/native登録・import/repair・snapshot/IBD・miner・Panel・Final・reward・credit・weight・permit・受賞権利消費は、RFC0065の同じEffectiveMiningAllowedを読む。別API、owner変更、同一artifactの別名、burn Resume、core指定で安全停止を回避させない。
+
+UNASSESSED/CHECKING/UNKNOWN/FAILは採掘不可。全PASSに加えてG-EXEC/G-COLL/G-COST/G-USE、現行rule・停止集合・既存gateを必要とする。単なるBFT賛成票はどの数学的gateも置換しない。
+
+追加モデルのModelRegisteredは市場生成と原子的に成立する。MAS1の未適格は「市場が未準備」という状態ではない。市場取引、既確定残高、永久LPの意味を安全停止で変更しない。
+
+## 3. 非報酬評価とBFTの接続
+
+候補・suiteをfreezeした後の独立TB1-MODEL_AUDITで評価入力を作る。提出結果固定後の別TB1-PANELで検証担当を選ぶ。評価は非報酬であり、未適格モデルが自己の採掘資格や停止rosterを作る循環を持たない。control容量と予算を事前予約する。
+
+新規UNKNOWNはREVIEW_HOLDに置き、ModelRiskCaseをBFT停止担当へ送る。稼働後の未確定懸念には認証されたq署名のStopCertificateを必要とし、未検証通報一件で永久停止しない。認証された客観的反例は自動停止経路を使える。
+
+停止rosterは事前確定TB1 holder rosterに明示されたMODEL_STOP権限とし、n=3f+1、q=2f+1、別fault前提を持つ。TB1 share証明と停止署名は別domainである。PublicOneHonestからBFT故障上限を推定しない。
+
+## 4. 停止・解除と適用順序
+
+MAS1用の新しいreducerは、安全停止・反例・rule失効を同batchの成功sweep、Final、発行、権利消費より前に反映する。旧profileの再生順は変えない。停止中も元期限・資料・Court・返還・責任精算を継続する。
+
+artifact/profileの解除は最新検査世代の全PASSと、現在rosterのq署名、正確な旧停止集合・control recordへの束縛を必要とする。TheoremRule version停止は個別モデルの解除で消さず、別途採択した新ruleと全適合再検査を必要とする。burn、期限満了、owner又はtierの変更だけで解除しない。停止・解除は既存nativeのcanonical包含とjournalへ統合し、受信順やローカル時刻で分岐させない。
+
+## 5. activationと旧責任
+
+1. 本改訂は設計採択のみ。公開設定・配備・支払の変更ではない。
+2. 具体的なTheoremRule、KernelAnalysisProfile、PracticalSuite、閾値、全有界checker、非報酬評価、TB1-MODEL_AUDIT、rosterとfault前提、署名suite・codec・上限・保護容量を先に固定する。
+3. 一つのバイナリで受付から停止・復帰・Final・権利消費まで接続し、restart/reorg/IBDで状態一致を検証する。Qwen用定理が未完成なら合格モデルとして扱わない。
+4. 明示activation recordの境界以後の対象profileに適用する。既登録モデルの新規資格にも検査を行い、過去登録を自動PASSにしない。
+5. 境界前に正規受理された旧claimは固定したlegacy drainと元期限で終える。旧仕事の新世代への付替えや二重計上を禁止する。
+6. 条件が未完成、BFTが未構築、又は適格モデル集合が空なら、新profileのactivationは成立しない。旧乱数・旧採掘・BFT仮承認へfallbackしない。
+
+## 6. 残余リスクの公表
+
+MAS1は、認識済みの危険を排除し、不明な新規候補を閉じ、後発の危険へ停止手段を与える。全ての安い算法の自動検出、一般LLMの費用証明、未知入力での品質、停止までの被害ゼロを保証しない。
+
+停止の認証と危険の正しい理解を区別する。BFTによる誤停止・停止遅延、資料不足・検閲、native合意前提、suiteの過学習と登録候補選別を実装・運用の評価対象として保持する。

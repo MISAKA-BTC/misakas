@@ -2,6 +2,10 @@
 
 通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。新規採掘の後続採択は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) に従います。旧記録の掲載は新profileでの有効性を意味しません。
 
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
+
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## (root)
@@ -242,6 +246,8 @@
 - [adr/0230-palw-function-output-and-work-admissibility.md](../adr/0230-palw-function-output-and-work-admissibility.md)
 - [adr/0231-additional-model-option-economics.md](../adr/0231-additional-model-option-economics.md)
 - [adr/0232-reward-buy-and-permanent-liquidity.md](../adr/0232-reward-buy-and-permanent-liquidity.md)
+- [adr/0233-model-admission-screening-and-bft-stop.md](../adr/0233-model-admission-screening-and-bft-stop.md)
+- [adr/0234-qwen3-fow1-execution-and-readout.md](../adr/0234-qwen3-fow1-execution-and-readout.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)
@@ -427,6 +433,7 @@
 - [design/palw/consensus/public-adjudication-policy-v0.3.md](../design/palw/consensus/public-adjudication-policy-v0.3.md)
 - [design/palw/consensus/public-adjudication-policy-v0.4.md](../design/palw/consensus/public-adjudication-policy-v0.4.md)
 - [design/palw/consensus/public-adjudication-policy-v0.5.md](../design/palw/consensus/public-adjudication-policy-v0.5.md)
+- [design/palw/consensus/public-adjudication-policy-v0.6.md](../design/palw/consensus/public-adjudication-policy-v0.6.md)
 - [design/palw/consensus/rfc9-l2-fork-choice.md](../design/palw/consensus/rfc9-l2-fork-choice.md)
 - [design/palw/consensus/rule-e-leaf-v2-note.md](../design/palw/consensus/rule-e-leaf-v2-note.md)
 - [design/palw/consensus/t12-replay-memory-1001.md](../design/palw/consensus/t12-replay-memory-1001.md)
@@ -599,6 +606,8 @@
 - [design/palw/models/palw-practical-runtime-plan-2026-08-26.md](../design/palw/models/palw-practical-runtime-plan-2026-08-26.md)
 - [design/palw/models/palw-qwen25-class-phase0.md](../design/palw/models/palw-qwen25-class-phase0.md)
 - [design/palw/models/palw-two-class-plan-2026-08-21.md](../design/palw/models/palw-two-class-plan-2026-08-21.md)
+- [design/palw/models/qf1/README.md](../design/palw/models/qf1/README.md)
+- [design/palw/models/qf1/trace-schema.md](../design/palw/models/qf1/trace-schema.md)
 - [design/palw/models/rfc-0004-part2-typed-roots.md](../design/palw/models/rfc-0004-part2-typed-roots.md)
 - [design/palw/models/rfc06-genesis-declaration-index-2026-10-13.md](../design/palw/models/rfc06-genesis-declaration-index-2026-10-13.md)
 - [design/palw/models/versioned-kernels.md](../design/palw/models/versioned-kernels.md)
@@ -777,10 +786,12 @@
 - [governance/README.md](../governance/README.md)
 - [governance/design-freeze.md](../governance/design-freeze.md)
 - [governance/document-lifecycle.md](../governance/document-lifecycle.md)
+- [governance/model-admission-safety-transition.md](../governance/model-admission-safety-transition.md)
 - [governance/model-option-economics-transition.md](../governance/model-option-economics-transition.md)
 - [governance/palw-tb1-fow1-transition.md](../governance/palw-tb1-fow1-transition.md)
 - [governance/parameter-register.md](../governance/parameter-register.md)
 - [governance/post-mainnet-scope.md](../governance/post-mainnet-scope.md)
+- [governance/qwen-fow1-profile-transition.md](../governance/qwen-fow1-profile-transition.md)
 - [governance/templates/README.md](../governance/templates/README.md)
 - [governance/templates/adr-major-change.md](../governance/templates/adr-major-change.md)
 - [governance/templates/parameter-change.md](../governance/templates/parameter-change.md)
@@ -940,6 +951,10 @@
 - [maintenance/revisions/2026-11-18-an1/THREAT_MATRIX.md](revisions/2026-11-18-an1/THREAT_MATRIX.md)
 - [maintenance/revisions/2026-11-18-an1/VALIDATION.md](revisions/2026-11-18-an1/VALIDATION.md)
 - [maintenance/revisions/2026-11-18-an1/reference_impl/README.md](revisions/2026-11-18-an1/reference_impl/README.md)
+- [maintenance/revisions/2026-11-20-model-admission-safety/CHANGES.md](revisions/2026-11-20-model-admission-safety/CHANGES.md)
+- [maintenance/revisions/2026-11-20-model-admission-safety/DESIGN_REVIEW.md](revisions/2026-11-20-model-admission-safety/DESIGN_REVIEW.md)
+- [maintenance/revisions/2026-11-20-model-admission-safety/README.md](revisions/2026-11-20-model-admission-safety/README.md)
+- [maintenance/revisions/2026-11-20-model-admission-safety/VALIDATION.md](revisions/2026-11-20-model-admission-safety/VALIDATION.md)
 - [maintenance/revisions/2026-11-20-model-output-binding/CHANGES.md](revisions/2026-11-20-model-output-binding/CHANGES.md)
 - [maintenance/revisions/2026-11-20-model-output-binding/README.md](revisions/2026-11-20-model-output-binding/README.md)
 - [maintenance/revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md](revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md)
@@ -950,6 +965,10 @@
 - [maintenance/revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md](revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md)
 - [maintenance/revisions/2026-11-20-permanent-liquidity/README.md](revisions/2026-11-20-permanent-liquidity/README.md)
 - [maintenance/revisions/2026-11-20-permanent-liquidity/VALIDATION.md](revisions/2026-11-20-permanent-liquidity/VALIDATION.md)
+- [maintenance/revisions/2026-11-20-qwen-fow1/CHANGES.md](revisions/2026-11-20-qwen-fow1/CHANGES.md)
+- [maintenance/revisions/2026-11-20-qwen-fow1/DESIGN_REVIEW.md](revisions/2026-11-20-qwen-fow1/DESIGN_REVIEW.md)
+- [maintenance/revisions/2026-11-20-qwen-fow1/README.md](revisions/2026-11-20-qwen-fow1/README.md)
+- [maintenance/revisions/2026-11-20-qwen-fow1/VALIDATION.md](revisions/2026-11-20-qwen-fow1/VALIDATION.md)
 - [maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md](revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)
 - [maintenance/revisions/2026-11-20-tb1-fow1/README.md](revisions/2026-11-20-tb1-fow1/README.md)
 - [maintenance/revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md](revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md)
@@ -1097,6 +1116,8 @@
 - [rfc/0062-palw-function-output-and-work-admissibility.md](../rfc/0062-palw-function-output-and-work-admissibility.md)
 - [rfc/0063-additional-model-option-economics.md](../rfc/0063-additional-model-option-economics.md)
 - [rfc/0064-reward-buy-and-permanent-liquidity.md](../rfc/0064-reward-buy-and-permanent-liquidity.md)
+- [rfc/0065-model-admission-screening-and-bft-stop.md](../rfc/0065-model-admission-screening-and-bft-stop.md)
+- [rfc/0066-qwen3-fow1-execution-and-readout.md](../rfc/0066-qwen3-fow1-execution-and-readout.md)
 - [rfc/INDEX.md](../rfc/INDEX.md)
 - [rfc/README.md](../rfc/README.md)
 - [rfc/TOPICS.md](../rfc/TOPICS.md)

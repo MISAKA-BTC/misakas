@@ -52,6 +52,15 @@ status[('adr','0232')]='ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・�
 for n in ['0087','0089','0091','0095','0101','0114','0124','0177','0179']:
  status[('adr',n)]='ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存'
 moe2_notice='> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。\n\n'
+status[('rfc','0065')]='ADOPTED_DESIGN_NOT_ACTIVATED / MAS1構造・実用性検査・BFT安全停止'
+status[('adr','0233')]='ADOPTED_DESIGN_NOT_ACTIVATED / MAS1限定停止権限・UNKNOWN閉鎖'
+status[('adr','0180')]='台帳BFT禁止を維持 / ADR0233のモデル安全停止を限定追加'
+mas1_notice='> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。\n\n'
+moe2_notice=mas1_notice+moe2_notice
+status[('rfc','0066')]='ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・37-vector Readout'
+status[('adr','0234')]='ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定'
+qf1_notice='> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。\n\n'
+moe2_notice=qf1_notice+moe2_notice
 existing_catalog=D/'maintenance/decision-catalog.json'
 if existing_catalog.exists():
  for row in json.loads(existing_catalog.read_text()).get('records',[]):

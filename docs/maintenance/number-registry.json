@@ -236,6 +236,28 @@
       "adr_path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "audit": "MOE2 30/20/50, virtual-reserve integer kernel and permanent nonredeemable liquidity; no native wire or activation value assigned."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0065",
+      "rfc_path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "adr": "0233",
+      "adr_path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "MAS1 admission screening, objective usefulness and limited BFT safety stop; no runtime or wire allocation."
+    },
+    {
+      "date": "2026-11-20",
+      "rfc": "0066",
+      "rfc_path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "adr": "0234",
+      "adr_path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "QF1 fixed Qwen3 integer graph, token positions, Readout and logical codec; no native allocation or Qwen cost/quality certification."
     }
-  ]
+  ],
+  "next_post_consolidation": {
+    "rfc": "0067",
+    "adr": "0235"
+  }
 }

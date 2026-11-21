@@ -36,7 +36,7 @@
     "exposure_undo_allowed": false,
     "reuse_exposed_round_for_new_freeze": false,
     "new_beacon_wait_for_accepted_remedies": false,
-    "activation_requires": "complete BGW/PQ/native implementation and review, all selected consumer codecs/resources/recovery, explicit activation; FOW1 also requires concrete function/cost rules"
+    "activation_requires": "complete BGW/PQ/native implementation and review, all selected consumer codecs/resources/recovery, explicit activation; FOW1 also requires concrete function/cost rules; MAS1 also requires MODEL_AUDIT evaluation and separate MODEL_STOP control authority"
   },
   "consumers": [
     {
@@ -44,7 +44,14 @@
       "kind": "independent_tb1_round",
       "purpose": "EXEC",
       "scope": "new FOW1 execution challenge",
-      "freeze": ["complete candidate C and all nonces", "owner and beneficiary", "model/job/profile and theorem rule", "target and accounting snapshot", "original deadlines and reservations", "EXEC/PANEL RoundRef"],
+      "freeze": [
+        "complete candidate C and all nonces",
+        "owner and beneficiary",
+        "model/job/profile and theorem rule",
+        "target and accounting snapshot",
+        "original deadlines and reservations",
+        "EXEC/PANEL RoundRef"
+      ],
       "gate": "native-stable registration set before first honest EXEC share",
       "use": "derive s; bind actual input tokens and Init",
       "legacy_replacement": "unspecified or work/header/seal-reveal execution seed",
@@ -55,7 +62,13 @@
       "kind": "independent_tb1_round",
       "purpose": "PANEL",
       "scope": "selected full-replay Panel",
-      "freeze": ["signed Original and admitted original set", "pool and weights", "DrawPolicyId", "actor duties", "original deadlines and reservations"],
+      "freeze": [
+        "signed Original and admitted original set",
+        "pool and weights",
+        "DrawPolicyId",
+        "actor duties",
+        "original deadlines and reservations"
+      ],
       "gate": "native-stable Original and pool freeze before first honest PANEL share; EXEC and PANEL prepared before job admission",
       "use": "apply fixed DrawPolicy; do not infer independent human operators from slot count",
       "legacy_replacement": "future anchor/work-fold/paid-lock seal-reveal seed",
@@ -65,7 +78,12 @@
       "consumer": "COURT_POSITIVE",
       "kind": "deterministic_derivation",
       "source_purpose": "PANEL",
-      "context": ["authenticated PANEL certificate", "Original", "Panel actor", "obligation and scope"],
+      "context": [
+        "authenticated PANEL certificate",
+        "Original",
+        "Panel actor",
+        "obligation and scope"
+      ],
       "new_future_randomness": false,
       "new_independent_lottery": false,
       "legacy_replacement": "CPN1 challenge source; preserve old case codecs for drain"
@@ -82,7 +100,10 @@
       "consumer": "FOW1_ADMISSION_ORDER",
       "kind": "deterministic_order",
       "source_purpose": null,
-      "order": ["canonical ticket", "slot_id"],
+      "order": [
+        "canonical ticket",
+        "slot_id"
+      ],
       "new_independent_lottery": false,
       "extra_difficulty_draw": false,
       "legacy_replacement": "AN1/FOW1 ticket order overrides old preseal seed ranking on this route"
@@ -93,7 +114,13 @@
       "purpose": "ADMISSION",
       "enabled": false,
       "scope": "only a separately adopted control profile that requires an unknown preseal ranking seed; never an extra FOW1 lottery",
-      "freeze": ["candidate set", "target/D snapshot", "ranking rule", "capacity", "target epoch and original deadlines"],
+      "freeze": [
+        "candidate set",
+        "target/D snapshot",
+        "ranking rule",
+        "capacity",
+        "target epoch and original deadlines"
+      ],
       "gate": "own native-stable preseal freeze before first honest ADMISSION share",
       "native_implemented_here": false
     },
@@ -101,7 +128,12 @@
       "consumer": "EXEC_SCHEDULE",
       "kind": "independent_tb1_round",
       "purpose": "SCHEDULE",
-      "freeze": ["eligible unused/unexpired credit set", "reservation identities", "allocation policy", "future slot range"],
+      "freeze": [
+        "eligible unused/unexpired credit set",
+        "reservation identities",
+        "allocation policy",
+        "future slot range"
+      ],
       "gate": "native-stable credit-set freeze before first honest SCHEDULE share",
       "use": "allocate existing execution rights; not another mining ticket",
       "forbidden_cycle": "seed transport cannot require a permit from the schedule currently being generated",
@@ -112,7 +144,12 @@
       "kind": "independent_tb1_round",
       "purpose": "ROLE",
       "operators": "already valid previous-epoch holders",
-      "freeze": ["next holder candidates and unique collateral lots", "selection rule", "next n/f", "next suite and schedule"],
+      "freeze": [
+        "next holder candidates and unique collateral lots",
+        "selection rule",
+        "next n/f",
+        "next suite and schedule"
+      ],
       "gate": "native-stable next-roster candidate set before first honest ROLE share",
       "bootstrap": "explicit initial roster and disclosed fault assumption; no self-selection or constant execution entropy",
       "legacy_replacement": "attachment previous-PANEL derivation replaced by an independent ROLE session",
@@ -122,7 +159,13 @@
       "consumer": "GENERATION_PRNG",
       "kind": "deterministic_derivation",
       "source_purpose": "EXEC",
-      "context": ["canonical attempt", "registered sampling algorithm", "draw order", "rounding", "stop rule"],
+      "context": [
+        "canonical attempt",
+        "registered sampling algorithm",
+        "draw order",
+        "rounding",
+        "stop rule"
+      ],
       "new_future_randomness": false,
       "legacy_replacement": "execution PRNG is not a trace root or future Panel beacon"
     },
@@ -134,8 +177,58 @@
       "difficulty": "single pre-fixed theta; 0 <= theta <= 2^256; T < theta",
       "width_bits": 256,
       "extra_future_ticket_beacon": false,
-      "forbidden_salts": ["PANEL seed", "SCHEDULE seed", "ROLE seed", "ADMISSION seed", "signature randomness", "receipt", "proof supporter subset", "free salt"],
+      "forbidden_salts": [
+        "PANEL seed",
+        "SCHEDULE seed",
+        "ROLE seed",
+        "ADMISSION seed",
+        "signature randomness",
+        "receipt",
+        "proof supporter subset",
+        "free salt",
+        "MODEL_AUDIT seed",
+        "MODEL_STOP certificate"
+      ],
       "legacy_replacement": "SWC1 R_ticket, old Final-after-maturity receipt lottery and multiple quantum draws are not inherited"
+    },
+    {
+      "consumer": "MODEL_PRACTICAL_EVALUATION",
+      "kind": "independent_tb1_round",
+      "purpose": "MODEL_AUDIT",
+      "scope": "MAS1 non-rewarding evaluation",
+      "freeze": [
+        "immutable model descriptor and generation",
+        "PracticalSuite and test generation rule",
+        "candidate set and selection budget",
+        "original deadlines and capacity",
+        "separate subsequent PANEL RoundRef"
+      ],
+      "gate": "native-stable candidate/suite freeze before first honest MODEL_AUDIT share",
+      "use": "derive evaluation inputs; no mining Ticket, credit, weight or award rights",
+      "native_implemented_here": false
+    },
+    {
+      "consumer": "MODEL_EVALUATION_PANEL",
+      "kind": "independent_tb1_round",
+      "purpose": "PANEL",
+      "scope": "non-rewarding model evaluation, separate from mining claim rounds",
+      "freeze": [
+        "evaluation Original and trace/output roots",
+        "independent pool and DrawPolicy",
+        "duties, original deadlines and reserved capacity"
+      ],
+      "gate": "evaluation Original stable before first honest PANEL share",
+      "native_implemented_here": false
+    },
+    {
+      "consumer": "MODEL_SAFETY_STOP",
+      "kind": "no_new_beacon",
+      "source_purpose": null,
+      "use": "q=2f+1 distinct MODEL_STOP signatures from pre-fixed authorized roster; canonical native control",
+      "share_certificate_is_stop_certificate": false,
+      "waits_for_new_beacon": false,
+      "ledger_finality_authority": false,
+      "native_implemented_here": false
     }
   ],
   "reference_validation_scope": {
@@ -143,6 +236,8 @@
     "separate_arithmetic_cases": 103152,
     "additional_ROLE_SCHEDULE_ADMISSION_covered_by_upstream_tests": false,
     "complete_BGW_or_PQ_or_native_covered": false,
-    "FOW1_function_collision_or_cost_theorem_proved": false
-  }
+    "FOW1_function_collision_or_cost_theorem_proved": false,
+    "MODEL_AUDIT_MODEL_STOP_covered_by_upstream_tests": false
+  },
+  "model_admission_spec": "docs/rfc/0065-model-admission-screening-and-bft-stop.md"
 }

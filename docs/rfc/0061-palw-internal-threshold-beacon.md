@@ -1,5 +1,15 @@
 # RFC-0061 — PALW内部閾値beaconと用途別乱数契約
 
+<!-- MAS1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。独立MODEL_AUDIT purposeを追加する。MODEL_STOPは明示付与された用途別署名権限であり、share証明や新しい乱数purposeではない。
+
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+
+旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
+<!-- MAS1-ADOPTED-20261120-END -->
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
 - Scheme: **PALW-TB1 / TB1-BGW-PQ**（設計識別名。native wire tagの割当ではない）
@@ -41,7 +51,7 @@ n=3f+1,\qquad t=f+1,\qquad q=n-f=2f+1.
 
 ## 2. Purposeと全consumerの対応
 
-論理purposeは `EXEC`、`PANEL`、`SCHEDULE`、`ROLE`、`ADMISSION` とする。未知purposeは拒否する。各purpose／roundは**独立した秘密・多項式・VSS session・公開gate**を持つ。公開済みseedのdomain再hashを、新しい未来未知性の代用にしない。各purposeのwire tagとsuite版は有効化時に一度だけ固定する。
+論理purposeは `EXEC`、`PANEL`、`SCHEDULE`、`ROLE`、`ADMISSION`、MAS1の `MODEL_AUDIT` とする。未知purposeは拒否する。各purpose／roundは**独立した秘密・多項式・VSS session・公開gate**を持つ。公開済みseedのdomain再hashを、新しい未来未知性の代用にしない。各purposeのwire tagとsuite版は有効化時に一度だけ固定する。
 
 | consumer | 乱数・処理 | 最初の正直share公開前に固定する対象 | 新profileでの扱い |
 | --- | --- | --- | --- |
@@ -55,12 +65,15 @@ n=3f+1,\qquad t=f+1,\qquad q=n-f=2f+1.
 | EXEC生成権schedule | TB1 `SCHEDULE` の `sigma_S` | 適格credit集合、予約、割当規則、未来slot範囲 | 未認証仕事からseedや権利を生成しない |
 | 次epoch保持者roster | 前epoch保持者によるTB1 `ROLE` の `sigma_R` | 次候補lease/担保lot集合、抽選規則、n/f、次suite/schedule | 自分のrosterを自分の未生成乱数で選ばない |
 | negative、資料要求・応答、Court、取消・終端 | 新乱数を要求しない | 元claim、元予約、元期限 | TB1停止中も既受理救済を進める |
+| MAS1の実用評価入力 | 独立TB1 `MODEL_AUDIT` | 不変candidate/descriptor、suite、生成規則、予算、期限、test集合規則 | 非報酬用途。最初の正直share前に固定。採掘Ticketを生まない |
+| MAS1評価の再実行担当 | 別のTB1 `PANEL` | 非報酬評価の元提出物、pool、義務、原期限 | 評価提出後に固定。通常採掘PANELと別round |
+| MAS1安全停止 | 新乱数なし | 事前確定roster、MODEL_STOP権限、risk case | q署名の停止証明。TB1 share証明の代用や再利用を禁止 |
 
 ### 2.1 追加抽選を作らない境界
 
 [RFC-0056 §17](0056-global-claim-admission-difficulty.md)のAN1順序 `(ticket, slot_id)` は維持する。旧RFC-0055/ADR-0223のseed由来受付順位を、この同じAN1/FOW1経路へ追加してはならない。その旧順位機構を別の新control profileへ適用する場合だけ、`ADMISSION`としてTB1へ移す。これは採掘Ticketの第二抽選ではなく有限候補の処理順位であり、D合格・正当性・creditを単独で与えない。
 
-旧SWC1の第三の `R_ticket`、Final後の旧receipt lottery、署名乱数・証明subsetの差からの再抽選は、新AN1/FOW1へ採用しない。AN1互換のTicketはRFC-0059の固定式、FOW1のTicketはRFC-0062の固定式に従う。`sigma_P`、`sigma_S`、`sigma_R`、`sigma_A`、可変proof bytesを、その式の追加saltへ入れてはならない。
+旧SWC1の第三の `R_ticket`、Final後の旧receipt lottery、署名乱数・証明subsetの差からの再抽選は、新AN1/FOW1へ採用しない。AN1互換のTicketはRFC-0059の固定式、FOW1のTicketはRFC-0062の固定式に従う。`sigma_P`、`sigma_S`、`sigma_R`、`sigma_A`、MODEL_AUDITの値、停止証明又は可変proof bytesを、その式の追加saltへ入れてはならない。
 
 ### 2.2 Panel抽選policyとの分離
 
@@ -129,7 +142,7 @@ TB1の64byte context digest、32byte seed、既存64byte native beaconは異な�
 
 VSS終了時、正直holderはRoundRef、dealer、VSS終了までの公開transcript root、終了phase anchorに束縛したReadyへ署名する。そのrootへReady自身、QualRoot、FreezeRecordを含めない。q件の同一context Readyと規定のVSS終了判定を満たしたdealerをqualifiedとする。Ready多数は、Nodeが全私信の正しさを直接証明したという意味ではない。
 
-準備期限までにqualifiedとなった**全dealer**を固定slot順でQへ含める。都合のよいsubsetを選ばない。`|Q| >= q`、Q・資料の可用性・全容量の固定を満たして初めてPREPAREDとなる。AN1/FOW1のユーザー仕事はEXEC/PANEL双方のPREPAREDと予約完了後に受理する。SCHEDULE/ROLE/ADMISSIONは、それぞれのconsumer契約に必要なroundが準備できるまで当該用途を受理しない。
+準備期限までにqualifiedとなった**全dealer**を固定slot順でQへ含める。都合のよいsubsetを選ばない。`|Q| >= q`、Q・資料の可用性・全容量の固定を満たして初めてPREPAREDとなる。AN1/FOW1のユーザー仕事はEXEC/PANEL双方のPREPAREDと予約完了後に受理する。SCHEDULE/ROLE/ADMISSION/MODEL_AUDITは、それぞれのconsumer契約に必要なroundが準備できるまで当該用途を受理しない。MAS1評価はMODEL_AUDITと結果提出後のPANELの双方の計画・容量を事前予約する。
 
 ## 6. Release gateと時間順序
 
@@ -155,6 +168,8 @@ VSS終了時、正直holderはRoundRef、dealer、VSS終了までの公開transc
 - **ADMISSION:** seed順位を使用する別control profileについて、対象候補集合、target/D、順位policy、容量と原期限を閉じ、安定化後にsigma_Aを公開する。登録前か実行後かというstageをTimingPlanで固定し、未来の未生成Rootを仮置きしない。AN1/FOW1の既存 `(ticket,slot_id)` 順へは追加しない。
 
 各用途の依存DAGをTimingPlanに固定する。未来のconsumer、未発行credit、まだ決まらないroster、自己生成中のseedへ循環依存する計画は拒否する。purposeを増やしたこと自体を容量確保やliveな実装と扱わない。
+
+MAS1のMODEL_AUDITは候補・suiteのfreeze後に独立して公開し、その結果で非報酬testを実行する。評価提出物のfreeze後に別PANELを公開する。評価が自分の採掘権利又はその権利で生成するblockに依存しないcontrol経路を使う。停止・資料・反証の処理にはこの新しいbeacon待機を追加しない。
 
 ### 6.3 共通の予測不能性境界
 

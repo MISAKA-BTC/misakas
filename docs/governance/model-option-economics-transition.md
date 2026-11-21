@@ -1,5 +1,15 @@
 # MisakaOption経済仕様MOE2の適用・移行
 
+<!-- MAS1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。市場は登録時に作成する。MAS1の審査待ちや停止を市場未準備・市場閉鎖へ読み替えず、MOE2の率・永久LP・確定残高を変更しない。
+
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+
+旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
+<!-- MAS1-ADOPTED-20261120-END -->
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。native/ABI/state版、activation位置は未割当。
 - 正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)、[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)、[RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)

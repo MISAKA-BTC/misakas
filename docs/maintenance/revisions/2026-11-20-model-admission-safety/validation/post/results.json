@@ -1,0 +1,17 @@
+[
+  {
+    "check": "docs",
+    "exit": 1,
+    "lines": 50
+  },
+  {
+    "check": "rfc",
+    "exit": 1,
+    "lines": 8
+  },
+  {
+    "check": "adr",
+    "exit": 1,
+    "lines": 199
+  }
+]

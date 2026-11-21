@@ -1,5 +1,24 @@
 # RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性
 
+<!-- QF1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — QF1のQwen3具体profile
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。本RFCの抽象ReadoutをQwen3-8B向けに具体化するprofileはQF1。全36blockの第二残差後とfinal norm後の各4096 i16を、次tokenの各予測位置で読む。
+
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+<!-- QF1-ADOPTED-20261120-END -->
+
+
+<!-- MAS1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。採掘資格の入口にkernel/graph解析・実用性G-USE・UNKNOWN保留・BFT停止状態を追加する。未完成のG-COSTは引き続き採掘不可である。
+
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+
+旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
+<!-- MAS1-ADOPTED-20261120-END -->
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**（要求・責務・移行方針の採択。適合する本番モデル、費用定理、native実装、公開有効化の完成ではない）
 - 系列: **PALW-FOW1**（Function Output and Work admissibility。論理名でありwire IDは未割当）
@@ -16,7 +35,7 @@ FOW1を有効化する新規採掘では、登録された推論関数の採掘�
 
 本RFCは必要な定理を要求する契約を採択する。既存Qwen又は任意のLLMについて、その定理が完成したと宣言するものではない。適合する具体的な関数系列・定理・検査器がない間はFOW1の採掘を有効化しない。適格性が空である状態を「実用的LLM-PoWが完成した」と表示しない。
 
-モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。Groth16等の実行validity proof、新しいBFT finality、モデル品質・HF取得可否の審査委員会は導入しない。
+モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。Groth16等の実行validity proof、新しいBFT finality、HF取得可否の審査委員会は導入しない。後続MAS1では公開suiteに基づく実用性G-USEと限定BFT安全停止を追加するが、未証明の費用条件を多数決で承認しない。
 
 ## 1. 四つの値と二種類の一回性
 
@@ -41,7 +60,7 @@ $$\operatorname{CoreExec}_{M,P}(x)=(y,z,\tau),\qquad z=\operatorname{Readout}_{P
 
 ### 2.1 登録と適格性を別の状態にする
 
-一般の`ModelRegistered`と、FOW1で仕事・報酬・合意資格を発生できる`FOW1Admissible`を分ける。前者はモデルの不変identity・形式・資源等に従うpermissionlessな登録である。後者は、全候補に同じ数学的・構造的規則を適用した結果であり、モデルの名前、人気、品質、保有者数、HFの可用性、登録者の裁量で決めない。
+一般の`ModelRegistered`と、FOW1で仕事・報酬・合意資格を発生できる`FOW1Admissible`を分ける。前者はモデルの不変identity・形式・資源等に従うpermissionlessな登録である。後者は、全候補に同じ数学的・構造的規則を適用した結果であり、モデルの名前、人気、裁量的な品質評判、保有者数、HFの可用性、登録者の裁量で決めない。MAS1対象では別途、公開・共通の実用性G-USEと安全停止状態を確認する。
 
 型・条件名は論理的状態でありnative enumを割当済みではない。新規の有償採掘・credit・weightを許す箇所はすべて後者を確認する。既存登録にflagを立てるだけで、既存のModel IDやprogramの意味を変更しない。
 
@@ -80,6 +99,12 @@ Nodeは全重みを取得せず、既存の認証されたregistration/program i
 
 このため、任意のQwen重みへchallenge prefixを追加しただけでFOW1Admissibleにはならない。具体的なruleに適合しない登録は、一般モデルとして存在できても、FOW1の新規採掘・credit・weightには使えない。非対応を旧AN1/MOR1へfallbackして同じ資格を与えない。
 
+### 2.4 MAS1の解析・実用性・停止状態
+
+[RFC0065](0065-model-admission-screening-and-bft-stop.md)のKernelAnalysisProfile、LoweringManifest、UsefulStateMap、PracticalSuite、WorkCostContract、AdmissionPolicy、AdmissionGenerationをdescriptorへ結合する。ModelRegisteredからFOW1Admissibleへの遷移には、全必須検査PASS、G-USE及び安全停止なしを加える。
+
+UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否する。自動検査やBFT署名をG-COLL/G-COSTの証明としない。全重みの未認証属性は引き続き不適格であり、BFTはそれを認定する委員会ではない。評価実行は非報酬とし、採掘資格を前提にしない独立control経路で検査する。
+
 ## 3. TB1を使う入力・実行・公開の順序
 
 本familyの新しい未来乱数源は[RFC-0061](0061-palw-internal-threshold-beacon.md)のPALW-TB1に固定する。完全BGW VSS、PQ認証私信、公開share certificateを用い、EXECとPANELは別秘密・別session・別gateとする。既知のEXEC値をhashし直してPANELの未知性を作らない。
@@ -88,7 +113,7 @@ Nodeは全重みを取得せず、既存の認証されたregistration/program i
 
 1. 有効なFOW1 descriptor、全`C`/nonce候補、owner/beneficiary、target、原期限、EXEC/PANEL RoundRefを登録する。両roundのPREPAREDと必要予約を先に確認する。
 2. TB1 EXEC用の登録集合をnativeにfreezeし、同じ集合・roundの公開gateが成立するまでshareを公開しない。
-3. 正規EXEC certificateから得た`\sigma_E`を使い、`s=H_FOW1-attempt(Enc(C,\sigma_E))`を導出する。AN1の固定byte-token frameを実入力に用いる。
+3. 正規EXEC certificateから得た`\sigma_E`を使い、`s=H_FOW1-attempt(Enc(C,\sigma_E))`を導出する。AN1の固定byte-token frameを実入力に用いる。QF1を明示したprofileに限り、RFC0066 §3のHEX64 chat frameへ置換する。
 4. `CoreExec`から`y,z,tau`と四Root・唯一のTicketを生成し、署名済み元claimを固定する。
 5. 元claim集合、global Panel pool、抽選規則をTB1 PANELへfreezeし、その別秘密の正規certificateから`\sigma_P`を得る。
 6. 選出Panelの完全再実行、資料case、Court、成功又は未成功終端を元期限・元予約で進める。
@@ -143,6 +168,10 @@ $$\Pr\!\left[K_A(B)>\left\lfloor B/c_{\min}\right\rfloor\right]\le\varepsilon_{\
 
 現在採択するのは三gateを必須とする設計である。未証明のruleを`verified=true`として登録する経路、テスト合格だけで適格化する経路、正しい局所Courtの数で代替する経路を禁止する。
 
+### 4.5 MAS1対象の追加条件
+
+本節の三gateに、RFC0065のG-USE、構造検査、最新検査世代・rule・安全停止状態を追加する。有限の実用testは用途別の品質根拠であり、三gateの数学的根拠を代替しない。採掘専用の無用な重い枝、巨大trace生成又は高価な証明を、コアLLMの有用計算費用として認定しない。
+
 ## 5. 四Root、Ticket、補助receipt
 
 `R_x`、`R_y`、`R_z`、`R_tau`は別domainのcanonical commitmentとする。`z`の固定長全bytesを認証する`R_z`と、traceのReadout/Endが同じ`z`を指すことを必須関係にする。単にownerが宣言した`R_z`を、コア出力とみなしてはならない。
@@ -151,7 +180,7 @@ FOW1のTicketを次へ一意に固定する。
 
 $$T=H_{\rm FOW1-ticket}\!\left(\operatorname{Enc}_{P}(s,R_x,R_y,R_z,R_\tau)\right).$$
 
-既存AN1の三Root Ticketとは別family・別domainであり、既存の署名codecを意味変更しない。`s`はAN1の入力frameに用いる32byte、`T`は32byteの値を規定順序で読む256bit unsigned integerとする。FOW1のhash suite、domain bytes、field型、順序、長さ、空値、padding、整数境界をprofileで完全指定する。既存SHA-256等の名前だけで新wire値を推定しない。二つの正しい符号化を同じ試行に認めない。
+既存AN1の三Root Ticketとは別family・別domainであり、既存の署名codecを意味変更しない。`s`は実入力frameに用いる32byte（QF1ではRFC0066のHEX64 frame）、`T`は32byteの値を規定順序で読む256bit unsigned integerとする。FOW1のhash suite、domain bytes、field型、順序、長さ、空値、padding、整数境界をprofileで完全指定する。既存SHA-256等の名前だけで新wire値を推定しない。二つの正しい符号化を同じ試行に認めない。
 
 唯一のdifficulty snapshotから得た`theta`に対する`T < theta`を一度だけ判定する。境界は`0 <= theta <= 2^256`とし、`theta=2^256`を扱える広い整数型を使う。旧D境界を引き継ぐ場合はAN1と同じ`theta=floor((2^256-1)/D)+1`である。Panel seed、Court nonce、署名乱数、receipt、表示文字列、carrier、自由saltをTicketへ入れない。旧SWC1の未来`R_ticket`、旧Final後receipt抽選、旧複数量子drawをFOW1へ重ねない。
 
@@ -196,7 +225,7 @@ $$\Pr[\text{正しい当選を少なくとも一つ得る}]\le\min\{1,1-(1-p)^k+
 
 ## 8. 全consumerの単一gate
 
-FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissible`、対応TheoremRule、TB1 certificate/FreezeRecord、正規`z`と四Root、唯一のTicket、一回消費を加える。モデル登録画面、miner、Panel、Node、SDK、RPC、import/repair、snapshot/IBD、reorg、reward/credit/weightの全consumerが同じ型・版・gateを使う。
+FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissible`、対応TheoremRule、TB1 certificate/FreezeRecord、正規`z`と四Root、唯一のTicket、一回消費を加える。MAS1対象ではさらにRFC0065のEffectiveMiningAllowedを必要とし、同batchの安全停止を成功sweep・発行・未消費受賞権利の消費より先に反映する。モデル登録画面、miner、Panel、Node、SDK、RPC、import/repair、snapshot/IBD、reorg、reward/credit/weightの全consumerが同じ型・版・gateを使う。
 
 同batchでは適格notice/資料case、反証、失効、依存取消を成功・発行・消費より先に適用する。現在の適格性を過去snapshotの合格表示で代替しない。証拠不足、未知rule、未対応Readout、TB1不成立、元期限切れは成功にしない。
 

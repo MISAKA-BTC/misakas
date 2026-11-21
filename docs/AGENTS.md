@@ -38,3 +38,11 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 ## 2026-11-20 MOE2永久流動性の明示改訂
 
 ユーザーは30% Position購入・20%BILIと購入済みPositionの一部の永久LP化・余剰Position burn・残余50%への変更を指示した。[RFC0064](rfc/0064-reward-buy-and-permanent-liquidity.md)と[ADR0232](adr/0232-reward-buy-and-permanent-liquidity.md)を後続採択とし、原子的市場登録、追加モデル限定、coreの対象R100%、通常売買5%/3%を維持する。既存仮想reserve/whole Positionに対する整数式とdust処理を明示し、一般のV2 AMMの保証を無条件転用しない。永久LP記録済みモデルのcore指定を禁止する。既承認のこの変更について再確認を求めず、旧MOE1/TB1/FOW1ブロック・過去原本・検査結果は保全する。native実装やactivation完了は宣言しない。
+
+## 2026-11-20 MAS1モデル検査とBFT安全停止の明示改定
+
+今回のユーザーは、モデル追加段階のkernel/graph解析と実用性条件、安価な予測・再利用の排除、自動判定不能時のBFT停止への接続を明示指示した。[RFC0065](rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](adr/0233-model-admission-screening-and-bft-stop.md)を後続採択とする。旧「モデル単位検査なし」「品質審査なし」「BFT不使用」はMAS1の限定用途について置換するが、台帳finality・fork choice・reorgへのBFT権限、HF取得審査、計算validity proofは導入しない。UNKNOWNの採掘仮承認を禁止し、G-COSTとQwenの未完成定理をBFT署名で代替しない。MOE2市場原子生成と経済比率、旧責任、元snapshotを保持する。新規実装・公開activationをこの指示から完了扱いせず、既承認の文書変更のための再確認は求めない。
+
+## 2026-11-20 QF1のQwen実行具体化
+
+ユーザーの明示指示で[RFC0066](rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](adr/0234-qwen3-fow1-execution-and-readout.md)を設計採択した。36層Qwen3-8Bの整数A16・HEX64・37-vector Readout・有界hash chunkを具体化する。数値状態の非衝突性、安価な予測不能性、Qwen実機品質又はnative実装を証明済みにしない。MAS1のUNKNOWN停止と全gate、TB1、MOE2、旧claim、元の歴史payloadを維持する。この承認済み文書変更のために再確認を求めない。

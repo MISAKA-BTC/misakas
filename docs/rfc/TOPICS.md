@@ -4,6 +4,10 @@
 
 > **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。
 
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
+
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 ## Consensus / architecture
@@ -28,6 +32,7 @@
 - [RFC-0056 — 全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md)
 - [RFC-0058 — 実行commit・段階別抽選・仕事の一回性と合意資格](0058-staged-work-commitments-and-consensus-eligibility.md)
 - [RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性](0062-palw-function-output-and-work-admissibility.md)
+- [RFC-0066 — QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout](0066-qwen3-fow1-execution-and-readout.md)
 
 ## EVM / wallet
 
@@ -62,6 +67,7 @@
 - [RFC-0052 — Hugging Face 固定モデル取得と claim 固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md)
 - [RFC-0053 — 追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md)
 - [RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md)
+- [RFC-0065 — MAS1：モデル追加時の構造検査・実用性条件とBFT停止](0065-model-admission-screening-and-bft-stop.md)
 
 ## Operations / interfaces / recovery
 

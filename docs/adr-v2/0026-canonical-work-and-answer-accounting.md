@@ -1,5 +1,14 @@
 # ADR-v2-0026 — 正規仕事量・PWU・推論対価・回答の二重計上防止
 
+<!-- QF1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — QF1のQwen3具体profile
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。QF1の実推論と追加Readout費用を区別し、固定prefix/KV/batchの正当な共有をG-COSTの対象に含める。
+
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+<!-- QF1-ADOPTED-20261120-END -->
+
+
 <!-- MOE2-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
 

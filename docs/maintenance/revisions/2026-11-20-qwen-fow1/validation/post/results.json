@@ -1,0 +1,14 @@
+{
+  "docs": {
+    "exit_code": 1,
+    "failures": 947
+  },
+  "rfc": {
+    "exit_code": 1,
+    "errors": 7
+  },
+  "adr": {
+    "exit_code": 1,
+    "errors": 157
+  }
+}

@@ -501,6 +501,34 @@
       "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "provenance": "2026-11-20 explicit MOE2 30/20/50 permanent-liquidity instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0065",
+      "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MAS1 instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0233",
+      "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit MAS1 instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0066",
+      "path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0234",
+      "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
     }
   ],
   "editorial_date": "2026-11-20",
@@ -522,7 +550,7 @@
     "activation_changed": false,
     "current_source_mapping": "adoption-map.json"
   },
-  "latest_revision": "2026-11-20 MOE1: additional-only options, core Miner100%, atomic registration-market creation",
+  "latest_revision": "2026-11-20-qwen-fow1",
   "subsequent_adoptions": [
     {
       "date": "2026-11-08",
@@ -625,6 +653,47 @@
       "core_option_market_enabled": false,
       "permanent_lp_core_promotion_allowed": false,
       "all_states_paired_liquidity_liveness_proved": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-model-admission-safety",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction: screen model kernels/graphs and practical usefulness before mining; route unresolved risk to BFT stopping.",
+      "rfc_records": [
+        "docs/rfc/0065-model-admission-screening-and-bft-stop.md"
+      ],
+      "decision_records": [
+        "docs/adr/0233-model-admission-screening-and-bft-stop.md"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false,
+      "new_profile": "MAS1",
+      "automatic_detection_complete": false,
+      "qwen_cost_theorem_proved": false,
+      "unknown_mining_allowed": false,
+      "bft_approval_replaces_cost_theorem": false,
+      "bft_ledger_finality": false,
+      "moe2_changed": false
+    },
+    {
+      "date": "2026-11-20",
+      "revision": "2026-11-20-qwen-fow1",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
+      "rfc_records": [
+        "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
+      ],
+      "decision_records": [
+        "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
+      ],
+      "new_profile": "QF1",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "qwen_cost_theorem_proved": false,
+      "qwen_quality_measured": false,
+      "unknown_mining_allowed": false,
+      "bft_approval_replaces_cost_theorem": false,
+      "moe2_changed": false
     }
   ],
   "latest_proposal": {
@@ -702,27 +771,22 @@
   ],
   "latest_adoption": {
     "date": "2026-11-20",
-    "revision": "2026-11-20-permanent-liquidity",
+    "revision": "2026-11-20-qwen-fow1",
     "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
-    "authority": "Explicit user instruction: 30% Position purchase + 20% permanent liquidity + 50% residual rewards; inherited additional-only scope and atomic market creation.",
+    "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
     "rfc_records": [
-      "docs/rfc/0064-reward-buy-and-permanent-liquidity.md"
+      "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
     ],
     "decision_records": [
-      "docs/adr/0232-reward-buy-and-permanent-liquidity.md"
+      "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
     ],
+    "new_profile": "QF1",
     "runtime_changed": false,
     "activation_changed": false,
-    "new_profile": "MOE2",
-    "purchase_additional_permille": 300,
-    "permanent_liquidity_additional_permille": 200,
-    "residual": "R-floor(300R/1000)-floor(200R/1000)",
-    "amm_burn_permille": 50,
-    "amm_owner_total_permille": 30,
-    "core_miner_permille": 1000,
-    "registration_creates_market_atomically": true,
-    "core_option_market_enabled": false,
-    "permanent_lp_core_promotion_allowed": false,
-    "all_states_paired_liquidity_liveness_proved": false
+    "qwen_cost_theorem_proved": false,
+    "qwen_quality_measured": false,
+    "unknown_mining_allowed": false,
+    "bft_approval_replaces_cost_theorem": false,
+    "moe2_changed": false
   }
 }

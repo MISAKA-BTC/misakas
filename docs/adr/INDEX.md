@@ -4,6 +4,10 @@
 
 > **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。新規採掘の後続正本は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md)。RFC61/62・ADR229/230は設計採択済み・未有効化であり、旧sourceを新規受付へfallbackしない。
 
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
+
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
@@ -183,7 +187,7 @@
 | ADR-0177 | [モデル配分・owner収入とMOE2の分類別報酬](0177-model-bond-allocation-without-availability-consensus.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
 | ADR-0178 | [The fork choice heals a partition on bonded participation: one search over every tip, econ…](0178-fork-choice-heals-a-partition-on-bonded-participation.md) | 原文と後続改定を参照 |
 | ADR-0179 | [モデル二階層と追加モデル専用MisakaOption](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
-| ADR-0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) | Accepted / BFT不使用の設計 |
+| ADR-0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) | 台帳BFT禁止を維持 / ADR0233のモデル安全停止を限定追加 |
 | ADR-0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) | Accepted / 原則凍結 |
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
 | ADR-0183 | [G14 裁定容量・Panel 下限・裁定保持期間・検出方針(ユーザー決定の記録)](0183-g14-court-capacity-panel-floor-retention-detection.md) | 原文と後続改定を参照 |
@@ -238,3 +242,5 @@
 | ADR-0230 | [推論関数の採掘出力と費用定理を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計 |
 | ADR-0231 | [追加モデル限定MisakaOptionと新しい報酬・売買・移転規則](0231-additional-model-option-economics.md) | 旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
 | ADR-0232 | [30%買付・20%永久流動性・余剰Position burnを採択する](0232-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約 |
+| ADR-0233 | [モデル追加時の構造・実用性検査と限定BFT停止を採択する](0233-model-admission-screening-and-bft-stop.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAS1限定停止権限・UNKNOWN閉鎖 |
+| ADR-0234 | [Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する](0234-qwen3-fow1-execution-and-readout.md) | ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定 |

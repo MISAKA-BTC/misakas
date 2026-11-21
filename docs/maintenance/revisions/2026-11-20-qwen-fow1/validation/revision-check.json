@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "scope": "document preservation and declared contract only",
+  "input_files": 3012,
+  "unchanged_input_files": 2961,
+  "changed_existing_files": 51,
+  "exact_before_backups": 51,
+  "unchanged_historical_payloads_in_amended_books": 16,
+  "prior_consolidated_book_bytes_preserved_after_notice_removal": 21,
+  "new_design_files": 9,
+  "errors": [],
+  "not_verified": [
+    "Qwen inference",
+    "Qwen tokenizer",
+    "Qwen quality",
+    "G-COLL",
+    "G-COST",
+    "native Court",
+    "TB1/BFT runtime",
+    "activation"
+  ]
+}

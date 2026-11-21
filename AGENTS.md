@@ -78,3 +78,7 @@ reinterpret legacy terminology as permission to violate this decision.
 ## 2026-11-11 ユーザーの後続限定改定
 
 [PRINCIPLES §9](docs/PRINCIPLES.md)と[RFC-0053](docs/rfc/0053-additional-model-burn-pause.md)／[ADR-0221](docs/adr/0221-additional-model-burn-pause.md)を適用する。追加登録モデルだけに、誰でもburnで停止、登録者だけがburnで解除する制度を採択。genesis・年次fork指定モデルは対象外。取得可否証明・第三者検査・多数決・定期可用性認定は廃止し、旧一般規則はこの可逆な稼働停止に限り明示改定する。モデル品質審査、class取消、tier変更は行わない。claimの反証・責任・原期限を維持し、設計採択を公開有効化としない。
+
+## 2026-11-21 ユーザー改定 — 新規採掘の MAS1
+
+新規採掘に限り [RFC-0065](docs/rfc/0065-model-admission-screening-and-bft-stop.md) を優先する。登録・既存係数・市場、旧 claim の責任と原期限を維持する。新規採掘の検査・停止は MAS1、Qwen3 の実行形式は [RFC-0066](docs/rfc/0066-qwen3-fow1-execution-and-readout.md) に従う。公開有効化は別途決定する。

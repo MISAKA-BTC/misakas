@@ -1,5 +1,15 @@
 # MISAKAの設計前提 — 不可侵原則
 
+<!-- MAS1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。今回のユーザー明示指示による例外は、モデル追加時の共通安全検査と限定BFT停止である。旧DNS-BFT又はHF取得可否認定は復活させない。
+
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+
+旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
+<!-- MAS1-ADOPTED-20261120-END -->
+
 <!-- MOE2-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
 
@@ -544,3 +554,7 @@ EXEC負荷とcourt負荷が重なっても約束した供給を維持するこ�
 追加モデルのRから50%を市場へ買い上げ、残余を版付き役割規則で分配する。通常AMMのburn5%、owner総額3%、net残差を採用し、直接送受信・譲渡・承認を許可する。自動買上げの追加BILI burnとowner支払は0、取得Positionはretireする。直接移転でclaim・bond・ExecCredit・管理権・過去責任を移さない。
 
 保存則、同一native/EVM台帳、有限な元期限、共通上限・export cap、旧claimの条件、core旧市場winddownを守る。市場欠落を正常な準備待ちや買上げ免除にしない。TB1/FOW1の保証・登録適格性・Court・有効化条件は維持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、runtime実装・公開稼働を完了したとはしない。
+
+## QF1具体profile（2026-11-20の明示追加）
+
+[RFC0066](rfc/0066-qwen3-fow1-execution-and-readout.md)はQwen3の具体的なFOW1実行を定義する。整数化・Readout・入力の固定は検証対象の確定であり、Qwenの計算費用や数値非衝突性の定理ではない。G-USEを含むMAS1の全gate、限定BFT安全停止、Panel＋Court、未有効化の区別を維持する。

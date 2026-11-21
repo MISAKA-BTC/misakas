@@ -1,5 +1,15 @@
 # ADR-v2-0023 — 30%購入・20%永久LP・余剰burnとcore報酬
 
+<!-- MAS1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。新規報酬発生の全入口で資格と停止を読む。MOE2比率・既確定債務・永久LPは維持する。
+
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+
+旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
+<!-- MAS1-ADOPTED-20261120-END -->
+
 編集統合日: 2026-10-30　|　MOE2規範改訂: 2026-11-20　|　名前空間: `ADR-v2`　|　履歴原文の主担当: 2本
 
 **現行状態: ADOPTED_DESIGN_NOT_ACTIVATED。** MOE2の経済改訂を本書の現在著述部へ反映する。native/EVM実装、移行、試験又は公開有効化が完了したという意味ではない。原文payload、TB1/FOW1、MOE1採択記録を保全し、旧実装の実績をMOE2の完成記録へ書き換えない。
