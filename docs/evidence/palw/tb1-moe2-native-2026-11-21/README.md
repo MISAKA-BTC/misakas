@@ -79,3 +79,13 @@ cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib moe2 -- --no
 MISAKA_PRIVATE_TB1_TIR_ARTIFACT=/path/to/model.palwtir \
   cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib private_moe2_three_process_registration -- --nocapture
 ```
+
+## MOE2 の報酬予約と引き落とし
+
+追加モデルの登録を受理した3プロセスが、それぞれの選択鎖から市場、資金提供 bond の公開鍵・担保、予算 policy を読み取った。登録者とは別の試験 bond が claim、model/root、資金提供 bond、policy、quote anchor、期限、数量・価格制限、worker 配分を束縛する予約キーに ML-DSA-87 で署名した。このキーを登録後の heartbeat に収録し、別の後続ブロックを会計処理位置に使った。各ピアが登録時の鍵で署名を検査した。期限を変更すると署名は一致しなかった。
+
+この試験では登録時点の native 予算台帳を複製し、通常の予約 API で試験用の worker 報酬 160 をモデルと bond に予約する。MOE2 の決済処理はこの予約から 160 を一度だけ引き落とした。買付 48 で 2 Position を取得し、永久 LP に 32 と 1 Position を入れ、余剰の 1 Position を burn した。残り 80 の支払権利は採択済み試験プランに従って miner 64、Panel 16 となった。部分的な引き落とし、従来の claim ID の予約流用、決済の再送は拒否された。予算 journal の単一書き込みを逆適用すると、複製した台帳は引き落とし前と完全一致した。[8件の core テスト、3ピアのブロック・予約キー・会計値](reserved-reward.txt)
+
+経済条件の収録ブロックと MAS1 停止証明は、同じ登録ブロックまでを再生した別々の DB で短い再編成を検査した。どちらも3者が同じ代替 tip と登録の巻き戻しを確認した。二つの履歴を直列につないだ先行試験では、対抗分岐に heartbeat を追加した場合も、試験用 native attempt を追加した場合も、元の停止証明が選択鎖に残った。深い分岐で停止が解除されたという結果は得ていない。
+
+選択鎖に収録したものは資金提供者が署名した条件の digest である。報酬額と成熟・支払期限には隔離 fixture を使用した。複製上の市場・支払権利・予約消費から、受賞ブロックによる発行、選択鎖の残高更新、worker UTXO 支払いを認定しない。再現コマンドは上記の `private_moe2_three_process_registration` と `--lib moe2` を使う。

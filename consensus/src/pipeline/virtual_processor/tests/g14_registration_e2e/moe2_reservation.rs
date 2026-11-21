@@ -1,0 +1,193 @@
+//! Isolated accounting projection on each peer's selected registration state.
+use super::*;
+use crate::pipeline::virtual_processor::tests::new_miner_data;
+use kaspa_consensus_core::{
+    constants::SOMPI_PER_KASPA,
+    palw_bond_budget_v1::{PalwBudgetAskV1, PalwBudgetOriginV1, PalwBudgetWriteV1, palw_bond_budget_export_cap_v1},
+    palw_model_market_v1::moe2::{
+        Moe2PriceLimits, Moe2QuantityLimits, Moe2WorkerPlan,
+        settlement::{Moe2Position, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms},
+    },
+    palw_settlement_liability_v1::PalwSettlementTermsSourcedV1,
+};
+use libcrux_ml_dsa::ml_dsa_87;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct Observation {
+    pub(super) enrollment: Hash64,
+    position: Hash64,
+    reservation: Hash64,
+    consumed: u64,
+    reserve: u64,
+    retired: u64,
+    miner: u64,
+    panel: u64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(super) struct Replay {
+    blocks: [RpcRawBlock; 2],
+    signature: Vec<u8>,
+}
+
+pub(super) async fn exercise(
+    env: &mut Env,
+    state: &PalwChainStateV2,
+    mut book: Moe2SettlementBook,
+    model: Hash64,
+    remote: Option<Replay>,
+) -> (Observation, Replay) {
+    let point = *state.last_point().unwrap();
+    let registered = *book.model(&model).unwrap();
+    let bond = env.chain.bonds[1];
+    let capital = state.bond(&bond).unwrap().collateral;
+    let policy = env.bundle.state.bond_budget().unwrap().policy.clone();
+    let mut budget = state.bond_budget().unwrap().clone();
+    let reward = 160 * SOMPI_PER_KASPA;
+    let terms = Moe2SettlementTerms {
+        claim: Hash64::from_u64_word(641),
+        funding_bond: bond,
+        model,
+        artifact_root: registered.artifact_root,
+        policy: policy.digest(),
+        quote_anchor: point.block,
+        valid_from: point.daa_score,
+        deadline: point.daa_score + 5,
+        plan: Moe2WorkerPlan::MinerAndPanel20,
+        limits: Moe2QuantityLimits {
+            max_reward: reward,
+            max_purchase_sompi: reward * 3 / 10,
+            min_out: 2,
+            max_purchase_units: 2,
+            max_lp_sompi: reward / 5,
+            max_lp_units: 1,
+        },
+        price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 2000 },
+    };
+    let source = terms.reservation_key();
+    // Peers receive the signed enrollment and both raw blocks. Only the first peer
+    // signs. Each reader resolves the verification key from its own native bond.
+    const DOMAIN: &[u8] = b"MISAKA/private/MOE2/accounting-enrollment/v1";
+    let (enrollment, execution, signature) = if let Some(replay) = remote {
+        let [a, b] = replay.blocks.map(|b| Block::try_from(b).unwrap());
+        arrive(&env.chain, a.clone(), "MOE2 economic terms").await;
+        arrive(&env.chain, b.clone(), "MOE2 accounting position").await;
+        (a, b, replay.signature)
+    } else {
+        let key = TestConsensus::palw_v2_registry_keypair(1);
+        let sig = ml_dsa_87::sign(&key.signing_key, source.as_byte_slice(), DOMAIN, [44; 32]).unwrap();
+        let mut miner = new_miner_data();
+        miner.extra_data = source.as_byte_slice().to_vec();
+        let interval = env.config.params.target_time_per_block();
+        let a = env.chain.heartbeat_paying(miner, interval, vec![]).await;
+        let b = env.chain.heartbeat(interval, vec![]).await;
+        (a, b, sig.as_slice().to_vec())
+    };
+    let api = &env.chain.ctx.consensus;
+    assert!(api.palw_coinbase_commits_to(env.domain.as_bytes(), enrollment.hash(), &source.as_bytes()).unwrap());
+    assert!(api.is_chain_ancestor_of(point.block, enrollment.hash()).unwrap());
+    assert!(api.is_chain_ancestor_of(enrollment.hash(), execution.hash()).unwrap());
+    assert_ne!(enrollment.hash(), execution.hash());
+    let vk = ml_dsa_87::MLDSA87VerificationKey::new(state.bond(&bond).unwrap().pubkey.as_slice().try_into().unwrap());
+    let sig = ml_dsa_87::MLDSA87Signature::new(signature.as_slice().try_into().unwrap());
+    ml_dsa_87::verify(&vk, source.as_byte_slice(), DOMAIN, &sig).unwrap();
+    let (tip, next_state) = env.chain.tip_state();
+    assert_eq!(tip, execution.hash());
+    assert_eq!(state.model_market(&model), next_state.model_market(&model));
+    let at = Moe2Position { point: *next_state.last_point().unwrap(), ordinal: 1 };
+    book.admit(terms, |anchor, id| (anchor == point.block && id == model).then_some(registered)).unwrap();
+    let mut journal = Vec::new();
+    let held = u128::from(reward) * 4;
+    let ask = PalwBudgetAskV1 { block_units: 0, reward_sompi: reward, final_weight: 0, liability_sompi: held };
+    let grant = budget
+        .reserve_claim_v1(&policy, capital, source, bond, Some(model), point.daa_score, ask, PalwBudgetOriginV1::Attempt, &mut journal)
+        .unwrap();
+    assert_eq!(grant.reward_sompi, reward);
+    let before = budget.clone();
+    let start = journal.len();
+    let row = *budget.claim_row(&source).unwrap();
+    assert_eq!(row.model.unwrap().0, model);
+    // Only the reservation, market, budget policy and collateral here are read from
+    // the native engine. Maturity and the claimant release terms are fixtures.
+    let funding = Moe2SettlementFunding {
+        claim: terms.claim,
+        position: at,
+        miner_now: reward * 4 / 10,
+        panel_now: reward / 10,
+        liability: PalwSettlementTermsSourcedV1 {
+            reserved_reward: Ok(row.reserved.reward_sompi),
+            consumed_reward: Ok(row.consumed.reward_sompi),
+            draw: reward,
+            payment: reward,
+            paid_now: reward,
+            exported_before: Ok(0),
+            export_cap: Ok(palw_bond_budget_export_cap_v1(&policy, held)),
+            liability_sompi: Ok(row.liability_sompi),
+            bond_collateral: Ok(capital.into()),
+            other_live_liability: Ok(budget.bond_row(&bond).unwrap().open_liability_sompi - held),
+            bond_locked_until: Ok(terms.deadline),
+            liability_until: Ok(terms.deadline),
+            signed_hard_deadline: Ok(terms.deadline),
+            material_ttl_until: Ok(terms.deadline),
+            vest_until: None,
+            retire_not_before: Ok(terms.deadline),
+            now: at.point.daa_score,
+        },
+    };
+    // The unchanged selected tip has the model, the market and the same bond, but
+    // no reward enrollment. Reusing its bare claim or a changed quote cannot pay.
+    let mut unfunded = state.bond_budget().unwrap().clone();
+    let mut unfunded_journal = Vec::new();
+    unfunded
+        .reserve_claim_v1(
+            &policy,
+            capital,
+            terms.claim,
+            bond,
+            Some(model),
+            point.daa_score,
+            ask,
+            PalwBudgetOriginV1::Attempt,
+            &mut unfunded_journal,
+        )
+        .unwrap();
+    let wrong_terms = Moe2SettlementTerms { deadline: terms.deadline + 1, ..terms };
+    assert!(ml_dsa_87::verify(&vk, wrong_terms.reservation_key().as_byte_slice(), DOMAIN, &sig).is_err());
+    assert_eq!(
+        book.settle(terms.claim, at, point.block, &funding, &mut unfunded, &mut unfunded_journal),
+        Err(Moe2SettlementError::ReservationMismatch)
+    );
+    assert_eq!(unfunded.claim_row(&terms.claim).unwrap().consumed.reward_sompi, 0);
+    let mut wrong = funding;
+    wrong.liability.draw -= 1;
+    assert!(book.settle(terms.claim, at, point.block, &wrong, &mut budget, &mut journal).is_err());
+    assert_eq!(budget, before);
+    assert_eq!(journal.len(), start);
+    assert!(book.receipt(&terms.claim).is_none());
+    let pay = book.settle(terms.claim, at, point.block, &funding, &mut budget, &mut journal).unwrap();
+    assert_eq!(
+        book.settle(terms.claim, at, point.block, &funding, &mut budget, &mut journal),
+        Err(Moe2SettlementError::AlreadySettled)
+    );
+    let receipt = book.receipt(&terms.claim).unwrap();
+    let obs = Observation {
+        enrollment: enrollment.hash(),
+        position: execution.hash(),
+        reservation: source,
+        consumed: budget.claim_row(&source).unwrap().consumed.reward_sompi,
+        reserve: receipt.after.msk_reserve,
+        retired: receipt.retired_units,
+        miner: pay.miner_now,
+        panel: pay.panel_now,
+    };
+    assert_eq!((receipt.purchase, receipt.liquidity), (48 * SOMPI_PER_KASPA, 32 * SOMPI_PER_KASPA));
+    assert_eq!((receipt.purchased_units, receipt.liquidity_units, obs.retired), (2, 1, 1));
+    assert_eq!((obs.reserve, obs.miner, obs.panel), (80 * SOMPI_PER_KASPA, 64 * SOMPI_PER_KASPA, 16 * SOMPI_PER_KASPA));
+    assert_eq!(obs.consumed, obs.reserve + obs.miner + obs.panel);
+    let [PalwBudgetWriteV1::Row { table, key, old, new }] = &journal[start..] else { panic!("one debit") };
+    budget.apply_row(*table, key, old, new, true).unwrap();
+    assert_eq!(budget, before);
+    assert!(state.bond_budget().unwrap().claim_row(&source).is_none());
+    println!("MOE2 accounting projection pid={} {obs:?} rollback=true", std::process::id());
+    (obs, Replay { blocks: [RpcRawBlock::from(&enrollment), RpcRawBlock::from(&execution)], signature })
+}

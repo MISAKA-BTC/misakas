@@ -1,6 +1,8 @@
 use super::*;
 #[path = "mas1_stop.rs"]
 mod mas1_stop;
+#[path = "moe2_reservation.rs"]
+mod moe2_reservation;
 use kaspa_consensus_core::{
     config::params::{
         PALW_T12_FULL_BOND_BUDGET_ENTRY, PALW_T12_FULL_GATE_C_ENTRY, PALW_T12_FULL_PROBABILISTIC_CONSTRAINTS_ENTRY,
@@ -49,6 +51,7 @@ struct RegistrationReplay {
     fork: Vec<RpcRawBlock>,
     fork_root: Hash64,
     control: mas1_stop::ControlReplay,
+    economics: moe2_reservation::Replay,
 }
 
 async fn heavier_fork(env: &Env, common: &Block) -> (Vec<Block>, Hash64) {
@@ -73,32 +76,42 @@ async fn private_moe2_three_process_registration() {
     assert!(genesis.classes_iter().all(|(key, _)| genesis.model_market(key).is_none()));
     const PEER_INPUT: &str = "MISAKA_TEST_MOE2_REGISTRATION_BLOCKS";
     let peer_input = std::env::var_os(PEER_INPUT);
-    let (class_id, artifact_root, blocks, expected, fork, fork_root, remote_control) = if let Some(ref path) = peer_input {
-        let replay: RegistrationReplay = serde_json::from_reader(File::open(path).unwrap()).unwrap();
-        let decode = |raw: Vec<RpcRawBlock>| raw.into_iter().map(|row| Block::try_from(row).unwrap()).collect::<Vec<_>>();
-        let blocks = decode(replay.blocks);
-        for block in &blocks {
-            arrive(&env.chain, block.clone(), "MOE2 registration").await;
-        }
-        (replay.class_id, replay.artifact_root, blocks, Some(replay.root), decode(replay.fork), replay.fork_root, Some(replay.control))
-    } else {
-        let c = match std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT") {
-            Some(path) => {
-                let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(std::path::Path::new(&path)).unwrap();
-                Case {
-                    class: artifact.class().unwrap(),
-                    root: artifact.inventory_root().unwrap().0,
-                    name: "held TIR".into(),
-                    real_root: true,
-                }
+    let (class_id, artifact_root, blocks, expected, fork, fork_root, remote_control, remote_economics) =
+        if let Some(ref path) = peer_input {
+            let replay: RegistrationReplay = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            let decode = |raw: Vec<RpcRawBlock>| raw.into_iter().map(|row| Block::try_from(row).unwrap()).collect::<Vec<_>>();
+            let blocks = decode(replay.blocks);
+            for block in &blocks {
+                arrive(&env.chain, block.clone(), "MOE2 registration").await;
             }
-            None => case("moe-top2-shared"),
+            (
+                replay.class_id,
+                replay.artifact_root,
+                blocks,
+                Some(replay.root),
+                decode(replay.fork),
+                replay.fork_root,
+                Some(replay.control),
+                Some(replay.economics),
+            )
+        } else {
+            let c = match std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT") {
+                Some(path) => {
+                    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(std::path::Path::new(&path)).unwrap();
+                    Case {
+                        class: artifact.class().unwrap(),
+                        root: artifact.inventory_root().unwrap().0,
+                        name: "held TIR".into(),
+                        real_root: true,
+                    }
+                }
+                None => case("moe-top2-shared"),
+            };
+            let m = mine_registration_on(env, &c, card).await;
+            env = m.env;
+            let (fork, fork_root) = heavier_fork(&env, &m.blocks[0]).await;
+            (m.class_id, c.root, m.blocks, None, fork, fork_root, None, None)
         };
-        let m = mine_registration_on(env, &c, card).await;
-        env = m.env;
-        let (fork, fork_root) = heavier_fork(&env, &m.blocks[0]).await;
-        (m.class_id, c.root, m.blocks, None, fork, fork_root, None)
-    };
     let (tip, state) = env.chain.tip_state();
     assert_eq!(tip, blocks.last().unwrap().hash());
     let class = state.class(&class_id).expect("registered class");
@@ -118,6 +131,28 @@ async fn private_moe2_three_process_registration() {
         std::process::id(),
         class.registered_daa
     );
+    // Run the two shallow reorg scenarios from the exact same registration prefix.
+    // Concatenating the extensions instead moves the incumbent past the private
+    // profile's shallow-reorg bound before the competing history even arrives.
+    let (budget_observation, economics) = {
+        let mut economic_env = Env::over(registration_config());
+        for block in &blocks {
+            arrive(&economic_env.chain, block.clone(), "MOE2 registration prefix").await;
+        }
+        economic_env.chain.ctx.simulated_time = blocks.last().unwrap().header.timestamp;
+        let (_, economic_state) = economic_env.chain.tip_state();
+        assert_eq!(economic_state.state_root(), root);
+        let observed = moe2_reservation::exercise(&mut economic_env, &economic_state, book, class_id, remote_economics).await;
+        for block in &fork {
+            arrive(&economic_env.chain, block.clone(), "branch without MOE2 enrollment").await;
+        }
+        let (economic_tip, rolled_back) = economic_env.chain.tip_state();
+        assert_eq!(economic_tip, fork.last().unwrap().hash());
+        assert_eq!(rolled_back.state_root(), fork_root);
+        assert!(!economic_env.chain.ctx.consensus.is_chain_ancestor_of(observed.0.enrollment, economic_tip).unwrap());
+        println!("MOE2 pid={} detached_enrollment=true", std::process::id());
+        observed
+    };
     let control = mas1_stop::exercise(&mut env, class_id, artifact_root, tip, remote_control.as_ref(), &fork).await;
     let stop_hash = Block::try_from(control.blocks[2].clone()).unwrap().hash();
     let (fork_tip, reverted) = env.chain.tip_state();
@@ -130,7 +165,7 @@ async fn private_moe2_three_process_registration() {
     if let Some(expected) = expected {
         assert_eq!(root, expected);
         let receipt = PathBuf::from(peer_input.unwrap()).with_file_name(format!("{}.json", std::process::id()));
-        serde_json::to_writer(File::create(receipt).unwrap(), &(root, fork_root)).unwrap();
+        serde_json::to_writer(File::create(receipt).unwrap(), &(root, fork_root, budget_observation)).unwrap();
         return;
     }
     let dir = kaspa_database::utils::get_kaspa_tempdir();
@@ -143,6 +178,7 @@ async fn private_moe2_three_process_registration() {
         fork: fork.iter().map(RpcRawBlock::from).collect(),
         fork_root,
         control,
+        economics,
     };
     serde_json::to_writer(File::create(&path).unwrap(), &replay).unwrap();
     let mut peers = Vec::new();
@@ -158,7 +194,7 @@ async fn private_moe2_three_process_registration() {
     for mut peer in peers {
         assert!(peer.wait().unwrap().success());
         let receipt = File::open(dir.path().join(format!("{}.json", peer.id()))).unwrap();
-        let roots: (Hash64, Hash64) = serde_json::from_reader(receipt).unwrap();
-        assert_eq!(roots, (root, fork_root));
+        let roots: (Hash64, Hash64, moe2_reservation::Observation) = serde_json::from_reader(receipt).unwrap();
+        assert_eq!(roots, (root, fork_root, budget_observation));
     }
 }

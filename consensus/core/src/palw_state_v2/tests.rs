@@ -26683,9 +26683,12 @@ mod model_market_virtual {
 
     #[test]
     fn moe2_registered_market_settles_a_reserved_fixture_reward() {
+        use crate::palw_bond_budget_v1::{
+            PalwBondBudgetPolicyV1, PalwBondBudgetStateV1, PalwBudgetOriginV1, PalwBudgetVectorV1, PalwBudgetWriteV1,
+        };
         use crate::palw_model_market_v1::moe2::{
             Moe2PriceLimits, Moe2QuantityLimits, Moe2WorkerPlan,
-            settlement::{Moe2Position, Moe2SettlementBook, Moe2SettlementFunding, Moe2SettlementTerms},
+            settlement::{Moe2Position, Moe2SettlementBook, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms},
         };
         use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
 
@@ -26695,8 +26698,11 @@ mod model_market_virtual {
         book.register_block(&state, params.model_tier_v1.as_ref().unwrap(), &registration).unwrap();
         let registered = *book.model(&model).unwrap();
         let reward = V / 10;
+        let held = u128::from(reward) * 4;
+        let capital = 5 * reward;
         let terms = Moe2SettlementTerms {
             claim: h64(31),
+            funding_bond: bond_key(2),
             model,
             artifact_root: registered.artifact_root,
             policy: h64(4),
@@ -26731,9 +26737,9 @@ mod model_market_virtual {
                 paid_now: reward,
                 exported_before: Ok(0),
                 export_cap: Ok(reward),
-                liability_sompi: Ok(2000),
-                bond_collateral: Ok(3000),
-                other_live_liability: Ok(1000),
+                liability_sompi: Ok(held),
+                bond_collateral: Ok(capital.into()),
+                other_live_liability: Ok(0),
                 bond_locked_until: Ok(204),
                 liability_until: Ok(204),
                 signed_hard_deadline: Ok(terms.deadline),
@@ -26743,7 +26749,51 @@ mod model_market_virtual {
                 now: at.point.daa_score,
             },
         };
-        let paid = book.settle(terms.claim, at, terms.quote_anchor, &funding).unwrap();
+        let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        let mut budget = PalwBondBudgetStateV1::new(0, &policy);
+        let mut journal = Vec::new();
+        let source = terms.reservation_key();
+        let reserve = PalwBudgetVectorV1 { reward_sompi: reward, ..Default::default() };
+        budget
+            .reserve_liable(
+                &policy,
+                capital,
+                source,
+                terms.funding_bond,
+                Some((model, 0)),
+                200,
+                reserve,
+                held,
+                PalwBudgetOriginV1::Attempt,
+                true,
+                &mut journal,
+            )
+            .unwrap();
+        let before = budget.clone();
+        let previous_writes = journal.clone();
+        let mut inconsistent = funding;
+        inconsistent.liability.draw = 0;
+        assert!(book.settle(terms.claim, at, terms.quote_anchor, &inconsistent, &mut budget, &mut journal).is_err());
+        inconsistent = funding;
+        inconsistent.liability.reserved_reward = Ok(reward + 1);
+        assert_eq!(
+            book.settle(terms.claim, at, terms.quote_anchor, &inconsistent, &mut budget, &mut journal),
+            Err(Moe2SettlementError::ReservationMismatch)
+        );
+        assert_eq!(budget, before);
+        assert_eq!(journal, previous_writes);
+        assert!(book.receipt(&terms.claim).is_none() && book.entitlement(&terms.claim).is_none());
+        let paid = book.settle(terms.claim, at, terms.quote_anchor, &funding, &mut budget, &mut journal).unwrap();
+        assert_eq!(budget.claim_row(&source).unwrap().consumed.reward_sompi, reward);
+        assert_eq!(
+            book.settle(terms.claim, at, terms.quote_anchor, &funding, &mut budget, &mut journal),
+            Err(Moe2SettlementError::AlreadySettled)
+        );
+        let [PalwBudgetWriteV1::Row { table, key, old, new }] = &journal[previous_writes.len()..] else {
+            panic!("a complete settlement journals exactly one budget debit")
+        };
+        budget.apply_row(*table, key, old, new, true).unwrap();
+        assert_eq!(budget, before);
         let receipt = book.receipt(&terms.claim).unwrap();
         assert_eq!(receipt.purchase, 3 * reward / 10);
         assert_eq!(receipt.liquidity, reward / 5);
@@ -26754,7 +26804,12 @@ mod model_market_virtual {
         assert!(book.has_permanent_lp(model, registered.artifact_root));
         eprintln!(
             "MOE2 registration root {}, buy {}, LP {}, burned {}, miner {}, panel {}",
-            state.state_root(), receipt.purchase, receipt.liquidity, receipt.retired_units, paid.miner_now, paid.panel_now
+            state.state_root(),
+            receipt.purchase,
+            receipt.liquidity,
+            receipt.retired_units,
+            paid.miner_now,
+            paid.panel_now
         );
     }
 

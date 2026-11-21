@@ -21,7 +21,7 @@ impl Moe2RewardSplit {
 
 /// Separate limits on the reward, the BILI spent on each market leg and the
 /// Position quantities it moves. The minimum output is in purchased Positions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct Moe2QuantityLimits {
     pub max_reward: u64,
     pub max_purchase_sompi: u64,
@@ -34,7 +34,7 @@ pub struct Moe2QuantityLimits {
 /// Admission-selected limits for this local quote rule. Slippage measures a
 /// shortfall in bought units from the anchor quote for the same B. Impact
 /// measures the premium of B/q over the current pre-buy spot price X/U.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct Moe2PriceLimits {
     pub max_output_slippage_bps: u16,
     pub max_purchase_impact_bps: u32,
@@ -192,7 +192,7 @@ impl Moe2RegisteredModel {
 
 /// The two residual plans for jobs without delegated prefix work. The selected
 /// plan is bound at admission. Additional plans need their own role allocation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub enum Moe2WorkerPlan {
     Miner,
     MinerAndPanel20,
