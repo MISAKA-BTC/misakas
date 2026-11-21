@@ -541,6 +541,8 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 
 保存元の DB を同じ隔離ネットワークのパラメーターで開き、tip の state root を検証した。Final 後の56個の attempt ブロックごとに署名済みヘッダから claim ID を再計算し、対応ブロックの状態差分を読んだ。その差分に自分の claim の新規作成は0件、同じブロックを指す抽選 seed anchor の記録も0件だった。元の 8K claim の認証行は抽選前である。この範囲では追加の heartbeat や署名だけで Gate C を進めることはできない。[状態差分と認証行](genesis-anchor-journal.txt)
 
+同じバイナリの独立した3プロセスが新規 DB で元の数値実行を行い、保存した789ブロックの受理を完了した。各ピアの transcript・Final・抽選0の認証行・tip・state root が一致した。別の照合器でも全789ヘッダを順番に再ハッシュして、直前の親と最後の tip を検査した。[3ピア照合](genesis-recovered-three-peer.json)・[ピア2](genesis-recovered-peer-b.txt)・[ピア3](genesis-recovered-peer-c.txt)
+
 ## 署名済み Original からの Stop 資料の受付
 
 Stop 資料を保管する際は、owner 署名、対象の attempt、答えと trace の opening を検査する。局所関係に矛盾がある場合も認証済みの資料として受け取れる。開示が空、長さが不正、または opening が root に一致しない場合には拒否する。数値再実行の結果との一致を検査する前にファイルと親ディレクトリを同期する。[受付・裁定の実装](../../../../misaka/palw/remote/src/tb1_exposure/exec_input/stop_case.rs)・[関連6試験](qf1-stop-intake-test.txt)

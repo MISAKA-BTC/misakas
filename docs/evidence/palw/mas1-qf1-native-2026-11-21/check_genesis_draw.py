@@ -30,7 +30,7 @@ def header_hash(header, commitment, pre_pow):
     encoded.extend(le64(len(work)) + work)
     for key in ("pruningPoint", "evmPayloadHash", "evmCommitmentRoot", "overlayCommitmentRoot", "palwStateRoot"):
         encoded.extend(bytes.fromhex(header[key]))
-    if not pre_pow:
+    if not pre_pow and commitment:
         encoded.extend(le64(len(commitment)) + commitment)
     return keyed("BlockPrePowHash64" if pre_pow else "BlockHash64", encoded)
 
@@ -95,6 +95,36 @@ def verify_readers(draw, paths, count):
     return dict(processes=[r[0] for r in peers], binary_sha256=common[0], state=common[1], phase=common[2], replay=transcript)
 
 
+def verify_final_suffix(draw, replay, packed, paths):
+    raw = packed.read_bytes()
+    archive = json.loads(raw)
+    inventory = json.loads((HERE / "genesis-exported-suffix.json").read_text())
+    require(hashlib.sha256(raw).hexdigest() == inventory["sha256"], "archived suffix digest")
+    tip = draw["block"]
+    require((archive["base"], archive["claim"]) == (tip, draw["claim"]), "wrong parent or original claim")
+    for block in archive["blocks"]:
+        h = block["header"]
+        require(h["version"] == 2 and h["powAlgoId"] in (6, 8) and any(bytes.fromhex(h["palwStateRoot"])), "unsupported suffix header")
+        require(h["parentsByLevel"][0] == [tip], "discontinuous selected chain")
+        tip = header_hash(h, bytes(h["palwCommitment"]), False).hex()
+    require(tip == archive["tip"] == inventory["tip"], "wrong end of archived branch")
+    common = None
+    for pid, path in zip(replay["processes"], paths):
+        [(observed, row)] = re.findall(r"^legacy genesis recovered (\d+) (\{.*\})$", path.read_text(), re.M)
+        native = json.loads(row)
+        require(int(observed) == pid and native["replay"] == replay["replay"], "different numerical replay")
+        require(common is None or native == common, "different recovered Gate C state")
+        common = native
+    require((common["claim"], common["accepted"], common["tip"], common["blocks"], common["daa"], common["state"])
+            == (draw["claim"], draw["block"], tip, len(archive["blocks"]), h["daaScore"], inventory["state_root"]),
+            "native recovery differs from the signed chain")
+    require(common["phase"] == "Final { final_daa: %d }" % common["final_daa"]
+            and common["final_daa"] <= common["daa"] < common["certify_by_daa"]
+            and common["draws"] == common["approvals"] == common["drawn_daa"] == 0 and common["outcome"] == "None",
+            "expected Final waiting for the first draw")
+    return common
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for arg in ("record", "capture", "producer"):
@@ -102,10 +132,15 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--peer", type=Path, help="one completed native run for this draw")
     group.add_argument("--peers", type=Path, nargs=3, help="three completed native readback logs for the same draw")
+    parser.add_argument("--final-suffix", type=Path, help="verify the recovered branch against the same completed native replays")
     args = parser.parse_args()
+    if args.final_suffix and not (args.peer or args.peers):
+        parser.error("--final-suffix requires native peer logs")
     result = verify(args.record, args.capture, args.producer)
     if args.peer:
         result["reexecution"] = verify_readers(result, [args.peer], 1)
     if args.peers:
         result["reexecution"] = verify_readers(result, args.peers, 3)
+    if args.final_suffix:
+        result["recovered"] = verify_final_suffix(result, result["reexecution"], args.final_suffix, args.peers or [args.peer])
     print(json.dumps(result, indent=2))
