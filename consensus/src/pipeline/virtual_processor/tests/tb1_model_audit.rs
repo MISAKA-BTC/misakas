@@ -388,6 +388,15 @@ async fn registered_audit_history(mode: AuditHistory) {
             assert!(std::env::var_os(history::OUTPUT).is_some(), "retain the signed public close for cold peers");
             history::save(&node, &archive, registered, None, Some(seals), roots, signed);
         }
+        if let Some(path) = std::env::var_os("MISAKA_PRIVATE_FRESH_WINDOW_READ") {
+            assert!(
+                reader.is_some() && std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ").is_some(),
+                "replay the signed audit and certified work before the release window"
+            );
+            let mut node = legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
+            fresh::replay_window(&mut node, &cut, close.hash(), &aq, audit, marker, roots[0], seals[0], &keys, Path::new(&path)).await;
+            return;
+        }
         fresh::observe(
             &node,
             registered,

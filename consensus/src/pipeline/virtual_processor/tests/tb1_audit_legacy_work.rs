@@ -290,7 +290,7 @@ pub(super) async fn exercise(
     cut: &PreparedAudit<'_>,
     qualification: &Tb1Qualification<'_>,
     deadline: u64,
-) {
+) -> Rig {
     let path = std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT").expect("held legacy Studio model");
     let held = TirArtifactV1::open(Path::new(&path)).unwrap();
     let class = held.class().unwrap();
@@ -448,4 +448,5 @@ pub(super) async fn exercise(
             }
         }
     }
+    node
 }
