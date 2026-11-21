@@ -96,10 +96,10 @@ mod tests {
         let inputs = [[1; 64], [2; 64]];
         let routes = [[3; 64]];
         let plan = CostPlan { scope: [4; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
-        let run = |input| CostRun { scope: plan.scope, input, ticket_input: input, units: 10 };
+        let run = |input| CostRun { scope: plan.scope, input, ticket_input: input, units: 10..=10 };
         let references = inputs.map(run);
         let candidates = inputs.map(|input| RouteRun { route: routes[0], run: run(input) });
-        CostReview::assess(&plan, &references, &candidates)
+        CostReview::assess(&plan, &references, &candidates, &[])
     }
 
     #[test]

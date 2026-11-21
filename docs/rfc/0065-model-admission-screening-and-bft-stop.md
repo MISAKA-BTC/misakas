@@ -71,7 +71,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 | Initとchallenge | nonceがmetadataにしかない、mask/truncationで落ちる、定数へ置換される | 規定入力と矛盾する認証証拠はFAIL。形式的な依存線だけではG-COST PASSにしない |
 | Readout | z=s、H(s)、定数、短いtable参照、回答を計算せず生成できる別枝 | 登録規則に反する短絡を確定すればFAIL。依存解析だけで全代替算法を否定しない |
 | 有用な計算との結合 | yには不要な巨大な演算をz専用に追加し、LLMの有用仕事として価格付けする | 第4節の費用分離に反すればFAIL |
-| 定数化・相殺 | 零/identity/対角/低rank、無効expert、打切り、飽和、既知の相殺 | 構造の存在だけを違反にしない。宣言下界に反する同値算法又は許可predicate違反を確定すればFAIL。未認証の全重み条件はUNKNOWN |
+| 定数化・相殺 | 零/identity/対角/低rank、無効expert、打切り、飽和、既知の相殺 | 構造の存在だけを違反にしない。同じ正規Ticket入力を事前費用閾値未満で作れると再現できた場合、又は許可predicate違反を確定した場合はFAIL。未認証の全重み条件はUNKNOWN |
 | cache・共有 | 同じprefixを毎回新規扱い、seedだけ替えて同じlogitsを使う、重み前処理を無視 | WorkCostContractに入らない共有があればFAIL又はUNKNOWN。正当なcache自体は不正ではない |
 | 選別と条件分岐 | 簡単な入力だけ選択、benchmark検知、challenge依存の安いbranch、MoEの一部を非開示 | 許可入力全域・分岐の定理条件を確認できなければUNKNOWN。既知の違反はFAIL |
 | traceとTicket | 自由salt、可変padding、偽のgraph位置、同じ仕事の複数ticket | canonicalな実行・一回会計に反すればFAIL |
@@ -79,11 +79,11 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 
 「dense」「full-rank」「パラメータが多い」「Qwenと同形」「出力が高entropyに見える」「多数のtestで衝突しなかった」だけをG-COLL/G-COSTの証明として受理しない。認識できる短絡の検出範囲を`DetectionCoverage`として公開する。任意の悪意あるモデルを完全に自動排除できるとは宣言しない。
 
-### 3.2 下界と安いアルゴリズムの扱い
+### 3.2 安い経路の検査と修正後の再検査
 
 G-COSTは[RFC-0062 §4.3](0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復費用検査で判定する。再現された正規Ticket入力の費用が事前閾値を下回れば当該世代はFAIL。旧世代のPASSは新しいartifact・suiteへ引き継がない。
 
-未証明の性能測定又は特定GPUでの高速化は、危険を報告する材料になるが、そのまま数学的な反例とはしない。モデルの用途を維持する正しい高速化をslashせず、仕事単価・適格性ruleの再検討と停止へ接続する。
+安価な経路が再現された場合は、対象の入力・経路・計測記録を保存し、修正後に同じ条件と新しい入力で再検査する。既知の失敗例を除いたsuiteでは停止解除の根拠を満たさない。特定の機材で見つかった正しい高速化は、その適用範囲を記載して新規採掘の適格性と停止で扱う。
 
 ## 4. 実用性と採掘専用計算の制限
 
