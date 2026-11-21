@@ -35,6 +35,24 @@ def header_hash(header, commitment, pre_pow):
     return keyed("BlockPrePowHash64" if pre_pow else "BlockHash64", encoded)
 
 
+def attempt_identity(h):
+    """Read the original v6 envelope and derive the claim and its position-bound native work key."""
+    wire = bytes(h["palwCommitment"])
+    require(wire[:6] == b"PAV2\x06\x00", "expected committed version 6 attempt")
+    signature_bytes = 4627
+    unsigned = wire[4:-signature_bytes-4]
+    require(wire[-signature_bytes-4:-signature_bytes] == struct.pack("<I", signature_bytes), "ML-DSA-87 envelope length")
+    domain, challenge, cls, bond = unsigned[2:66], unsigned[66:130], unsigned[130:194], unsigned[194:262]
+    prefix = "misaka-palw/attempt-v2/"
+    original = keyed(prefix + "attempt-id/v1", le64(len(unsigned)), unsigned).hex()
+    pre_pow = header_hash(h, wire, True)
+    require(keyed(prefix+"challenge/v1", domain, pre_pow, le64(h["timestamp"]), le64(h["nonce"]), cls, bond) == challenge, "header challenge mismatch")
+    anchor = keyed("misaka-palw/base0/rc-job-anchor/v1", domain, pre_pow, cls, bond, le64(h["nonce"] >> 22))
+    view = unsigned[:66] + bytes(64) + unsigned[130:]
+    execution = keyed(prefix+"execution-commitment/v3", anchor, le64(len(view)), view)
+    return wire, unsigned, original, anchor, execution
+
+
 def verify(record, capture, producer, renewed=None):
     if renewed is None:
         renewed = json.loads((HERE / "genesis-renew.json").read_text())
@@ -42,12 +60,9 @@ def verify(record, capture, producer, renewed=None):
     h = row["raw"]["header"]
     require(row["base"] == renewed["tip"] and h["parentsByLevel"][0] == [row["base"]], "different renewed branch")
     require((h["version"], h["powAlgoId"], h["palwStateRoot"]) == (2, 6, renewed["state"]), "different lane or parent state")
-    wire = bytes(h["palwCommitment"])
-    require(wire[:6] == b"PAV2\x06\x00", "expected committed version 6 attempt")
-    signature_bytes = 4627
-    unsigned = wire[4:-signature_bytes-4]
-    require(wire[-signature_bytes-4:-signature_bytes] == struct.pack("<I", signature_bytes), "ML-DSA-87 envelope length")
-    domain, challenge, cls, bond = unsigned[2:66], unsigned[66:130], unsigned[130:194], unsigned[194:262]
+    wire, unsigned, original, anchor, execution = attempt_identity(h)
+    cls = unsigned[130:194]
+    require(original == row["claim"], "claim does not match the raw unsigned envelope")
     require(cls.hex() == renewed["class"], "different registered class")
     key_size, = struct.unpack_from("<I", unsigned, 262)
     root_offset = 266 + key_size + 64
@@ -55,13 +70,6 @@ def verify(record, capture, producer, renewed=None):
     artifact, trace, output = (unsigned[i:i+64].hex() for i in range(root_offset, root_offset+192, 64))
     require(artifact == renewed["artifact"], "different registered inventory")
     prefix = "misaka-palw/attempt-v2/"
-    original = keyed(prefix + "attempt-id/v1", le64(len(unsigned)), unsigned).hex()
-    require(original == row["claim"], "claim does not match the raw unsigned envelope")
-    pre_pow = header_hash(h, wire, True)
-    require(keyed(prefix+"challenge/v1", domain, pre_pow, le64(h["timestamp"]), le64(h["nonce"]), cls, bond) == challenge, "header challenge mismatch")
-    anchor = keyed("misaka-palw/base0/rc-job-anchor/v1", domain, pre_pow, cls, bond, le64(h["nonce"] >> 22))
-    view = unsigned[:66] + bytes(64) + unsigned[130:]
-    execution = keyed(prefix+"execution-commitment/v3", anchor, le64(len(view)), view)
     price = int.from_bytes(keyed(prefix+"class-ticket/v3", execution)[:16], "little")
     log = producer.read_text()
     [target_hex] = re.findall(r"^\[real-attempt\] unchanged class target ([0-9a-f]{32}),", log, re.M)

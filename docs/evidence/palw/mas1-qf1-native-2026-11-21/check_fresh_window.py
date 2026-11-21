@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from check_fresh_audit import records
-from check_genesis_draw import header_hash
+from check_genesis_draw import attempt_identity, header_hash
 from check_legacy_work import HERE, require
 
 
@@ -91,11 +91,16 @@ def check_maturity(window, native_log):
     [(cert_pid, cert)] = records(log, "legacy genesis certification")
     require(pid == cert_pid and pid != window["writer"] and cert["claim"] == source["claim"] and
             cert["state"] == source["state"] and cert["tip"] == source["tip"], "different cold certification")
+    accepted = json.loads(subprocess.check_output(["tar", "-xOf", HERE / "fresh-retained-audit-public.tar.zst", "accepted/winning.json"]))
+    header = accepted["raw"]["header"]
+    wire, _, claim, _, work = attempt_identity(header)
+    require(header_hash(header, wire, False).hex() == source["accepted"] and claim == source["claim"] == accepted["claim"] and
+            row["work"] == work.hex(), "matured fact belongs to a different native execution")
     cross = window["maturity_header"]
     require((row["tip"], row["daa"], row["blocks"], row["state"]) ==
             (cross["tip"], cross["daa"], cross["blocks"], cross["next_header_parent_state"]), "wrong mature state or block")
     require(row["claim"] == source["claim"] and row["base"] == source["tip"] and row["close"] == window["close"] and
-            row["maturity"] == window["forecast_maturity"] == row["daa"] and re.fullmatch(r"[0-9a-f]{128}", row["work"]),
+            row["maturity"] == window["forecast_maturity"] == row["daa"],
             "maturity is not tied to the original work, claim and audit")
     ready = row["readiness"]
     require(ready["safe"] == source["accepted"] and ready["generation"] == row["tip"] and
