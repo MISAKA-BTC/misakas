@@ -6,16 +6,18 @@ use kaspa_consensus_core::{
     palw_bond_budget_v1::{PalwBudgetAskV1, PalwBudgetOriginV1, PalwBudgetWriteV1, palw_bond_budget_export_cap_v1},
     palw_model_market_v1::moe2::{
         Moe2PriceLimits, Moe2QuantityLimits, Moe2WorkerPlan,
-        settlement::{Moe2Position, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms},
+        settlement::{Moe2Position, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementTerms, Moe2WorkerRelease},
     },
     palw_settlement_liability_v1::PalwSettlementTermsSourcedV1,
 };
 use libcrux_ml_dsa::ml_dsa_87;
+use misaka_palw_remote::private_moe2::PrivateMoe2Checkpoint;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Observation {
     enrollment: Hash64,
     checkpoint: Hash64,
+    carrier: Hash64,
     position: Hash64,
     reservation: Hash64,
     consumed: u64,
@@ -27,7 +29,7 @@ pub(super) struct Observation {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(super) struct Replay {
-    blocks: [RpcRawBlock; 2],
+    blocks: [RpcRawBlock; 3],
     signature: Vec<u8>,
     undo: Vec<u8>,
 }
@@ -72,11 +74,11 @@ pub(super) async fn exercise(
     // Peers receive the signed enrollment and both raw blocks. Only the first peer
     // signs. Each reader resolves the verification key from its own native bond.
     const DOMAIN: &[u8] = b"MISAKA/private/MOE2/accounting-enrollment/v1";
-    let (enrollment, execution, signature) = if let Some(replay) = remote {
-        let [a, b] = replay.blocks.map(|b| Block::try_from(b).unwrap());
+    let (enrollment, execution, signature, remote_carrier) = if let Some(replay) = remote {
+        let [a, b, c] = replay.blocks.map(|b| Block::try_from(b).unwrap());
         arrive(&env.chain, a.clone(), "MOE2 economic terms").await;
         arrive(&env.chain, b.clone(), "MOE2 accounting position").await;
-        (a, b, replay.signature)
+        (a, b, replay.signature, Some(c))
     } else {
         let key = TestConsensus::palw_v2_registry_keypair(1);
         let sig = ml_dsa_87::sign(&key.signing_key, source.as_byte_slice(), DOMAIN, [44; 32]).unwrap();
@@ -85,7 +87,7 @@ pub(super) async fn exercise(
         let interval = env.config.params.target_time_per_block();
         let a = env.chain.heartbeat_paying(miner, interval, vec![]).await;
         let b = env.chain.heartbeat(interval, vec![]).await;
-        (a, b, sig.as_slice().to_vec())
+        (a, b, sig.as_slice().to_vec(), None)
     };
     let api = &env.chain.ctx.consensus;
     assert!(api.palw_coinbase_commits_to(env.domain.as_bytes(), enrollment.hash(), &source.as_bytes()).unwrap());
@@ -169,33 +171,69 @@ pub(super) async fn exercise(
     assert_eq!(journal.len(), start);
     assert!(book.receipt(&terms.claim).is_none());
     let admitted = book.clone();
-    let (pay, undo) = book.settle_recorded(terms.claim, at, point.block, &funding, &mut budget, &mut journal).unwrap();
-    assert_eq!(
-        book.settle(terms.claim, at, point.block, &funding, &mut budget, &mut journal),
-        Err(Moe2SettlementError::AlreadySettled)
-    );
-    let receipt = *book.receipt(&terms.claim).unwrap();
+    let mut reference = book.clone();
+    let (expected_payment, expected_undo) =
+        reference.settle_recorded(terms.claim, at, point.block, &funding, &mut budget, &mut journal).unwrap();
     let directory = kaspa_database::utils::get_kaspa_tempdir();
     let store = directory.path();
-    let native = checkpoint::NativeSettlement::project(
+    let (native, pay, undo) = checkpoint::NativeSettlement::project(
         store,
         env,
         state,
         enrollment.hash(),
-        execution.hash(),
         &journal[..start],
-        &journal[start..],
-        receipt,
+        &mut book,
+        &terms,
+        at,
+        Moe2WorkerRelease {
+            reward,
+            miner_now: funding.miner_now,
+            panel_now: funding.panel_now,
+            liability_until: terms.deadline,
+            signed_hard_deadline: terms.deadline,
+            material_ttl_until: terms.deadline,
+            vest_until: None,
+            retire_not_before: terms.deadline,
+        },
     );
+    assert_eq!((&book, pay, undo), (&reference, expected_payment, expected_undo));
+    let receipt = *book.receipt(&terms.claim).unwrap();
     let (checkpoint, checkpoint_bytes) = book.checkpoint(native.child_root);
     let undo_bytes = borsh::to_vec(&undo).unwrap();
     if let Some(shared) = shared_undo {
         assert_eq!(shared, undo_bytes);
     }
 
+    const BOOK_BYTE_BUDGET: usize = 16 * 1024;
+    let record = PrivateMoe2Checkpoint {
+        network: env.domain,
+        reservation: source,
+        enrollment: enrollment.hash(),
+        execution: execution.hash(),
+        native_root: native.child_root,
+        book_root: checkpoint,
+    };
+    let carrier = if let Some(block) = remote_carrier {
+        arrive(&env.chain, block.clone(), "MOE2 settlement checkpoint").await;
+        block
+    } else {
+        let mut miner = new_miner_data();
+        miner.extra_data = record.marker().as_byte_slice().to_vec();
+        env.chain.heartbeat_paying(miner, env.config.params.target_time_per_block(), vec![]).await
+    };
+    let api = env.chain.ctx.consensus.as_ref();
+    assert_eq!(record.read_selected(api, carrier.hash(), &checkpoint_bytes, BOOK_BYTE_BUDGET).unwrap(), book);
+    assert!(record.read_selected(api, execution.hash(), &checkpoint_bytes, BOOK_BYTE_BUDGET).is_err());
+    let wrong_record = PrivateMoe2Checkpoint { native_root: native.parent_root, ..record };
+    assert!(wrong_record.read_selected(api, carrier.hash(), &checkpoint_bytes, BOOK_BYTE_BUDGET).is_err());
+    let mut corrupt = checkpoint_bytes.clone();
+    corrupt[0] ^= 1;
+    assert!(record.read_selected(api, carrier.hash(), &corrupt, BOOK_BYTE_BUDGET).is_err());
+
     let obs = Observation {
         enrollment: enrollment.hash(),
         checkpoint,
+        carrier: carrier.hash(),
         position: execution.hash(),
         reservation: source,
         consumed: budget.claim_row(&source).unwrap().consumed.reward_sompi,
@@ -217,11 +255,16 @@ pub(super) async fn exercise(
         arrive(&env.chain, block.clone(), "branch without MOE2 enrollment").await;
     }
     let (fork_tip, _) = env.chain.tip_state();
-    for detached in [enrollment.hash(), execution.hash()] {
+    for detached in [enrollment.hash(), execution.hash(), carrier.hash()] {
         assert!(!env.chain.ctx.consensus.is_chain_ancestor_of(detached, fork_tip).unwrap());
     }
     let loaded = std::fs::read(store.join("settled")).unwrap();
-    const BOOK_BYTE_BUDGET: usize = 16 * 1024;
+    // The old block body is still locally available. Withdrawal is decided by
+    // selected ancestry rather than deleting the historical commitment.
+    assert!(
+        env.chain.ctx.consensus.palw_coinbase_commits_to(env.domain.as_bytes(), carrier.hash(), &record.marker().as_bytes()).unwrap()
+    );
+    assert!(record.read_selected(env.chain.ctx.consensus.as_ref(), carrier.hash(), &loaded, BOOK_BYTE_BUDGET).is_err());
     let mut book = Moe2SettlementBook::from_checkpoint(native.child_root, checkpoint, &loaded, BOOK_BYTE_BUDGET).unwrap();
     assert!(Moe2SettlementBook::from_checkpoint(native.parent_root, checkpoint, &loaded, loaded.len()).is_err());
     assert!(Moe2SettlementBook::from_checkpoint(native.child_root, checkpoint, &loaded, loaded.len() - 1).is_err());
@@ -248,7 +291,13 @@ pub(super) async fn exercise(
         native.child_root,
         undo_bytes.len()
     );
-    (obs, Replay { blocks: [RpcRawBlock::from(&enrollment), RpcRawBlock::from(&execution)], signature, undo: undo_bytes })
+    println!(
+        "MOE2 pid={} checkpoint_carrier={} marker={} native_debit_and_market=true detached_checkpoint_rejected=true",
+        std::process::id(),
+        carrier.hash(),
+        record.marker()
+    );
+    (obs, Replay { blocks: [&enrollment, &execution, &carrier].map(RpcRawBlock::from), signature, undo: undo_bytes })
 }
 
 #[path = "moe2_checkpoint.rs"]

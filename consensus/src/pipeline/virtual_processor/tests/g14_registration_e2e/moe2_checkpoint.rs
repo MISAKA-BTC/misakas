@@ -2,16 +2,11 @@
 //! carriage codecs. The fixture retains these roots outside the selected chain.
 use super::*;
 use kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetStateV1;
-use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::LockedLiquidityReceipt;
+use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
+    Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
+};
 use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
 use std::path::Path;
-
-fn budget_entries(writes: &[PalwBudgetWriteV1]) -> impl Iterator<Item = PalwDeltaEntryV2> + '_ {
-    writes.iter().map(|w| match w.clone() {
-        PalwBudgetWriteV1::Row { table, key, old, new } => PalwDeltaEntryV2::BondBudgetRow { table, key, old, new },
-        PalwBudgetWriteV1::Header { old, new } => PalwDeltaEntryV2::BondBudgetHeader { old, new },
-    })
-}
 
 pub(super) struct NativeSettlement<'a> {
     store: &'a Path,
@@ -25,39 +20,60 @@ impl<'a> NativeSettlement<'a> {
         env: &Env,
         registration: &PalwChainStateV2,
         enrollment: Hash64,
-        execution: Hash64,
         reservation: &[PalwBudgetWriteV1],
-        debit: &[PalwBudgetWriteV1],
-        receipt: LockedLiquidityReceipt,
-    ) -> Self {
-        assert_eq!(receipt.position.point.block, execution);
-        assert_eq!(debit.len(), 1);
+        book: &mut Moe2SettlementBook,
+        terms: &Moe2SettlementTerms,
+        at: Moe2Position,
+        release: Moe2WorkerRelease,
+    ) -> (Self, Moe2SettledReward, Moe2SettlementUndo) {
         let vp = env.chain.vp();
         let store = vp.palw_state_v2_store.read();
         let (published_parent, mut enrollment) = store.delta_of(enrollment).unwrap();
-        let (published_child, mut executed) = store.delta_of(execution).unwrap();
+        let (published_child, mut executed) = store.delta_of(at.point.block).unwrap();
         drop(store);
         let params = &env.bundle.state;
         let canonical_parent = apply_delta_v2(registration, &enrollment, params).unwrap();
         assert_eq!(canonical_parent.state_root(), published_parent);
-        assert_eq!(apply_delta_v2(&canonical_parent, &executed, params).unwrap().state_root(), published_child);
-        enrollment.entries.extend(budget_entries(reservation));
+        let mut unfunded = apply_delta_v2(&canonical_parent, &executed, params).unwrap();
+        assert_eq!(unfunded.state_root(), published_child);
+        let admitted = book.clone();
+        let base_len = executed.entries.len();
+        assert_eq!(
+            unfunded.settle_private_moe2(&env.config.params, book, &mut executed, terms.claim, at, release),
+            Err(Moe2SettlementError::ReservationMismatch)
+        );
+        assert_eq!(unfunded.state_root(), published_child);
+        assert_eq!(*book, admitted);
+        assert_eq!(executed.entries.len(), base_len);
+
+        enrollment.entries.extend(reservation.iter().cloned().map(PalwDeltaEntryV2::from));
         let parent = apply_delta_v2(registration, &enrollment, params).unwrap();
-        executed.entries.extend(budget_entries(debit));
-        executed.entries.push(PalwDeltaEntryV2::ModelMarket {
-            key: receipt.model,
-            old: Some(receipt.before),
-            new: Some(receipt.after),
-        });
-        let child = apply_delta_v2(&parent, &executed, params).unwrap();
-        assert_eq!(child.model_market(&receipt.model), Some(&receipt.after));
+        let mut child = apply_delta_v2(&parent, &executed, params).unwrap();
+        let before_settlement = child.state_root();
+        let wrong_release = Moe2WorkerRelease { panel_now: release.panel_now + 1, ..release };
+        assert!(child.settle_private_moe2(&env.config.params, book, &mut executed, terms.claim, at, wrong_release).is_err());
+        let public = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        assert_eq!(
+            child.settle_private_moe2(&public, book, &mut executed, terms.claim, at, release),
+            Err(Moe2SettlementError::UnknownClaimContext)
+        );
+        assert_eq!((child.state_root(), executed.entries.len(), &*book), (before_settlement, base_len, &admitted));
+        let (reward, undo) = child.settle_private_moe2(&env.config.params, book, &mut executed, terms.claim, at, release).unwrap();
+        assert_eq!(book.entitlement(&terms.claim), Some(&reward));
+        let child_root = child.state_root();
+        assert_eq!(apply_delta_v2(&parent, &executed, params).unwrap().state_root(), child_root);
+        assert_eq!(
+            child.settle_private_moe2(&env.config.params, book, &mut executed, terms.claim, at, release),
+            Err(Moe2SettlementError::AlreadySettled)
+        );
+        assert_eq!((child.state_root(), executed.entries.len()), (child_root, base_len + 2));
         assert_ne!(parent.state_root(), published_parent);
         assert_ne!(child.state_root(), published_child);
         std::fs::write(checkpoint_dir.join("native-carriage"), borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap())
             .unwrap();
         std::fs::write(checkpoint_dir.join("enrollment.delta"), borsh::to_vec(&enrollment).unwrap()).unwrap();
         std::fs::write(checkpoint_dir.join("settlement.delta"), borsh::to_vec(&executed).unwrap()).unwrap();
-        Self { store: checkpoint_dir, parent_root: parent.state_root(), child_root: child.state_root() }
+        (Self { store: checkpoint_dir, parent_root: parent.state_root(), child_root }, reward, undo)
     }
 
     pub(super) fn reload(&self, env: &Env) -> PalwChainStateV2 {

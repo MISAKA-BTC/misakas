@@ -119,6 +119,20 @@ pub struct Moe2SettledReward {
     pub vest_until: Option<u64>,
 }
 
+/// Release from an independently authorized mining claim. Its owner authenticates
+/// the reward, worker plan, vesting and obligation horizons before accounting.
+#[derive(Clone, Copy, Debug)]
+pub struct Moe2WorkerRelease {
+    pub reward: u64,
+    pub miner_now: u64,
+    pub panel_now: u64,
+    pub liability_until: u64,
+    pub signed_hard_deadline: u64,
+    pub material_ttl_until: u64,
+    pub vest_until: Option<u64>,
+    pub retire_not_before: u64,
+}
+
 impl Moe2SettlementFunding {
     fn check(&self, allocation: Moe2RewardAllocation) -> Result<Moe2SettledReward, Moe2SettlementError> {
         let t = &self.liability;
@@ -275,6 +289,9 @@ impl Moe2SettlementBook {
 
     pub fn model(&self, model: &Hash64) -> Option<&Moe2RegisteredModel> {
         self.models.get(model)
+    }
+    pub(crate) fn admitted_terms(&self, claim: &Hash64) -> Option<&Moe2SettlementTerms> {
+        self.admitted.get(claim).map(|(terms, _)| terms)
     }
     pub fn entitlement(&self, claim: &Hash64) -> Option<&Moe2SettledReward> {
         self.settled.get(claim).map(|(reward, _)| reward)

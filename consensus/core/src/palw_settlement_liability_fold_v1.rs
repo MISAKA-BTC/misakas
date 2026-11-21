@@ -149,20 +149,16 @@ pub(super) fn liability_refused_v1(why: PalwSettlementLiabilityRefusalV1) -> Pal
     PalwStateV2Error::BondBudgetRefused(format!("RFC-0008 combined liability predicate: {}", why.name()))
 }
 
-impl TransitionBuilder<'_> {
-    fn liability_fence_from_v1(&self, now: u64) -> Option<u64> {
-        self.params.settlement_once_active_at(now).then(|| self.params.settlement_once_from()).flatten()
-    }
-
+impl PalwChainStateV2 {
     /// The bond-side terms every family shares, from the bond's actual rows: collateral, the other live liabilities (this claim's
     /// own `K` taken out only while its row is open — a kept shadow is counted in full) and the withdrawal-hold horizon.
-    fn bond_liability_terms_v1(
+    pub(super) fn bond_liability_terms_v1(
         &self,
         bond: &PalwBondKeyV2,
         own_open_liability: u128,
     ) -> (PalwSettlementTermV1<u128>, PalwSettlementTermV1<u128>, PalwSettlementTermV1<u64>) {
-        let collateral = self.state.bonds.get(bond).map(|b| u128::from(b.collateral)).ok_or("the claim's bond is not registered");
-        let Some(budget) = self.state.bond_budget.as_ref() else {
+        let collateral = self.bonds.get(bond).map(|b| u128::from(b.collateral)).ok_or("the claim's bond is not registered");
+        let Some(budget) = self.bond_budget.as_ref() else {
             // No engine yet: no other liability is recorded, and nothing holds the bond beyond its status.
             return (collateral, Ok(0), Err("the ADR-0176 withdrawal hold (no bond budget engine)"));
         };
@@ -180,6 +176,12 @@ impl TransitionBuilder<'_> {
             hold.max(window).saturating_sub(1)
         };
         (collateral, Ok(other), Ok(locked))
+    }
+}
+
+impl TransitionBuilder<'_> {
+    fn liability_fence_from_v1(&self, now: u64) -> Option<u64> {
+        self.params.settlement_once_active_at(now).then(|| self.params.settlement_once_from()).flatten()
     }
 
     /// **The claim's R book**: `(reserved, consumed)` of the native income row its reservation was moved into at acceptance (an
@@ -252,7 +254,7 @@ impl TransitionBuilder<'_> {
                     return Ok(None); // a seeded pre-budget claim keeps the rule it was accepted under
                 }
                 let own = if row.open { row.liability_sompi } else { 0 };
-                let (bond_collateral, other_live_liability, bond_locked_until) = self.bond_liability_terms_v1(&row.bond, own);
+                let (bond_collateral, other_live_liability, bond_locked_until) = self.state.bond_liability_terms_v1(&row.bond, own);
                 let liability_until = horizon
                     .or_else(|| self.state.panel_liabilities.get(&claim).map(|r| r.expiry_daa.saturating_sub(1)))
                     .or_else(|| {
@@ -320,7 +322,7 @@ impl TransitionBuilder<'_> {
                     self.state.bond_budget.as_ref().ok_or(unsourced("the native claim's ADR-0176 reservation (no engine)"))?;
                 let row = *budget.claim_row(&budget_id).ok_or(unsourced("the native claim's ADR-0176 reservation row"))?;
                 let own = if row.open { row.liability_sompi } else { 0 };
-                let (bond_collateral, other_live_liability, bond_locked_until) = self.bond_liability_terms_v1(&row.bond, own);
+                let (bond_collateral, other_live_liability, bond_locked_until) = self.state.bond_liability_terms_v1(&row.bond, own);
                 Ok(Some(PalwSettlementTermsSourcedV1 {
                     reserved_reward: Ok(row.reserved.reward_sompi),
                     consumed_reward: Ok(row.consumed.reward_sompi),
@@ -353,7 +355,7 @@ impl TransitionBuilder<'_> {
                 let id = super::palw_bond_budget_fold_v1::kernel_budget_claim_id_v1(&claim);
                 let row = *budget.claim_row(&id).ok_or(unsourced("the kernel claim's ADR-0176 reservation row"))?;
                 let own = if row.open { row.liability_sompi } else { 0 };
-                let (bond_collateral, other_live_liability, bond_locked_until) = self.bond_liability_terms_v1(&row.bond, own);
+                let (bond_collateral, other_live_liability, bond_locked_until) = self.state.bond_liability_terms_v1(&row.bond, own);
                 let liability_until = kernel.liability_until.ok_or("the kernel claim's liability horizon (not Final)");
                 let hard = kernel_claim_signed_hard_deadline_v1(
                     self.params,
@@ -784,7 +786,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         let (bond, capital, accepted_daa, liability, reserved) = plan.liability_terms_v1();
-        let (_, other_live_liability, _) = self.bond_liability_terms_v1(&bond, 0);
+        let (_, other_live_liability, _) = self.state.bond_liability_terms_v1(&bond, 0);
         let (hard, material_ttl_until, retire_not_before): (
             PalwSettlementTermV1<u64>,
             PalwSettlementTermV1<u64>,

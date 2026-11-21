@@ -378,6 +378,15 @@ fn budget_refused(bond: PalwBondKeyV2, why: PalwBudgetRefusalV1) -> PalwStateV2E
     PalwStateV2Error::BondBudgetExhausted { bond, why: why.to_string() }
 }
 
+impl From<PalwBudgetWriteV1> for PalwDeltaEntryV2 {
+    fn from(write: PalwBudgetWriteV1) -> Self {
+        match write {
+            PalwBudgetWriteV1::Header { old, new } => Self::BondBudgetHeader { old, new },
+            PalwBudgetWriteV1::Row { table, key, old, new } => Self::BondBudgetRow { table, key, old, new },
+        }
+    }
+}
+
 impl TransitionBuilder<'_> {
     pub(super) fn hold_native_recipient_v1(
         &mut self,
@@ -838,14 +847,7 @@ impl TransitionBuilder<'_> {
     /// The engine's journal, as deltas. The delta slots were admitted with the op (`bond_budget_op`); the row bytes MOVE into the
     /// entries (no copy).
     fn journal_bond_budget(&mut self, writes: Vec<PalwBudgetWriteV1>) {
-        for write in writes {
-            match write {
-                PalwBudgetWriteV1::Header { old, new } => self.entries.push(PalwDeltaEntryV2::BondBudgetHeader { old, new }),
-                PalwBudgetWriteV1::Row { table, key, old, new } => {
-                    self.entries.push(PalwDeltaEntryV2::BondBudgetRow { table, key, old, new })
-                }
-            }
-        }
+        self.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
     }
 
     /// **RFC-0006 (RFC06-1): admit an engine op's growth before it runs** — `growth.writes` journal entries, each at most one new

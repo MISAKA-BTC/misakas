@@ -34,6 +34,7 @@ pub mod l2;
 /// RFC09: the fork choice under rule E + Gate C from op 203 v2 committed leaves (the full node's own readers).
 pub mod l2_rule_e;
 pub mod miner;
+pub mod private_moe2;
 #[cfg(feature = "positive-panel")]
 pub mod positive_panel;
 #[cfg(feature = "positive-panel")]
