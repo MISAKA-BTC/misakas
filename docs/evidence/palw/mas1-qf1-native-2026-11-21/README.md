@@ -537,6 +537,8 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 
 試験終了前に保存した隔離 DB のコピーを読み取り専用で開き、元の受付ブロックから DAA 6,857 までの選択鎖789ブロックを取り出した。各ヘッダのハッシュを保存済みキーと照合し、ブロック本体を raw 形式に往復した。収録した Final 後の attempt ブロックのうち、後続ブロックも収録した56件では、すべて後続ヘッダの DAA が元と同じだった。保存した範囲は64回の試験の途中までである。[raw ブロック](genesis-exported-suffix.json.zst)・[範囲と SHA-256](genesis-exported-suffix.json)
 
+新しい DB で署名済み監査枝と Qwen2.5 の元の仕事を再実行した1プロセスが、この789ブロックを通常どおり受理し、保存元と同じ tip・state root を得た。DAA 6,857 で元 claim は Final、Gate C の抽選0・承認0、認証期限は DAA 8,793。認証行に終局結果はまだなかった。[独立再生時の認証行と state root](genesis-recovered-peer.txt)
+
 ## 署名済み Original からの Stop 資料の受付
 
 Stop 資料を保管する際は、owner 署名、対象の attempt、答えと trace の opening を検査する。局所関係に矛盾がある場合も認証済みの資料として受け取れる。開示が空、長さが不正、または opening が root に一致しない場合には拒否する。数値再実行の結果との一致を検査する前にファイルと親ディレクトリを同期する。[受付・裁定の実装](../../../../misaka/palw/remote/src/tb1_exposure/exec_input/stop_case.rs)・[関連6試験](qf1-stop-intake-test.txt)
