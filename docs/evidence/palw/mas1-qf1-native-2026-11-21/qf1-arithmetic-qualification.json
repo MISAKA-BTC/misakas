@@ -1,0 +1,28 @@
+{
+  "close": "8f9e2d10d21141dd884336b4e63c9e1e7f3a3af80846d12bff1482bfd10807d031f9a29430fbf527cf6ab3fc1898a12df54669b00e88fc03e2da3cecf446e669",
+  "roster": "7ec4a400d63b4278f2a30458eafdd8b0901cb7921421a441d7adb9f2b516383dc82bb9992133bd3ea38f5a0d738b5fcba5c2616742a7ff001ea802a2ed5e49e3",
+  "rounds": [
+    {
+      "purpose": "MODEL_AUDIT",
+      "round": "305329e8fe59c4b6a6e55b4f2adffdbc5ab7716c4eb58e0962075e3893948ab0cc1883dcbc0029955029b57430ae8a009e633d3135b76b1f7e9574b9a54dd140",
+      "qualification": "9356c46f8bab90d9a87c1cc19b47d9e692d4aa86914ac7b5166bd00b5c93a09245f11475036ca1d74209b59a4d1618070d0025de3bfc70f17071c8eb5c6c54a7",
+      "ready_signatures": 9,
+      "qualified_dealers": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "purpose": "PANEL",
+      "round": "8b7502681321eb4a61d6d18600c7d11a45859513e9f89fd8da4199c8881c5ca20e93f8ec230c0c4495bba0ec44a9b61a43d733c4dd4b77e9d31f08a42ea503ca",
+      "qualification": "55ce4316b103d6d01ec3a5194ab5d05fd1cc7c1116cce1ff3a86577c46d9847e9e5849ed58acc5a8dc9bf0385df2953a474d6a8650f1ebea192318c6441fda30",
+      "ready_signatures": 9,
+      "qualified_dealers": [
+        0,
+        1,
+        2
+      ]
+    }
+  ]
+}

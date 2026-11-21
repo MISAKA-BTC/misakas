@@ -1,9 +1,10 @@
 //! Two bounded private exact-answer tasks. Scores are local observations until
 //! the evaluation submission is closed and independently replayed by its PANEL.
 use super::*;
+use crate::tb1_exposure::exec_input::LocalOriginalBody;
 use crate::tb1_exposure::qf1::Qf1Prompt;
-use kaspa_consensus_core::palw_qf1::is_eos;
-use misaka_palw_tir_exec::node::qf1::{LocalAnswer, LocalInstance};
+use kaspa_consensus_core::palw_qf1::{Stop, is_eos};
+use misaka_palw_tir_exec::node::qf1::LocalInstance;
 
 pub const CASES: u32 = 2;
 const LIMIT: u32 = 16;
@@ -29,6 +30,41 @@ pub fn suite_id() -> Hash64 {
     )
 }
 
+/// Public input for later independent replay. The suite determines the expected
+/// digit from the challenge; evaluators derive the score from the output tokens.
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
+pub struct ArithmeticEvaluation {
+    pub case: u32,
+    pub challenge: [u8; 32],
+    pub job: String,
+    pub expected: u32,
+    pub output: Vec<u32>,
+    pub stopped_at_eos: bool,
+    pub positions: u32,
+    pub z: Hash64,
+    pub original: LocalOriginalBody,
+}
+
+/// Commit both cases in suite order on the branch that published this audit seed.
+pub fn submission_marker(certificate: Hash64, cases: &[ArithmeticEvaluation; CASES as usize]) -> io::Result<[u8; 64]> {
+    for (i, row) in cases.iter().enumerate() {
+        if row.case != i as u32
+            || row.output.is_empty()
+            || row.output.len() > LIMIT as usize
+            || row.job != (ArithmeticCase { challenge: row.challenge, index: row.case }).job().0
+        {
+            return Err(invalid("incomplete or unordered arithmetic submission"));
+        }
+    }
+    Ok(Sha3_512::new()
+        .chain_update(b"MISAKA/private/MAS1/arithmetic-submission/v1")
+        .chain_update(suite_id().as_bytes())
+        .chain_update(certificate.as_bytes())
+        .chain_update(borsh::to_vec(cases)?)
+        .finalize()
+        .into())
+}
+
 struct ArithmeticCase {
     challenge: [u8; 32],
     index: u32,
@@ -41,14 +77,26 @@ impl ArithmeticCase {
         if self.index == 0 { (format!("{PREFIX}{a} + {b}{SUFFIX}"), a + b) } else { (format!("{PREFIX}{} - {b}{SUFFIX}", a + b), a) }
     }
 
-    fn execute(&self, model: &LocalInstance<'_>, tokenizer: &[u8]) -> io::Result<(String, u32, LocalAnswer)> {
+    fn execute(&self, model: &LocalInstance<'_>, tokenizer: &[u8]) -> io::Result<ArithmeticEvaluation> {
         let id = model.identity();
         let (job, digit) = self.job();
         let prompt = Qf1Prompt::from_registered_tokenizer(tokenizer, id.tokenizer, id.descriptor, &job, 32 << 20, 256)?;
         let tokens = prompt.frame(&self.challenge);
         let expected = prompt.digit_token(digit);
-        let answer = model.replay(&tokens, LIMIT, LEAVES, suite_id(), self.challenge).map_err(io::Error::other)?;
-        Ok((job, expected, answer))
+        let trace =
+            model.produce_trace(&tokens, LIMIT, LEAVES, suite_id(), self.challenge, suite_id(), None).map_err(io::Error::other)?;
+        let original = LocalOriginalBody::from_trace(&trace);
+        Ok(ArithmeticEvaluation {
+            case: self.index,
+            challenge: self.challenge,
+            job,
+            expected,
+            output: trace.answer.tokens,
+            stopped_at_eos: trace.answer.stop == Stop::Eos,
+            positions: trace.answer.processed_positions,
+            z: Hash64::from_bytes(trace.answer.z),
+            original,
+        })
     }
 }
 
@@ -72,7 +120,7 @@ impl FrozenAudit<'_> {
         case: u32,
         model: &LocalInstance<'_>,
         tokenizer: &[u8],
-    ) -> io::Result<(String, u32, LocalAnswer)> {
+    ) -> io::Result<ArithmeticEvaluation> {
         if self.cut.plan.suite != suite_id() || self.cut.plan.tests_per_candidate != CASES {
             return Err(invalid("different frozen arithmetic suite or case count"));
         }
@@ -94,6 +142,35 @@ impl FrozenAudit<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn submission_binds_originals_in_draw_order() {
+        let certificate = Hash64::from_bytes([4; 64]);
+        let mut rows = std::array::from_fn(|index| {
+            let case = ArithmeticCase { challenge: [7; 32], index: index as u32 };
+            ArithmeticEvaluation {
+                case: case.index,
+                challenge: case.challenge,
+                job: case.job().0,
+                expected: 19,
+                output: vec![19, 151643],
+                stopped_at_eos: true,
+                positions: 80,
+                z: Hash64::default(),
+                original: LocalOriginalBody { counts: [79, 2, 1, 900], roots: [Hash64::default(); 4], ticket: [0; 32] },
+            }
+        });
+        let original = submission_marker(certificate, &rows).unwrap();
+        assert_ne!(submission_marker(Hash64::default(), &rows).unwrap(), original);
+        rows.swap(0, 1);
+        assert!(submission_marker(certificate, &rows).is_err());
+        rows.swap(0, 1);
+        rows[1].original.roots[2] = certificate;
+        assert_ne!(submission_marker(certificate, &rows).unwrap(), original);
+        rows[1].original.roots[2] = Hash64::default();
+        rows[1].output[0] += 1;
+        assert_ne!(submission_marker(certificate, &rows).unwrap(), original);
+    }
+
     #[test]
     fn arithmetic_generators_and_exact_scores() {
         let mut challenge = [0; 32];

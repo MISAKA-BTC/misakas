@@ -245,6 +245,8 @@ pub(super) async fn replay_window(
     }
     let write = std::env::var_os("MISAKA_PRIVATE_FRESH_PUBLICATION_WRITE");
     let read = std::env::var_os("MISAKA_PRIVATE_FRESH_PUBLICATION_READ");
+    let submission_source = read.as_ref().map(|path| Path::new(path).with_extension("submission.json"));
+    let submission_output = write.as_ref().map(|path| Path::new(path).with_extension("submission.json"));
     let publication = match (write, read) {
         (None, None) => return,
         (Some(path), None) => {
@@ -295,20 +297,6 @@ pub(super) async fn replay_window(
     let cases = [0, 1].map(|case| frozen.challenge(api, batch, certificate, &rows, q, LIMITS, 0, case).unwrap());
     assert_ne!(cases[0], cases[1]);
     assert!(frozen.challenge(api, batch, certificate, &rows, q, LIMITS, 1, 0).is_err());
-    if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some() {
-        use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{CASES, exact_digit_score};
-        let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
-        for case in 0..CASES {
-            let (job, expected, answer) =
-                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, case, model, &tokenizer).unwrap();
-            peer_log!(
-                "fresh arithmetic evaluation {}",
-                serde_json::json!({"pid":std::process::id(),"case":case,"certificate":certificate,
-                "challenge":faster_hex::hex_string(&cases[case as usize]),"job":job,"expected":expected,"output":answer.tokens,
-                "z":Hash64::from_bytes(answer.z),"correct":exact_digit_score(expected,&answer.tokens)})
-            );
-        }
-    }
     peer_log!(
         "fresh audit certificate {} {}",
         std::process::id(),
@@ -317,4 +305,52 @@ pub(super) async fn replay_window(
             "cases":cases.map(|c|faster_hex::hex_string(&c)),"state":node.chain.tip_state().1.state_root()
         })
     );
+    if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some() {
+        use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{
+            ArithmeticEvaluation, CASES, exact_digit_score, submission_marker,
+        };
+        let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
+        let results: [ArithmeticEvaluation; CASES as usize] = std::array::from_fn(|index| {
+            let row =
+                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, index as u32, model, &tokenizer).unwrap();
+            assert_eq!(row.challenge, cases[index]);
+            peer_log!(
+                "fresh arithmetic evaluation {}",
+                serde_json::json!({"pid":std::process::id(),
+                "certificate":certificate,"evaluation":row,"correct":exact_digit_score(row.expected,&row.output)})
+            );
+            row
+        });
+        let marker = submission_marker(certificate, &results).unwrap();
+        let parent = node.chain.sink();
+        assert_eq!(parent, certificate);
+        let block = if let Some(path) = submission_source {
+            let (raw, original): (RpcRawBlock, [ArithmeticEvaluation; CASES as usize]) =
+                serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            assert_eq!(original, results, "full re-execution differs from the archived submission");
+            let block = Block::try_from(raw).unwrap();
+            assert_eq!(block.header.direct_parents(), &[parent]);
+            stable_panel::arrive(node, block.clone(), "archived arithmetic submission").await;
+            block
+        } else {
+            local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic evaluation submission").await
+        };
+        assert_eq!(node.chain.sink(), block.hash());
+        assert!(node.api().palw_coinbase_commits_to(round.chain_id, block.hash(), &marker).unwrap());
+        for (i, expected) in cases.iter().enumerate() {
+            assert_eq!(frozen.challenge(node.api().as_ref(), batch, certificate, &rows, q, LIMITS, 0, i as u32).unwrap(), *expected);
+        }
+        if let Some(path) = submission_output {
+            let file = File::create_new(path).unwrap();
+            serde_json::to_writer(&file, &(RpcRawBlock::from(&block), &results)).unwrap();
+            file.sync_all().unwrap();
+        }
+        peer_log!(
+            "fresh arithmetic submission pid={} certificate={} block={} marker={}",
+            std::process::id(),
+            certificate,
+            block.hash(),
+            Hash64::from_bytes(marker)
+        );
+    }
 }

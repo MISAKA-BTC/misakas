@@ -8,6 +8,7 @@ from pathlib import Path
 
 from check_fresh_audit import audit_binding, coinbase_extra
 from check_genesis_draw import header_hash
+from check_transaction_root import verify_block_transactions
 from check_legacy_work import HERE, require
 
 
@@ -45,19 +46,23 @@ def verify_signature(openssl, key, message, signature, context, directory):
     return result.returncode == 0
 
 
-def verify(openssl):
+def verify(openssl, arithmetic=False):
     algorithms = subprocess.run([openssl, "list", "-signature-algorithms"], capture_output=True)
     require(algorithms.returncode == 0 and b"ML-DSA-65" in algorithms.stdout,
             "select an OpenSSL with ML-DSA-65 support using --openssl")
     keys = public_keys()
     roster = h512(b"MISAKA/private/TB1/roster/v1", u32(len(keys)),
                   *(x.to_bytes(66, "big") + key for x, key in enumerate(keys, 1)))
-    archive = HERE / "fresh-retained-audit-public.tar.zst"
+    name = "qf1-arithmetic-audit-close" if arithmetic else "fresh-retained-audit"
+    record = json.loads((HERE / f"{name}.json").read_bytes())
+    audit = record["audit"]
+    number = 15 if arithmetic else 13
+    archive = HERE / f"{name}-public.tar.zst"
     raw = subprocess.check_output(["tar", "-xOf", archive, "public.jsonl"])
     meta, *blocks = map(json.loads, raw.splitlines())
-    audit = json.loads((HERE / "fresh-retained-audit.json").read_bytes())["audit"]
     tip, by_hash = meta["genesis"], {}
     for blue, block in enumerate(blocks, 1):
+        verify_block_transactions(block)
         header = block["header"]
         require(header["parentsByLevel"][0] == [tip] and header["blueScore"] == blue, "disconnected public prefix")
         tip = header_hash(header, bytes(header["palwCommitment"]), False).hex()
@@ -65,7 +70,7 @@ def verify(openssl):
     require(tip == audit["tip"] == meta["tip"] and audit["registered"] == meta["registered"] and
             by_hash[audit["close"]]["header"]["parentsByLevel"][0] == [audit["preparation"]],
             "different selected registration or close")
-    pair, _, freeze = audit_binding(audit)
+    pair, _, freeze = audit_binding(audit, bytes.fromhex(record["suite"]) if arithmetic else None)
     require(coinbase_extra(by_hash[audit["preparation"]]) == pair and coinbase_extra(by_hash[audit["close"]]) == freeze,
             "paired qualification or candidate freeze differs from the original carriers")
     network = b"testnet-12"
@@ -79,7 +84,7 @@ def verify(openssl):
             close_blue = (by_hash[audit["close"]]["header"]["blueScore"] if i == 0 else 2*audit["audit_deadline"]+100)
             label = ("audit", "panel")[i]
             rid = h512(b"MISAKA/private/TB1/BGW-PQ/round/v1", chain, roster, u64(1), bytes([len(purpose)]), purpose,
-                       u64(13+i), bytes([13])*64, u64(close_blue), u64(audit[label+"_from"]), u64(audit[label+"_deadline"]))
+                       u64(number+i), bytes([number])*64, u64(close_blue), u64(audit[label+"_from"]), u64(audit[label+"_deadline"]))
             require(rid.hex() == audit["rounds"][i], "round identity differs from the signed schedule")
             roots = [bytes.fromhex(x) for x in meta["dealer_roots"][i]]
             signatures = meta["signatures"][i]
@@ -105,4 +110,6 @@ def verify(openssl):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--openssl", default="openssl", help="OpenSSL with ML-DSA support")
-    print(json.dumps(verify(parser.parse_args().openssl), indent=2))
+    parser.add_argument("--arithmetic", action="store_true", help="verify the arithmetic MODEL_AUDIT and its later PANEL")
+    args = parser.parse_args()
+    print(json.dumps(verify(args.openssl, args.arithmetic), indent=2))

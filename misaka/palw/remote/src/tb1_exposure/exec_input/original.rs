@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub const LOCAL_ORIGINAL_DOMAIN: &[u8] = b"MISAKA/private/QF1/local-original-signature/v1";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalOriginalBody {
     pub counts: [u64; 4],
@@ -16,6 +16,10 @@ pub struct LocalOriginalBody {
 }
 
 impl LocalOriginalBody {
+    pub(crate) fn from_trace(trace: &LocalTrace) -> Self {
+        Self { counts: trace.roots.map(|r| r.count()), roots: trace.roots.map(|r| Hash64::from_bytes(r.digest)), ticket: trace.ticket }
+    }
+
     /// Canonical signature message for the received fields and this EXEC instance.
     pub fn signing_id(&self, input: &DerivedExecInput<'_>) -> Hash64 {
         let mut hash = Sha3_512::new()
@@ -45,11 +49,7 @@ impl LocalOriginal<'_, '_> {
         &self.trace
     }
     pub fn body(&self) -> LocalOriginalBody {
-        LocalOriginalBody {
-            counts: self.trace.roots.map(|r| r.count()),
-            roots: self.trace.roots.map(|r| Hash64::from_bytes(r.digest)),
-            ticket: self.trace.ticket,
-        }
+        LocalOriginalBody::from_trace(&self.trace)
     }
     /// Numerical comparison with the target signed before EXEC release.
     /// Local inference carries no entitlement, including on a matching ticket.

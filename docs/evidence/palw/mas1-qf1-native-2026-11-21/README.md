@@ -1126,3 +1126,15 @@ python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-work | cmp - "$p/qf1-ar
 算術試験と同じバイナリ（SHA-256 `deb86d2b…`）でStudioの登録・市場生成・MOE2配分を3プロセスで再現した。試験用160 MSKから買付48、永久LP32、Miner64、Panel16となり、余剰の1 Positionをburnした。3プロセスとも巻き戻しと再適用で同じ市場・LP・worker権利を復元した。別試験ではholderがnative finalityの撤回を受け、再起動後も公開停止を維持した。[同じビルドの実行ログ](qf1-arithmetic-build-regressions.tar.zst)
 
 FinalとGate Cの公開記録の照合器は、各ブロックの署名を含む全取引からヘッダーの取引Merkle rootを再計算する。既存の8K claim `50f0da2d…` の受付後10,366ブロックで照合し、Panel receiptとGate C attestationの署名を各1ビット変えた対照では、いずれも元ヘッダーとの不一致を検出した。[取引のシリアライズと照合](check_transaction_root.py)
+
+### 算術評価の資格と提出物
+
+算術試験のclose `8f9e2d10…` で、監査round 15と後続Panel round 16のREADY署名を公開鍵から検証した。各roundで3 dealer × 3 holderの9署名が元のround・dealer資料・sessionに一致し、資格rootと算術suiteを含むcloseも再現できた。[両roundの結果](qf1-arithmetic-qualification.json)
+
+```sh
+python3 -B "$p/check_fresh_qualification.py" --arithmetic --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-qualification.json"
+```
+
+隔離用の提出処理では、監査seed公開後に各問を1回推論し、出力token列、停止理由、処理位置数、数値Readout、四Rootの件数・digest、Ticketを記録する。2件を出題順に並べてsuiteと元の監査証明書に結び付け、証明書の直後のブロックに格納したdigestを照合する。読み取り側は同じ登録モデルから全件再実行し、保存した全フィールドとブロックの一致を確認する。署名済み監査seedによる実測と後続の選出Panelによる判定は別途記録する。
+
+提出形式の回帰試験では、問題順の逆転を拒否し、証明書・回答・Rootの変更で別のdigestになることを確認した。remoteライブラリの試験は213件成功・1件ignored。提出処理を含むnativeビルド `456ec675…` でも、独立したStudio市場試験の3プロセスとholderのfinality撤回試験を再実行した。[検査ログ](qf1-arithmetic-submission-tests.tar.zst)
