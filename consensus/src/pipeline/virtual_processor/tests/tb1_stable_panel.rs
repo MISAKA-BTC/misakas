@@ -153,6 +153,46 @@ impl Actors {
         self.keys.keys().copied().zip([1, 2, 4]).collect()
     }
 }
+async fn carry_to_daa(
+    node: &mut Rig,
+    parent: &mut Option<UnixStream>,
+    peers: &mut [(Child, UnixStream)],
+    target: u64,
+    marker: [u8; 64],
+) -> Block {
+    let start = node.chain.daa_of(node.chain.sink());
+    assert!(start < target);
+    for _ in 0..=2 * (target - start) {
+        let block = local_carrier(node, parent, peers, 0, marker, "original PANEL deadline").await;
+        if block.header.daa_score == target {
+            return block;
+        }
+    }
+    panic!("PANEL test did not reach DAA {target}");
+}
+
+// Each selected verifier resolves the registered scales from its own signing store.
+// No fallback to the instance used to prepare the Original before the draw.
+fn replay_from_store(
+    dir: &Path,
+    available: bool,
+    replay: impl FnOnce(&LocalInstance<'_>) -> std::io::Result<[u8; 64]>,
+) -> std::io::Result<[u8; 64]> {
+    use misaka_palw_sdk::qf1_local::residual_tiles::Candidate;
+    use misaka_palw_tir_exec::node::TirArtifactV1;
+    let section = dir.join("signer-registered-scales.section");
+    if available {
+        std::fs::hard_link(std::env::var_os("MISAKA_PRIVATE_QF1_TILES").unwrap(), &section)?;
+    }
+    File::open(&section)?;
+    let parent =
+        TirArtifactV1::open(Path::new(&std::env::var_os("MISAKA_PRIVATE_QF1_FULL").unwrap())).map_err(std::io::Error::other)?;
+    let recipe = Candidate::over(&parent).map_err(std::io::Error::other)?;
+    let asset = recipe.open(&parent, &section).map_err(std::io::Error::other)?;
+    let instance = recipe.bind_full(&asset).map_err(std::io::Error::other)?;
+    replay(&instance)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn release(
     node: &mut Rig,
@@ -291,7 +331,12 @@ pub(super) async fn release(
     let key = &actors.mine.verification_key;
     let actor = actor_id(key);
     let selected = draw.selected().contains(&actor);
-    let message = draw.replay_message(api, input, instance, body, owner, key);
+    let missing_trial = std::env::var_os("MISAKA_PRIVATE_QF1_MISSING_REPLAY_MATERIAL").is_some();
+    let normal_trial = std::env::var_os("MISAKA_PRIVATE_QF1_NO_DISPUTE").is_some();
+    assert!(!(missing_trial && normal_trial) && (!(missing_trial || normal_trial) || !inconsistent_readout_fixture()));
+    let unavailable = missing_trial && draw.selected()[0] == actor;
+    let replay = |model: &LocalInstance<'_>| draw.replay_message(api, input, model, body, owner, key);
+    let message = if missing_trial && selected { replay_from_store(dir, !unavailable, replay) } else { replay(instance) };
     let before_stop = if inconsistent_readout_fixture() {
         let reason = message.unwrap_err().to_string();
         if selected {
@@ -310,7 +355,10 @@ pub(super) async fn release(
         );
         cert.hash()
     } else {
-        let reply = if selected {
+        let reply = if unavailable {
+            assert_eq!(message.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+            None
+        } else if selected {
             Some((
                 actor,
                 ml_dsa_65::sign(&actors.mine.signing_key, &message.unwrap(), REPLAY_SIGNATURE_DOMAIN, rand::random())
@@ -332,7 +380,7 @@ pub(super) async fn release(
                     assert!(votes.insert(id, signature).is_none());
                 }
             }
-            let ordered: Vec<_> = draw.selected().iter().map(|id| (*id, votes.remove(id).unwrap())).collect();
+            let ordered: Vec<_> = draw.selected().iter().filter_map(|id| votes.remove(id).map(|sig| (*id, sig))).collect();
             assert!(votes.is_empty());
             for (_, s) in peers.iter_mut() {
                 send(s, &ordered);
@@ -341,6 +389,42 @@ pub(super) async fn release(
         };
         let sigs: Vec<_> = ordered.iter().map(|(_, b)| ml_dsa_65::MLDSA65Signature::new(b.as_slice().try_into().unwrap())).collect();
         let replies: Vec<_> = ordered.iter().zip(&sigs).map(|((id, _), sig)| (&actors.keys[id], sig)).collect();
+        if missing_trial {
+            use std::io::ErrorKind;
+            assert_eq!(ordered.len(), 1);
+            assert_eq!(ordered[0].0, draw.selected()[1]);
+            assert!(draw.verify_reply(api, replies[0].0, replies[0].1).is_ok());
+            assert_eq!(draw.reply_commitment(api, &[replies[0], replies[0]]).unwrap_err().kind(), ErrorKind::InvalidData);
+            assert_eq!(
+                draw.reply_commitment(api, &[(&actors.keys[&draw.selected()[0]], replies[0].1)]).unwrap_err().kind(),
+                ErrorKind::InvalidData
+            );
+            let deadline = input.terms().deadline_exclusive_daa;
+            carry_to_daa(node, parent, peers, deadline - 1, [84; 64]).await;
+            assert_eq!(draw.reply_commitment(node.api().as_ref(), &replies).unwrap_err().kind(), ErrorKind::WouldBlock);
+            carry_to_daa(node, parent, peers, deadline, [84; 64]).await;
+            let api = node.api().as_ref();
+            assert_eq!(draw.reply_commitment(api, &replies).unwrap_err().kind(), ErrorKind::TimedOut);
+            if selected {
+                assert_eq!(draw.replay_message(api, input, instance, body, owner, key).unwrap_err().kind(), ErrorKind::TimedOut);
+            }
+            peer_log!(
+                "QF1 missing material pid={} actor={} original={} certificate={} selected={:?} missing={} signed={} signatures={} pending_daa={} deadline={} tip={}",
+                std::process::id(),
+                actor,
+                original,
+                cert.hash(),
+                draw.selected(),
+                unavailable,
+                selected && !unavailable,
+                replies.len(),
+                deadline - 1,
+                deadline,
+                node.chain.sink()
+            );
+            return;
+        }
+        assert_eq!(ordered.len(), draw.selected().len());
         assert!(draw.reply_commitment(api, &replies[..1]).is_err());
         assert!(draw.reply_commitment(api, &[replies[0], replies[0]]).is_err());
         assert!(draw.verify_reply(api, replies[0].0, replies[1].1).is_err());
@@ -357,6 +441,25 @@ pub(super) async fn release(
             original,
             accepted.hash()
         );
+        if normal_trial {
+            let deadline = input.terms().deadline_exclusive_daa;
+            carry_to_daa(node, parent, peers, deadline - 1, [84; 64]).await;
+            let late = carry_to_daa(node, parent, peers, deadline, commitment).await;
+            let api = node.api().as_ref();
+            draw.read_replies(api, accepted.hash(), &replies).unwrap();
+            assert_eq!(draw.read_replies(api, late.hash(), &replies).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+            assert_eq!(draw.reply_commitment(api, &replies).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+            peer_log!(
+                "QF1 undisputed pid={} original={} accepted={} accepted_daa={} deadline={} late={}",
+                std::process::id(),
+                original,
+                accepted.hash(),
+                accepted.header.daa_score,
+                deadline,
+                late.hash()
+            );
+            return;
+        }
         accepted.hash()
     };
     use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};

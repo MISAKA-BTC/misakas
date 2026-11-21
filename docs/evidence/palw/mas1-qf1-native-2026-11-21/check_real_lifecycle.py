@@ -12,7 +12,7 @@ from check_prediction import qf1, shared_rows
 from check_stop import verify_case
 
 
-def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False, inconsistent_readout=False):
+def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False, inconsistent_readout=False, missing_material=False, undisputed=False):
     pids, (attempt, prompt_json) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64}) tokens=(\[[0-9, ]+\])")
     peers, (cls, descriptor, positions, answer_json, stop, z_hex) = shared_rows(
         log, r"QF1 fixture pid=(\d+) class=(\w+) descriptor=(\w+) positions=(\d+) tokens=(\[[0-9, ]+\]) stop=(\w+) z=(\w+)")
@@ -71,7 +71,23 @@ def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False
     if binary is None:
         raise ValueError("missing binary identity")
     panel = verify_draw(log, dict(**body, pids=ordered, receipt=receipt, panel_close=close, panel_close_blue_score=int(blue),
-                                  panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]), expect_replies=not inconsistent_readout)
+                                  panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]),
+                        expect_replies=not (inconsistent_readout or missing_material), missing_material=missing_material)
+    if missing_material or undisputed:
+        if "TB1 Court" in log or not re.search(r"^test result: ok\. 1 passed; 0 failed;", log, re.MULTILINE):
+            raise ValueError("unexpected Court or incomplete native run")
+        if undisputed:
+            peers, (bound, accepted, accepted_daa, deadline, late) = shared_rows(
+                log, r"QF1 undisputed pid=(\d+) original=(\w+) accepted=(\w+) accepted_daa=(\d+) deadline=(\d+) late=(\w+)")
+            if (peers != pids or bound != original or accepted != panel["accepted_replies"]
+                    or not panel["release_daa"] < int(accepted_daa) < int(deadline) or accepted == late):
+                raise ValueError("incorrect historical or expired receipt")
+            panel.update(accepted_daa=int(accepted_daa), deadline=int(deadline), deadline_block=late)
+        # The stable non-paying round fixes an exclusive DAA of 60 before EXEC.
+        if panel["deadline"] != 60:
+            raise ValueError("different original deadline for this round")
+        return dict(class_id=cls, descriptor=descriptor, attempt=attempt, input_ids=prompt, output_ids=answer,
+                    stop=stop, readout_z=z_hex, panel=panel)
     court = verify_case(log, panel, decode_limit)
     if retained_stop:
         rows = list(re.finditer(r"QF1 retained Stop pid=(\d+) original=([0-9a-f]{128}) bytes=(\d+)", log))
@@ -336,6 +352,8 @@ if __name__ == "__main__":
     parser.add_argument("class_check",type=Path)
     parser.add_argument("--decode-limit", type=int, default=3, help="precommitted generation bound for Original verification")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--missing-material", action="store_true", help="check the selected seat with unavailable model scales at the original deadline")
+    mode.add_argument("--undisputed", action="store_true", help="check a timely reply set still readable at expiry without opening a Court")
     mode.add_argument("--retained-stop", action="store_true", help="require producer disclosure on every peer before receipt")
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
     mode.add_argument("--live-offers", action="store_true", help="verify the same signed long offer before and after native capital seasoning")
@@ -348,6 +366,8 @@ if __name__ == "__main__":
     args=parser.parse_args()
     if args.inconsistent_readout and not (args.retained_stop and args.retained_end):
         parser.error("--inconsistent-readout requires both retained disclosures")
+    if args.retained_end and (args.missing_material or args.undisputed):
+        parser.error("undisputed and missing-material runs have no End Court")
     verify = check
     if args.certified_history:
         verify = check_certified_history
@@ -365,5 +385,5 @@ if __name__ == "__main__":
     if "full" in expected:
         expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
     log = args.log.read_text()
-    result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end, args.inconsistent_readout) if verify is check else verify(log, expected)
+    result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end, args.inconsistent_readout, args.missing_material, args.undisputed) if verify is check else verify(log, expected)
     print(json.dumps(result, indent=2))

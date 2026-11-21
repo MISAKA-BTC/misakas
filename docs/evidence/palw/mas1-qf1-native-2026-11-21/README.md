@@ -596,3 +596,34 @@ zstd -dc "$p/genesis-funded-draw-blocks.json.zst" > "$out/draw.json"
 for peer in a b; do zstd -dc "$p/genesis-funded-draw-reader-$peer.txt.zst" > "$out/reader-$peer.log"; done
 python3 -B "$p/check_funded_draw_recovery.py" "$out/final.json" "$out/draw.json" "$out/reader-a.log" "$out/reader-b.log"
 ```
+
+### QF1 の選出席が完全再実行の資料を取得できない場合
+
+Qwen3-8B の非報酬 Original `6a0b74fd…` では、抽選後、各選出者が署名用ディレクトリから登録済み scale section を取得する。先頭の席にはこのファイルを配布せず、読み取りは `NotFound` となった。もう1席は親 artifact と section の組を確認し、完全再実行に一致して署名した。Original を準備したときのモデルはホストにある。この試験で欠落させたのは1席の署名用ストアの資料である。
+
+3ピアとも1署名を検証し、同じ署名の二重計上と別の席の鍵への付け替えを拒否した。DAA 59 では残り1席の署名を待ち、元期限 DAA 60 に到達すると、新しい署名と承認集合の確定を拒否した。計算不正の裁定は発生していない。この試験は隔離 Panel の署名と期限を対象とする。資料供給契約の責任裁定、合意状態の未検証終了、Final・決済は別途検証を要する。[3ピアで照合した席と期限](qf1-missing-replay-material.json)・[生ログ](qf1-missing-replay-material.txt.zst)
+
+```sh
+MISAKA_PRIVATE_QF1_MISSING_REPLAY_MATERIAL=1 "$TEST_BINARY" private_tb1_stable_panel --ignored --nocapture
+zstd -dc "$p/qf1-missing-replay-material.txt.zst" > "$out/missing.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/missing.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --missing-material
+```
+
+正常系の Original `2e5e95f3…` では、選出2席がそれぞれ全入力から再実行し、追加質問や Court を開かずに署名した。3ピアが DAA 27 に承認集合を収録し、元期限の DAA 60 でも当時の有効な記録を読み取れた。同じ承認集合を DAA 60 の別ブロックに載せた場合、3ピアとも期限後の新規受付を拒否した。比較にはブロックヘッダーの実際の DAA を使う。検証対象は稼働中のピアが保持した抽選情報に基づく承認記録である。[正常系の照合結果](qf1-undisputed-replay.json)・[生ログ](qf1-undisputed-replay.txt.zst)
+
+```sh
+MISAKA_PRIVATE_QF1_NO_DISPUTE=1 "$TEST_BINARY" private_tb1_stable_panel --ignored --nocapture
+zstd -dc "$p/qf1-undisputed-replay.txt.zst" > "$out/undisputed.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/undisputed.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --undisputed
+```
+
+### 8K の元の Final に対する Gate C 認証
+
+Qwen2.5 の claim `8748971c…` では、producer を除く抽選済み7名が元の計算を個別に再実行した。署名付き承認は DAA 7,933〜7,939 に収録され、75の抽選枠が承認された。元の Final DAA 6,633 から訴追期間 5,040 DAA が経過した DAA 11,673 で、書き込みピアの native 状態が `Certified` を返した。照合器は抽選後の7,481ブロックの親・ヘッダーハッシュ、7件の取引の署名形式・bond・対象 claim・実行 transcript を照合する。署名自体と承認の合意判定は native 実行で検査される。これは隔離チェーン上の旧形式の計算である。[認証結果と7件の収録位置](genesis-funded-certificate.json)・[書き込みピアのログ](genesis-funded-certificate-writer.txt.zst)・[追加の raw ブロック](genesis-funded-certificate-blocks.json.zst)
+
+```sh
+zstd -dc "$p/genesis-funded-certificate-blocks.json.zst" > "$out/certification.json"
+zstd -dc "$p/genesis-funded-certificate-writer.txt.zst" > "$out/cert-writer.log"
+zstd -dc "$p/genesis-draw-block.json.zst" > "$out/original-attempt.json"
+python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert-writer.log" "$out/original-attempt.json"
+```

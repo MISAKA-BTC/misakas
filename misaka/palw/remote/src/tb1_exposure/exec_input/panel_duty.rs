@@ -127,16 +127,20 @@ impl LocalReplayDraw {
     pub fn selected(&self) -> &[Hash64] {
         &self.selected
     }
-    fn live(&self, native: &dyn ConsensusApi) -> io::Result<()> {
+    fn branch(&self, native: &dyn ConsensusApi) -> io::Result<(u64, Hash64)> {
         let (state, daa, tip) = anchor_state(native, self.close)?;
-        if !matches!(state, AnchorState::Finalized)
-            || daa >= self.deadline
-            || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)?
-        {
+        if !matches!(state, AnchorState::Finalized) || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)? {
             return Err(invalid("local PANEL duty outside live history"));
         }
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok((daa, tip))
+    }
+    fn live(&self, native: &dyn ConsensusApi) -> io::Result<()> {
+        let (daa, _) = self.branch(native)?;
+        if daa >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
         }
         Ok(())
     }
@@ -183,21 +187,32 @@ impl LocalReplayDraw {
         native: &dyn ConsensusApi,
         replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
     ) -> io::Result<[u8; 64]> {
-        let tip = native.get_sink();
-        if replies.len() != self.selected.len() {
-            return Err(invalid("incomplete local PANEL replies"));
+        let (daa, tip) = self.branch(native)?;
+        if daa >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
         }
+        let marker = self.replies_marker(replies);
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        marker
+    }
+
+    fn replies_marker(&self, replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)]) -> io::Result<[u8; 64]> {
+        let mut seats = self.selected.iter();
         let mut h = Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/reply-set/v1").chain_update(self.duty);
-        for (&id, &(key, sig)) in self.selected.iter().zip(replies) {
-            if actor_id(key) != id {
+        for &(key, sig) in replies {
+            let id = actor_id(key);
+            if !seats.any(|seat| *seat == id) {
                 return Err(invalid("PANEL replies outside draw order"));
             }
-            self.verify_reply(native, key, sig)?;
+            let msg = self.message(key)?;
+            ml_dsa_65::verify(key, &msg, REPLAY_SIGNATURE_DOMAIN, sig).map_err(|_| invalid("invalid local PANEL reply"))?;
             h.update(id.as_bytes());
             h.update(sig.as_slice());
         }
-        if native.get_sink() != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
+        if replies.len() != self.selected.len() {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete local PANEL replies"));
         }
         Ok(h.finalize().into())
     }
@@ -207,8 +222,11 @@ impl LocalReplayDraw {
         block: Hash64,
         replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
     ) -> io::Result<()> {
-        let tip = native.get_sink();
-        let marker = self.reply_commitment(native, replies)?;
+        let (_, tip) = self.branch(native)?;
+        let marker = self.replies_marker(replies)?;
+        if native.get_header(block).map_err(io::Error::other)?.daa_score >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
         let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
         if !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
             || !native.is_chain_ancestor_of(block, tip).map_err(io::Error::other)?

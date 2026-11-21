@@ -27,7 +27,7 @@ def check_panel(log):
     return verify_draw(log, verify(log, 1 << 256))
 
 
-def verify_draw(log, result, *, expect_replies=True):
+def verify_draw(log, result, *, expect_replies=True, missing_material=False):
     hex64, hex32 = r"([0-9a-f]{128})", r"([0-9a-f]{64})"
     events = re.findall(r"TB1 stable PANEL pid=(\d+) slot=(\d+) close=" + hex64 + " stable=" + hex64
                         + r" stable_daa=(\d+) release_daa=(\d+) batch=" + hex64 + " certificate=" + hex64 + " seed=" + hex32, log)
@@ -45,6 +45,17 @@ def verify_draw(log, result, *, expect_replies=True):
     reply_pattern = hex64 if expect_replies else r"(none)"
     duties = re.findall(r"TB1 replay duty pid=(\d+) actor=" + hex64
                         + r" replayed=(true|false) selected=\[([^\]]+)\] original=" + hex64 + " replies=" + reply_pattern, log)
+    if missing_material:
+        if expect_replies or duties:
+            raise ValueError("unexpected complete or duplicate replay duty")
+        material = re.findall(r"QF1 missing material pid=(\d+) actor=" + hex64 + " original=" + hex64
+                              + " certificate=" + hex64 + r" selected=\[([^\]]+)\] missing=(true|false) signed=(true|false)"
+                              + r" signatures=(\d+) pending_daa=(\d+) deadline=(\d+) tip=" + hex64, log)
+        if (len(material) != 3 or len({(r[2:5], r[7:]) for r in material}) != 1 or material[0][3] != certificate
+                or material[0][7] != "1" or int(material[0][8]) + 1 != int(material[0][9])
+                or material[0][10] in {certificate, close, result["receipt"]}):
+            raise ValueError("inconsistent incomplete reply or deadline observations")
+        duties = [(r[0], r[1], r[6], r[4], r[2], None) for r in material]
     if (len(duties) != 3 or {int(row[0]) for row in duties} != set(result["pids"])
             or len({row[3:] for row in duties}) != 1 or duties[0][4] != result["original"]):
         raise ValueError("different PANEL duty receipts")
@@ -57,8 +68,14 @@ def verify_draw(log, result, *, expect_replies=True):
                               + bytes.fromhex(seed)).digest()
     ranked = sorted(race(anchor, result["original"], actor, weight) for actor, weight in zip(actors, (1, 2, 4)))
     selected = [actor for _, actor in ranked[:2]]
-    if re.findall(r"[0-9a-f]{128}", duties[0][3]) != selected or any((r[2] == "true") != (r[1] in selected) for r in duties):
+    expected_workers = selected[1:] if missing_material else selected
+    if re.findall(r"[0-9a-f]{128}", duties[0][3]) != selected or any((r[2] == "true") != (r[1] in expected_workers) for r in duties):
         raise ValueError("draw order or actual workers disagree")
+    if missing_material:
+        if any((r[5] == "true") != (r[1] == selected[0]) for r in material):
+            raise ValueError("unavailable signer outside expected seat")
+        result.update(unavailable_actor=selected[0], signed_actor=selected[1], signatures=1,
+                      pending_daa=int(material[0][8]), deadline=int(material[0][9]), deadline_block=material[0][10])
     result.update(panel_release="certified", stable=stable, stable_daa=int(stable_daa), release_daa=int(release_daa),
                   panel_certificate=certificate, panel_batch=batch, panel_seed=seed, exec_seed=exec_seeds[0],
                   actors_by_weight=actors, selected=selected, accepted_replies=duties[0][5] if expect_replies else None)
