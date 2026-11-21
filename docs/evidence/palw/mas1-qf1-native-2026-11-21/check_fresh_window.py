@@ -110,11 +110,40 @@ def check_maturity(window, native_log):
                 finalized=ready["finalized"]["finalized"], publication=row["publication"])
 
 
+def check_held_endpoint(window, native_log):
+    maturity = json.loads((HERE / "fresh-work-maturity.json").read_bytes())
+    log = native_log.read_text()
+    [(pid, end)] = records(log, "fresh audit window end")
+    [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log, re.M)
+    require(pid == maturity["reader"] and binary == maturity["binary_sha256"] and end["slot"] == maturity["slot"],
+            "different holder process or build")
+    require(all(end[k] == window[k] for k in ("base", "close", "tip", "blocks", "daa")) and end["daa"] < window["deadline"],
+            "wrong branch or endpoint")
+    readiness = end["readiness"]
+    point = window["pruning_header"]["point"]
+    require(readiness["generation"] == end["tip"] and readiness["sinkDaa"] == end["daa"] and
+            readiness["sinkBlue"] == window["blue"] and readiness["safe"] == maturity["safe"] and
+            readiness["finalized"]["pruningPoint"] == readiness["finalized"]["finalized"] == point,
+            "unexpected advisory observation")
+    require(end["publication"] == "WouldBlock: native finalized head unavailable" and
+            "sign only on an independently finalized close:" in log and
+            "test result: FAILED. 0 passed; 1 failed" in log and "fresh audit signed holder=" not in log,
+            "expected the native custody refusal")
+    return dict(reader=pid, slot=end["slot"], tip=end["tip"], daa=end["daa"], deadline=window["deadline"],
+                state=end["state"], safe=readiness["safe"], advisory_finalized=point, holder_gate=end["publication"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branch", type=Path)
     parser.add_argument("writer_log", type=Path)
-    parser.add_argument("--maturity-log", type=Path, help="cold holder log through the first native closed-fact row")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--maturity-log", type=Path, help="cold holder log through the first native closed-fact row")
+    group.add_argument("--held-endpoint-log", type=Path, help="holder refusal at the first covering pruning point")
     args = parser.parse_args()
     window = verify(args.branch, args.writer_log)
-    print(json.dumps(check_maturity(window, args.maturity_log) if args.maturity_log else window, indent=2))
+    if args.held_endpoint_log:
+        window = check_held_endpoint(window, args.held_endpoint_log)
+    elif args.maturity_log:
+        window = check_maturity(window, args.maturity_log)
+    print(json.dumps(window, indent=2))

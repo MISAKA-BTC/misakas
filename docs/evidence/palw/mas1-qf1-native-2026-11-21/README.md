@@ -819,3 +819,10 @@ python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" 
 python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
   --maturity-log "$p/fresh-work-maturity.log" | cmp - "$p/fresh-work-maturity.json"
 ```
+
+同じ holder 0 は52,170個すべてを再生した。DAA 37,758 で readiness は pruning point `98da02e7…` を finalized と表示したが、holder が参照する native settlement snapshot では finalized head を取得できず、公開ゲートは `WouldBlock` を返した。署名処理はそこで終了し、この実行で share は公開されなかった。これは期限前の一時点の観測である。[公開判定と終了ログ](fresh-holder-window-end.log)・[到達点の照合](fresh-holder-window-end.json)
+
+```sh
+python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
+  --held-endpoint-log "$p/fresh-holder-window-end.log" | cmp - "$p/fresh-holder-window-end.json"
+```
