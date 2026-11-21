@@ -7,7 +7,7 @@ from check_g_cost_shared_prefix import frozen_plan
 from check_legacy_work import require
 
 
-def verify(plan, raw):
+def check_runs(plan, raw):
     first, *targets = plan["trials"]
     header, calibration, *runs, control = map(json.loads, raw.read_text().splitlines())
     require(header["method"] == "predict-length" and header["trials"] == len(targets) + 1 and
@@ -30,12 +30,24 @@ def verify(plan, raw):
             reason = row["retry_reason"]
             retried = isinstance(reason, str) and bool(reason)
             require((reason is None or retried) and retried == (predict and actual != guess), "wrong retry")
+            if retried:
+                pair["retry_reason"] = reason
             pair["predicted_us" if predict else "reference_us"] = row["elapsed_us"]
         records.append(pair)
     forced = 2 if guess == 1 else guess-1
-    require(control["control_target"] == 0 and control["predicted"] == forced != records[0]["observed_length"] and
-            isinstance(control["retry_reason"], str) and control["retry_reason"] and
-            bytes(control["verified_ticket"]).hex() == targets[0]["ticket"], "missing verified forced retry")
+    reason = control["retry_reason"]
+    require(control["control_target"] == 0 and control["predicted"] == forced and
+            (reason is None or (isinstance(reason, str) and bool(reason))) and
+            (reason is not None) == (forced != records[0]["observed_length"]) and
+            bytes(control["verified_ticket"]).hex() == targets[0]["ticket"], "wrong shifted prediction or retry")
+    return header, calibration, records, control
+
+
+def verify(plan, raw):
+    first, *targets = plan["trials"]
+    header, calibration, records, control = check_runs(plan, raw)
+    guess, forced = calibration["predicted"], control["predicted"]
+    require(len(targets) == 5 and control["retry_reason"] is not None, "original six-ticket comparison needs its miss control")
     setup_us = 1000 * header["setup_ms"]
     shared = setup_us + calibration["elapsed_us"]
     independent = sum(p["reference_us"] for p in records)

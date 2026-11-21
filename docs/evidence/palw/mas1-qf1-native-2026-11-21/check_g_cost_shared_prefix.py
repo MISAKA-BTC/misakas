@@ -10,18 +10,18 @@ from check_g_cost_readout_reuse import HERE, LOGS
 from check_real_lifecycle import check
 
 
-def frozen_plan():
+def frozen_plan(logs=LOGS):
     identity = json.loads((HERE / "qf1-native-tile-artifacts.json").read_bytes())["full"]
     expected = {"class_id": identity["class_id"], "artifact_root": identity["inventory"]}
     samples = []
-    for name, mode in LOGS:
+    for name, mode in logs:
         path = HERE / name
         data = subprocess.check_output(["zstd", "-dc", path]) if path.suffix == ".zst" else path.read_bytes()
         log = data.decode()
         r = check(log, expected, decode_limit=16, **mode)
         opened = [json.loads(line) for line in re.findall(r"^QF1 disclosure (\{.*\})$", log, re.M)]
         [init] = {bytes.fromhex(row["record"]) for row in opened if row["index"] == 0}
-        samples.append(dict(source=name, attempt=r["attempt"], context=init[5:69].hex(), input_ids=r["input_ids"],
+        samples.append(dict(source=path.name, attempt=r["attempt"], context=init[5:69].hex(), input_ids=r["input_ids"],
                             output_ids=r["output_ids"], z=r["readout_z"], roots=r["panel"]["roots"], ticket=r["panel"]["ticket"],
                             descriptor=r["descriptor"]))
     [descriptor] = {s["descriptor"] for s in samples}
