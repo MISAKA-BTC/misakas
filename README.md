@@ -31,13 +31,15 @@ The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/release
 is an earlier artifact. This source update includes parent-order fixes for initial sync. It does not establish live fleet deployment
 or claim-level settlement. See [RFC-0042 (AllModelG14PanelOne)](docs/rfc/0042-all-model-g14-panel-one.md)
 and [RFC-0042 (CourtSupplierConsent)](docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md)
-for the separate designs. The [parallel-allocation record](docs/maintenance/numbering.md#2026-11-02-並行割当衝突)
+for the separate designs. The [parallel-allocation record of 2026-11-02](docs/maintenance/numbering.md)
 explains their shared historical numbering.
 
 Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
 **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor. Claim-level credit authorization remains a separate requirement.
 
 The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md); its final same-candidate validation is part of the implementation goal.
+
+New mining has two adopted specifications pending public activation. MAS1 defines mining admission and safety stops, and QF1 defines the Qwen3-8B A16 execution and readout. Model registration and market creation retain their existing rules. [RFC-0065](docs/rfc/0065-model-admission-screening-and-bft-stop.md) · [RFC-0066](docs/rfc/0066-qwen3-fow1-execution-and-readout.md)
 
 ## Quick start
 
