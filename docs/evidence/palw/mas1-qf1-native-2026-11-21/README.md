@@ -137,3 +137,11 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_output_head.py "$
 入力 residual の scale は 2⁻¹⁵、正規化後と Q/K/V は 2⁻¹⁰、gain は整数 Q20 とした。epsilon は元の 1/1,000,000 から各入力の二乗単位の Q24 に変換した。いずれも今回の部分実行に固定した数値である。入力行は検証済み48行の集合を使い、元の token ID との対応を artifact に記録した。3ピアの同一 artifact と六つの段階の出力を、独立した整数計算で照合できる。[3ピアの入力とハッシュ](attention-run.txt)・[段階ごとの照合結果](attention-check.json)
 
 再現時は本ディレクトリで `python fetch_qf1_attention.py <重みディレクトリ>` を実行し、前節の試験環境に `MISAKA_PRIVATE_QF1_ATTENTION=<重みディレクトリ>` を追加する。`python check_attention.py <重みディレクトリ> <埋め込み行ファイル> <試験ログ>` で再計算する。ここで実重みを使った範囲は RoPE の直前までで、KV 履歴、因果 attention、MLP、各層の読出し、採掘用 Original は引き続き未検証である。
+
+## 全399テンソルの整数変換
+
+上流の5 shard を読み直し、各 shard と各 BF16 テンソルの SHA-256 を検証した。変換結果の[整数パラメータ台帳](integer-weights.json)に、shape、dtype、row-major のコード列の SHA-256 を記録した。253行列は出力行ごとの i8、入力 embedding は行ごとの i16、145本の norm gain は little-endian の i32（Q20）である。行スケールは BF16 絶対値最大の little-endian 列でも照合できる。各行の絶対値最大を127または32,767で割ってスケールとし、全ゼロ行のスケールには1を用いた。丸めは HalfAwayFromZero。コードは全体で8,813,989,888バイト、行ごとの最大値は3,409,408バイト相当になった。
+
+出力 head の全 i8 が既存の Rust 変換結果と一致した。保存していた上流 gain 全145本を独立に有理数で Q20 へ変換してコードハッシュを照合した。さらに上流 index・元の重み・整数台帳を使い、第0層の全11テンソルと7本の行スケール列を新しいディレクトリに復元した。18ファイルを再読した合計は193,049,600バイトで、全件が台帳に一致した。先頭 gain の期待ハッシュを改変した試験では、出力ディレクトリを公開する前に復元が失敗した。
+
+再現には本ディレクトリで `python check_integer_weights.py --local <保存済みshardの場所>` を使う。整数台帳から任意の1層を復元するには `python materialize_integer_layer.py <層番号0〜35> integer-weights.json <固定revisionのmodel.safetensors.index.json> <新しい出力ディレクトリ>` を実行する。これらのファイルは入力パラメータである。全36層を実行する登録用 TIR、活性値の全 scale と table、StateMap、推論品質、MAS1 採掘適格性は別途検証する。
