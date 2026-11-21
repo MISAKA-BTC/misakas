@@ -67,6 +67,57 @@ impl LocalPanelCut {
     ) -> io::Result<LocalReplayDraw> {
         let tip = native.get_sink();
         let freeze = self.resolve(native, close, q)?;
+        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        draw.live(native)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(draw)
+    }
+
+    /// Verify a previously included reply set from its retained cut and publication
+    /// evidence, including when the original deadline has elapsed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_recorded_replies(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+        block: Hash64,
+        replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
+    ) -> io::Result<()> {
+        let tip = native.get_sink();
+        let (freeze, _) = self.resolve_on_selected_branch(native, close, q)?;
+        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        draw.read_replies(native, block, replies)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconstruct_draw(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+        freeze: Tb1HolderFreeze,
+    ) -> io::Result<LocalReplayDraw> {
         let seats = policy.seats as usize;
         let receipt = self.receipts.iter().find(|r| r.original == original).ok_or_else(|| invalid("Original outside PANEL cut"))?;
         if !receipt.meets_target
@@ -106,7 +157,7 @@ impl LocalPanelCut {
             .chain_update(anchor.as_bytes())
             .finalize()
             .into();
-        let draw = LocalReplayDraw {
+        Ok(LocalReplayDraw {
             chain: self.closure.round.chain_id,
             original,
             receipt: receipt.block,
@@ -115,12 +166,7 @@ impl LocalPanelCut {
             deadline: receipt.deadline,
             selected,
             duty,
-        };
-        draw.live(native)?;
-        if native.get_sink() != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
-        }
-        Ok(draw)
+        })
     }
 }
 impl LocalReplayDraw {

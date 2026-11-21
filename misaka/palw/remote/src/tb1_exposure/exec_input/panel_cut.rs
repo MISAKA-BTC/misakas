@@ -122,10 +122,22 @@ impl LocalPanelCut {
         self.closure.commitment(parent)
     }
     pub fn resolve(&self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<Tb1HolderFreeze> {
+        let (freeze, daa) = self.resolve_on_selected_branch(native, close, q)?;
+        if daa >= self.closure.round.deadline_exclusive_daa {
+            return Err(invalid("local PANEL close outside live EXEC history"));
+        }
+        Ok(freeze)
+    }
+
+    fn resolve_on_selected_branch(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        q: &Tb1Qualification<'_>,
+    ) -> io::Result<(Tb1HolderFreeze, u64)> {
         let (state, daa, tip) = anchor_state(native, self.exec_close)?;
         let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
         if !matches!(state, AnchorState::Finalized)
-            || daa >= self.closure.round.deadline_exclusive_daa
             || !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
             || !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)?
         {
@@ -140,7 +152,7 @@ impl LocalPanelCut {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL close view moved"));
         }
-        Ok(freeze)
+        Ok((freeze, daa))
     }
     pub fn observe(&self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<NativePublicationGate> {
         self.resolve(native, close, q)?;

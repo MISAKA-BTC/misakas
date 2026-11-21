@@ -968,3 +968,14 @@ python3 -B "$p/check_real_lifecycle.py" "$out/varied-build-direct-court.log" "$p
 ```
 
 同じバイナリで、日本の首都を問う仕事を新たに登録し、選出2席のうち1席で再実行資料を取得できない場合も検査した。3ピアが同じEXECのbatch・certificate・seedと同じ期限ブロックを読み取った。署名は1件で、DAA 59では承認集合が不足し、元の排他期限DAA 60で新規受付が終了した。これはローカルな承認受付の締切までの観測で、未検証終了の合意状態への記録は残る。[3ピアと期限の照合](varied-build-missing-material.json)・[元ログ](varied-build-missing-material.txt.zst)
+
+### 期限後にPANELの承認集合を再構成する
+
+隔離3ピアで、元の排他期限DAA 60に達した後、保持したcut・公開時のgate・batch・certificate・公開行から抽選を組み直し、期限内に収録した承認を読み取った。署名を1件に減らした集合、同じcommitmentを期限に再収録したブロック、期限後の新規抽選受付はいずれも拒否された。履歴の読み取りでも選択鎖・確定点・各署名を検査する。この試験では公開資料とgateをメモリに保持しており、プロセス再起動からの再構成は未検証である。[3ピアの結果](historical-replies.json)・[生ログ](historical-replies.txt.zst)
+
+同じ実行ファイルでStudioの登録市場・160単位の配分・巻き戻しも隔離3プロセスで再照合した。[精算結果](historical-replies-market.json)・[帳簿・巻き戻し・ログ](historical-replies-market.tar.zst)
+
+```sh
+zstd -dc "$p/historical-replies.txt.zst" > "$out/historical-replies.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/historical-replies.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --recorded-replies | cmp - "$p/historical-replies.json"
+```

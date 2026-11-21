@@ -447,6 +447,36 @@ pub(super) async fn release(
             let late = carry_to_daa(node, parent, peers, deadline, commitment).await;
             let api = node.api().as_ref();
             draw.read_replies(api, accepted.hash(), &replies).unwrap();
+            let recorded = |block, signatures| {
+                cut.read_recorded_replies(
+                    api,
+                    close.hash(),
+                    &gate,
+                    batch.hash(),
+                    cert.hash(),
+                    &rows,
+                    q,
+                    LIMITS,
+                    original,
+                    actors.policy,
+                    block,
+                    signatures,
+                )
+            };
+            recorded(accepted.hash(), replies.as_slice()).unwrap();
+            assert!(recorded(accepted.hash(), &replies[..1]).is_err());
+            assert_eq!(recorded(late.hash(), replies.as_slice()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+            assert!(
+                cut.draw_replays(api, close.hash(), &gate, batch.hash(), cert.hash(), &rows, q, LIMITS, original, actors.policy)
+                    .is_err()
+            );
+            peer_log!(
+                "QF1 historical replies pid={} original={} accepted={} late={}",
+                std::process::id(),
+                original,
+                accepted.hash(),
+                late.hash()
+            );
             assert_eq!(draw.read_replies(api, late.hash(), &replies).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
             assert_eq!(draw.reply_commitment(api, &replies).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
             peer_log!(
