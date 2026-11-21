@@ -147,13 +147,51 @@ def check_model_audit(log, artifact):
                 deadline=int(deadline), case_deadline=int(case_deadline), publication="WouldBlock", signing="WouldBlock")
 
 
+def check_certified_history(log, artifact):
+    verdicts = re.findall(r"MAS1 certified audit frontier pid=(\d+) registration=(\w+) preparation=(\w+) close=(\w+) "
+                          r"class=(\w+) floor=(\w+) frontier=(\w+) tip=(\w+) daa=(\d+) deadline=(\d+) readiness=(\{[^\n]+\})", log)
+    replays = re.findall(r"MAS1 audit replay pid=(\d+) source=(archive|producer) state=(\w+) freeze=(\w+) "
+                         r"accepted=(\w+) ready_signatures=(\d+) blocks=(\d+)", log)
+    pids = {v[0] for v in verdicts}
+    if (len(verdicts) != 3 or len(pids) != 3 or len({v[1:] for v in verdicts}) != 1 or {v[0] for v in replays} != pids
+            or sorted(v[1] for v in replays) != ["archive", "archive", "producer"] or len({v[2:] for v in replays}) != 1):
+        raise ValueError("different selected audit histories or missing independent reader")
+    registered, preparation, close, cls, floor, frontier, tip, daa, deadline, raw = verdicts[0][1:]
+    state, freeze, accepted, signature_count, blocks = replays[0][2:]
+    ready = json.loads(raw)
+    cert = re.findall(r"TB1 prior floor certified claim=(\w+) accepted=(\w+) frontier=(\w+) positions=(\d+) quorum=(\d+)", log)
+    if (cert != [(floor, accepted, frontier, "75", "41")] or accepted != frontier or cls != artifact["class_id"]
+            or len({registered, preparation, close, frontier, tip}) != 5 or signature_count != "18"
+            or tip != ready["generation"] or int(daa) != ready["sinkDaa"] or int(blocks) != ready["sinkBlue"]
+            or int(daa) >= int(deadline) or ready["safe"] is not None or ready["finalized"]["finalized"] is not None):
+        raise ValueError("floor certificate, model, native generation or audit deadline")
+    waits = {w["kind"]: (int(w["have"]), int(w["need"])) for w in ready["blocking"]["waits"]}
+    if (waits != {"insufficientDepth": (0, 1), "insufficientWork": (0, 1)}
+            or ready["blocking"]["evidence"]["pendingFacts"] or ready["skipped"]["baseClass"] != 1):
+        raise ValueError("native maturity tally")
+    binary = re.search(r"^test_binary_sha256=([0-9a-f]{64})$", log, re.MULTILINE)
+    if binary is None:
+        raise ValueError("missing executable identity")
+    return dict(binary_sha256=binary[1], processes={v[0]: v[1] for v in sorted(replays)}, blocks=int(blocks),
+                registration=registered, preparation=preparation, close=close, freeze=freeze, class_id=cls, floor_claim=floor,
+                accepted=accepted, frontier=frontier, tip=tip, committed_state_root=state, verified_ready_signatures=int(signature_count),
+                certified_daa=int(daa), deadline=int(deadline), blocking=ready["blocking"], finalized=ready["finalized"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("log",type=Path)
     parser.add_argument("class_check",type=Path)
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
     args=parser.parse_args()
-    verify = check_model_audit if args.model_audit else check_pending_freeze if args.pending_freeze else check
+    verify = check
+    if args.certified_history:
+        verify = check_certified_history
+    elif args.model_audit:
+        verify = check_model_audit
+    elif args.pending_freeze:
+        verify = check_pending_freeze
     print(json.dumps(verify(args.log.read_text(), json.loads(args.class_check.read_bytes())), indent=2))

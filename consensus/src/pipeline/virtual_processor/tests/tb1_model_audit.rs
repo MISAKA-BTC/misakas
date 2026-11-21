@@ -1,6 +1,8 @@
 //! Registered, non-paying evaluation with independent test dealer material.
 //! Use the native chain after the registered EXEC close without injecting work.
 use super::*;
+#[path = "tb1_audit_history.rs"]
+mod history;
 use misaka_palw_remote::tb1_exposure::model_audit::{AuditCandidate, AuditPlan, PreparedAudit};
 use misaka_palw_tir_exec::node::qf1::Identity;
 
@@ -207,11 +209,22 @@ async fn private_registered_audit_certified_frontier() {
     let parts = (config.clone(), bundle.clone(), premine, floats.clone());
     let mut node = Rig::new(&parts, 0x12_c500_0000);
     stable_panel::arm(&mut node);
-    for block in tb1_registration_prefix(&parts, held.class().unwrap(), identity.inventory).await {
-        stable_panel::arrive(&mut node, block, "registered prior to long audit").await;
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let archive = std::env::var_os(history::OUTPUT).map(std::path::PathBuf::from).unwrap_or_else(|| dir.path().join("blocks.jsonl"));
+    let mut reader = history::Reader::open(node.chain.sink());
+    if let Some(r) = &mut reader {
+        while node.chain.sink() != r.header.registered {
+            r.next(&mut node).await;
+        }
+    } else {
+        for block in tb1_registration_prefix(&parts, held.class().unwrap(), identity.inventory).await {
+            stable_panel::arrive(&mut node, block, "registered prior to long audit").await;
+        }
     }
     let registered = node.chain.sink();
-    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let registered_state = node.chain.tip_state().1;
+    assert_eq!(registered_state.class(&identity.class).unwrap().artifact_root, identity.inventory);
+    assert!(registered_state.model_market(&identity.class).is_some());
     let before = node.api().get_header(registered).unwrap();
     let policy = node.chain.bundle.state.rfc0018_v1().unwrap().certification;
     let keys: Vec<_> = (1..=4).map(|i| ml_dsa_65::generate_key_pair([i; 32])).collect();
@@ -240,17 +253,56 @@ async fn private_registered_audit_certified_frontier() {
     };
     let a = audit.id();
     let p = panel.id();
-    let mut roots = Vec::new();
-    for (name, id) in [("audit", &a), ("panel", &p)] {
-        let path = dir.path().join(name);
-        std::fs::create_dir(&path).unwrap();
-        roots.push(stable_panel::provision(&path, None, 0, id).roots);
-    }
+    let roots = if let Some(r) = &reader {
+        r.header.dealer_roots
+    } else {
+        [("audit", &a), ("panel", &p)].map(|(name, id)| {
+            let path = dir.path().join(name);
+            std::fs::create_dir(&path).unwrap();
+            stable_panel::provision(&path, None, 0, id).roots
+        })
+    };
     let dealers = [0, 1, 2];
-    let aq = qualified(&a, roster, &keys, &dealers, 41, Some(&roots[0]));
-    let pq = qualified(&p, roster, &keys, &dealers, 42, Some(&roots[1]));
+    let mut signed = [Vec::new(), Vec::new()];
+    let mut resolve = |round: usize, id, session: u8| {
+        if let Some(r) = &reader {
+            let rows: &Vec<Vec<u8>> = &r.header.signatures[round];
+            assert_eq!(rows.len(), 9);
+            // An otherwise identical cut with a modified original signature falls short of qualification.
+            assert!(
+                qualification_from_ready(id, roster, &dealers, session, Some(&roots[round]), |i, _| {
+                    let mut sig = rows[i].clone();
+                    if i == 0 {
+                        sig[0] ^= 1;
+                    }
+                    sig
+                })
+                .is_err()
+            );
+        }
+        qualification_from_ready(id, roster, &dealers, session, Some(&roots[round]), |i, row| {
+            if let Some(r) = &reader {
+                r.header.signatures[round][i].clone()
+            } else {
+                let sig =
+                    ml_dsa_65::sign(&keys[row.holder_slot].signing_key, &ready_message(row, 2048).unwrap(), READY_CONTEXT, [9; 32])
+                        .unwrap()
+                        .as_slice()
+                        .to_vec();
+                signed[round].push(sig.clone());
+                sig
+            }
+        })
+        .unwrap()
+    };
+    let aq = resolve(0usize, &a, 41);
+    let pq = resolve(1usize, &p, 42);
     let pair = PreparedAudit::preparation_marker(&audit, &aq, &panel, &pq).unwrap();
-    let prep = local_carrier(&mut node, &mut None, &mut [], 0, pair, "long audit qualification").await;
+    let prep = if let Some(r) = &mut reader {
+        r.next(&mut node).await
+    } else {
+        local_carrier(&mut node, &mut None, &mut [], 0, pair, "long audit qualification").await
+    };
     misaka_palw_sdk::qf1_local::registration_at(node.api().as_ref(), prep.hash(), &model).unwrap();
     let candidates =
         [AuditCandidate { class: identity.class, artifact: identity.inventory, descriptor: identity.descriptor, generation: 1 }];
@@ -263,12 +315,26 @@ async fn private_registered_audit_certified_frontier() {
     };
     let cut = PreparedAudit::read(node.api().as_ref(), prep.hash(), audit, &aq, &panel, &pq, plan, &candidates).unwrap();
     let marker = cut.close_commitment(prep.hash());
-    let close = local_carrier(&mut node, &mut None, &mut [], 0, marker, "long audit close").await;
+    let close = if let Some(r) = &mut reader {
+        r.next(&mut node).await
+    } else {
+        local_carrier(&mut node, &mut None, &mut [], 0, marker, "long audit close").await
+    };
     cut.holder_freeze(node.api().as_ref(), close.hash(), &aq).unwrap();
-    let floor = certified_floor_history(&mut node.chain, &mut floats[0].clone()).await;
+    let floor = if let Some(r) = &mut reader {
+        r.finish(&mut node).await;
+        r.header.floor
+    } else {
+        certified_floor_history(&mut node.chain, &mut floats[0].clone()).await
+    };
     let state = node.chain.tip_state().1;
     let frontier = state.safe_frontier().1;
-    let accepted = state.claim(&floor).unwrap().accepted_block;
+    let claim = state.claim(&floor).unwrap();
+    use kaspa_consensus_core::palw_rfc0018_v1::{PalwGateCViewV1, palw_independently_work_certified_v1};
+    assert!(palw_independently_work_certified_v1(&floor, claim, &PalwGateCViewV1::of(&node.chain.bundle.state, &state)));
+    assert!(matches!(claim.phase, kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { .. }));
+    assert_eq!(claim.class_id, node.chain.bundle.base_class_id);
+    let accepted = claim.accepted_block;
     let tip = node.chain.sink();
     let now = node.chain.daa_of(tip);
     let api = node.api().as_ref();
@@ -293,4 +359,27 @@ async fn private_registered_audit_certified_frontier() {
         identity.class,
         serde_json::to_string(&ready).unwrap()
     );
+    let observation = serde_json::json!({
+        "registered": registered, "preparation": prep.hash(), "close": close.hash(), "freeze": Hash64::from_bytes(marker),
+        "class": identity.class, "artifact": identity.inventory, "claim": floor, "accepted": accepted, "frontier": frontier,
+        "state": state.state_root(), "deadline": deadline, "readiness": ready,
+    });
+    peer_log!(
+        "MAS1 audit replay pid={} source={} state={} freeze={} accepted={} ready_signatures={} blocks={}",
+        std::process::id(),
+        if reader.is_some() { "archive" } else { "producer" },
+        state.state_root(),
+        Hash64::from_bytes(marker),
+        accepted,
+        if let Some(r) = &reader {
+            r.header.signatures.iter().map(Vec::len).sum::<usize>()
+        } else {
+            signed.iter().map(Vec::len).sum::<usize>()
+        },
+        node.api().get_header(tip).unwrap().blue_score
+    );
+    if reader.is_none() {
+        history::save(&node, &archive, registered, floor, roots, signed);
+    }
+    history::verify_peers(&archive, dir.path(), &observation);
 }

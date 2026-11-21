@@ -177,6 +177,23 @@ fn qualified<'a>(
     session: u8,
     transcripts: Option<&[Hash64; 4]>,
 ) -> Tb1Qualification<'a> {
+    qualification_from_ready(round_ref, roster, dealers, session, transcripts, |_, r| {
+        ml_dsa_65::sign(&keys[r.holder_slot].signing_key, &ready_message(r, 2048).unwrap(), READY_CONTEXT, [9; 32])
+            .unwrap()
+            .as_slice()
+            .to_vec()
+    })
+    .unwrap()
+}
+
+fn qualification_from_ready<'a>(
+    round_ref: &'a [u8],
+    roster: Tb1Roster<'a>,
+    dealers: &'a [usize],
+    session: u8,
+    transcripts: Option<&[Hash64; 4]>,
+    mut signature: impl FnMut(usize, &Tb1Ready<'_>) -> Vec<u8>,
+) -> Result<Tb1Qualification<'a>, kaspa_consensus_core::palw_tb1::Tb1PolynomialError> {
     let ends: Vec<_> = (0..4)
         .map(|d| {
             Some(Tb1DealerEnd {
@@ -201,10 +218,7 @@ fn qualified<'a>(
             });
         }
     }
-    let signatures: Vec<_> = ready
-        .iter()
-        .map(|r| ml_dsa_65::sign(&keys[r.holder_slot].signing_key, &ready_message(r, 2048).unwrap(), READY_CONTEXT, [9; 32]).unwrap())
-        .collect();
+    let signatures: Vec<_> = ready.iter().enumerate().map(|(i, r)| signature(i, r)).collect();
     for (r, sig) in ready.iter_mut().zip(&signatures) {
         r.signature = sig.as_slice();
     }
@@ -218,7 +232,6 @@ fn qualified<'a>(
         9,
         2048,
     )
-    .unwrap()
 }
 
 #[tokio::test]

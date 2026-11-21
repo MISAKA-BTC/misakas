@@ -193,7 +193,7 @@ python "$p/check_class.py" "$OUT/qwen3-8b.palwtir"
 
 二つの隔離チェーンで同じ実モデルを検査した。一つでは署名付きの追加モデル登録を3ピアが受理し、同じ登録ブロックの状態に市場が生成された。隔離チェーンの最初の heartbeat の事前検査にも現行 t12 の range evaluator を適用した。最初に DAA 1 から適用した実行では事前検査が旧規則を選び、terminal close の計算量が上限を超えた。[登録・市場・再編成の3ピア記録](real-market.txt)
 
-もう一つでは3ピアが同じ署名付き EXEC の 111 入力から全36層を実行した。回答は `[74, 130998, 488]`、停止は Limit。Original は 1,967,418 個の TRACE leaf を束縛し、3ピアは Init、位置64、End の opening を1件ずつ開いた。後続の独立した PANEL で抽選された2者が全再実行して署名し、Stop に関する反証は公開 opening から `ChallengeNotEstablished` と裁定された。Python 検査は3者の一致、公開された値と root、抽選、Stop witness を照合する。[3ピアの生ログ](real-three-peer.txt)・[独立照合](real-lifecycle.json)
+もう一つでは3ピアが同じ署名付き EXEC の 111 入力から全36層を実行した。回答は `[14847, 108722, 60508]`、停止は Limit。Original は 1,967,418 個の TRACE leaf を束縛し、3ピアは Init、位置64、End の opening を1件ずつ開いた。後続の独立した PANEL で抽選された2者が全再実行して署名し、Stop に関する反証は公開 opening から `ChallengeNotEstablished` と裁定された。Python 検査は3者の一致、公開された値と root、抽選、Stop witness を照合する。[3ピアの生ログ](real-three-peer.txt)・[独立照合](real-lifecycle.json)
 
 仕事は RFC-0066 の private local inference で、事前固定した隔離用 D=1 を使う。報酬原資、新規採掘適格性、Final、Gate C、受賞ブロックをこの実行で認定していない。MODEL_AUDIT・G-COLL・G-COST・G-USE は別途必要である。
 
@@ -246,10 +246,29 @@ python3 -B "$p/check_real_lifecycle.py" --model-audit "$OUT/model-audit.txt" "$p
 
 ### 登録済みモデルと同じ鎖で frontier が close を覆った試験
 
-別の隔離 round では最初から監査期限を DAA 15,121 に固定した。Qwen3-8B を署名付きで登録し、監査準備ブロックの親状態から登録済み class を読み、候補 close を受理した。同じノードで通常の heartbeat を積み、検証者成熟後に元の target で BASE-0 を374回実行した。受け付けた floor claim は DAA 5,182 に Final、10,222 に Gate C 認証に達した。検証した承認は抽選75位置分、必要数は41。認証済み frontier が受付ブロックと一致し、登録 → 監査準備 → 監査 close → floor 受付 → frontier → 選択先端の祖先関係を native DB で検査した。[登録・認証・native readiness の全記録](registered-certified-frontier.txt)
+別の隔離 round では最初から監査期限を DAA 15,121 に固定した。Qwen3-8B を署名付きで登録し、監査準備ブロックの親状態から登録済み class を読み、候補 close を受理した。生成側は通常の heartbeat を積み、検証者成熟後に元の target で BASE-0 を134回実行した。受け付けた floor claim は DAA 5,182 に Final、10,222 に Gate C 認証に達した。検証した承認は抽選75位置分、必要数は41。認証済み frontier が受付ブロックと一致し、登録 → 監査準備 → 監査 close → floor 受付 → frontier → 選択先端の祖先関係を native DB で検査した。[登録・認証・native readiness の全記録](registered-certified-frontier.txt)
 
-このケースは1プロセスで、試験用の成熟済み仕事、frontier、pruning point は注入していない。DAA 10,222 の最初の未決済ブロック（blue score 1）には、必要な anchor 1件に対して0件、必要な仕事量1に対して0という二つの待ち理由が記録された。成熟待ちの fact も0で、BASE-0 は集計から1件除外された。safe と finalized はともに空で、監査 share の公開は保留となった。close を決済するには、計上対象の仕事の受付がその effect の DAA・blue score 以降にあり、深度に数える anchor も同じ条件を満たす必要がある。[仕事と anchor を数える条件](../../../../consensus/core/src/palw_native_settlement_v1.rs)
+生成側と、genesis から raw block を再読した2プロセスは、それぞれの DB で同じ登録・監査 close・認証済み frontier・選択先端・状態 root を得た。受信側は監査と評価 PANEL の元の Ready 署名を各9件検査し、いずれかの round の先頭署名を1 byte 変えると資格を成立させられなかった。3者の native readiness の全項目は一致した。[3プロセスの独立照合](registered-certified-frontier.json)
+
+今回の実行ファイルの SHA-256 は `53a8f6a955a051b82a417612a2d82383ea4bafe9433141f01879ab4fd19bee77`。同じビルドで短期の監査、固定入力の全層再実行、成熟仕事を試験入力にした別の3ピアでの EXEC・Panel・Stop Court、市場登録と再編成も再検査した。各試験にはそれぞれの台帳を用いた。
+
+この試験では成熟済み仕事、frontier、pruning point を注入していない。DAA 10,222 の最初の未決済ブロック（blue score 1）には、必要な anchor 1件に対して0件、必要な仕事量1に対して0という二つの待ち理由が記録された。成熟待ちの fact も0で、BASE-0 は集計から1件除外された。safe と finalized はともに空で、監査 share の公開は保留となった。close を決済するには、計上対象の仕事の受付がその effect の DAA・blue score 以降にあり、深度に数える anchor も同じ条件を満たす必要がある。[仕事と anchor を数える条件](../../../../consensus/core/src/palw_native_settlement_v1.rs)
 
 ```sh
 "$bin" private_registered_audit_certified_frontier --ignored --nocapture
+```
+
+再検査用の `misaka-qf1-certified-audit-20261121.jsonl.zst` は圧縮後 SHA-256 `000d19ed684297be78eb7c26eafe2df481831cea77d506eacb8ae4287e08da8d`、展開後 `f2287895bb054178bb0846f754f5f84f7688198814f8896f8e7ed7bcfe6268d0`。先頭行に genesis・登録・floor claim・先端・ブロック数と、監査用・評価 PANEL 用の dealer transcript root と元の Ready 署名各9件を収録した。続く20,448行は順番どおりの RPC raw block である。実モデルと隔離 genesis の初期資金は reader がローカルで用意する。
+
+```sh
+export CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+export CARGO_TARGET_DIR=target/protected-core-tests RUST_MIN_STACK=67108864 RAYON_NUM_THREADS=3
+cargo +1.93.0 --config 'profile.test.package.misaka-palw-tir-exec.opt-level=3' test \
+  --locked --offline -p kaspa-consensus --features evm --lib private_registered_audit_certified_frontier --no-run
+# bin に上で表示された executable、archive に保存済みの zst ファイルを指定する
+zstd -dc "$archive" > "$OUT/audit.jsonl"
+MISAKA_PRIVATE_CERTIFIED_AUDIT_READ="$OUT/audit.jsonl" \
+  "$bin" private_registered_audit_certified_frontier --ignored --nocapture
+# 保存済みの3プロセス実行ログを照合する
+python3 -B "$p/check_real_lifecycle.py" --certified-history "$p/registered-certified-frontier.txt" "$p/class-check.json"
 ```

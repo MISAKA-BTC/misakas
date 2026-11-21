@@ -1,0 +1,59 @@
+{
+  "binary_sha256": "53a8f6a955a051b82a417612a2d82383ea4bafe9433141f01879ab4fd19bee77",
+  "processes": {
+    "64180": "producer",
+    "64668": "archive",
+    "64669": "archive"
+  },
+  "blocks": 20448,
+  "registration": "42f7c372032fac6870d88955cd34890411d0e375cf8f597bdbe2b086acc7b1b920855abaf2bc1bc11eef0f10c83fd0b67f81ff904ce45a1faac0a23ab17a42fd",
+  "preparation": "f55e6c7fdcd496e1dbbf513cbe9e255f8f4c87420a815d0cfa9374a9b65845a627752244a2b823f04fdaf590d98661e681851e8db1d16a39a4829ef2ade6eafb",
+  "close": "653ff4fae316a7f38201ab35a37484ac7262d0201817c06d52f8fc6886ca06075b11b35968f2cb4ee51bdf122c7373b698b30d7c1dfafe2d94c6fc5d148406a9",
+  "freeze": "a7d98509a865b7bb0a2c2913654fea5475101bfc44b3972ddb74673e8201feadf5f064d572022911277a347a6ac1657ba6fbd84ec203747e05f43ba039d01da1",
+  "class_id": "64b927d057d7d088c605e739823a4ba38c631c764737a3fd82d7558fd668910381d0d674a9640396b13d5698ca03428487e4b19f8ae0268ef4b231b3979b9260",
+  "floor_claim": "a82fd1ec6b2eb419e2991b84ba8dd095ef56d5b2501517012c9595c99ea04a8519a390d97d3199fed419256dd503365c26faa6a303fa3d6a8b8365cea9cc4fe1",
+  "accepted": "6a07a8d5ad2eab5a801349f0ec6a62b356ef587ff7f1af86669a781e015ef3404f4f39f3c1bed2afcf3dc49623142baddeab933cfd788128d80778c9c7807704",
+  "frontier": "6a07a8d5ad2eab5a801349f0ec6a62b356ef587ff7f1af86669a781e015ef3404f4f39f3c1bed2afcf3dc49623142baddeab933cfd788128d80778c9c7807704",
+  "tip": "65837b751ec4e63d25c14ca44d0af8b990c561376880374e3787abc58f6605229c49d2d05f1d8417edd240b86bfb321c6e5dcdffd96c9924fd476c6bc5448db8",
+  "committed_state_root": "9535db585fdf68ea0a2907d605cc4c467b044e4133e90b6bcac59e5dbff35600d5f810e2e4881ea8b7b06e5da74e53c88f29fb4dd23c746b025dafdee56e724c",
+  "verified_ready_signatures": 18,
+  "certified_daa": 10222,
+  "deadline": 15121,
+  "blocking": {
+    "block": "a62df9aeee80872b4f3bc2f903d6a37e5f14f616b1ae8139ebc89dd0ad6d7854398faf6ecdf7aa2be7695429a0bb77dcbcf5bfaf9fb451274466c1f6d4ae5b80",
+    "daa": 0,
+    "blue": 1,
+    "inSafePrefix": false,
+    "waits": [
+      {
+        "kind": "insufficientDepth",
+        "have": 0,
+        "need": 1
+      },
+      {
+        "kind": "insufficientWork",
+        "have": "0",
+        "need": "1"
+      }
+    ],
+    "openClaimsTotal": 0,
+    "openSessionsTotal": 0,
+    "earliestReadyInDaa": null,
+    "evidence": {
+      "anchors": 0,
+      "work": "0",
+      "maturedFacts": 0,
+      "pendingFacts": 0,
+      "pendingWork": "0"
+    }
+  },
+  "finalized": {
+    "finalized": null,
+    "pruningPoint": "20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69",
+    "pruningBlue": 0,
+    "wait": {
+      "kind": "noSafePrefix"
+    },
+    "withdrawnFrom": null
+  }
+}
