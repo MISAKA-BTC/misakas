@@ -959,3 +959,10 @@ uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_co
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --log "$p/g-cost-varied-jobs-run.jsonl" | cmp - "$p/g-cost-varied-jobs.json"
 RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --predict-length "$parent" "$out/scales.section" "$out/varied-plan.json" > "$out/varied-run.jsonl"
 ```
+
+同じバイナリの別の隔離3ピアで、正しい算術のOriginalを選出Panelが承認した後にStopとEndの両方を直接Courtへ提出した。受付前に保持した証拠はそれぞれ1,622 bytes、3,069 bytesで、3者の裁定はいずれも `ChallengeNotEstablished` だった。これは上の3問の費用集計から独立した非報酬試験である。[3ピアと裁定結果](varied-build-direct-court.json)・[元のログ](varied-build-direct-court.txt.zst)
+
+```sh
+zstd -dc "$p/varied-build-direct-court.txt.zst" > "$out/varied-build-direct-court.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/varied-build-direct-court.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end | cmp - "$p/varied-build-direct-court.json"
+```
