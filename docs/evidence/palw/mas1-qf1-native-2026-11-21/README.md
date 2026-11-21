@@ -96,3 +96,9 @@ cargo +1.93.0 test --locked --offline -p misaka-palw-remote --features private-t
 python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_stop.py \
   docs/evidence/palw/mas1-qf1-native-2026-11-21/panel-run.txt
 ```
+
+## 上流 Qwen3-8B の形状照合
+
+固定リビジョンの config、分割 index、5個の safetensors header を取得した。config と index の内容を当該 Git オブジェクト ID と照合し、RFC-0066 §1 の36層、Q/K gain の各128値、Q/K/V/O の向き、MLP、独立した embedding と LM head、最終 gain まで全399テンソルの名前・shape・BF16型を検査した。各 shard のデータ領域の offset は重複・欠落がなく、合計8,190,735,360パラメータ、16,381,470,720バイトで index と一致した。
+
+[実行結果](upstream-geometry.json)には上流が公表した各 shard の LFS SHA-256 を収録した。今回の読み取りは header までで、重み全体の再ハッシュ、整数化された QF1 artifact、推論結果には各々の検証が残る。再現は `huggingface_hub==0.36.2` を利用できる Python で `python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_qwen_source.py` を実行する。[固定した上流リビジョン](https://huggingface.co/Qwen/Qwen3-8B/tree/b968826d9c46dd6066d109eabc6255188de91218)

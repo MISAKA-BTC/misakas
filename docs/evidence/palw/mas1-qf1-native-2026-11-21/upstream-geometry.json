@@ -1,0 +1,48 @@
+{
+  "model": "Qwen/Qwen3-8B",
+  "revision": "b968826d9c46dd6066d109eabc6255188de91218",
+  "source_files_sha256": {
+    "config.json": "f7c4eadfbbf522470667b797a3c89be2524832d2d599797248dc304fff447c30",
+    "model.safetensors.index.json": "f9fdbcb91c23971c13ec5d5f2573d2349e8f61f2f049371ec699281748fdb1bc"
+  },
+  "tensor_count": 399,
+  "bf16_parameters": 8190735360,
+  "source_shards": [
+    {
+      "file": "model-00001-of-00005.safetensors",
+      "bytes": 3996250744,
+      "upstream_sha256": "31d6a825ae35f11fb85b195b4c42c146c051e446433125a215336abdf95cbf5f",
+      "tensor_data_bytes": 3996241408,
+      "tensors": 81
+    },
+    {
+      "file": "model-00002-of-00005.safetensors",
+      "bytes": 3993160032,
+      "upstream_sha256": "5991236cea6fe21f3d43cab0f0e84448734fbbe0789816202989f2ddc9d18282",
+      "tensor_data_bytes": 3993146880,
+      "tensors": 114
+    },
+    {
+      "file": "model-00003-of-00005.safetensors",
+      "bytes": 3959604768,
+      "upstream_sha256": "c5185c4794be2d8a9784d5753c9922db38df478ce11f9ed0b415b7304d896836",
+      "tensor_data_bytes": 3959591936,
+      "tensors": 111
+    },
+    {
+      "file": "model-00004-of-00005.safetensors",
+      "bytes": 3187841392,
+      "upstream_sha256": "b5ee7de71fbf17db3d5704e0c8f2bc7d005ca9e1d7ca2aeb19827b0cfcaa917a",
+      "tensor_data_bytes": 3187830784,
+      "tensors": 92
+    },
+    {
+      "file": "model-00005-of-00005.safetensors",
+      "bytes": 1244659840,
+      "upstream_sha256": "20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff",
+      "tensor_data_bytes": 1244659712,
+      "tensors": 1
+    }
+  ],
+  "weight_payloads_verified": false
+}
