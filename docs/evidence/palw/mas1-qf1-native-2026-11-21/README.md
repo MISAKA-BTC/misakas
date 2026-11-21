@@ -526,3 +526,5 @@ cargo +1.93.0 run --locked --offline -p misaka-palw-base0 --example check-8k-cap
 ```sh
 python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p/genesis-draw-receipt.txt" --peer "$p/genesis-draw-reexecution.txt"
 ```
+
+同じ受付済み claim について、各席が待機中に保有証明を更新しない場合も調べた。DAA 6,491 から 40 heartbeat 後、DAA 6,511 の抽選位置へ進み、採掘した BASE-0 アンカーを受理した。ノードは元の claim ID について「必要5席、除外・operator 重複排除後は2席」と記録し、Panel を割り当てなかった。試験はここで失敗し、この枝でこの claim の Gate C 署名や支払いは生じていない。[対照試験のログ抜粋](genesis-unrenewed-panel.txt)
