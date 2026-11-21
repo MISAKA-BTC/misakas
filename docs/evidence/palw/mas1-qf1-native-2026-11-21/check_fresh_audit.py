@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import re
+import struct
 from pathlib import Path
 
 from check_genesis_draw import header_hash, verify as verify_draw, verify_readers
@@ -12,6 +13,33 @@ from check_legacy_work import HERE, require
 def records(log, prefix):
     pattern = rf"^(?:test \S+ \.\.\. )?{re.escape(prefix)} (\d+) (\{{.*\}})$"
     return [(int(pid), json.loads(row)) for pid, row in re.findall(pattern, log, re.M)]
+
+
+def audit_binding(audit):
+    """Encode the fixed fixture plan at its original close, before either draw."""
+    audit_id, panel_id = map(bytes.fromhex, audit["rounds"])
+    audit_q, panel_q = map(bytes.fromhex, audit["qualifications"])
+    prepare = bytes.fromhex(audit["preparation"])
+    paired = hashlib.sha3_512(b"MISAKA/private/MAS1/qualified-evaluation-rounds/v1" +
+                              audit_id + audit_q + panel_id + panel_q).digest()
+    # Hash64::from_u64_word stores the final word in little-endian order.
+    suite, reservation = [bytes(56) + value.to_bytes(8, "little") for value in (0xa501, 0xa502)]
+    plan = struct.pack(">IIQI", 1, 2, audit["panel_deadline"] + 1, 1)
+    instance = b"".join(bytes.fromhex(audit[k]) for k in ("class", "inventory", "descriptor"))
+    candidates = hashlib.sha3_512(b"MISAKA/private/MAS1/non-rewarding-candidates/v1" +
+                                  prepare + paired + suite + reservation + plan + instance + struct.pack(">Q", 1)).digest()
+    freeze = hashlib.sha3_512(b"MISAKA/private/TB1/mining-freeze/v1" +
+                              audit_id + audit_q + prepare + candidates + suite).digest()
+    require(freeze.hex() == audit["freeze"], "candidate, suite, budget or paired round differs from freeze")
+    return paired, candidates, freeze
+
+
+def coinbase_extra(block):
+    tx = block["transactions"][0]
+    require(tx["subnetworkId"] == "01" + "00" * 19, "missing coinbase")
+    payload = bytes.fromhex(tx["payload"])
+    require(len(payload) >= 19 and len(payload) >= 19 + payload[18], "short coinbase script")
+    return payload[19 + payload[18]:]
 
 
 def verify(root):
@@ -73,9 +101,11 @@ def verify(root):
     walk(blocks)
     require(tip == archive["tip"] == common["tip"] and archive["registered"] == common["registered"] and
             len(checkpoints) == 4, "audit prefix not fully covered")
+    paired, _, freeze = audit_binding(common)
+    require(coinbase_extra(checkpoints[common["preparation"]][0]) == paired, "different qualified evaluation rounds")
     close = checkpoints[common["close"]][0]
     require(close["header"]["parentsByLevel"][0] == [common["preparation"]] and
-            bytes.fromhex(close["transactions"][0]["payload"]).endswith(bytes.fromhex(common["freeze"])), "different close commitment")
+            coinbase_extra(close) == freeze, "different close commitment")
 
     state = common["state"]
     for name, stage in (("capital", "initial"), ("seats", "seats"), ("genesis-capital", "capital"), ("renew", "renewed")):
