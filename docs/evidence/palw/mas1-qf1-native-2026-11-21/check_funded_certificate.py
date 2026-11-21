@@ -5,7 +5,7 @@ import json
 import re
 import struct
 from pathlib import Path
-from check_genesis_draw import header_hash, keyed
+from check_genesis_draw import header_hash, keyed, verify_readers
 from check_legacy_work import HERE, require
 
 
@@ -63,9 +63,55 @@ def verify(branch_path, writer_path, winning_path):
                 archive_sha256=hashlib.sha256(raw).hexdigest(), writer=int(pid), binary_sha256=binary)
 
 
+def recover(certificate, paths):
+    original = json.loads((HERE / "genesis-draw.json").read_bytes())
+    funded = json.loads((HERE / "genesis-funded-draw-replicas.json").read_bytes())["recovered"]
+    peers = verify_readers(original, paths, 2)
+    require(peers["binary_sha256"] == certificate["binary_sha256"] and certificate["writer"] not in peers["processes"],
+            "three independent native processes on the same executable")
+    audit = json.loads((HERE / "registered-certified-frontier.json").read_bytes())
+    views = []
+    for pid, path in zip(peers["processes"], paths):
+        log = path.read_text()
+        def observation(kind):
+            [(observed, raw)] = re.findall(r"^" + kind + r" (\d+) (\{.*\})$", log, re.M)
+            require(int(observed) == pid, "readback process identity")
+            return json.loads(raw)
+        row = observation("legacy genesis certification")
+        expected = dict(claim=certificate["claim"], accepted=original["block"], tip=certificate["tip"],
+                        frontier=[original["blue_score"], original["block"]],
+                        certified_daa=certificate["certified_daa"], approvals=certificate["positive_positions"], drawn=funded["draws"],
+                        final_daa=funded["final_daa"], replay=certificate["transcript"])
+        expected["class"] = original["class_id"]
+        for key, value in expected.items():
+            require(row[key] == value, "certification readback differs for " + key)
+        signed = observation("signed audit after nonfloor")
+        require(signed["close"] == audit["close"] and signed["deadline"] == audit["deadline"] and
+                (signed["tip"], signed["state"], signed["daa"]) == (row["tip"], row["state"], row["certified_daa"]),
+                "the audit observation and certificate must share one state")
+        ready = signed["readiness"]
+        require(ready["generation"] == signed["tip"] and ready["sinkDaa"] == signed["daa"] < signed["deadline"], "audit snapshot")
+        require(signed["publication"] == "held" and ready["safe"] is None and ready["finalized"]["finalized"] is None, "unreleased native audit")
+        blocker = ready["blocking"]
+        require(blocker["evidence"] == dict(anchors=0, maturedFacts=0, pendingFacts=1, pendingWork="1388926972416", work="0"),
+                "native pending work on the blocking prefix")
+        [maturity] = [wait for wait in blocker["waits"] if wait["kind"] == "waitingMaturity"]
+        [retention] = [wait for wait in ready["tip"]["waits"] if wait["kind"] == "openClaim" and wait["claim"] == certificate["claim"]]
+        require(maturity["readyDaa"] == retention["retentionDaa"] == 17931 and
+                signed["deadline"] < maturity["readyDaa"] == signed["daa"] + blocker["earliestReadyInDaa"],
+                "maturity and original claim retention must extend past the signed deadline")
+        views.append((row, signed))
+    require(views[0] == views[1], "readers disagree on the native certification or settlement")
+    return dict(processes=peers["processes"], certification=views[0][0], signed_audit=views[0][1])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("certification_branch", "writer", "original_attempt"):
         parser.add_argument(name, type=Path)
+    parser.add_argument("--readers", type=Path, nargs=2, help="validate two completed independent cold replays of the final branch")
     args = parser.parse_args()
-    print(json.dumps(verify(args.certification_branch, args.writer, args.original_attempt), indent=2))
+    result = verify(args.certification_branch, args.writer, args.original_attempt)
+    if args.readers:
+        result["cold_readback"] = recover(result, args.readers)
+    print(json.dumps(result, indent=2))

@@ -634,3 +634,12 @@ python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert
 ### MODEL_AUDIT の公開期限と holder の署名予約
 
 登録済みモデルの非報酬監査で、close は DAA 6、公開窓は DAA 9 以上 21 未満だった。DAA 9 で両方の操作が公開を保留した。元期限後の DAA 33 でも finality は未成立で、3ピアすべてが未公開 holder の署名予約と監査の公開判定の両方で `TimedOut` を返した。同じビルドで、すでに公開した holder が finality 撤回後と再起動後も停止する回帰試験に合格した。[3ピアの期限境界](registered-audit-exclusive-deadline.txt.zst)
+
+### 認証の独立再生と元の Qwen3 監査の期限
+
+書き込みピアと同じバイナリの別の2プロセスが、それぞれ新規 DB で隔離チェーンを再生した。旧 Qwen2.5 claim `8748971c…` について、両者が同じ Final、75枠の Gate C 認証、対象ブロック、状態 root を読み出した。DAA 11,673 の両ピアで、別の Qwen3 監査の署名済み close `653ff4fa…` は公開保留だった。状態が示す未成熟の仕事量は 1,388,926,972,416、成熟済みの仕事量は 0。最も早い成熟 DAA 17,931 は、監査の元期限 15,121 を 2,810 DAA 過ぎる。[認証と監査状態](genesis-funded-certificate-replicas.json)・[読取ピア B](genesis-funded-certificate-reader-b.txt.zst)・[読取ピア C](genesis-funded-certificate-reader-c.txt.zst)
+
+```sh
+for k in b c; do zstd -dc "$p/genesis-funded-certificate-reader-$k.txt.zst" > "$out/cert-reader-$k.log"; done
+python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert-writer.log" "$out/original-attempt.json" --readers "$out/cert-reader-b.log" "$out/cert-reader-c.log"
+```
