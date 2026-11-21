@@ -1,0 +1,72 @@
+{
+  "close": "653ff4fae316a7f38201ab35a37484ac7262d0201817c06d52f8fc6886ca06075b11b35968f2cb4ee51bdf122c7373b698b30d7c1dfafe2d94c6fc5d148406a9",
+  "base": "11521a800860ed6fd256ecfa0c526657f60e3133378fbbdccfcebef1e797a38e7635a1c31ddaa6add29b0f52b20eb073645b1eabc9cad62ec14edf5b0a1adfeb",
+  "deadline": 15121,
+  "tip": "4267331aff130a353e49827d0e8a2251cf9d48a425467b9885ea7e343e331ff4e012f63c70bc4f58fb8f33ce2d2f32b825653656eed0e4e61867ed4f7cbcbd82",
+  "blocks": 6896,
+  "initial_earliest_maturity_daa": 17931,
+  "pruning": "20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69",
+  "pruning_depth": 74920,
+  "finality_depth": 600,
+  "observations": [
+    {
+      "blocks": 0,
+      "tip": "11521a800860ed6fd256ecfa0c526657f60e3133378fbbdccfcebef1e797a38e7635a1c31ddaa6add29b0f52b20eb073645b1eabc9cad62ec14edf5b0a1adfeb",
+      "daa": 11673,
+      "blue": 23406,
+      "publication": "held",
+      "evidence": {
+        "anchors": 0,
+        "maturedFacts": 0,
+        "pendingFacts": 1,
+        "pendingWork": "1388926972416",
+        "work": "0"
+      }
+    },
+    {
+      "blocks": 6894,
+      "tip": "55867d05088f23749295f8eae08ea081001d4f494a8ecf06612553c680914a4358a2c4d7b7416c0e1b332d058c4175f35768e72c5b0d0bcb31bcd76a58364cae",
+      "daa": 15120,
+      "blue": 30300,
+      "publication": "held",
+      "evidence": {
+        "anchors": 0,
+        "maturedFacts": 0,
+        "pendingFacts": 0,
+        "pendingWork": "0",
+        "work": "0"
+      }
+    },
+    {
+      "blocks": 6895,
+      "tip": "b58e15cdce5e7183b77d2f92ff19601bb0e164c5f2a128e0739ac0bb41951cd1ddf3a6f67ba5897b4a62ac69c194ed2a92e84527617986dd27c28478c527683d",
+      "daa": 15120,
+      "blue": 30301,
+      "publication": "held",
+      "evidence": {
+        "anchors": 0,
+        "maturedFacts": 0,
+        "pendingFacts": 0,
+        "pendingWork": "0",
+        "work": "0"
+      }
+    },
+    {
+      "blocks": 6896,
+      "tip": "4267331aff130a353e49827d0e8a2251cf9d48a425467b9885ea7e343e331ff4e012f63c70bc4f58fb8f33ce2d2f32b825653656eed0e4e61867ed4f7cbcbd82",
+      "daa": 15121,
+      "blue": 30302,
+      "publication": "expired",
+      "evidence": {
+        "anchors": 0,
+        "maturedFacts": 0,
+        "pendingFacts": 0,
+        "pendingWork": "0",
+        "work": "0"
+      }
+    }
+  ],
+  "binary_sha256": "95442c4f9cee3658364c709c824b98296694851930dff520116000ea63d33e01",
+  "process": 94758,
+  "archive_sha256": "6e623ed9e740cd8446b796b8bc8eb72583caf9750c5fffbaa545fb03586c825b"
+}

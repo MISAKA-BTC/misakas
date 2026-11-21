@@ -643,3 +643,11 @@ python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert
 for k in b c; do zstd -dc "$p/genesis-funded-certificate-reader-$k.txt.zst" > "$out/cert-reader-$k.log"; done
 python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert-writer.log" "$out/original-attempt.json" --readers "$out/cert-reader-b.log" "$out/cert-reader-c.log"
 ```
+
+同じ署名済み close を保持した追加の native プロセスで、認証先端から通常の heartbeat だけを 6,896 ブロック追加した。ノードは DAA 15,120 の最後の2ブロックで公開を保留し、元期限 DAA 15,121 の最初のブロックで `TimedOut` を返した。全ヘッダーの親とハッシュ、pruning point を照合した。終了時の blue score は 30,302、検証済み pruning point は genesis で、safe・finalized ともに空だった。DAA 15,120 と 15,121 の停止位置では未成熟の仕事も 0 件だった。DAA 17,931 は認証直後の状態で表示された最早成熟時刻であり、そこで公開できることを確認した値ではない。監査 seed の公開・採点には至らなかった。[期限前後の照合](genesis-audit-release-window.json)・[native ログ](genesis-audit-release-window.txt.zst)・[追加ブロック](genesis-audit-release-window-blocks.jsonl.zst)
+
+```sh
+zstd -dc "$p/genesis-audit-release-window-blocks.jsonl.zst" > "$out/window.jsonl"
+zstd -dc "$p/genesis-audit-release-window.txt.zst" > "$out/window.log"
+python3 -B "$p/check_audit_release_window.py" "$out/window.jsonl" "$out/window.log"
+```

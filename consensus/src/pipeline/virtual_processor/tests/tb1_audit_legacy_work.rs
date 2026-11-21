@@ -90,6 +90,66 @@ fn observe_capital(node: &Rig, class: Hash64, what: &str) -> serde_json::Value {
     observation
 }
 
+/// Continue the original signed audit on its certified branch, without
+/// replacing the candidate, pruning point, clock policy or native work facts.
+async fn follow_release_window(
+    node: &mut Rig,
+    cut: &PreparedAudit<'_>,
+    close: Hash64,
+    q: &Tb1Qualification<'_>,
+    deadline: u64,
+    path: &Path,
+) {
+    let base = node.chain.sink();
+    let step = node.config.params.target_time_per_block();
+    let mut archive = std::io::BufWriter::new(File::create_new(path).unwrap());
+    let mut blocks = 0u64;
+    let mut last_pruning = None;
+    loop {
+        let tip = node.chain.sink();
+        let h = node.api().get_header(tip).unwrap();
+        let pruning = node.chain.ctx.consensus.pruning_point();
+        let covers = node.api().is_chain_ancestor_of(close, pruning).unwrap();
+        // Native finality is bounded by the node's validated pruning point.
+        // Query the whole decision whenever release is possible, at either end,
+        // or when either the pruning point or its coverage changes.
+        if covers || last_pruning != Some(pruning) || h.daa_score >= deadline - 1 {
+            let gate = cut.observe(node.api().as_ref(), close, q);
+            let status = match gate {
+                Ok(_) => {
+                    assert!(covers && h.daa_score < deadline);
+                    "ready"
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && h.daa_score < deadline => "held",
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut && h.daa_score >= deadline => "expired",
+                Err(e) => panic!("cannot resolve the signed audit on its original branch: {e}"),
+            };
+            if blocks == 0 || last_pruning != Some(pruning) || status != "held" || h.daa_score == deadline - 1 {
+                peer_log!(
+                    "signed audit release window {} {}",
+                    std::process::id(),
+                    serde_json::json!({
+                        "base":base,"close":close,"tip":tip,"blocks":blocks,"daa":h.daa_score,"blue":h.blue_score,"deadline":deadline,
+                        "pruning":pruning,"header_pruning":h.pruning_point,"pruning_depth":node.config.params.pruning_depth(),
+                        "finality_depth":node.config.params.finality_depth(),"covers_close":covers,"publication":status,"readiness":readiness_of(node)
+                    })
+                );
+            }
+            if status != "held" {
+                break;
+            }
+        }
+        last_pruning = Some(pruning);
+        let b = node.chain.heartbeat(step, vec![]).await;
+        assert_eq!(node.api().get_ghostdag_data(b.hash()).unwrap().selected_parent, tip);
+        serde_json::to_writer(&mut archive, &RpcRawBlock::from(&b)).unwrap();
+        archive.write_all(b"\n").unwrap();
+        blocks += 1;
+    }
+    archive.flush().unwrap();
+    archive.get_ref().sync_all().unwrap();
+}
+
 pub(super) async fn exercise(
     mut node: Rig,
     parts: Parts,
@@ -244,6 +304,9 @@ pub(super) async fn exercise(
                         serde_json::json!({"close":close,"deadline":deadline,"tip":tip,"daa":now,
                             "state":node.chain.tip_state().1.state_root(),"publication":publication,"readiness":readiness_of(&node)})
                     );
+                    if let Some(out) = std::env::var_os("MISAKA_PRIVATE_AUDIT_FOLLOW_WINDOW") {
+                        follow_release_window(&mut node, cut, close, qualification, deadline, Path::new(&out)).await;
+                    }
                 }
             }
         }
