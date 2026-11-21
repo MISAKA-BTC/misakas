@@ -325,7 +325,8 @@ async fn registered_audit_history(legacy: bool) {
         reservation: Hash64::from_u64_word(0xa502),
         case_deadline_exclusive_daa: panel.deadline_exclusive_daa + 1,
     };
-    let cut = PreparedAudit::read(node.api().as_ref(), prep.hash(), audit, &aq, &panel, &pq, plan, &candidates).unwrap();
+    let prepare = |n: &Rig| PreparedAudit::read(n.api().as_ref(), prep.hash(), audit, &aq, &panel, &pq, plan, &candidates).unwrap();
+    let cut = prepare(&node);
     let marker = cut.close_commitment(prep.hash());
     let close = if let Some(r) = &mut reader {
         r.next(&mut node).await
@@ -335,7 +336,7 @@ async fn registered_audit_history(legacy: bool) {
     cut.holder_freeze(node.api().as_ref(), close.hash(), &aq).unwrap();
     if legacy {
         assert!(reader.is_some(), "must start from the recorded audit close");
-        legacy_work::exercise(node, parts, close.hash(), identity.class, cut, &aq, deadline).await;
+        legacy_work::exercise(node, parts, close.hash(), identity.class, prepare, &aq, deadline).await;
         return;
     }
     let floor = if let Some(r) = &mut reader {

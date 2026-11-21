@@ -1,7 +1,7 @@
 //! Execute the funded legacy class's actual canonical draws before the MODEL_AUDIT
 //! deadline. A reader needs both the raw winning header and its retained material.
 use super::*;
-use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::RealAttemptV1;
+use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::{RealAttemptV1, certify_executed_claim, executed_certification};
 use kaspa_consensus_core::{
     config::class_manifest_const_v1::{QWEN25_A16_8K_MANIFEST_V1, class_id_of_class, inventory_root_of_class},
     palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1,
@@ -19,7 +19,15 @@ struct WinningBlock {
     raw: RpcRawBlock,
 }
 
-pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool) {
+#[derive(Serialize, Deserialize)]
+struct CertifiedBranch {
+    base: Hash64,
+    claim: Hash64,
+    tip: Hash64,
+    blocks: Vec<RpcRawBlock>,
+}
+
+pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, renewed: Hash64) {
     let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
     let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
     let (base, state) = node.chain.tip_state();
@@ -75,5 +83,49 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool) 
             "capture_bytes":result.material.len(),"capture_sha256":faster_hex::hex_string(&Sha256::digest(&result.material)),
             "trace":claim.trace_root,"output":claim.output_root,"execution":claim.execution_root
         })
+    );
+    let write = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE");
+    let read = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ");
+    match (write, read) {
+        (Some(path), None) => {
+            let mut funds = genesis_seats::funding_change(node, renewed);
+            certify_executed_claim(&mut node.chain, &mut funds, &result, &backend, digest).await;
+            let end = node.chain.sink();
+            let blocks = node.blocks_through(end);
+            let split = blocks.iter().position(|b| b.hash() == tip).unwrap();
+            let branch = CertifiedBranch {
+                base: tip,
+                claim: result.claim,
+                tip: end,
+                blocks: blocks[split + 1..].iter().map(RpcRawBlock::from).collect(),
+            };
+            let mut writer = std::io::BufWriter::new(File::create_new(path).unwrap());
+            serde_json::to_writer(&mut writer, &branch).unwrap();
+            writer.flush().unwrap();
+        }
+        (None, Some(path)) => {
+            let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
+            assert_eq!((branch.base, branch.claim), (tip, result.claim));
+            assert!(!branch.blocks.is_empty());
+            for raw in &branch.blocks {
+                genesis_seats::replay(node, raw).await;
+            }
+            assert_eq!(node.chain.sink(), branch.tip);
+        }
+        (None, None) => return,
+        _ => panic!("certification either writes or reads one branch"),
+    }
+    let row = executed_certification(&node.chain, result.claim);
+    assert!(row.attestations.iter().all(|a| a.transcript == digest));
+    let (end, state) = node.chain.tip_state();
+    let claim = state.claim(&result.claim).unwrap();
+    assert_eq!(claim.accepted_block, tip);
+    assert!(matches!(claim.phase, kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { .. }));
+    peer_log!(
+        "legacy genesis certification {} {}",
+        std::process::id(),
+        serde_json::json!({"claim":result.claim,"class":claim.class_id,"accepted":tip,"final_daa":row.final_daa,
+            "certified_daa":row.outcome.unwrap().1,"drawn":row.draws.len(),"approvals":row.positive_positions(),
+            "replay":faster_hex::hex_string(&digest),"tip":end,"state":state.state_root(),"frontier":state.safe_frontier()})
     );
 }

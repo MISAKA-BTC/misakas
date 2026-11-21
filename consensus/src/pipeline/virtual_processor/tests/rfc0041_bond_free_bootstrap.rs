@@ -282,7 +282,7 @@ async fn rfc0041_production_recovery_pays_then_public_bonds_start_palw() {
     assert_eq!(panel.anchor, anchor.header.hash);
     assert_eq!(panel.seats.len(), chain.bundle.panel.seat_count() as usize);
     assert!(panel.seats.iter().all(|seat| chain.bonds.contains(&seat.bond) && seat.bond != chain.bonds[0]));
-    authenticate(&mut chain, &mut funding, claim, |_, card| [0xC0 | card as u8; 64]).await;
+    authenticate(&mut chain, &mut funding, claim, Anchors::CarriageFixture, |_, card| [0xC0 | card as u8; 64]).await;
 
     // Shut down the node and load the same database, without genesis import or
     // replacing state. The helper derives only genesis bonds, so restore the
@@ -361,12 +361,18 @@ fn certification(
         .map(|raw| borsh::from_slice(raw).unwrap())
 }
 
+enum Anchors {
+    CarriageFixture,
+    Executed,
+}
+
 /// Drive the normal seat and Gate C carriers, with the verdict material supplied
 /// by the caller for each signer. The bootstrap-only test checks identities.
 async fn authenticate(
     chain: &mut T12Chain,
     funding: &mut (TransactionOutpoint, UtxoEntry),
     claim: Hash64,
+    anchors: Anchors,
     review: impl Fn(&T12Chain, usize) -> [u8; 64],
 ) {
     use kaspa_consensus_core::palw_kernel_route_v1::*;
@@ -415,7 +421,15 @@ async fn authenticate(
         if certification(chain, claim).unwrap().anchor.is_some() {
             break;
         }
-        chain.attempt(5 + (round % 3) as usize, step, vec![], &|_| true).await;
+        let card = 5 + (round % 3) as usize;
+        match anchors {
+            Anchors::CarriageFixture => {
+                chain.attempt(card, step, vec![], &|_| true).await;
+            }
+            Anchors::Executed => {
+                chain.real_attempt(card, step).await;
+            }
+        }
         for _ in 0..8 {
             chain.heartbeat(step, vec![]).await;
         }
@@ -423,10 +437,11 @@ async fn authenticate(
     let row = certification(chain, claim).unwrap();
     assert!(row.anchor.is_some(), "a later execution anchor draws the verifiers");
     assert_eq!(row.draws.len(), 75);
-    assert!(!row.draws.contains(&palw_kernel_bond_id_v1(&chain.bonds[0])));
+    let producer = chain.tip_state().1.claim(&claim).expect("accepted producer").bond;
+    assert!(!row.draws.contains(&palw_kernel_bond_id_v1(&producer)));
     // Authentication of the approving identities under the explicit honest-stake
     // premise. Fixture execution roots are not a real LLM replay or arithmetic proof.
-    for card in 1..8 {
+    for card in 0..chain.bonds.len() {
         let signer = chain.bonds[card];
         let verifier = palw_kernel_bond_id_v1(&signer);
         if !row.draws.contains(&verifier) {
@@ -465,6 +480,46 @@ async fn authenticate(
     assert!(certified(chain, claim));
 }
 
+/// Authenticate a retained execution on its existing branch with freshly executed
+/// floor anchors. At each signature the chosen seat independently replays the
+/// accepted job. The caller supplies the class backend authenticated at admission.
+pub(in crate::pipeline::virtual_processor::tests) async fn certify_executed_claim(
+    chain: &mut T12Chain,
+    funding: &mut (TransactionOutpoint, UtxoEntry),
+    real: &RealAttemptV1,
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    expected_transcript: [u8; 64],
+) {
+    let step = chain.config.params.target_time_per_block();
+    let slot = chain.wait_for_anchor_slot(real.claim).await;
+    let anchor = chain.real_attempt(7, step).await;
+    assert!(anchor.block.header.daa_score >= slot);
+    let panel = chain.tip_state().1.panel(&real.claim).expect("executed anchor draws the accepted claim's panel").clone();
+    assert_eq!(panel.anchor, anchor.block.hash());
+    authenticate(chain, funding, real.claim, Anchors::Executed, |chain, card| {
+        let replay = real.replay_with_backend(chain, backend).expect("selected signer independently reproduces the accepted job");
+        assert_eq!(replay, expected_transcript);
+        eprintln!("verified execution {} for signing card {card}", real.claim);
+        replay
+    })
+    .await;
+}
+
+/// Read back the mandatory approved Gate C decision, including on raw-block readers.
+pub(in crate::pipeline::virtual_processor::tests) fn executed_certification(
+    chain: &T12Chain,
+    claim: Hash64,
+) -> kaspa_consensus_core::palw_security_certification_v1::PalwClaimCertificationRowV1 {
+    use kaspa_consensus_core::palw_security_certification_v1::PalwCertificationOutcomeV1;
+    let row = certification(chain, claim).expect("original certification row");
+    let policy = chain.bundle.state.rfc0018_v1().unwrap().certification;
+    assert_eq!(row.draws.len(), usize::from(policy.m));
+    assert!(row.positive_positions() >= u32::from(policy.k));
+    assert_eq!(row.outcome.map(|(outcome, _)| outcome), Some(PalwCertificationOutcomeV1::Certified));
+    assert!(certified(chain, claim));
+    row
+}
+
 pub(in crate::pipeline::virtual_processor::tests) async fn certified_floor_history(
     chain: &mut T12Chain,
     funding: &mut (TransactionOutpoint, UtxoEntry),
@@ -481,7 +536,7 @@ pub(in crate::pipeline::virtual_processor::tests) async fn certified_floor_histo
     let initial_replay = real.replay_transcript(chain).expect("replay accepted floor work");
     eprintln!("TB1 prior floor accepted claim={} block={} daa={}", real.claim, real.block.hash(), real.block.header.daa_score);
     chain.attempt_at_the_anchor_slot(real.claim, 7).await;
-    authenticate(chain, funding, real.claim, |chain, _| {
+    authenticate(chain, funding, real.claim, Anchors::CarriageFixture, |chain, _| {
         let replay = real.replay_transcript(chain).expect("every positive verdict requires full floor replay");
         assert_eq!(replay, initial_replay);
         replay

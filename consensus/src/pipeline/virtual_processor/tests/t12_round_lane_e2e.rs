@@ -83,7 +83,9 @@ use std::sync::Arc;
 
 #[path = "rfc0041_bond_free_bootstrap.rs"]
 mod bond_free_bootstrap;
-pub(super) use bond_free_bootstrap::{certified_floor_history, send as send_lifecycle};
+pub(super) use bond_free_bootstrap::{
+    certified_floor_history, certify_executed_claim, executed_certification, send as send_lifecycle,
+};
 
 const T12_GENESIS_CARDS: usize = 8;
 
@@ -594,6 +596,13 @@ impl T12Chain {
     /// own acceptance. The attempt makes a claim of its own for `card`, which the caller's chain simply
     /// carries. Returns the anchor block.
     pub(super) async fn attempt_at_the_anchor_slot(&mut self, claim_id: Hash64, card: usize) -> Block {
+        let slot = self.wait_for_anchor_slot(claim_id).await;
+        let (block, _) = self.attempt(card, self.config.params.target_time_per_block(), Vec::new(), &|_| true).await;
+        assert!(block.header.daa_score >= slot, "the attempt stands at or past the slot");
+        block
+    }
+
+    async fn wait_for_anchor_slot(&mut self, claim_id: Hash64) -> u64 {
         let slot = {
             let (_, state) = self.tip_state();
             state.claim(&claim_id).expect("the claim exists").bind_base_daa() + self.bundle.panel.anchor_delay()
@@ -605,9 +614,7 @@ impl T12Chain {
             PalwClaimPhaseV2::Provisional,
             "a heartbeat at the slot does not anchor a panel past palw_rcore_plus"
         );
-        let (block, _) = self.attempt(card, self.config.params.target_time_per_block(), Vec::new(), &|_| true).await;
-        assert!(block.header.daa_score >= slot, "the attempt stands at or past the slot");
-        block
+        slot
     }
 }
 

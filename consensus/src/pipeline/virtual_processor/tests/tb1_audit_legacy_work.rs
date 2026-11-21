@@ -90,12 +90,12 @@ fn observe_capital(node: &Rig, class: Hash64, what: &str) -> serde_json::Value {
     observation
 }
 
-pub(super) async fn exercise(
+pub(super) async fn exercise<'a>(
     mut node: Rig,
     parts: Parts,
     close: Hash64,
     qwen: Hash64,
-    cut: PreparedAudit<'_>,
+    prepare: impl Fn(&Rig) -> PreparedAudit<'a>,
     qualification: &Tb1Qualification<'_>,
     deadline: u64,
 ) {
@@ -195,7 +195,7 @@ pub(super) async fn exercise(
     assert_eq!(seasoned, tip);
     let claims = state.claims_iter().count();
     assert_eq!(claims, 0);
-    let err = cut.observe(node.api().as_ref(), close, qualification).err().expect("audit shares remain held");
+    let err = prepare(&node).observe(node.api().as_ref(), close, qualification).err().expect("audit shares remain held");
     assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
     let readiness = readiness_of(&node);
     assert_eq!(readiness.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
@@ -218,11 +218,32 @@ pub(super) async fn exercise(
             if std::env::var_os("MISAKA_PRIVATE_GENESIS_RENEW_READ").is_some()
                 || std::env::var_os("MISAKA_PRIVATE_GENESIS_RENEW_WRITE").is_some()
             {
-                genesis_seats::run(&mut node, assigned, path, "MISAKA_PRIVATE_GENESIS_RENEW").await;
+                let renewed = genesis_seats::run(&mut node, assigned, path, "MISAKA_PRIVATE_GENESIS_RENEW").await;
+                let attest = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE").is_some()
+                    || std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ").is_some();
                 if let Some(location) = std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_WRITE") {
-                    genesis_claim::run(&mut node, path, Path::new(&location), true).await;
+                    genesis_claim::run(&mut node, path, Path::new(&location), true, renewed).await;
                 } else if let Some(location) = std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_READ") {
-                    genesis_claim::run(&mut node, path, Path::new(&location), false).await;
+                    genesis_claim::run(&mut node, path, Path::new(&location), false, renewed).await;
+                } else {
+                    assert!(!attest, "certification requires an accepted execution");
+                }
+                if attest {
+                    let tip = node.chain.sink();
+                    let now = node.chain.daa_of(tip);
+                    assert!(now < deadline);
+                    let gate = prepare(&node).observe(node.api().as_ref(), close, qualification);
+                    let publication = match gate {
+                        Ok(_) => "ready",
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => "held",
+                        Err(e) => panic!("invalid original audit after executing work: {e}"),
+                    };
+                    peer_log!(
+                        "signed audit after nonfloor {} {}",
+                        std::process::id(),
+                        serde_json::json!({"close":close,"deadline":deadline,"tip":tip,"daa":now,
+                            "state":node.chain.tip_state().1.state_root(),"publication":publication,"readiness":readiness_of(&node)})
+                    );
                 }
             }
         }

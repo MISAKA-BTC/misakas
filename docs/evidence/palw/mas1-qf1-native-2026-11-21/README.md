@@ -463,3 +463,7 @@ export MISAKA_PRIVATE_GENESIS_RENEW_READ="$OUT/genesis-renew.json"
 # 上記の MODEL_AUDIT と legacy fork の READ、Qwen2.5 の実ファイルと QF1 の実行環境を引き継ぐ
 "$bin" private_registered_audit_legacy_work --ignored --nocapture
 ```
+
+隔離枝の実仕事について、受付済み raw block と推論資料を読み戻す試験に、Panel と Gate C の署名を進めるモードを追加した。生成側は Panel の bind 用と Gate C の抽選用の両方で実行した BASE-0 ブロックを使う。各署名の直前に、選出された席・検証者が受け付けた元の header と元の資料に対して、登録モデルの backend で独立再実行する。検証者候補から除外する bond は元の claim から読む。手数料原資は8席の更新を支払った取引の釣銭である。
+
+`MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE` で受け付けた claim 以後の raw block を記録し、`MISAKA_PRIVATE_GENESIS_CERTIFY_READ` を指定した各 reader は同じ branch を検証して、Final、元の claim の Gate C 投票数・transcript、当初の監査 close に対する publication 可否を読み直す。両モードには前節の素材と `MISAKA_PRIVATE_GENESIS_ATTEMPT_READ` の受付記録が必要である。実行ファイル SHA-256 `2cbce58f…6be290` の [BASE-0 再実行と RFC-0041 の回帰試験](genesis-certification-regressions.txt)は双方成功。この2試験は Qwen2.5 の仕事の認証結果を含まない。
