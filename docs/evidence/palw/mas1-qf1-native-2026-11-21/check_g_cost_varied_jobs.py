@@ -37,7 +37,10 @@ def read_plan(tokenizer_file, data):
     jobs = schedule["jobs"]
     require(len(jobs) == len(set(jobs)) > 0, "empty or duplicate scheduled jobs")
     logs = [LOGS[0], *((data / f"varied-job-{i}.txt.zst", {"undisputed": True}) for i in range(len(jobs)))]
-    plan = frozen_plan(logs)
+    plan = frozen_plan(logs, include_native=True)
+    market = json.loads((HERE / "varied-jobs-moe2-book.json").read_bytes())
+    require(all(trial["native_binary"] == market["binary_sha256"] for trial in plan["trials"][1:]),
+            "scheduled jobs must use the same native build as the three-peer MOE2 test")
     calibration = plan["trials"][0]
     require(plan["decode_limit"] == schedule["decode_limit"] and len(calibration["output_ids"]) == schedule["fixed_length"],
             "changed reference prediction or decode limit")
@@ -53,8 +56,10 @@ def report(plan, jobs, log):
     trials = []
     for job, original, pair in zip(jobs, plan["trials"][1:], pairs):
         stop = qf1.schedule(original["input_ids"], original["output_ids"], plan["decode_limit"])["stop_reason"]
-        trials.append(dict(job=job, **pair, stop=stop, retry=pair["observed_length"] != calibration["predicted"]))
-    return dict(descriptor=plan["descriptor"], fixed_length=calibration["predicted"], setup_ms=header["setup_ms"],
+        trials.append(dict(job=job, ticket=original["ticket"], native_peers=original["native_peers"],
+                           **pair, stop=stop, retry=pair["observed_length"] != calibration["predicted"]))
+    return dict(descriptor=plan["descriptor"], native_binary=plan["trials"][1]["native_binary"],
+                fixed_length=calibration["predicted"], setup_ms=header["setup_ms"],
                 calibration_us=calibration["elapsed_us"],
                 trials=trials,
                 target_reference_us=ref, target_predicted_us=predicted, with_calibration_reference_us=ref+common,

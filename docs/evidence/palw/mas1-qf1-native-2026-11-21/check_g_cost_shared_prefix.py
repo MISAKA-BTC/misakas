@@ -10,7 +10,7 @@ from check_g_cost_readout_reuse import HERE, LOGS
 from check_real_lifecycle import check
 
 
-def frozen_plan(logs=LOGS):
+def frozen_plan(logs=LOGS, *, include_native=False):
     identity = json.loads((HERE / "qf1-native-tile-artifacts.json").read_bytes())["full"]
     expected = {"class_id": identity["class_id"], "artifact_root": identity["inventory"]}
     samples = []
@@ -24,6 +24,8 @@ def frozen_plan(logs=LOGS):
         samples.append(dict(source=path.name, attempt=r["attempt"], context=init[5:69].hex(), input_ids=r["input_ids"],
                             output_ids=r["output_ids"], z=r["readout_z"], roots=r["panel"]["roots"], ticket=r["panel"]["ticket"],
                             descriptor=r["descriptor"]))
+        if include_native:
+            samples[-1].update(native_binary=r["panel"]["binary_sha256"], native_peers=r["panel"]["pids"])
     [descriptor] = {s["descriptor"] for s in samples}
     if len({s["attempt"] for s in samples}) != len(samples):
         raise ValueError("duplicate attempt in cost plan")
