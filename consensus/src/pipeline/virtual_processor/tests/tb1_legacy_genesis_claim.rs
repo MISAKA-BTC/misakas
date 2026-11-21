@@ -1,7 +1,9 @@
 //! Execute the funded legacy class's actual canonical draws before the MODEL_AUDIT
 //! deadline. A reader needs both the raw winning header and its retained material.
 use super::*;
-use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::{RealAttemptV1, certify_executed_claim, executed_certification};
+use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::{
+    AfterPanelFinal, RealAttemptV1, executed_certification, review_executed_claim,
+};
 use kaspa_consensus_core::{
     config::class_manifest_const_v1::{QWEN25_A16_8K_MANIFEST_V1, class_id_of_class, inventory_root_of_class},
     palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1,
@@ -89,8 +91,10 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
     );
     let write = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE");
     let read = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ");
+    let checkpoint = std::env::var_os("MISAKA_PRIVATE_GENESIS_FINAL_WRITE");
+    assert!(checkpoint.is_none() || (write.is_none() && read.is_none()), "choose one Final or certification output");
     if let Some(path) = std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_READ") {
-        assert!(write.is_none() && read.is_none(), "cold suffix inspection must not mine or attest");
+        assert!(checkpoint.is_none() && write.is_none() && read.is_none(), "cold suffix inspection must not mine or attest");
         let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
         assert_eq!((branch.base, branch.claim), (tip, result.claim));
         assert!(!branch.blocks.is_empty());
@@ -140,7 +144,8 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
         }
         return;
     }
-    match (write, read) {
+    let final_only = checkpoint.is_some();
+    match (checkpoint.or(write), read) {
         (Some(path), None) => {
             let mut funds = genesis_seats::funding_change(node, renewed);
             let slot = claim.bind_base_daa() + node.bundle.panel.anchor_delay();
@@ -163,19 +168,23 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
             if stale_at_slot > 0 {
                 genesis_seats::renew(node, held, &mut funds).await;
             }
-            certify_executed_claim(&mut node.chain, &mut funds, &result, &backend, digest).await;
-            let end = node.chain.sink();
-            let blocks = node.blocks_through(end);
-            let split = blocks.iter().position(|b| b.hash() == tip).unwrap();
-            let branch = CertifiedBranch {
-                base: tip,
-                claim: result.claim,
-                tip: end,
-                blocks: blocks[split + 1..].iter().map(RpcRawBlock::from).collect(),
-            };
-            let mut writer = std::io::BufWriter::new(File::create_new(path).unwrap());
-            serde_json::to_writer(&mut writer, &branch).unwrap();
-            writer.flush().unwrap();
+            let after_final = if final_only { AfterPanelFinal::Checkpoint } else { AfterPanelFinal::Executed };
+            review_executed_claim(&mut node.chain, &mut funds, &result, &backend, digest, after_final).await;
+            funded_anchor::save(node, result.claim, tip, Path::new(&path));
+            if final_only {
+                let (end, state) = node.chain.tip_state();
+                let row = state.claim(&result.claim).unwrap();
+                assert_eq!(row.accepted_block, tip);
+                peer_log!(
+                    "legacy genesis final checkpoint claim={} accepted={} tip={} phase={:?} state={}",
+                    result.claim,
+                    tip,
+                    end,
+                    row.phase,
+                    state.state_root()
+                );
+                return;
+            }
         }
         (None, Some(path)) => {
             let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
@@ -273,12 +282,12 @@ fn export_genesis_claim_suffix() {
             let claim = attempt_id_v2(&envelope.attempt);
             let (_, delta) = store.delta_of(at).unwrap();
             candidates += 1;
-            admitted += usize::from(delta.entries.iter().any(|e| {
-                matches!(e, PalwDeltaEntryV2::Claim { key, old: None, new: Some(_) } if *key == claim)
-            }));
-            seeded += usize::from(delta.entries.iter().any(|e| {
-                matches!(e, PalwDeltaEntryV2::RoundSeedAnchor { new: Some(a), .. } if a.block == at)
-            }));
+            admitted += usize::from(
+                delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Claim { key, old: None, new: Some(_) } if *key == claim)),
+            );
+            seeded += usize::from(
+                delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::RoundSeedAnchor { new: Some(a), .. } if a.block == at)),
+            );
         }
         let block = Block {
             header,

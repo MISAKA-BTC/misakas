@@ -742,3 +742,17 @@ export MISAKA_PRIVATE_GENESIS_SEATS_READ="$out/seats.json" MISAKA_PRIVATE_GENESI
 export MISAKA_PRIVATE_GENESIS_RENEW_READ="$out/renew.json" MISAKA_PRIVATE_GENESIS_ATTEMPT_READ="$out/accepted"
 RUST_MIN_STACK=67108864 RAYON_NUM_THREADS=3 "$test_binary" private_fresh_audit_custody --ignored --nocapture --test-threads=1
 ```
+
+### 新しい監査 close と同じ枝での 8K claim の Final
+
+11月22日の隔離試験で、上記の Qwen2.5-1.5B 8K claim `50f0da2d…` が DAA 6,633 のブロック `a615adb3…` で Final に到達した。選出に先立ち8席が readiness を更新し、DAA 6,511 の実行ブロック `a63633f0…` が Panel 抽選の起点になった。選出されたカード0・3・4は、元の計算資料から各自で数値を再実行し、それぞれ有効の receipt に署名した。受付ブロック `5292996b…` から Final までの285ブロックで元の claim ID、3件の署名付き receipt、選択親とハッシュを照合した。Final 時点の仕事は Gate C の承認待ちだった。[Final の照合結果](fresh-8k-final.json)・[署名済みブロックとログ](fresh-8k-final.tar.zst)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+zstd -dc "$p/fresh-8k-final.tar.zst" | tar -xf - -C "$out"
+python3 -B "$p/check_fresh_final.py" "$out" > "$out/checked-final.json"
+cmp "$out/checked-final.json" "$p/fresh-8k-final.json"
+```
+
+native の生成側は前節の再生設定に `MISAKA_PRIVATE_GENESIS_FINAL_WRITE` を追加して、まだ存在しない出力ファイルを指定する。署名済みの Final から再開するプロセスでは、代わりに `MISAKA_PRIVATE_GENESIS_SUFFIX_READ` にそのファイルを指定する。fixture の鍵を持つ1プロセスで選出席ごとに再実行しており、別々の運営者による署名を実証したものではない。

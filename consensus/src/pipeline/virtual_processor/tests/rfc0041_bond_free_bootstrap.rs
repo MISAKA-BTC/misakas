@@ -282,7 +282,7 @@ async fn rfc0041_production_recovery_pays_then_public_bonds_start_palw() {
     assert_eq!(panel.anchor, anchor.header.hash);
     assert_eq!(panel.seats.len(), chain.bundle.panel.seat_count() as usize);
     assert!(panel.seats.iter().all(|seat| chain.bonds.contains(&seat.bond) && seat.bond != chain.bonds[0]));
-    authenticate(&mut chain, &mut funding, claim, Anchors::CarriageFixture, |_, card| [0xC0 | card as u8; 64]).await;
+    authenticate(&mut chain, &mut funding, claim, AfterPanelFinal::CarriageFixture, |_, card| [0xC0 | card as u8; 64]).await;
 
     // Shut down the node and load the same database, without genesis import or
     // replacing state. The helper derives only genesis bonds, so restore the
@@ -361,9 +361,10 @@ fn certification(
         .map(|raw| borsh::from_slice(raw).unwrap())
 }
 
-enum Anchors {
+pub(in crate::pipeline::virtual_processor::tests) enum AfterPanelFinal {
     CarriageFixture,
     Executed,
+    Checkpoint,
 }
 
 /// Drive the normal seat and Gate C carriers, with the verdict material supplied
@@ -372,7 +373,7 @@ async fn authenticate(
     chain: &mut T12Chain,
     funding: &mut (TransactionOutpoint, UtxoEntry),
     claim: Hash64,
-    anchors: Anchors,
+    after_final: AfterPanelFinal,
     review: impl Fn(&T12Chain, usize) -> [u8; 64],
 ) {
     use kaspa_consensus_core::palw_panel_v2::*;
@@ -413,17 +414,21 @@ async fn authenticate(
         .await;
     assert!(!certified(chain, claim), "Final alone gives no consensus credit");
     assert!(certification(chain, claim).is_some(), "Final commits the certification row");
+    if let AfterPanelFinal::Checkpoint = after_final {
+        return;
+    }
     let step = chain.config.params.target_time_per_block();
     for round in 0..64 {
         if certification(chain, claim).unwrap().anchor.is_some() {
             break;
         }
         let card = 5 + (round % 3) as usize;
-        match anchors {
-            Anchors::CarriageFixture => {
+        match after_final {
+            AfterPanelFinal::Checkpoint => unreachable!(),
+            AfterPanelFinal::CarriageFixture => {
                 chain.attempt(card, step, vec![], &|_| true).await;
             }
-            Anchors::Executed => {
+            AfterPanelFinal::Executed => {
                 chain.real_attempt(card, step).await;
             }
         }
@@ -492,12 +497,13 @@ pub(in crate::pipeline::virtual_processor::tests) async fn attest_drawn_final(
 /// Authenticate a retained execution on its existing branch with freshly executed
 /// floor anchors. At each signature the chosen seat independently replays the
 /// accepted job. The caller supplies the class backend authenticated at admission.
-pub(in crate::pipeline::virtual_processor::tests) async fn certify_executed_claim(
+pub(in crate::pipeline::virtual_processor::tests) async fn review_executed_claim(
     chain: &mut T12Chain,
     funding: &mut (TransactionOutpoint, UtxoEntry),
     real: &RealAttemptV1,
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     expected_transcript: [u8; 64],
+    after_final: AfterPanelFinal,
 ) {
     let step = chain.config.params.target_time_per_block();
     let slot = chain.wait_for_anchor_slot(real.claim).await;
@@ -528,7 +534,7 @@ pub(in crate::pipeline::virtual_processor::tests) async fn certify_executed_clai
     );
     let panel = state.panel(&real.claim).expect("executed anchor draws the accepted claim's panel").clone();
     assert_eq!(panel.anchor, anchor.block.hash());
-    authenticate(chain, funding, real.claim, Anchors::Executed, |chain, card| {
+    authenticate(chain, funding, real.claim, after_final, |chain, card| {
         let replay = real.replay_with_backend(chain, backend).expect("selected signer independently reproduces the accepted job");
         assert_eq!(replay, expected_transcript);
         eprintln!("verified execution {} for signing card {card}", real.claim);
@@ -568,7 +574,7 @@ pub(in crate::pipeline::virtual_processor::tests) async fn certified_floor_histo
     let initial_replay = real.replay_transcript(chain).expect("replay accepted floor work");
     eprintln!("TB1 prior floor accepted claim={} block={} daa={}", real.claim, real.block.hash(), real.block.header.daa_score);
     chain.attempt_at_the_anchor_slot(real.claim, 7).await;
-    authenticate(chain, funding, real.claim, Anchors::CarriageFixture, |chain, _| {
+    authenticate(chain, funding, real.claim, AfterPanelFinal::CarriageFixture, |chain, _| {
         let replay = real.replay_transcript(chain).expect("every positive verdict requires full floor replay");
         assert_eq!(replay, initial_replay);
         replay

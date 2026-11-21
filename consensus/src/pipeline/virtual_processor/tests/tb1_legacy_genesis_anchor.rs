@@ -5,7 +5,7 @@ use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::attest_drawn_
 use kaspa_consensus_core::{palw_backend::PalwExecutionBackendV1, palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1};
 use libcrux_ml_dsa::ml_dsa_87;
 
-fn save(node: &Rig, claim: Hash64, base: Hash64, path: &Path) {
+pub(super) fn save(node: &Rig, claim: Hash64, base: Hash64, path: &Path) {
     let tip = node.chain.sink();
     let mut at = tip;
     let mut blocks = Vec::new();
