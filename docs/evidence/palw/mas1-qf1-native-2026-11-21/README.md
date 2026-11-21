@@ -67,3 +67,20 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_original.py \
 ```
 
 この記録の再実行は3つの試験プロセスによるもの。PANEL 凍結の native finality と公開開始 DAA が揃わず、PANEL share の公開は保留された。このローカル推論では登録前に固定した閾値 2^255 と Ticket の 256 ビット値を比較して記録する。比較結果による報酬・権利の発行は行わない。抽選された担当者による承認、Court、採掘 claim の Final・受賞・決済は未検証である。
+
+## 独立した PANEL seed から選出者の完全再実行まで
+
+この追加試験は、前節の保留・再編成試験とは独立した隔離チェーンで実行する。新しいローカル推論の登録時に難度を D=1、閾値を 2^256、仕事の期限を DAA 60 に固定した。登録後の閾値変更や再抽選はない。3ピアはそれぞれ専用 DB で同じ heartbeat 列を受理し、EXEC は DAA 4、PANEL は DAA 26 から share を公開できる。最初の試験では EXEC の finality 観測時の DAA が3で、holder が署名を拒否した。記録した試験では、各ノードが native DAA を確認し、原スケジュールの公開開始まで heartbeat で進めた。
+
+PANEL 用には、準備ブロックの前に EXEC と独立した dealer 多項式を生成する。隔離試験の provisioner が holder ごとの share を配り、多項式の digest が Ready と QualRoot に入る。完全な VSS 通信、専用の取引手数料・担保はこの実行の対象外である。成熟済み仕事と pruning frontier は既存の RFC-0012 隔離 fixture の入力を用いた。選択鎖、DAA、凍結ブロック、受領ブロック、finality と release 証明書は各ピアが native API から検査した。
+
+3つの検証者プロセスは各自の ML-DSA-65 鍵を生成し、公開鍵だけを交換する。PANEL の対象を固定するブロックは、同じ署名済み Original、候補3名の ID、試験用重み 1・2・4、既存の整数重み付き抽選、2席すべての完全再実行義務を束縛する。選出された2者は公開済みの入力から試験用 TIR を再実行し、四つの root、回答長、Ticket と登録者署名を照合してから署名した。残り1者の署名要求、他の席の署名、欠落・重複した返答は拒否された。全3者が後続の選択鎖ブロックから2署名の受領を確認した。
+
+[3プロセスの記録](panel-run.txt)と[独立照合の結果](panel-check.json)には、両 seed、凍結・安定化・証明書・返答ブロック、選出者を収録した。独立照合は Python で全 trace を再構成し、元の Original、凍結時の候補重み、PANEL seed から全候補の抽選順位を計算する。実 Qwen3-8B の採掘資格、正規の資金予約、Court、Final、受賞、決済は未確認である。
+
+```sh
+# 前節と同じ tokenizer・ビルド環境を指定して起動する
+cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib private_tb1_stable_panel -- --ignored --nocapture
+python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_panel.py \
+  docs/evidence/palw/mas1-qf1-native-2026-11-21/panel-run.txt
+```

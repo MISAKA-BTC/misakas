@@ -19,7 +19,7 @@ def tiles(pos, stage, layer, node, dtype, values):
         yield envelope(1, header + struct.pack(f"<{len(tile)}{code}", *tile))
 
 
-def verify(log):
+def verify(log, expected_target=1 << 255):
     result = check(log)
     original = [json.loads(row) for row in re.findall(r"QF1 original (\{[^\n]+\})", log)]
     disclosures = [json.loads(row) for row in re.findall(r"QF1 disclosure (\{[^\n]+\})", log)]
@@ -92,7 +92,7 @@ def verify(log):
     if ([r.hex() for r in roots], counts, qf1.ticket(s, counts, roots).hex()) != (body[0]["roots"], body[0]["counts"], body[0]["ticket"]):
         raise ValueError("roots, lengths or ticket differ from the reference")
     theta = int.from_bytes(bytes.fromhex(body[0]["target"]), "big")
-    if theta != 1 << 255 or qf1.is_winner(bytes.fromhex(body[0]["ticket"]), theta) != body[0]["ticket_meets_target"]:
+    if theta != expected_target or qf1.is_winner(bytes.fromhex(body[0]["ticket"]), theta) != body[0]["ticket_meets_target"]:
         raise ValueError("ticket comparison differs from the prespecified fixture threshold")
     indices = sorted(row["index"] for row in disclosures)
     if indices != [0, 64, d - 1]:

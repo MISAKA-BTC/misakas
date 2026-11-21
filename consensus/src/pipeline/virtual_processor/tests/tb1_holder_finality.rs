@@ -33,6 +33,9 @@ macro_rules! peer_log {
     }};
 }
 
+#[path = "tb1_stable_panel.rs"]
+mod stable_panel;
+
 const QF1_TEST_TOKENIZER: &str =
     "10ed14bc48937bd836b309447040a8d43d38f103fde39682f7f9f2c4cbb6b4b4666658ab71ed3d90de7c6e2e00cce21c01863b4403ae41dab361b099fdfe2ec5";
 const READER_DIR: &str = "MISAKA_PRIVATE_TB1_FREEZE_READER";
@@ -98,14 +101,19 @@ fn receive<T: serde::de::DeserializeOwned>(socket: &mut UnixStream) -> T {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-fn child_reader(dir: &Path, slot: usize) -> (Child, UnixStream) {
+fn child_reader(dir: &Path, slot: usize, stable: bool) -> (Child, UnixStream) {
     let (parent, child_input) = UnixStream::pair().unwrap();
     for s in [&parent, &child_input] {
         s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
         s.set_write_timeout(Some(Duration::from_secs(60))).unwrap();
     }
-    let child = Command::new(std::env::current_exe().unwrap())
-        .arg("native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected")
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    if stable {
+        command.args(["private_tb1_stable_panel", "--ignored"]);
+    } else {
+        command.arg("native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected");
+    }
+    let child = command
         .args(["--test-threads=1", "--nocapture"])
         .env(READER_DIR, dir)
         .env(READER_SLOT, slot.to_string())
@@ -125,11 +133,11 @@ async fn local_carrier(
 ) -> Block {
     if let Some(socket) = parent {
         let block = Block::try_from(receive::<RpcRawBlock>(socket)).unwrap();
-        node.arrive(block.clone(), label).await;
+        stable_panel::arrive(node, block.clone(), label).await;
         block
     } else {
         let miner = MinerData::new(card_payout_spk(card), marker.to_vec());
-        let template = node.attempt_with_miner(card, vec![], no_evm(), vec![], miner);
+        let template = stable_panel::carrier(node, card, miner);
         let block = node.take(template, label).await;
         for (_, s) in peers {
             send(s, &RpcRawBlock::from(&block));
@@ -159,9 +167,18 @@ fn qualified<'a>(
     keys: &[ml_dsa_65::MLDSA65KeyPair],
     dealers: &'a [usize],
     session: u8,
+    transcripts: Option<&[Hash64; 4]>,
 ) -> Tb1Qualification<'a> {
     let ends: Vec<_> = (0..4)
-        .map(|d| Some(Tb1DealerEnd { end: Tb1VssEnd { end_anchor: [session; 64], transcript_root: [session + d; 64] }, position: 1 }))
+        .map(|d| {
+            Some(Tb1DealerEnd {
+                end: Tb1VssEnd {
+                    end_anchor: [session; 64],
+                    transcript_root: transcripts.map_or([session + d; 64], |t| t[d as usize].as_bytes()),
+                },
+                position: 1,
+            })
+        })
         .collect();
     let mut ready = Vec::new();
     for &dealer in dealers {
@@ -198,9 +215,23 @@ fn qualified<'a>(
 
 #[tokio::test]
 async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected() {
+    run(false).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the RFC-0066 tokenizer asset in MISAKA_PRIVATE_QF1_TOKENIZER"]
+async fn private_tb1_stable_panel() {
+    assert!(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").is_some());
+    run(true).await;
+}
+
+async fn run(stable: bool) {
     let parts = parts(Some(FENCE));
     let mut node = Rig::new(&parts, 0x12_c500_0000);
     let genesis = node.chain.sink();
+    if stable {
+        stable_panel::arm(&mut node);
+    }
     let template = node.beat();
     let keys: Vec<_> = (1..=4).map(|i| ml_dsa_65::generate_key_pair([i; 32])).collect();
     let public: Vec<_> = keys.iter().map(|kp| kp.verification_key.clone()).collect();
@@ -214,8 +245,8 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         purpose: Tb1MiningPurpose::Exec,
         schedule_id: [9; 64],
         close_blue_score: template.header.blue_score + 1,
-        release_from_daa: template.header.daa_score + 1,
-        deadline_exclusive_daa: template.header.daa_score + 11,
+        release_from_daa: if stable { 4 } else { template.header.daa_score + 1 },
+        deadline_exclusive_daa: if stable { 32 } else { template.header.daa_score + 11 },
     };
     let round_ref = round.id();
     let round_ref = round_ref.as_slice();
@@ -225,35 +256,40 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         logical_round: 3,
         // Seven selected blocks take EXEC close to its certificate; the
         // next two carry the signed Original and the private PANEL close.
-        close_blue_score: round.close_blue_score + 9,
-        release_from_daa: 20,
-        deadline_exclusive_daa: 30,
+        close_blue_score: if stable { 25 } else { round.close_blue_score + 9 },
+        release_from_daa: if stable { 26 } else { 20 },
+        deadline_exclusive_daa: if stable { 50 } else { 30 },
         ..round
     };
     let panel_id = panel.id();
-    let q = qualified(round_ref, roster, &keys, &dealers, 7);
-    let panel_q = qualified(&panel_id, roster, &keys, &dealers, 29);
+    let q = qualified(round_ref, roster, &keys, &dealers, 7, None);
+    let child_dir = std::env::var_os(READER_DIR).map(std::path::PathBuf::from);
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let slot = if child_dir.is_some() { std::env::var(READER_SLOT).unwrap().parse::<usize>().unwrap() } else { 0 };
+    let setup = stable.then(|| stable_panel::provision(dir.path(), child_dir.as_deref(), slot, &panel_id));
+    let panel_q = qualified(&panel_id, roster, &keys, &dealers, 29, setup.as_ref().map(|p| &p.roots));
     assert!(QualifiedExecPanel::new(round, &q, panel, &q).is_err());
     assert!(QualifiedExecPanel::new(round, &panel_q, panel, &q).is_err());
     let rounds = QualifiedExecPanel::new(round, &q, panel, &panel_q).unwrap();
-    let child_dir = std::env::var_os(READER_DIR).map(std::path::PathBuf::from);
-    let dir = kaspa_database::utils::get_kaspa_tempdir();
     let preparation = if let Some(path) = &child_dir {
         let raw: RpcRawBlock = serde_json::from_reader(File::open(path.join("preparation.json")).unwrap()).unwrap();
         let block = Block::try_from(raw).unwrap();
-        node.arrive(block.clone(), "recorded EXEC/PANEL preparation").await;
+        stable_panel::arrive(&mut node, block.clone(), "recorded EXEC/PANEL preparation").await;
         block
     } else {
         let mut miner = new_miner_data();
         miner.extra_data = rounds.commitment().to_vec();
-        let t = node.beat_with_miner(miner, vec![]);
+        let t = stable_panel::heartbeat(&mut node, miner);
         let block = node.take(t, "joint EXEC/PANEL qualification").await;
         serde_json::to_writer(File::create_new(dir.path().join("preparation.json")).unwrap(), &RpcRawBlock::from(&block)).unwrap();
         block
     };
     let parent = preparation.hash();
     assert_eq!(node.chain.sink(), parent);
-    let terms = exec_input::terms(parent);
+    let mut terms = exec_input::terms(parent);
+    if stable {
+        terms.deadline_exclusive_daa = 60;
+    }
     let owner = ml_dsa_65::generate_key_pair([82; 32]);
     let key = terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap();
     let owner_sig = if let Some(path) = std::env::var_os(READER_DIR) {
@@ -283,7 +319,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         .is_err()
     );
     assert!(ExecInputBatch::from_signed(node.api().as_ref(), genesis, &rounds, &[], 4, 16).is_err());
-    let changed_panel_q = qualified(&panel_id, roster, &keys, &dealers, 30);
+    let changed_panel_q = qualified(&panel_id, roster, &keys, &dealers, 30, None);
     let other_rounds = QualifiedExecPanel::new(round, &q, panel, &changed_panel_q).unwrap();
     assert!(ExecInputBatch::from_signed(node.api().as_ref(), parent, &other_rounds, &[], 4, 16).is_err());
     let early_terms = misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms { registration_anchor: genesis, ..terms };
@@ -341,6 +377,14 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         max_positions: 8192,
         model_root: instance.as_ref().unwrap().identity().inventory,
         class_id: instance.as_ref().unwrap().identity().class,
+        // A fresh isolated D=1 profile fixes its difficulty before the EXEC close.
+        target: if stable {
+            let mut t = [0; 33];
+            t[0] = 1;
+            t
+        } else {
+            terms.target
+        },
         decode_tokens: 3,
         ..terms
     });
@@ -377,42 +421,66 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         Hash64::from_bytes(panel_q.root()),
         Hash64::from_bytes(inputs.root())
     );
-    let slot = if child_dir.is_some() { std::env::var(READER_SLOT).unwrap().parse::<usize>().unwrap() } else { 0 };
     let (prefix, work, tip) = if let Some(dir) = &child_dir {
         let raw: [RpcRawBlock; 6] = serde_json::from_reader(File::open(dir.join("blocks.json")).unwrap()).unwrap();
         let [close, e1, e7, e2, work, tip] = raw.map(|r| Block::try_from(r).unwrap());
         let prefix = vec![close, e1, e7, e2];
         for block in &prefix {
-            node.arrive(block.clone(), "recorded close prefix").await;
+            stable_panel::arrive(&mut node, block.clone(), "recorded close prefix").await;
         }
         let close = &prefix[0];
         plant_frontier(&node, close.header.blue_score, close.hash());
-        node.arrive(work.clone(), "recorded work").await;
+        stable_panel::arrive(&mut node, work.clone(), "recorded work").await;
         place_maturing_fact(&node, &work, 10, 0);
         node.vp().pruning_point_store.write().set(close.hash(), 1).unwrap();
-        node.arrive(tip.clone(), "recorded settlement tip").await;
+        stable_panel::arrive(&mut node, tip.clone(), "recorded settlement tip").await;
         (prefix, work, tip)
     } else {
         // A close carrying an attempt opens a claim and cannot finalize before its lifecycle closes.
         let mut miner = new_miner_data();
         miner.extra_data = freeze_id.to_vec();
-        let close = node.beat_with_miner(miner, vec![]);
+        let close = stable_panel::heartbeat(&mut node, miner);
         let close = node.take(close, "committed TB1 close").await;
         let mut prefix = vec![close];
-        prefix.extend(extend(&mut node, &[0]).await);
-        prefix.extend(extend(&mut node, &[7, 1]).await);
+        for card in [0, 7, 1] {
+            prefix.push(stable_panel::next(&mut node, card).await);
+        }
         let close = &prefix[0];
         plant_frontier(&node, close.header.blue_score, close.hash());
-        let work = extend(&mut node, &[2]).await.remove(0);
+        let work = stable_panel::next(&mut node, 2).await;
         place_maturing_fact(&node, &work, 10, 0);
         node.vp().pruning_point_store.write().set(close.hash(), 1).unwrap();
-        let tip = extend(&mut node, &[3]).await.remove(0);
+        let tip = stable_panel::next(&mut node, 3).await;
         (prefix, work, tip)
     };
     let anchor = prefix[0].hash();
     let before = snapshot_of(&node).unwrap();
     assert_eq!(before.generation, tip.hash());
     assert_eq!(before.finalized, Some(anchor), "{}", serde_json::to_string(&readiness_of(&node)).unwrap());
+    if stable {
+        let start = tip.header.daa_score;
+        if let Some(path) = &child_dir {
+            let blocks: Vec<RpcRawBlock> =
+                serde_json::from_reader(File::open(path.join("exec-release-window.json")).unwrap()).unwrap();
+            for raw in blocks {
+                stable_panel::arrive(&mut node, Block::try_from(raw).unwrap(), "wait for EXEC DAA").await;
+            }
+        } else {
+            let mut blocks = vec![];
+            while node.chain.daa_of(node.chain.sink()) < round.release_from_daa {
+                assert!(blocks.len() < 120, "EXEC DAA did not progress from {start}");
+                blocks.push(RpcRawBlock::from(&stable_panel::next(&mut node, 0).await));
+            }
+            serde_json::to_writer(File::create_new(dir.path().join("exec-release-window.json")).unwrap(), &blocks).unwrap();
+        }
+        peer_log!(
+            "TB1 EXEC window pid={} first_daa={} release_daa={} observed_daa={}",
+            std::process::id(),
+            start,
+            round.release_from_daa,
+            node.chain.daa_of(node.chain.sink())
+        );
+    }
     let context = Tb1ReleaseContext { round_ref, qual_root: q.root(), freeze_id };
     let api = node.api().as_ref();
     let jobs = inputs.observe(api, anchor, &closure, &q).unwrap();
@@ -456,24 +524,24 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         let publication: Publication = receive(&mut socket);
         let batch = Block::try_from(publication.batch).unwrap();
         let certificate = Block::try_from(publication.certificate).unwrap();
-        node.arrive(batch.clone(), "native signed batch").await;
+        stable_panel::arrive(&mut node, batch.clone(), "native signed batch").await;
         parent_socket = Some(socket);
         (publication.rows, batch, certificate)
     } else {
         let raw: Vec<_> = prefix.iter().chain([&work, &tip]).map(RpcRawBlock::from).collect();
         serde_json::to_writer(File::create_new(dir.path().join("blocks.json")).unwrap(), &raw).unwrap();
-        peers.extend((1..3).map(|s| child_reader(dir.path(), s)));
+        peers.extend((1..3).map(|s| child_reader(dir.path(), s, stable)));
         let mut records = vec![own_record];
         records.extend(peers.iter_mut().map(|(_, s)| receive::<ReleaseRecord>(s)));
         let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
         let rows = views(&decoded, context);
         let miner = MinerData::new(card_payout_spk(4), batch_commitment(&rows, LIMITS).unwrap().to_vec());
-        let template = node.attempt_with_miner(4, vec![], no_evm(), vec![], miner);
+        let template = stable_panel::carrier(&mut node, 4, miner);
         let batch = node.take(template, "TB1 signed batch").await;
         let marker = gate.propose(node.api().as_ref(), batch.hash(), &rows, &q, LIMITS).unwrap();
         assert!(gate.read_seed(node.api().as_ref(), batch.hash(), batch.hash(), &rows, &q, LIMITS).is_err());
         let miner = MinerData::new(card_payout_spk(5), marker.to_vec());
-        let template = node.attempt_with_miner(5, vec![], no_evm(), vec![], miner);
+        let template = stable_panel::carrier(&mut node, 5, miner);
         let certificate = template.to_immutable();
         let publication = Publication { batch: (&batch).into(), certificate: (&certificate).into(), rows: records };
         for (_, socket) in &mut peers {
@@ -484,7 +552,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
     let mut rows = views(&decoded, context);
     assert_eq!(node.chain.sink(), batch.hash());
-    node.arrive(certificate.clone(), "native TB1 certificate").await;
+    stable_panel::arrive(&mut node, certificate.clone(), "native TB1 certificate").await;
     assert_eq!(node.chain.sink(), certificate.hash());
     let api = node.api().as_ref();
     let seed = gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
@@ -617,6 +685,13 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     if let Some(socket) = parent_socket.as_mut() {
         socket.write_all(seed.as_bytes()).unwrap();
     }
+    if stable {
+        for (_, socket) in &mut peers {
+            let mut bytes = [0; 32];
+            socket.read_exact(&mut bytes).unwrap();
+            assert_eq!(&bytes, seed.as_bytes());
+        }
+    }
     let execution = std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT").map(|path| exec_input::infer(api, Path::new(&path), &request));
     if let Some(run) = &execution {
         peer_log!("TB1 TIR inference pid {} {}", std::process::id(), serde_json::to_string(run).unwrap());
@@ -626,22 +701,54 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
         peer_log!("QF1 receipt pid={} block={} original={}", std::process::id(), block.hash(), id);
         use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{LocalPanelInputs, LocalSubmission};
-        let candidates = [(Hash64::from_u64_word(1), 1), (Hash64::from_u64_word(2), 2), (Hash64::from_u64_word(3), 4)];
+        let actors = stable.then(|| stable_panel::Actors::enroll(&mut parent_socket, &mut peers));
+        let candidates = actors.as_ref().map_or_else(
+            || vec![(Hash64::from_u64_word(1), 1), (Hash64::from_u64_word(2), 2), (Hash64::from_u64_word(3), 4)],
+            |a| a.candidates(),
+        );
+        let draw_policy = actors.as_ref().map_or(Hash64::from_u64_word(72), |a| a.policy.id());
         let reservation = Hash64::from_u64_word(71);
         let submission = || LocalSubmission { input: r, block: block.hash(), body, signature: sig, material_reservation: reservation };
-        let pool =
-            |policy| LocalPanelInputs { draw_policy: Hash64::from_u64_word(policy), candidates: &candidates, max_candidates: 3 };
+        let pool = |policy| LocalPanelInputs { draw_policy: policy, candidates: &candidates, max_candidates: 3 };
         let api = node.api().as_ref();
-        let cut = jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission()], pool(72)).unwrap();
-        let other = jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission()], pool(73)).unwrap();
-        let empty = jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[], pool(72)).unwrap();
+        let cut = jobs
+            .local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission()], pool(draw_policy))
+            .unwrap();
+        let other = jobs
+            .local_panel_cut(
+                api,
+                batch.hash(),
+                certificate.hash(),
+                &rows,
+                &q,
+                LIMITS,
+                &[submission()],
+                pool(Hash64::from_u64_word(73)),
+            )
+            .unwrap();
+        let empty = jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[], pool(draw_policy)).unwrap();
         assert!(
-            jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission(), submission()], pool(72))
-                .is_err()
+            jobs.local_panel_cut(
+                api,
+                batch.hash(),
+                certificate.hash(),
+                &rows,
+                &q,
+                LIMITS,
+                &[submission(), submission()],
+                pool(draw_policy)
+            )
+            .is_err()
         );
-        let marker = cut.commitment(block.hash());
-        assert_ne!(marker, other.commitment(block.hash()));
-        assert_ne!(marker, empty.commitment(block.hash()));
+        if stable {
+            while node.api().get_header(node.chain.sink()).unwrap().blue_score + 1 < panel.close_blue_score {
+                local_carrier(&mut node, &mut parent_socket, &mut peers, 0, [80; 64], "PANEL cutoff heartbeat").await;
+            }
+        }
+        let close_parent = node.chain.sink();
+        let marker = cut.commitment(close_parent);
+        assert_ne!(marker, other.commitment(close_parent));
+        assert_ne!(marker, empty.commitment(close_parent));
         let closed = local_carrier(&mut node, &mut parent_socket, &mut peers, 7, marker, "local PANEL close").await;
         let api = node.api().as_ref();
         cut.resolve(api, closed.hash(), &panel_q).unwrap();
@@ -657,6 +764,32 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
             closed.header.blue_score,
             Hash64::from_bytes(marker)
         );
+        if let (Some(setup), Some(actors)) = (setup.as_ref(), actors.as_ref()) {
+            stable_panel::release(
+                &mut node,
+                &mut parent_socket,
+                &mut peers,
+                dir.path(),
+                slot,
+                &keys[slot],
+                &panel_q,
+                &panel_id,
+                &cut,
+                close_parent,
+                &closed,
+                panel.release_from_daa,
+                setup,
+                seed.as_bytes(),
+                &rows,
+                actors,
+                r,
+                instance.as_ref().unwrap(),
+                body,
+                sig,
+                *id,
+            )
+            .await;
+        }
         Some((block, closed, cut))
     } else {
         None
@@ -666,14 +799,20 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         return;
     }
     for (idx, (child, socket)) in peers.iter_mut().enumerate() {
-        let mut received = [0; 32];
-        socket.read_exact(&mut received).unwrap();
-        assert_eq!(&received, seed.as_bytes());
+        if !stable {
+            let mut received = [0; 32];
+            socket.read_exact(&mut received).unwrap();
+            assert_eq!(&received, seed.as_bytes());
+        }
         assert!(child.wait().unwrap().success());
         let peer: (Vec<u32>, Option<exec_input::Inference>) =
             serde_json::from_reader(File::open(dir.path().join(format!("result-{}.json", idx + 1))).unwrap()).unwrap();
         assert_eq!(peer.0, ids);
         assert_eq!(peer.1, execution);
+    }
+    if stable {
+        assert!(original_receipt.is_some());
+        return;
     }
     let later = match original_receipt {
         Some((ref block, _, _)) => block.clone(),
@@ -689,7 +828,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     let fork_cards: &[usize] = if original_receipt.is_some() { &[4, 5, 6, 0, 1, 2, 3] } else { &[4, 5, 6, 0, 1, 2] };
     let alternative = extend(&mut rival, fork_cards).await;
     for block in &alternative {
-        node.arrive(block.clone(), "heavier branch").await;
+        stable_panel::arrive(&mut node, block.clone(), "heavier branch").await;
     }
     let after = snapshot_of(&node).unwrap();
     assert_eq!(after.generation, alternative.last().unwrap().hash());

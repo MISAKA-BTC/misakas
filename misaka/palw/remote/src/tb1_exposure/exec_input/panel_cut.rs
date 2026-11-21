@@ -20,12 +20,19 @@ pub struct LocalPanelInputs<'a> {
     pub max_candidates: usize,
 }
 
+struct FrozenReceipt {
+    original: Hash64,
+    block: Hash64,
+    meets_target: bool,
+    deadline: u64,
+}
+
 pub struct LocalPanelCut {
     closure: Tb1MiningClosure,
     exec_close: Hash64,
     certificate: Hash64,
-    receipts: Vec<Hash64>,
-    deadline_exclusive: u64,
+    receipts: Vec<FrozenReceipt>,
+    candidates: Vec<(Hash64, u64)>,
 }
 
 impl FrozenExecInputs<'_> {
@@ -60,7 +67,6 @@ impl FrozenExecInputs<'_> {
             .chain_update(u32::try_from(submissions.len()).map_err(|_| invalid("PANEL submissions count"))?.to_be_bytes());
         let mut previous = None;
         let mut receipts = Vec::with_capacity(submissions.len());
-        let mut deadline_exclusive = rounds.panel.deadline_exclusive_daa;
         for row in submissions {
             let r = row.input;
             let entry = self.batch.entries.get(&r.slot).ok_or_else(|| invalid("unknown local PANEL registration slot"))?;
@@ -81,8 +87,12 @@ impl FrozenExecInputs<'_> {
             hash.update(row.material_reservation.as_bytes());
             hash.update(entry.terms.deadline_exclusive_daa.to_be_bytes());
             previous = Some(r.slot);
-            deadline_exclusive = deadline_exclusive.min(entry.terms.deadline_exclusive_daa);
-            receipts.push(row.block);
+            receipts.push(FrozenReceipt {
+                original,
+                block: row.block,
+                meets_target: r.terms.threshold()?.admits_ticket_be(&row.body.ticket),
+                deadline: entry.terms.deadline_exclusive_daa,
+            });
         }
         hash.update(u32::try_from(pool.candidates.len()).map_err(|_| invalid("PANEL pool count"))?.to_be_bytes());
         let mut previous = None;
@@ -103,7 +113,7 @@ impl FrozenExecInputs<'_> {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL input view moved"));
         }
-        Ok(LocalPanelCut { closure, exec_close: self.close, certificate, receipts, deadline_exclusive })
+        Ok(LocalPanelCut { closure, exec_close: self.close, certificate, receipts, candidates: pool.candidates.to_vec() })
     }
 }
 
@@ -115,14 +125,14 @@ impl LocalPanelCut {
         let (state, daa, tip) = anchor_state(native, self.exec_close)?;
         let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
         if !matches!(state, AnchorState::Finalized)
-            || daa >= self.deadline_exclusive
+            || daa >= self.closure.round.deadline_exclusive_daa
             || !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
             || !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)?
         {
             return Err(invalid("local PANEL close outside live EXEC history"));
         }
-        for &receipt in &self.receipts {
-            if !native.is_chain_ancestor_of(receipt, parent).map_err(io::Error::other)? {
+        for receipt in &self.receipts {
+            if !native.is_chain_ancestor_of(receipt.block, parent).map_err(io::Error::other)? {
                 return Err(invalid("local Original absent from PANEL prefix"));
             }
         }
@@ -137,3 +147,7 @@ impl LocalPanelCut {
         NativePublicationGate::observe(native, close, &self.closure, q)
     }
 }
+
+#[path = "panel_duty.rs"]
+mod duty;
+pub use duty::{LocalReplayDraw, LocalReplayPolicy, REPLAY_SIGNATURE_DOMAIN, actor_id};
