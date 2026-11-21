@@ -182,6 +182,18 @@ pub(super) async fn exercise(
     assert_eq!(budget, before);
     assert_eq!(journal.len(), start);
     assert!(book.receipt(&terms.claim).is_none());
+    // A reservation still exists under the exact signed key. A changed active
+    // policy must hold that reward even when the monetary fields all agree.
+    let mut changed_policy = policy.clone();
+    changed_policy.export_cap_permille -= 1;
+    let mut changed_budget = budget.clone();
+    changed_budget.header.policy_digest = changed_policy.digest();
+    let unchanged = (book.clone(), changed_budget.clone());
+    assert_eq!(
+        book.settle(terms.claim, at, point.block, &funding, &mut changed_budget, &mut journal),
+        Err(Moe2SettlementError::ReservationMismatch)
+    );
+    assert_eq!((&book, &changed_budget, journal.len()), (&unchanged.0, &unchanged.1, start));
     let admitted = book.clone();
     let mut reference = book.clone();
     let (expected_payment, expected_undo) =

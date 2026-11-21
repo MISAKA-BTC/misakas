@@ -402,7 +402,10 @@ impl Moe2SettlementBook {
     ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let model = self.models.get(&terms.model).ok_or(UnknownRegistration)?;
-        if terms.artifact_root != model.artifact_root || terms.valid_from < model.registration_daa || terms.deadline < terms.valid_from
+        if terms.artifact_root != model.artifact_root
+            || terms.valid_from < model.registration_daa
+            || terms.deadline < terms.valid_from
+            || terms.deadline == u64::MAX
         {
             return Err(UnknownClaimContext);
         }
@@ -483,7 +486,8 @@ impl Moe2SettlementBook {
         let key = terms.reservation_key();
         let row = budget.claim_row(&key).ok_or(ReservationMismatch)?;
         let liability = &funding.liability;
-        if row.origin != PalwBudgetOriginV1::Attempt
+        if terms.policy != budget.header.policy_digest
+            || row.origin != PalwBudgetOriginV1::Attempt
             || row.bond != terms.funding_bond
             || row.model.map(|(id, _)| id) != Some(terms.model)
             || !row.open
@@ -596,6 +600,7 @@ impl Moe2SettlementBook {
 mod tests {
     use super::super::tests::{LIMITS, market};
     use super::*;
+    use crate::palw_bond_budget_v1::{PalwBondBudgetPolicyV1, PalwBudgetVectorV1};
     fn h(id: u64) -> Hash64 {
         Hash64::from_u64_word(id)
     }
@@ -636,7 +641,6 @@ mod tests {
         anchor: Hash64,
         funding: &Moe2SettlementFunding,
     ) -> Result<Moe2SettledReward, Moe2SettlementError> {
-        use crate::palw_bond_budget_v1::{PalwBondBudgetPolicyV1, PalwBudgetVectorV1};
         let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         let mut budget = PalwBondBudgetStateV1::new(0, &policy);
         let mut journal = Vec::new();
@@ -678,7 +682,7 @@ mod tests {
             funding_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 7)),
             model: model.model,
             artifact_root: model.artifact_root,
-            policy: h(4),
+            policy: PalwBondBudgetPolicyV1::unapproved_probe_v1().digest(),
             quote_anchor: h(5),
             valid_from: 2,
             deadline: 4,
@@ -735,7 +739,6 @@ mod tests {
 
     #[test]
     fn recorded_settlements_unwind_in_order_and_preserve_prior_alias_liquidity() {
-        use crate::palw_bond_budget_v1::{PalwBondBudgetPolicyV1, PalwBudgetVectorV1};
         let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         let mut budget = PalwBondBudgetStateV1::new(0, &policy);
         let mut book = Moe2SettlementBook::default();
@@ -756,7 +759,7 @@ mod tests {
                 model: model.model,
                 artifact_root: model.artifact_root,
                 funding_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), i as u32)),
-                policy: h(60),
+                policy: policy.digest(),
                 quote_anchor: h(70 + i as u64),
                 valid_from: 2,
                 deadline: 5,
@@ -847,7 +850,7 @@ mod tests {
             funding_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 7)),
             model: model.model,
             artifact_root: model.artifact_root,
-            policy: h(4),
+            policy: PalwBondBudgetPolicyV1::unapproved_probe_v1().digest(),
             quote_anchor: h(5),
             valid_from: 2,
             deadline: 4,
@@ -858,6 +861,12 @@ mod tests {
         let mut parent = Moe2SettlementBook::default();
         parent.models.insert(model.model, model);
         let anchor = |id, line| (id == h(5) && line == model.model).then_some(model);
+        let before = parent.clone();
+        assert_eq!(
+            parent.admit(Moe2SettlementTerms { deadline: u64::MAX, ..terms }, anchor),
+            Err(Moe2SettlementError::UnknownClaimContext)
+        );
+        assert_eq!(parent, before);
         parent.admit(terms, anchor).unwrap();
         let mut child = parent.clone();
         let block = PalwBlockContextV2 { block: h(20), blue_score: 10, daa_score: 3, subsidy: 1000 };

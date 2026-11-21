@@ -585,6 +585,8 @@ async fn run(stable: bool, registered: bool) {
         Hash64::from_bytes(inputs.root())
     );
     if let Some((model_block, _)) = registration {
+        let (prepared_tip, close_parent_state) = node.chain.tip_state();
+        assert_eq!(prepared_tip, parent);
         let file = "pending-freeze-blocks.json";
         let anchor = if let Some(dir) = &child_dir {
             let raw: Vec<RpcRawBlock> = serde_json::from_reader(File::open(dir.join(file)).unwrap()).unwrap();
@@ -636,6 +638,38 @@ async fn run(stable: bool, registered: bool) {
         }
         let original_state = quote_anchor_state.as_ref().unwrap();
         assert_eq!(original_state.state_root(), api.get_header(parent).unwrap().palw_state_root);
+        let public_t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let budget_preview = |config, state| inputs.preview_closed_moe2_budget(api, config, anchor, &closure, &q, state);
+        assert!(budget_preview(&public_t12, &close_parent_state).is_err());
+        assert!(budget_preview(&node.config.params, original_state).is_err());
+        let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
+        assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9]);
+        let value = full[&9];
+        assert_eq!(value.consent, Hash64::from_bytes(entries[1].funding_ref));
+        assert_eq!(value.reward_sompi, quote.limits.max_reward);
+        let policy = &node.bundle.state.bond_budget().unwrap().policy;
+        let export = |held| kaspa_consensus_core::palw_bond_budget_v1::palw_bond_budget_export_cap_v1(policy, held);
+        assert!(
+            export(value.minimum_liability_sompi - 1) < value.reward_sompi
+                && export(value.minimum_liability_sompi) >= value.reward_sompi
+        );
+        assert_eq!(value.collateral_sompi, close_parent_state.bond(&quote.funding_bond).unwrap().collateral);
+        assert!(close_parent_state.bond_budget().unwrap().claim_row(&value.consent).is_none());
+        assert!(quote.deadline < panel.release_from_daa);
+        peer_log!(
+            "MOE2 budget preview pid={} close={} parent_root={} slot=9 consent={} collateral={} export_permille={} liability={} reward={} epoch={} panel_release={} bootstrap={} no_debit=true",
+            std::process::id(),
+            anchor,
+            close_parent_state.state_root(),
+            value.consent,
+            value.collateral_sompi,
+            policy.export_cap_permille,
+            value.minimum_liability_sompi,
+            value.reward_sompi,
+            value.allocation_epoch,
+            panel.release_from_daa,
+            close_parent_state.bond_budget().unwrap().allocation_bootstrapping_v1()
+        );
         let reward = quote.limits.max_reward;
         let split = closed_quote.preview(&node.config.params, original_state, reward).unwrap();
         let market = split.market.unwrap();

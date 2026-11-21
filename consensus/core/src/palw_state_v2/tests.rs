@@ -26700,12 +26700,13 @@ mod model_market_virtual {
         let reward = V / 10;
         let held = u128::from(reward) * 4;
         let capital = 5 * reward;
+        let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         let terms = Moe2SettlementTerms {
             claim: h64(31),
             funding_bond: bond_key(2),
             model,
             artifact_root: registered.artifact_root,
-            policy: h64(4),
+            policy: policy.digest(),
             quote_anchor: registration.point.block,
             valid_from: 200,
             deadline: 205,
@@ -26749,7 +26750,6 @@ mod model_market_virtual {
                 now: at.point.daa_score,
             },
         };
-        let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
         let mut budget = PalwBondBudgetStateV1::new(0, &policy);
         let mut journal = Vec::new();
         let source = terms.reservation_key();

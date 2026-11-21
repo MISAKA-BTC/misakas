@@ -153,6 +153,21 @@ def check_exec_quote(log, artifact):
                 native_funding_debit=0)
 
 
+def check_exec_budget(log, artifact):
+    quote = check_exec_quote(log, artifact)
+    peers, (close, parent_root, consent, collateral, rate, liability, reward, epoch, panel_release, bootstrap) = shared_rows(
+        log, r"MOE2 budget preview pid=(\d+) close=(\w+) parent_root=([0-9a-f]{128}) slot=9 consent=(\w+) "
+             r"collateral=(\d+) export_permille=(\d+) liability=(\d+) reward=(\d+) epoch=(\d+) panel_release=(\d+) bootstrap=(true|false) no_debit=true")
+    collateral, rate, liability, reward, epoch = map(int, (collateral, rate, liability, reward, epoch))
+    if (sorted(map(int, peers)) != quote["pids"] or close != quote["close"] or parent_root == quote["state_root"]
+            or int(panel_release) <= quote["quote_deadline"] or consent != quote["quote_consent"] or reward != quote["quote_max_reward"] or not 0 < rate <= 510
+            or liability != (1000 * reward + rate - 1) // rate or liability > collateral):
+        raise ValueError("close, signed offer, export ceiling, or minimum collateral mismatch")
+    return dict(**quote, close_parent_state_root=parent_root, collateral_sompi=collateral, export_cap_permille=rate,
+                minimum_liability_sompi=liability, model_allocation_epoch=epoch, allocation_bootstrap=(bootstrap == "true"),
+                earliest_panel_release_daa=int(panel_release))
+
+
 def check_model_audit(log, artifact):
     registered = check_pending_freeze(log, artifact)
     plans, plan = shared_rows(
@@ -234,6 +249,7 @@ if __name__ == "__main__":
     parser.add_argument("class_check",type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
+    mode.add_argument("--exec-budget", action="store_true", help="check the signed offer and native monetary capacity at its close")
     mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
@@ -241,6 +257,8 @@ if __name__ == "__main__":
     verify = check
     if args.certified_history:
         verify = check_certified_history
+    elif args.exec_budget:
+        verify = check_exec_budget
     elif args.exec_quote:
         verify = check_exec_quote
     elif args.model_audit:

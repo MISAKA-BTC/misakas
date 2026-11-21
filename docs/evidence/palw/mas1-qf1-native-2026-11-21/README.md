@@ -355,3 +355,17 @@ python -B "$p/check_residual_scale.py" --decode-reference --reference-limit 12 "
 ```sh
 python -B "$p/check_residual_scale.py" --cross-input-scale --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
 ```
+
+### EXEC の締切ブロックで確認した MOE2 の予算枠
+
+3つの native DB で同じ EXEC close を再読し、ヘッダーが認証する選択親状態から、署名済み slot 9 の報酬上限を賄うための担保を試算した。資金提供 bond の担保は93,906,321,001,040 sompi、予算の export 上限は担保の250‰。上限報酬16,000,000,000 sompi の全額を払い出すには64,000,000,000 sompi が必要で、1 sompi 減らすと足りない。epoch 0 のモデル配分は bootstrap 中だった。判定は、凍結集合の見積もり付き slot を順番に予算台帳の複製へ予約し、元の台帳に対する引き落としは0だった。今回の集合には見積もり付き slot が1件あった。[締切ブロックと3ピアの観測](registered-exec-budget.txt)・[署名参照と担保計算の独立照合](registered-exec-budget.json)
+
+見積もりの期限は DAA 6 で、同じ round の PANEL 公開開始は DAA 27。元の条件のまま、この見積もりで PANEL 後の決済を行うことはできない。今回の観測は資金面だけの試算で、採掘資格・finality・当選・支払は成立していない。
+
+決済時には、予約キーと対象 bond・model に加え、署名した policy が実行位置の予算台帳と一致することを確かめる。隔離試験では他の予約情報を保ったまま policy が異なる場合に、帳簿、予算行、journal が引き落とし前の値を保った。正規の試験予約は同じ実行ファイルの3ピアで決済・再編成・再生が通った。コアの関連9試験には無期限の MOE2 条件の拒否も含む。[決済と巻き戻しの観測・コア試験](budget-policy-regressions.txt)
+
+再現には前節の `private_registered_tb1_pending_freeze` と `private_moe2_three_process_registration` を用いる。独立照合は次のコマンドで行う。
+
+```sh
+python3 -B "$p/check_real_lifecycle.py" --exec-budget "$p/registered-exec-budget.txt" "$p/class-check.json"
+```
