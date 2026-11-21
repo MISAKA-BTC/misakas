@@ -1,9 +1,12 @@
 //! The RFC-0012 rig supplies its test-only mature work fact. Fork choice,
 //! executed headers, settlement generations and withdrawal readback are native.
-//! VSS outcomes, the two consumer roots and the original schedule are fixture inputs.
+//! VSS outcomes, allocated resources and the schedule are fixture inputs.
 //! Each native database resolves the closure from the same accepted close block.
 use super::*;
+#[path = "tb1_exec_input.rs"]
+mod exec_input;
 use kaspa_rpc_core::RpcRawBlock;
+use misaka_palw_remote::tb1_exposure::exec_input::{ExecInputBatch, REGISTRATION_DOMAIN, SignedExecInput};
 use misaka_palw_remote::tb1_exposure::publication::{NativePublicationGate, PublicationLimits, PublishedRelease, batch_commitment};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -165,7 +168,37 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         &dealers, &cut, 9, 2048,
     )
     .unwrap();
-    let closure = Tb1MiningClosure { round, qual_root: q.root(), consumer_set_root: [16; 64], policy_root: [17; 64] };
+    let terms = exec_input::terms(parent);
+    let panel = Tb1MiningRound {
+        purpose: Tb1MiningPurpose::Panel,
+        logical_round: 3,
+        close_blue_score: round.close_blue_score + 20,
+        release_from_daa: 20,
+        deadline_exclusive_daa: 30,
+        ..round
+    };
+    let owner = ml_dsa_65::generate_key_pair([82; 32]);
+    let key = terms.registration_key(&round, &panel, &owner.verification_key, 16).unwrap();
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let owner_sig = if let Some(path) = std::env::var_os(READER_DIR) {
+        let bytes = std::fs::read(Path::new(&path).join("input.sig")).unwrap();
+        ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap())
+    } else {
+        let sig = ml_dsa_65::sign(&owner.signing_key, &key, REGISTRATION_DOMAIN, [83; 32]).unwrap();
+        std::fs::write(dir.path().join("input.sig"), sig.as_slice()).unwrap();
+        sig
+    };
+    let entry =
+        SignedExecInput { terms: &terms, owner: &owner.verification_key, signature: &owner_sig, slot: 7, funding_ref: [23; 64] };
+    let changed = misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms { job_tokens: &[42, 108, 18], ..terms };
+    assert!(ExecInputBatch::from_signed(&round, &panel, &[SignedExecInput { terms: &changed, ..entry }], 4, 16).is_err());
+    assert!(
+        ExecInputBatch::from_signed(&round, &panel, &[SignedExecInput { slot: 8, ..entry }, SignedExecInput { ..entry }], 4, 16)
+            .is_err()
+    );
+    let inputs = ExecInputBatch::from_signed(&round, &panel, &[entry], 4, 16).unwrap();
+    let closure = Tb1MiningClosure { round, qual_root: q.root(), consumer_set_root: inputs.root(), policy_root: terms.policy };
+
     let freeze_id = closure.commitment(parent);
     let child_dir = std::env::var_os(READER_DIR).map(std::path::PathBuf::from);
     let slot = if child_dir.is_some() { std::env::var(READER_SLOT).unwrap().parse::<usize>().unwrap() } else { 0 };
@@ -206,10 +239,10 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert_eq!(before.generation, tip.hash());
     assert_eq!(before.finalized, Some(anchor));
     let context = Tb1ReleaseContext { round_ref, qual_root: q.root(), freeze_id };
-    let dir = kaspa_database::utils::get_kaspa_tempdir();
     let api = node.api().as_ref();
     let freeze = Tb1HolderFreeze::resolve(api, anchor, &closure, &q).unwrap();
     let gate = NativePublicationGate::observe(api, anchor, &closure, &q).unwrap();
+    let jobs = inputs.observe(api, anchor, &closure, &q).unwrap();
     let mut other_chain = round.chain_id;
     other_chain[0] ^= 1;
     assert!(!api.palw_coinbase_commits_to(other_chain, anchor, &freeze_id).unwrap());
@@ -291,15 +324,38 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         certificate.hash(),
         faster_hex::hex_string(seed.as_bytes())
     );
-    if let Some(mut socket) = parent_socket {
+    let request = jobs.derive(api, 7, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+    assert_eq!(request.registration_key(), &key);
+    assert_eq!(request.tokens().len(), 38);
+    assert_eq!(&request.tokens()[35..], terms.job_tokens);
+    assert!(jobs.derive(api, 8, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
+    let ids = request.tokens().to_vec();
+    eprintln!(
+        "TB1 EXEC input pid {} slot 7 attempt {} tokens {:?}",
+        std::process::id(),
+        faster_hex::hex_string(request.attempt()),
+        ids
+    );
+    if let Some(socket) = parent_socket.as_mut() {
         socket.write_all(seed.as_bytes()).unwrap();
+    }
+    let execution = std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT").map(|path| exec_input::infer(api, Path::new(&path), &request));
+    if let Some(run) = &execution {
+        eprintln!("TB1 TIR inference pid {} {}", std::process::id(), serde_json::to_string(run).unwrap());
+    }
+    if let Some(path) = child_dir {
+        serde_json::to_writer(File::create_new(path.join(format!("result-{slot}.json"))).unwrap(), &(ids, execution)).unwrap();
         return;
     }
-    for (child, socket) in &mut peers {
+    for (idx, (child, socket)) in peers.iter_mut().enumerate() {
         let mut received = [0; 32];
         socket.read_exact(&mut received).unwrap();
         assert_eq!(&received, seed.as_bytes());
         assert!(child.wait().unwrap().success());
+        let peer: (Vec<u32>, Option<exec_input::Inference>) =
+            serde_json::from_reader(File::open(dir.path().join(format!("result-{}.json", idx + 1))).unwrap()).unwrap();
+        assert_eq!(peer.0, ids);
+        assert_eq!(peer.1, execution);
     }
     let later = extend(&mut node, &[6]).await.remove(0);
     let api = node.api().as_ref();
@@ -315,6 +371,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert_eq!(after.generation, alternative.last().unwrap().hash());
     assert!(node.api().is_chain_ancestor_of(anchor, after.generation).unwrap());
     assert_eq!(after.finalized, None);
+    assert!(request.check_live(node.api().as_ref()).is_err());
     assert!(gate.read_seed(node.api().as_ref(), batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
     assert_eq!(readiness_of(&node).finalized.withdrawn_from, Some(anchor));
     assert!(journal.observe_branch(node.api().as_ref()).unwrap_err().to_string().contains("halted"));

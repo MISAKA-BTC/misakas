@@ -22,6 +22,16 @@ VSS の終了記録、資源予約参照、consumer と policy の内容、成�
 
 初回は追加の heartbeat が native の時刻上限を超え、公開ブロックの受理前に試験が止まった。記録した実行には、この隔離チェーンで既に有効な attempt ブロック2個を使った。新規 FOW1 の仕事からは独立している。consumer と policy、VSS と成熟済み仕事には前節と同じ試験入力を使用した。この reader は安定化を現地で観測したプロセス向けで、後から同期したノードの過去の finality、公開データのネットワーク配信、FOW1 の推論や合意 credit は未検証。隔離版の位置表現は DAA が32ビット、blue score が30ビットの範囲で動作し、範囲外の値を拒否する。
 
+### 署名した新しい仕事の入力から実モデル推論まで
+
+ローカルの新規仕事について owner が登録文脈に署名した。登録文脈は EXEC と PANEL の RoundRef、モデル・class・tokenizer、job token の root、nonce、受益者、target、会計・資料 policy の参照、実行量の上限と元期限を含む。試験ではこの1件に slot 7 を割り当てた。署名を検査した登録集合と資金予約参照を EXEC 凍結ブロックに結び付けてから holder が share を公開した。元の署名のまま job token を変更した入力と、同じ登録に2個目の slot を割り当てた集合は拒否された。
+
+3つのプロセスはそれぞれ証明書を選択鎖から読み、登録文脈と EXEC seed から試行 ID を導出した。入力の先頭には BOS・POW、試行 ID の各バイトを固定表で変換した32個の token、SEP を置き、元の job token 3個を続けた。3者とも同じ38個の token を TIR エンジンに渡した。各プロセスが元の Studio と同じモデルファイルを開き、inventory root・class・tokenizer・語彙数・context 上限を照合した。モデルは1個の token ID `76` を生成した。3者の input・execution・trace・output root と、列挙して確認した191,967枚の trace leaf の件数が一致した。推論の開始時と結果を返す直前に、元の証明書の選択鎖所属、finality と期限を再読する。試験の後半で finality が撤回されると、既に導出した入力も使用可否の再確認で拒否された。[3プロセスの入力・生成値・root・finality 撤回ログ](registered-exec-inference.txt)
+
+資金予約、難易度・会計 policy、VSS、成熟済み仕事は試験入力である。今回認証したのは凍結ブロックに含めた署名済み入力集合で、native の資金拘束と全登録の収集、独立した PANEL round の PREPARED・抽選、FOW1 の採掘出力 z と費用条件、Court・Final・受賞・決済は未検証。今回の生成値は TIR の通常の回答 y。元の Studio claim の署名・権利は新しい仕事に使用していない。
+
+実モデルを伴う再現には、SHA-256 が `48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90` の `model.palwtir`（180,336,320バイト）を所持する環境で、下記の native 試験を実行する際に `MISAKA_PRIVATE_TB1_TIR_ARTIFACT` へそのパスを指定する。変数を省略した通常の試験では、登録・入力の導出・分岐後の停止までを検査する。
+
 ## MOE2
 
 隔離した状態遷移は、追加モデルの登録ブロックの delta に class と初期市場を一緒に書き込む。分類には登録時点の native catalog、登録者、モデル ID、artifact root を使う。core の登録では市場行を作らない。決済帳簿は delta の旧値・新値とブロック後の市場を照合する。登録を巻き戻すと市場も同じ遷移で取り消される。

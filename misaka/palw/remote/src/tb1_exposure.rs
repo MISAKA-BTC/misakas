@@ -16,6 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod exec_input;
 pub mod publication;
 
 const MAGIC: &[u8; 8] = b"TB1EXP01";
