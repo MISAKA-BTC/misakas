@@ -5,6 +5,8 @@
 use super::*;
 #[path = "tb1_exec_input.rs"]
 mod exec_input;
+#[path = "tb1_qf1_embedding_fixture.rs"]
+mod embedding;
 #[path = "tb1_qf1_prediction_fixture.rs"]
 mod prediction;
 use kaspa_rpc_core::RpcRawBlock;
@@ -581,6 +583,9 @@ async fn run(stable: bool) {
         let line =
             format!("QF1 input pid={} attempt={} tokens={:?}\n", std::process::id(), faster_hex::hex_string(r.attempt()), r.tokens());
         std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
+        if let Some(path) = std::env::var_os("MISAKA_PRIVATE_QF1_EMBEDDING") {
+            embedding::check_input(Path::new(&path), r.tokens());
+        }
         let bound = instance.as_ref().unwrap();
         let (artifact, norm) = exercise.as_ref().unwrap();
         let substituted = prediction::bind_scale(artifact, *norm, b"other scale");

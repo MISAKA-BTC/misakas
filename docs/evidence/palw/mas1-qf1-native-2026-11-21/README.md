@@ -121,3 +121,11 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_output_head.py "$
 上流の固定リビジョンに対して、今度は5 shard の全16,381,516,776バイトを読み、各ファイル全体の SHA-256 が上流の LFS digest と一致することを確認した。399テンソルそれぞれについてデータの型・形状・長さ・offset と実データの SHA-256 を記録した。145本の norm gain は別途取り出し、保存した全616,448バイトをこの記録と照合した。[上流全399テンソルの実データの SHA-256](upstream-payloads.json)
 
 `check_qwen_weights.py` は5 shard 全てをストリームで読み、検査が揃ってから結果を出力する。`--local` で指定したディレクトリにある shard はそこから読み、残りは固定リビジョンから取得する。`--vectors` には gain の保存先として新しいディレクトリを指定できる。サンプル実行は `python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_qwen_weights.py`。ここまでで照合した全体は上流 BF16 の入力である。QF1 の整数化済み36層・scale・table・正規 program とその評価は個別に追跡する。
+
+## EXEC 入力の実 Qwen 埋め込み
+
+固定した上流 revision の入力 embedding 全体（151,936 行、1,244,659,712 バイト）を読み、SHA-256 を [399 テンソルの台帳](upstream-payloads.json)と照合した。隔離ジョブのテンプレート、質問、全16種類の challenge 桁で使う48行を切り出し、その集合のハッシュを試験に固定した。各行を既存の TIR lowerer で量子化し、全行共通の隔離試験用 residual scale `1/32768` で i16 に丸めた。
+
+同じバイナリの3ピアが、その回の証明書から得た EXEC 入力111位置について、各位置の BF16 の4096要素と整数化後の4096要素を token 順に照合した。3ピアで双方のハッシュが一致し、独立の Python 有理数計算が両方を再現した。行の改変と未収録 token の読取りは拒否された。同じ実行で従来の試験重みに対する Panel と Stop Court の再検算も通った。実重みを使ったこの照合の終点は入力 embedding で、36層の実推論、署名した Original の実重みへの切替、採掘資格は未完である。[バイナリ、各ピアの入力と結果](embedding-run.txt)
+
+再現時はこのディレクトリの `check_embedding.py /tmp/qf1-embedding.rows` で行集合を作成する。既存の `private_tb1_stable_panel` の環境に `MISAKA_PRIVATE_QF1_EMBEDDING=/tmp/qf1-embedding.rows` を追加し、出力を保存する。`check_embedding.py /tmp/qf1-embedding.rows --check <ログ>` で独立照合できる。
