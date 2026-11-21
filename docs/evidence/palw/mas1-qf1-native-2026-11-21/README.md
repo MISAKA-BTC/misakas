@@ -854,3 +854,16 @@ out=$(mktemp -d)
 tar -xf "$p/fresh-holder-0-release.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_holder_release.py" "$out" --holder 0 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-holder-0-release.json"
 ```
+
+### Studio 登録市場の永久 LP と会計記録の再計算
+
+監査 holder 0 の署名試験と同じバイナリ `8b08e725…` で、別の隔離3プロセスが Studio モデルを登録し、同じ精算帳簿（1,789 bytes）と巻き戻し記録（1,219 bytes）を保存した。照合器は3者の checkpoint root と帳簿の Borsh bytes を結び、登録直後の仮想 reserve・Position 在庫と元の予約条件から両方の市場取引を再計算する。対象は隔離用に成熟条件を与えた160単位の予約である。
+
+買付48で2 Position を取得し、永久 LP へ32と1 Position を入れ、余剰1 Position を burn した。残り80は miner 64、Panel 16。登録市場の実 reserve は80増加し、元の seed・owner 手数料は同額だった。同じ帳簿の claim に、LP receipt、モデル ID と artifact root の永久 LP 履歴、元の巻き戻し記録が結び付いた。新規 FOW1 の受賞に起因する支払はこの試験の対象外である。[3ピアの帳簿・巻き戻し記録・ログ](studio-moe2-book.tar.zst)・[再計算結果](studio-moe2-book.json)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+tar -xf "$p/studio-moe2-book.tar.zst" -C "$out"
+python3 -B "$p/check_studio_moe2_book.py" "$out" | cmp - "$p/studio-moe2-book.json"
+```
