@@ -1,0 +1,21 @@
+{
+  "original": "dba700abe265cf04f9d111c5c97335aa538228866d2a6191ca8315c3ade7006f396266c7a66accf37705e46cc85e4cf5a74428b09886946f1546b2e1d61d38a7",
+  "case": "cd0cb70d087fff3f12f871b36988c347288937ee1ddb1892f46adb900267d33eb4160759bf671e225cd556c6137bd5068c9187edf8dcc7918bff5dc27981b403",
+  "verdict": "9d0ab5c87d83d4a48f9e52d140762b5bc412f721eafdd6b1e9b26f0958557fc6b5148af06ae8a2d0a84afa034b72b1e8774ea06444677c22116ac4885980ca82",
+  "result": "ChallengeNotEstablished",
+  "token": 151643,
+  "answer_index": 1,
+  "stop_index": 270097,
+  "processed_positions": 112,
+  "witness_bytes": 1302,
+  "siblings": [
+    1,
+    19
+  ],
+  "pids": [
+    41105,
+    41131,
+    41132
+  ],
+  "binary_sha256": "d9fdc55e2873dbcf4c4104584db2ee3a5bb2dae584830c087e58c8890e320482"
+}

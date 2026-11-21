@@ -76,11 +76,23 @@ PANEL 用には、準備ブロックの前に EXEC と独立した dealer 多項
 
 3つの検証者プロセスは各自の ML-DSA-65 鍵を生成し、公開鍵だけを交換する。PANEL の対象を固定するブロックは、同じ署名済み Original、候補3名の ID、試験用重み 1・2・4、既存の整数重み付き抽選、2席すべての完全再実行義務を束縛する。選出された2者は公開済みの入力から試験用 TIR を再実行し、四つの root、回答長、Ticket と登録者署名を照合してから署名した。残り1者の署名要求、他の席の署名、欠落・重複した返答は拒否された。全3者が後続の選択鎖ブロックから2署名の受領を確認した。
 
-[3プロセスの記録](panel-run.txt)と[独立照合の結果](panel-check.json)には、両 seed、凍結・安定化・証明書・返答ブロック、選出者を収録した。独立照合は Python で全 trace を再構成し、元の Original、凍結時の候補重み、PANEL seed から全候補の抽選順位を計算する。実 Qwen3-8B の採掘資格、正規の資金予約、Court、Final、受賞、決済は未確認である。
+[3プロセスの記録](panel-run.txt)と[独立照合の結果](panel-check.json)には、両 seed、凍結・安定化・証明書・返答ブロック、選出者を収録した。独立照合は Python で全 trace を再構成し、元の Original、凍結時の候補重み、PANEL seed から全候補の抽選順位を計算する。Court のうち最後の回答と Stop の関係は次節で検証した。実 Qwen3-8B の採掘資格、正規の資金予約、claim 全体の終端、Final、受賞、決済は未確認である。
 
 ```sh
 # 前節と同じ tokenizer・ビルド環境を指定して起動する
 cargo +1.93.0 test --locked --offline -p kaspa-consensus --features evm --lib private_tb1_stable_panel -- --ignored --nocapture
 python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_panel.py \
+  docs/evidence/palw/mas1-qf1-native-2026-11-21/panel-run.txt
+```
+
+### 最後の回答 token と Stop を結ぶ局所 Court
+
+選出者の返答が受理された後、同じ署名済み Original に「最後の回答と停止記録が一致しない」という異議を提出する試験を追加した。資料提供側が最後の回答と Stop の Merkle path を配る。各ピアの裁定処理はモデルの再実行を必要としない。登録者署名と選択鎖の Original 受領を確認し、回答の index を T−1、Stop の index を trace leaf 数−Readout chunk 数−2 と計算する。根は元の Y と TRACE を使う。長さ、処理位置数、最終 token、EOS 優先の停止理由を照合し、独立した後続の case・verdict ブロックの順序と本文を読む。
+
+この Original は正しく EOS で停止したため、異議の結果は `ChallengeNotEstablished`。署名済みの根と整合しない資料は裁定前に拒否する。別の境界試験では、認証された値自体が誤っている場合を `ComputationRefuted` と判定する。対象は最後の回答と Stop の関係であり、途中の EOS・全 logits の選択・全層の算術、資料欠落時の制裁、すべての case の期限・会計・Final にはそれぞれの検証が必要になる。[開示サイズ・元の index・裁定記録](stop-check.json)
+
+```sh
+cargo +1.93.0 test --locked --offline -p misaka-palw-remote --features private-tb1-tir --lib authenticated_stop_distinguishes_invalid_witness_from_committed_contradiction
+python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_stop.py \
   docs/evidence/palw/mas1-qf1-native-2026-11-21/panel-run.txt
 ```

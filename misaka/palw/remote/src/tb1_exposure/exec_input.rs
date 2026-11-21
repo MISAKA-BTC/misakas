@@ -570,3 +570,6 @@ pub use original::{LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody};
 
 #[cfg(feature = "private-tb1-tir")]
 pub mod panel_cut;
+
+#[cfg(feature = "private-tb1-tir")]
+pub mod stop_case;

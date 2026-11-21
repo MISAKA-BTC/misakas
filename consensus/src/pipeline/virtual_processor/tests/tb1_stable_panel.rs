@@ -159,6 +159,7 @@ pub(super) async fn release(
     id: &[u8; 64],
     cut: &LocalPanelCut,
     close_parent: Hash64,
+    original_receipt: Hash64,
     close: &Block,
     release_from_daa: u64,
     setup: &Provision,
@@ -332,5 +333,41 @@ pub(super) async fn release(
         draw.selected(),
         original,
         accepted.hash()
+    );
+    use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};
+    let wire = if let Some(s) = parent {
+        receive::<Vec<u8>>(s)
+    } else {
+        let disclosure = input
+            .replay_qf1_original(node.api().as_ref(), instance, body.counts[1].try_into().unwrap(), Some(body.stop_index().unwrap()))
+            .unwrap();
+        disclosure.verify(node.api().as_ref(), body, owner).unwrap();
+        let wire = disclosure.stop_witness().unwrap().encode();
+        for (_, s) in peers.iter_mut() {
+            send(s, &wire);
+        }
+        wire
+    };
+    let api = node.api().as_ref();
+    let witness = StopWitness::decode(body, &wire).unwrap();
+    let mut changed = witness.clone();
+    changed.stop[17] ^= 1;
+    assert!(input.prepare_stop_case(api, original_receipt, body, owner, &changed).is_err());
+    let case = input.prepare_stop_case(api, original_receipt, body, owner, &witness).unwrap();
+    assert!(case.verdict_marker(api, accepted.hash()).is_err());
+    let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 last answer / Stop case").await;
+    let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
+    assert!(case.read_verdict(node.api().as_ref(), opened.hash(), opened.hash()).is_err());
+    let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 last answer / Stop verdict").await;
+    let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
+    assert_eq!(outcome, StopOutcome::ChallengeNotEstablished);
+    peer_log!(
+        "TB1 Court Stop pid={} original={} case={} verdict={} result={:?} witness={}",
+        std::process::id(),
+        original,
+        opened.hash(),
+        verdict.hash(),
+        outcome,
+        faster_hex::hex_string(&wire)
     );
 }

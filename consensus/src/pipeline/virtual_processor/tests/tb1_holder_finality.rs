@@ -776,6 +776,7 @@ async fn run(stable: bool) {
                 &panel_id,
                 &cut,
                 close_parent,
+                block.hash(),
                 &closed,
                 panel.release_from_daa,
                 setup,
