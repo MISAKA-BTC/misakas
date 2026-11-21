@@ -487,3 +487,17 @@ cmp "$out/scales.section" "$out/generated.section"
 "$ex" export-tiles "$parent" "$out/scales.section" | python3 -B "$p/check_qf1_full_tiles.py" "$out/scales.section"
 python3 -B "$p/check_real_lifecycle.py" "$p/qf1-native-tile-registered-freeze.txt" "$p/qf1-native-tile-artifacts.json" --pending-freeze
 ```
+
+## 修正後の QF1 の署名済み Original と、旧規則の 8K の実抽選
+
+単一ファイル class `b1da96d1…` の非報酬 EXEC で、生成上限16を登録時に署名し、隔離3プロセスで同じ入力を実行した。回答は `2 + 2 = 4.` と EOS の9 tokens、prefill を含む処理位置は119。独立な PANEL seed で選んだ2名が同じ Original `da14cf2d…` を完全再実行して署名した。3ピアとも最後の回答と Stop の局所証拠 1,622 bytes を検査し、異議不成立となった。この試験は private の成熟済み仕事 fixture で EXEC/PANEL の release を進める。報酬付きの Final・Gate C を測定した試験ではない。[3ピア生ログ](qf1-native-tile-three-peer.txt)・[独立照合](qf1-native-tile-lifecycle.json)
+
+旧規則の Qwen2.5 A16 8K は上記と別の試行である。更新済みの担当席を置いた署名済み監査枝上で最初の実行を行い、claim `8748971c…` を native が受理した。生ヘッダから再計算した block は `3250abac…`（DAA 6,491）、class ticket は `cb1449dab7180d9863dae3a062f54dea`。このテンプレートの native target は `ffffffffffffffffffffffffffffffff`。下記の検査では、登録済み inventory、親の state、header challenge、execution anchor、claim ID、ticket を元 bytes に結び付ける。保管資料は 2,409,131 bytes。署名・算術の検査は native の担当である。[受理記録](genesis-draw-receipt.txt)・[生ヘッダを含むブロック](genesis-draw-block.json.zst)・[保管資料](genesis-draw-material.bin.zst)・[照合結果](genesis-draw.json)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+python3 -B "$p/check_real_lifecycle.py" "$p/qf1-native-tile-three-peer.txt" "$p/qf1-native-tile-artifacts.json" --decode-limit 16
+zstd -dc "$p/genesis-draw-block.json.zst" > "$out/winning.json"
+zstd -dc "$p/genesis-draw-material.bin.zst" > "$out/capture.bin"
+python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p/genesis-draw-receipt.txt"
+```

@@ -1,0 +1,4 @@
+test_binary_sha256=9961bfa4a2da1423b34a8ad444d57fc2184091f731c84bbab51e2d10bb262a92
+[real-attempt] unchanged class target ffffffffffffffffffffffffffffffff, pwu 1388926972416, witness chunks 0
+[real-attempt] completed draw 1 after 2135.408376708s, ticket cb1449dab7180d9863dae3a062f54dea
+[real-attempt] 1 executions before accepted claim 8748971cd35bc4b7c1fc3ce9825922672830f4491758f5c8667fdea0fab61dfbfa8d5f730854da50c0c5985bc0b8790765255bc9014807df13c631e5b1069b40
