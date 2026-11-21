@@ -899,3 +899,15 @@ for file in fresh-holder-0-release fresh-holder-1-release fresh-audit-publicatio
 done
 python3 -B "$p/check_fresh_audit_seed.py" "$out" --publisher-only --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-audit-publication.json"
 ```
+
+### 停止位置を予測して全 trace を生成した費用
+
+6件の署名済み Original の先頭を通常どおり検証し、観測した回答長9を残り5件すべてに使った。予測経路でも greedy 選択と Stop は毎回実行し、回答列・数値 Readout・四つの Root・Ticket を元の値と照合した。基準経路は停止位置を実行で確定してから改めて trace を作る。両経路の実行順を組ごとに逆転した。5件の基準経路合計は396.068秒、予測経路合計は205.998秒で、5件すべてで同じ正規 Ticket を再現した。モデルの準備と最初の1件を含む合計はそれぞれ506.340秒、316.270秒。対照として最初の対象で予測を8に変えると trace の葉数が合わず、失敗分と元の検証を合わせて120.020秒かかった。これは非報酬の再生で、各経路・各対象を1回計時した。元の回答長が異なる仕事での成功頻度は未測定である。[計測結果](g-cost-predicted-length.json)・[生ログ](g-cost-predicted-length-run.jsonl)・[事前の比較手順・環境](g-cost-predicted-length-environment.json)
+
+共通 prefix 試験と同じ `parent`、scale section、署名資料から作った `plan.json` を使う。上記のビルド設定と3スレッドで次を実行する。
+
+```sh
+"$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --predict-length "$parent" "$out/scales.section" "$out/plan.json" > "$out/length-run.jsonl"
+python3 -B "$p/check_g_cost_predicted_length.py" "$out/length-run.jsonl"
+python3 -B "$p/check_g_cost_predicted_length.py" "$p/g-cost-predicted-length-run.jsonl" | cmp - "$p/g-cost-predicted-length.json"
+```

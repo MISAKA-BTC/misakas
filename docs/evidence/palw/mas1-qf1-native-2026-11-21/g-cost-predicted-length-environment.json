@@ -1,0 +1,41 @@
+{
+  "hw.model": "Mac13,1",
+  "machdep.cpu.brand_string": "Apple M1 Max",
+  "hw.memsize": "34359738368",
+  "hw.logicalcpu": "10",
+  "os": "26.7.1",
+  "architecture": "arm64",
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "rayon_threads": 3,
+  "cost_unit": "elapsed wall-clock microseconds, one warmed process, one sample per route and target",
+  "profile": "dev",
+  "tir_exec_opt_level": 3,
+  "binary_sha256": "8a6cf67445f2563e2556167f8beee3bd0ba4d35a76485defa5a73909ba95e574",
+  "plan_sha256": "0a0dda2427717e37ef987495e02b4f4d4599e15c9600e7e9ad5c0c117752e62a",
+  "method_sha256": "7eb75583c1495e17b1bef993d07a83f1f895a35cc1cfb1cabed9fe3cc842984c",
+  "benchmark_source_commit": "956337f764c6a682280cf38c9380d0e4a3d39b05",
+  "worktree_head_when_build_started": "be1d034d72125f25a89b5229a9ab462d0728df35",
+  "benchmark_source_sha256": {
+    "misaka/palw/sdk/examples/qf1-paired-cost.rs": "30f318bec4b93feb57e71c722dd212d78003ea8487f1c463f49f876d35a4c941",
+    "misaka/palw/tir/exec/src/node/qf1/cost_review.rs": "a5ebefbe9005868fa4df847b8a355f80139470aa6eef21d7c9a716fd447381c9"
+  },
+  "method": {
+    "route": "First verify the calibration Original by discovering stop and building its trace. Fix its token count for every later prediction.",
+    "reference": "Discover stop from scratch and then independently build a complete trace for each target.",
+    "candidate": "Build a full greedy trace once using the fixed predicted length. On a mismatch include the entire attempt and the ordinary reference retry.",
+    "setup": "One warmed model in one process. Report shared model setup and the first calibration separately and with the totals.",
+    "order": [
+      "candidate-reference",
+      "reference-candidate",
+      "candidate-reference",
+      "reference-candidate",
+      "candidate-reference"
+    ],
+    "control": "After the main comparisons use calibration length minus one for the first target and include the independent retry.",
+    "cost_unit": "elapsed wall clock microseconds, one comparison per target, three Rayon threads",
+    "eligibility": "historical nonrewarding workload, no adopted cutoff or uncertainty procedure"
+  },
+  "registered_scales_sha256": "b7033ed73613fe58b1d96948564454ceaf47bb678bab603f0277f48e14988f55",
+  "process_elapsed_seconds": 832.86,
+  "maximum_resident_set_bytes": 17765318656
+}

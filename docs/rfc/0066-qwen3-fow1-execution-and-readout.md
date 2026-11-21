@@ -360,6 +360,10 @@ cache keyは少なくともnumeric artifact/program/profile、実入力prefix全
 
 同じ6試行を3組に分け、各組で共通prefixの数値計算を共有した場合は、全試行の回答・数値Readout・四Root・Ticketが独立実行と一致した。3組の合計経過時間は、独立実行475.835秒、共有実行447.899秒で、5.87%短縮した。どちらの計測にも生成の停止位置を求める実行と、元のTicketに照合するtrace生成の2回が含まれる。初回Ticket照会の費用を判定するには、停止位置の予測で最初の実行を省ける場合も調べ、予測を外した試行の費用も計上する。各組1回ずつの測定であり、採択済みの費用閾値と誤差範囲は未設定のため、G-COSTはUNKNOWNを維持する。[測定結果と対象入力](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-shared-prefix.json)
 
+2026-11-22に同じ6件で停止位置の予測を実測した。最初の1件を完全実行して回答長9を固定した。残り5件では、予測した長さで全traceを1回生成すると、回答・数値Readout・四Root・Ticketがすべて一致した。5件合計は停止位置を求めてからtraceを生成する基準実行が396.068秒、予測を使う実行が205.998秒（47.99%短縮）。最初の1件とモデル準備を両経路に算入した6件合計は、それぞれ506.340秒と316.270秒だった。同じ対象で長さ8を指定した対照ではtraceが拒否され、完全な再実行でTicketを再現するまで120.020秒かかった。
+
+停止位置を調べるための追加実行を、正規Ticketの生成に必ず必要な仕事として計上しない。次の費用検査では予測と再試行を経路に含め、異なる仕事と停止位置で測る。この5件は同じ回答を返した過去の標本で、一般の仕事における予測成功率と採択済み費用閾値は未確定である。QF1のG-COSTはUNKNOWNを維持する。[元のTicketと計時の照合](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-predicted-length.json)
+
 ## 10. MAS1登録・有用性・停止への接続
 
 ### 10.1 有限の自動検査
@@ -419,6 +423,8 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 同梱の小規模Python参照の対象は、QF1-04/05/07の論理codecの一部と否定例である。
 
 2026-11-21の隔離・非報酬試験では、同一バイナリの3ピアでQF1-10の3ケースを個別に確認した。正常時は選出2席がQwen3-8Bの整数実行を再現して承認した。署名済みReadoutとEndが矛盾する場合は追加質問を経ずに局所裁定した。1席の資料が欠けた場合は承認が1件にとどまり、元期限で新規受付が終了した。資料義務違反の裁定、合意状態での未検証終了、Final・決済を含む一貫検証は残る。これらの試験によるG-COST判定は行わない。[正常時](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-undisputed-replay.json)・[Endの直接裁定](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-replay-deadline-refuted.json)・[資料不足と元期限](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-missing-replay-material.json)
+
+2026-11-22の隔離試験では、登録済みQwen3候補の非報酬MODEL_AUDITで、3 holderが元の監査closeに署名した。3件の公開行から復元したseedと、固定した1候補・2ケースのchallengeは、certificateを受理したpeerの結果と一致した。ここで確認したのは監査の抽選までである。PracticalSuiteの採点、新規採掘資格、受賞は引き続き未確認である。[署名者・certificate・照合結果](../evidence/palw/mas1-qf1-native-2026-11-21/fresh-audit-publication.json)
 
 有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、G-COLLの適合定理、G-COSTの反復費用検査、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
 
