@@ -86,6 +86,44 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
     );
     let write = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_WRITE");
     let read = std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ");
+    if let Some(path) = std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_READ") {
+        assert!(write.is_none() && read.is_none(), "cold suffix inspection must not mine or attest");
+        let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
+        assert_eq!((branch.base, branch.claim), (tip, result.claim));
+        assert!(!branch.blocks.is_empty());
+        for raw in &branch.blocks {
+            genesis_seats::replay(node, raw).await;
+        }
+        let (end, state) = node.chain.tip_state();
+        assert_eq!(end, branch.tip);
+        let claim = state.claim(&result.claim).unwrap();
+        assert_eq!(claim.accepted_block, tip);
+        use kaspa_consensus_core::palw_security_certification_v1::*;
+        let route = state.kernel_route_state_v1().unwrap();
+        let row: PalwClaimCertificationRowV1 = route
+            .aux_row(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_claim_key_v1(&palw_certification_id_v1(&result.claim)))
+            .unwrap();
+        let network: PalwCertificationNetworkRowV1 =
+            route.aux_row(PALW_SECURITY_CERTIFICATION_TABLE_V1, &certification_network_key_v1()).unwrap_or_default();
+        let daa = node.chain.daa_of(end);
+        let anchor = state.round_seed_anchor().map(|a| (a.span, a.block));
+        let policy = node.chain.bundle.state.rfc0018_v1().unwrap().certification;
+        peer_log!(
+            "legacy genesis recovered {} {}",
+            std::process::id(),
+            serde_json::json!({
+                "claim":result.claim,"accepted":tip,"tip":end,"state":state.state_root(),"blocks":branch.blocks.len(),"daa":daa,
+                "phase":format!("{:?}",claim.phase),"final_daa":row.final_daa,"committed_span":row.committed_span,
+                "current_seed_anchor":anchor,"drawn_daa":row.drawn_daa,"draws":row.draws.len(),"approvals":row.positive_positions(),
+                "outcome":format!("{:?}",row.outcome),"epoch":network.epoch,"network_draws":network.draws,
+                "epoch_cap":policy.draws_per_epoch,
+                "anchor_delay_spans":policy.anchor_delay_spans,"certify_by_daa":row.committed_daa+policy.certify_by_daa,
+                "claim_local_settlement":node.chain.bundle.state.claim_local_settlement_active_at(claim.accepted_daa),
+                "replay":faster_hex::hex_string(&digest)
+            })
+        );
+        return;
+    }
     match (write, read) {
         (Some(path), None) => {
             let mut funds = genesis_seats::funding_change(node, renewed);
@@ -147,5 +185,70 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
         serde_json::json!({"claim":result.claim,"class":claim.class_id,"accepted":tip,"final_daa":row.final_daa,
             "certified_daa":row.outcome.unwrap().1,"drawn":row.draws.len(),"approvals":row.positive_positions(),
             "replay":faster_hex::hex_string(&digest),"tip":end,"state":state.state_root(),"frontier":state.safe_frontier()})
+    );
+}
+
+/// Export a retained private suffix from a read-only database copy. Readers
+/// validate the raw blocks from the signed job as usual; no state is imported.
+#[test]
+#[ignore = "requires a copied private consensus DB and the accepted native job"]
+fn export_genesis_claim_suffix() {
+    use crate::model::stores::{
+        block_transactions::{BlockTransactionsStoreReader, DbBlockTransactionsStore},
+        evm::{DbEvmPayloadStore, EvmPayloadStoreReader},
+        ghostdag::{DbGhostdagStore, GhostdagStoreReader},
+        headers::{DbHeadersStore, HeaderStoreReader},
+        palw_state_v2::DbPalwStateV2Store,
+    };
+    use kaspa_database::prelude::{CachePolicy::Empty, StoreResultExt};
+    use std::sync::Arc;
+    let files_limit = 32;
+    let guard = kaspa_utils::fd_budget::acquire_guard(files_limit).unwrap();
+    let mut options = rocksdb::Options::default();
+    options.set_max_open_files(files_limit);
+    let inner = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_for_read_only(
+        &options,
+        std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap(),
+        false,
+    )
+    .unwrap();
+    let db = Arc::new(kaspa_database::prelude::DB::new(inner, guard));
+    let held = std::path::PathBuf::from(std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_READ").unwrap());
+    let winning: WinningBlock = serde_json::from_reader(File::open(held.join("winning.json")).unwrap()).unwrap();
+    let base = Block::try_from(winning.raw).unwrap().hash();
+    let headers = DbHeadersStore::new(db.clone(), Empty, Empty);
+    let ghost = DbGhostdagStore::new(db.clone(), 0, Empty, Empty);
+    let bodies = DbBlockTransactionsStore::new(db.clone(), Empty);
+    let payloads = DbEvmPayloadStore::new(db.clone(), Empty);
+    let point = DbPalwStateV2Store::new(db, Empty).tip_record().unwrap().unwrap();
+    let start_daa = headers.get_header(base).unwrap().daa_score;
+    let mut at = point.block;
+    let mut blocks = Vec::new();
+    while at != base {
+        let header = headers.get_header(at).unwrap();
+        assert_eq!(kaspa_consensus_core::hashing::header::hash(&header), at);
+        assert!(header.daa_score >= start_daa);
+        let block = Block {
+            header,
+            transactions: bodies.get(at).unwrap(),
+            evm_payload: Arc::new(payloads.get(at).optional().unwrap().unwrap_or_default()),
+        };
+        let raw = RpcRawBlock::from(&block);
+        assert_eq!(Block::try_from(raw.clone()).unwrap().hash(), at);
+        blocks.push(raw);
+        at = ghost.get_selected_parent(at).unwrap();
+    }
+    blocks.reverse();
+    assert!(!blocks.is_empty());
+    let count = blocks.len();
+    let end_daa = blocks.last().unwrap().header.daa_score;
+    let mut writer =
+        std::io::BufWriter::new(File::create_new(std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_WRITE").unwrap()).unwrap());
+    serde_json::to_writer(&mut writer, &CertifiedBranch { base, claim: winning.claim, tip: point.block, blocks }).unwrap();
+    writer.flush().unwrap();
+    writer.get_ref().sync_all().unwrap();
+    eprintln!(
+        "exported accepted job={} base={} tip={} daa={} state={} blocks={}",
+        winning.claim, base, point.block, end_daa, point.state_root, count
     );
 }
