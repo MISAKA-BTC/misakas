@@ -19,6 +19,8 @@ mod genesis_seats;
 
 #[derive(Serialize, Deserialize)]
 struct Branch {
+    #[serde(default)]
+    base: Option<Hash64>,
     close: Hash64,
     registration: Hash64,
     assignment: Hash64,
@@ -297,12 +299,14 @@ pub(super) async fn exercise(
     assert_ne!(id, qwen);
     assert_ne!(id, node.bundle.base_class_id);
     assert!(node.chain.tip_state().1.class(&id).is_none());
+    let base = node.chain.sink();
     let original = node.chain.tip_state().1.state_root();
     let mut funding = parts.3[0].clone();
     let (registration, assignment, seasoned);
     if let Some(path) = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_READ") {
         let b: Branch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
         assert_eq!(b.close, close);
+        assert_eq!(b.base.unwrap_or(close), base);
         (registration, assignment, seasoned) = (b.registration, b.assignment, b.seasoned);
         let mut visited = 0;
         for raw in b.blocks {
@@ -364,8 +368,9 @@ pub(super) async fn exercise(
         if let Some(out) = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_WRITE") {
             let tip = node.chain.sink();
             let blocks = node.blocks_through(tip);
-            let i = blocks.iter().position(|b| b.hash() == close).unwrap();
+            let i = blocks.iter().position(|b| b.hash() == base).unwrap();
             let branch = Branch {
+                base: Some(base),
                 close,
                 registration,
                 assignment,

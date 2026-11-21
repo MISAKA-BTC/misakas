@@ -712,3 +712,33 @@ cargo +1.93.0 --config 'profile.dev.package.misaka-palw-tir-exec.opt-level=3' bu
 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" "$parent" "$out/scales.section" "$out/plan.json" > "$out/run.jsonl"
 python3 -B "$p/check_g_cost_shared_prefix.py" --log "$out/run.jsonl"
 ```
+
+### 新しい監査 close と holder の再起動
+
+登録済みの整数 Qwen3-8B（class `b1da96d1…`）で、元期限 DAA 15,121 に達した監査とは別に、非報酬の MODEL_AUDIT と後続の評価 PANEL を準備した。公開窓は署名前に監査へ `[6, 90641)`、評価 PANEL へ `[90741, 256802)` を割り当てた。新しい監査 close は `67a7b2b0…`。この窓幅は隔離チェーンの観測に基づく試験設定で、公開 T12 の予定を示すものではない。
+
+生成側は用途ごとに9件の署名済み READY を記録し、holder 3人それぞれに元の share と署名予約の journal を保存した。同じ実行ファイルの別々の3プロセスが新規 DB で登録と close を再生し、各自の2用途の資料を開き直した。各プロセスで元の READY 署名から同じ資格を再構成でき、署名を1件変えた対照は失敗した。DAA 6 では監査の finality が未成立で、監査の公開判定と署名予約はともに `WouldBlock` だった。試験用の dealer・署名鍵・予約を使っており、分散した dealer 間通信と実予算の保証はこの試験の対象外である。
+
+同じ枝上で旧規則の Qwen2.5-1.5B 8K の仕事を1回実行し、通常の native テンプレートが新規 claim `50f0da2d…` を DAA 6,491 のブロック `5292996b…` で受理した。3プロセスが同じ2,409,131バイトの計算資料を読み、数値を再計算して trace・出力・実行 root と受付後の状態 root の一致を確認した。観測した claim の状態は `Provisional`。Qwen3 の監査 seed 公開、実用性・費用の判定、新規 FOW1 の受賞ブロックは引き続き未確認である。[照合結果](fresh-retained-audit.json)・[ブロック・計算資料・4プロセスの記録](fresh-retained-audit-public.tar.zst)
+
+公開記録のみでヘッダー・Ticket・各プロセスの記録を照合できる。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+zstd -dc "$p/fresh-retained-audit-public.tar.zst" | tar -xf - -C "$out"
+python3 -B "$p/check_fresh_audit.py" "$out" > "$out/checked.json"
+cmp "$out/checked.json" "$p/fresh-retained-audit.json"
+```
+
+native の再生には上記の全重み、登録済み residual scale section、Studio の TIR artifact、genesis の 8K artifact と、対象 holder が保持する元の非公開資料が必要である。次の変数を設定し、各 holder の独立プロセスで ignored test `private_fresh_audit_custody` を実行する。`slot` は 0・1・2 のいずれかである。
+
+```sh
+export MISAKA_PRIVATE_QF1_FULL="$parent" MISAKA_PRIVATE_QF1_TILES="$scales"
+export MISAKA_PRIVATE_TB1_TIR_ARTIFACT="$studio" MISAKA_PRIVATE_TB1_GENESIS8K="$model8k"
+export MISAKA_PRIVATE_FRESH_SLOT="$slot" MISAKA_PRIVATE_FRESH_HOLDER="$holder_dir"
+export MISAKA_PRIVATE_CERTIFIED_AUDIT_READ="$out/public.jsonl" MISAKA_PRIVATE_AUDIT_WORK_READ="$out/capital.json"
+export MISAKA_PRIVATE_GENESIS_SEATS_READ="$out/seats.json" MISAKA_PRIVATE_GENESIS_CAPITAL_READ="$out/genesis-capital.json"
+export MISAKA_PRIVATE_GENESIS_RENEW_READ="$out/renew.json" MISAKA_PRIVATE_GENESIS_ATTEMPT_READ="$out/accepted"
+RUST_MIN_STACK=67108864 RAYON_NUM_THREADS=3 "$test_binary" private_fresh_audit_custody --ignored --nocapture --test-threads=1
+```

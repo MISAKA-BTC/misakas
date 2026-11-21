@@ -1,6 +1,8 @@
 //! Registered, non-paying evaluation with independent test dealer material.
 //! Use the native chain after the registered EXEC close without injecting work.
 use super::*;
+#[path = "tb1_fresh_audit.rs"]
+mod fresh;
 #[path = "tb1_audit_history.rs"]
 mod history;
 #[path = "tb1_audit_legacy_work.rs"]
@@ -198,16 +200,29 @@ pub(super) async fn registered_cut(
 #[tokio::test]
 #[ignore = "requires the full QF1 asset and ordinary verifier maturity and certification"]
 async fn private_registered_audit_certified_frontier() {
-    registered_audit_history(false).await;
+    registered_audit_history(AuditHistory::CertifiedFloor).await;
 }
 
 #[tokio::test]
 #[ignore = "requires the signed audit archive and both registered model artifacts"]
 async fn private_registered_audit_legacy_work() {
-    registered_audit_history(true).await;
+    registered_audit_history(AuditHistory::LegacyWork).await;
 }
 
-async fn registered_audit_history(legacy: bool) {
+#[tokio::test]
+#[ignore = "requires the registered tiled QF1 asset and persistent private holder directories"]
+async fn private_fresh_audit_custody() {
+    registered_audit_history(AuditHistory::Fresh).await;
+}
+
+#[derive(PartialEq, Eq)]
+enum AuditHistory {
+    CertifiedFloor,
+    LegacyWork,
+    Fresh,
+}
+
+async fn registered_audit_history(mode: AuditHistory) {
     use super::super::super::{
         g14_registration_e2e::{private_moe2::arm_private_registration, tb1_registration_prefix},
         t12_round_lane_e2e::certified_floor_history,
@@ -215,7 +230,17 @@ async fn registered_audit_history(legacy: bool) {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     let asset = std::env::var_os("MISAKA_PRIVATE_QF1_FULL").expect("full QF1 model");
     let held = misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(&asset)).unwrap();
-    let model = misaka_palw_sdk::qf1_local::bind(&held).unwrap();
+    let tiled = (mode == AuditHistory::Fresh).then(|| {
+        let recipe = misaka_palw_sdk::qf1_local::residual_tiles::Candidate::over(&held).unwrap();
+        let section = std::env::var_os("MISAKA_PRIVATE_QF1_TILES").expect("registered residual scales");
+        let artifact = recipe.open(&held, Path::new(&section)).unwrap();
+        (recipe, artifact)
+    });
+    let (artifact, model) = if let Some((recipe, artifact)) = &tiled {
+        (artifact, recipe.bind_full(artifact).unwrap())
+    } else {
+        (&held, misaka_palw_sdk::qf1_local::bind(&held).unwrap())
+    };
     let identity = model.identity();
     let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
@@ -230,7 +255,7 @@ async fn registered_audit_history(legacy: bool) {
             r.next(&mut node).await;
         }
     } else {
-        for block in tb1_registration_prefix(&parts, held.class().unwrap(), identity.inventory).await {
+        for block in tb1_registration_prefix(&parts, artifact.class().unwrap(), identity.inventory).await {
             stable_panel::arrive(&mut node, block, "registered prior to long audit").await;
         }
     }
@@ -244,30 +269,43 @@ async fn registered_audit_history(legacy: bool) {
     let public: Vec<_> = keys.iter().map(|k| k.verification_key.clone()).collect();
     let coordinates: Vec<_> = (1..=4).map(field).collect();
     let roster = Tb1Roster { coordinates: &coordinates, holder_keys: &public, f: 1 };
-    let deadline = before.daa_score + policy.verifier_maturity_daa + policy.prosecution_window_daa + policy.lifetime_daa();
+    let certification_window = policy.verifier_maturity_daa + policy.prosecution_window_daa + policy.lifetime_daa();
+    let fresh = mode == AuditHistory::Fresh;
+    // Private scheduling allowance for the observed heartbeat chain. Release still
+    // requires the node's actual finalized head, independently of either clock.
+    let pruning_allowance = if fresh { config.params.pruning_depth() + config.params.finality_depth() } else { 0 };
+    let deadline = before.daa_score + certification_window + pruning_allowance;
     let audit = Tb1MiningRound {
         chain_id: node.domain.as_bytes(),
         roster_root: roster.root().unwrap(),
         role_epoch: 1,
-        logical_round: 11,
+        logical_round: if fresh { 13 } else { 11 },
         purpose: Tb1MiningPurpose::ModelAudit,
-        schedule_id: [11; 64],
+        schedule_id: [if fresh { 13 } else { 11 }; 64],
         close_blue_score: before.blue_score + 2,
         release_from_daa: before.daa_score + 5,
         deadline_exclusive_daa: deadline,
     };
     let panel = Tb1MiningRound {
-        logical_round: 12,
+        logical_round: if fresh { 14 } else { 12 },
         purpose: Tb1MiningPurpose::Panel,
         close_blue_score: 2 * deadline + 100,
         release_from_daa: deadline + 100,
-        deadline_exclusive_daa: 2 * deadline,
+        deadline_exclusive_daa: 2 * deadline + pruning_allowance,
         ..audit
     };
     let a = audit.id();
     let p = panel.id();
+    let mut custody = reader.as_ref().and_then(|r| r.header.custody);
+    if let Some(r) = &reader {
+        assert_eq!(r.header.custody.is_some(), fresh);
+    }
     let roots = if let Some(r) = &reader {
         r.header.dealer_roots
+    } else if fresh {
+        let (roots, seals) = fresh::provision(dir.path(), [&a, &p], &public);
+        custody = Some(seals);
+        roots
     } else {
         [("audit", &a), ("panel", &p)].map(|(name, id)| {
             let path = dir.path().join(name);
@@ -334,14 +372,51 @@ async fn registered_audit_history(legacy: bool) {
         local_carrier(&mut node, &mut None, &mut [], 0, marker, "long audit close").await
     };
     cut.holder_freeze(node.api().as_ref(), close.hash(), &aq).unwrap();
-    if legacy {
+    if fresh {
+        while node.chain.daa_of(node.chain.sink()) < audit.release_from_daa {
+            if let Some(r) = &mut reader {
+                r.next(&mut node).await;
+            } else {
+                local_carrier(&mut node, &mut None, &mut [], 0, [0; 64], "fresh audit release window").await;
+            }
+        }
+        let seals = custody.unwrap();
+        if let Some(r) = &mut reader {
+            assert!(r.header.floor.is_none());
+            r.finish(&mut node).await;
+        } else {
+            assert!(std::env::var_os(history::OUTPUT).is_some(), "retain the signed public close for cold peers");
+            history::save(&node, &archive, registered, None, Some(seals), roots, signed);
+        }
+        fresh::observe(
+            &node,
+            registered,
+            prep.hash(),
+            close.hash(),
+            &cut,
+            [audit, panel],
+            [&aq, &pq],
+            roots,
+            seals,
+            &public,
+            identity,
+            reader.is_some(),
+        );
+        if std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_READ").is_some()
+            || std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_WRITE").is_some()
+        {
+            legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
+        }
+        return;
+    }
+    if mode == AuditHistory::LegacyWork {
         assert!(reader.is_some(), "must start from the recorded audit close");
         legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
         return;
     }
     let floor = if let Some(r) = &mut reader {
         r.finish(&mut node).await;
-        r.header.floor
+        r.header.floor.unwrap()
     } else {
         certified_floor_history(&mut node.chain, &mut floats[0].clone()).await
     };
@@ -397,7 +472,7 @@ async fn registered_audit_history(legacy: bool) {
         node.api().get_header(tip).unwrap().blue_score
     );
     if reader.is_none() {
-        history::save(&node, &archive, registered, floor, roots, signed);
+        history::save(&node, &archive, registered, Some(floor), None, roots, signed);
     }
     history::verify_peers(&archive, dir.path(), &observation);
 }

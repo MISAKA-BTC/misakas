@@ -12,7 +12,9 @@ pub(super) struct Header {
     pub registered: Hash64,
     pub dealer_roots: [[Hash64; 4]; 2],
     pub signatures: [Vec<Vec<u8>>; 2],
-    pub floor: Hash64,
+    pub floor: Option<Hash64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody: Option<[[Hash64; 3]; 2]>,
     tip: Hash64,
     count: usize,
 }
@@ -62,7 +64,8 @@ pub(super) fn save(
     node: &Rig,
     path: &Path,
     registered: Hash64,
-    floor: Hash64,
+    floor: Option<Hash64>,
+    custody: Option<[[Hash64; 3]; 2]>,
     roots: [[Hash64; 4]; 2],
     signatures: [Vec<Vec<u8>>; 2],
 ) {
@@ -75,6 +78,7 @@ pub(super) fn save(
         dealer_roots: roots,
         signatures,
         floor,
+        custody,
         tip,
         count: blocks.len(),
     };
@@ -85,6 +89,7 @@ pub(super) fn save(
     }
     out.write_all(b"\n").unwrap();
     out.flush().unwrap();
+    out.get_ref().sync_all().unwrap();
 }
 
 pub(super) fn verify_peers(path: &Path, dir: &Path, observation: &serde_json::Value) {

@@ -35,8 +35,9 @@ def header_hash(header, commitment, pre_pow):
     return keyed("BlockPrePowHash64" if pre_pow else "BlockHash64", encoded)
 
 
-def verify(record, capture, producer):
-    renewed = json.loads((HERE / "genesis-renew.json").read_text())
+def verify(record, capture, producer, renewed=None):
+    if renewed is None:
+        renewed = json.loads((HERE / "genesis-renew.json").read_text())
     row = json.loads(record.read_bytes())
     h = row["raw"]["header"]
     require(row["base"] == renewed["tip"] and h["parentsByLevel"][0] == [row["base"]], "different renewed branch")
