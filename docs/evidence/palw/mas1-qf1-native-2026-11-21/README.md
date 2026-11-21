@@ -543,6 +543,8 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 
 同じバイナリの独立した3プロセスが新規 DB で元の数値実行を行い、保存した789ブロックの受理を完了した。各ピアの transcript・Final・抽選0の認証行・tip・state root が一致した。別の照合器でも全789ヘッダを順番に再ハッシュして、直前の親と最後の tip を検査した。[3ピア照合](genesis-recovered-three-peer.json)・[ピア2](genesis-recovered-peer-b.txt)・[ピア3](genesis-recovered-peer-c.txt)
 
+同じ枝をもう一度、候補の受付理由を記録して再生した。Final 後の56個の attempt ヘッダすべてで、ハッシュと producer bond の index をノードの記録と照合した。ブロックは選択鎖に入り、各 attempt の claim は BASE-0 の当該配分 epoch のモデル別ブロック機会 `P_m` 不足で拒否されていた。従って Gate C が使う seed anchor にもならなかった。[該当56ブロックとノードが返した拒否理由](genesis-model-budget-refusals.txt)
+
 ## 署名済み Original からの Stop 資料の受付
 
 Stop 資料を保管する際は、owner 署名、対象の attempt、答えと trace の opening を検査する。局所関係に矛盾がある場合も認証済みの資料として受け取れる。開示が空、長さが不正、または opening が root に一致しない場合には拒否する。数値再実行の結果との一致を検査する前にファイルと親ディレクトリを同期する。[受付・裁定の実装](../../../../misaka/palw/remote/src/tb1_exposure/exec_input/stop_case.rs)・[関連6試験](qf1-stop-intake-test.txt)
