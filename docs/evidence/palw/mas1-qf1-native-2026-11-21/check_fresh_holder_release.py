@@ -29,12 +29,18 @@ def block_hash(block):
     return header_hash(h, bytes(h["palwCommitment"]), False).hex()
 
 
-def release_message(audit, row, openssl):
+def enrolled_origin(archive):
+    raw = subprocess.check_output(["tar", "-xOf", archive, "public.jsonl"])
+    return json.loads(raw.splitlines()[0])
+
+
+def release_message(audit, row, openssl, origin=None):
     round_id, qual, freeze = map(bytes.fromhex, (audit["rounds"][0], audit["qualifications"][0], audit["freeze"]))
     holder = row["holder"]
     require(holder in range(3) and [d for d, _ in row["shares"]] == [0, 1, 2], "unexpected holder or dealers")
-    raw = subprocess.check_output(["tar", "-xOf", HERE / "fresh-retained-audit-public.tar.zst", "public.jsonl"])
-    origin = json.loads(raw.splitlines()[0])
+    if origin is None:
+        origin = enrolled_origin(HERE / "fresh-retained-audit-public.tar.zst")
+    require(origin["tip"] == audit["tip"] and origin["registered"] == audit["registered"], "wrong custody enrollment")
     dealer_roots, seals = origin["dealer_roots"][0], origin["custody"][0]
     message = bytearray(sized(round_id) + qual + freeze + u32(holder) + u32(3))
     for d, data in row["shares"]:

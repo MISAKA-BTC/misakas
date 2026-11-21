@@ -1,0 +1,12 @@
+{
+  "accepted_close": "67a7b2b03deaec69c39452c7645a9ae245cc890bcc5329e2f52366e838a97a2c94a6d680e0d0ad27fbef78c3623e2c5f7283766e992ae4bf121c1fe1b6eb0b04",
+  "historical_certificate": "f0628e3f33b94c913430e50d3c28e1c77d1c5bfe201c30468e7a9f1e72296aac02e48978043bb02e50b2cb605c22cd527f4aa681ddb5be6100b6217d579e3815",
+  "historical_seed": "295579de916fffa6989aa64670953af0006f33add45becb3084916439d0267a5",
+  "observed_by": [
+    15982,
+    19659,
+    21993
+  ],
+  "arithmetic_close": "8f9e2d10d21141dd884336b4e63c9e1e7f3a3af80846d12bff1482bfd10807d031f9a29430fbf527cf6ab3fc1898a12df54669b00e88fc03e2da3cecf446e669",
+  "arithmetic_result": "release differs from the original enrolled holder material"
+}

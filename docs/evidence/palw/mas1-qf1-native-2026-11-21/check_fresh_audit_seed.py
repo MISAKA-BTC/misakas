@@ -7,12 +7,12 @@ from pathlib import Path
 from check_fresh_audit import audit_binding, coinbase_extra, records
 from check_fresh_qualification import h512, sized, u32, verify as verify_qualification
 from check_fresh_window import check_maturity
-from check_fresh_holder_release import block_hash, release_message, verify_holder
+from check_fresh_holder_release import block_hash, enrolled_origin, release_message, verify_holder
 from check_legacy_work import HERE, require
 
 
-def reconstruct(audit, pub, openssl):
-    _, root, _ = audit_binding(audit)
+def reconstruct(audit, pub, openssl, *, suite=None, origin=None):
+    _, root, _ = audit_binding(audit, suite)
     round_id, qual, freeze = map(bytes.fromhex, (audit["rounds"][0], audit["qualifications"][0], audit["freeze"]))
     context = sized(round_id) + qual + freeze
     rows = pub["rows"]
@@ -21,7 +21,7 @@ def reconstruct(audit, pub, openssl):
     points = [[] for _ in range(3)]
     p = (1 << 521) - 1
     for row in rows:
-        message, signature, dealer_roots, _ = release_message(audit, row, openssl)
+        message, signature, dealer_roots, _ = release_message(audit, row, openssl, origin)
         for d, data in row["shares"]:
             points[d].append(int.from_bytes(bytes(data), "big"))
         batch_message.extend(sized(message) + signature)
@@ -44,6 +44,57 @@ def reconstruct(audit, pub, openssl):
     cases = [hashlib.sha3_256(b"MISAKA/private/MAS1/evaluation-challenge/v1" + root + seed + u32(0) + u32(i)).hexdigest()
              for i in range(2)]
     return dict(close=audit["close"], batch=batch, certificate=block_hash(pub["certificate"]), seed=seed.hex(), cases=cases)
+
+
+def arithmetic_seed(root, openssl):
+    """Read the three enrolled holders' publication and their original live native observations."""
+    record = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())
+    audit = record["audit"]
+    qualified = verify_qualification(openssl, arithmetic=True)
+    require(qualified["close"] == audit["close"], "wrong qualified arithmetic close")
+    origin = enrolled_origin(HERE / "qf1-arithmetic-audit-close-public.tar.zst")
+    pub = json.loads((root / "publication.json").read_bytes())
+    expected = reconstruct(audit, pub, openssl, suite=bytes.fromhex(record["suite"]), origin=origin)
+    return publication_readback(root, audit, pub, expected, "holder", "replay")
+
+
+def publication_readback(root, audit, pub, expected, holder_prefix, reader_prefix):
+    require(pub["rows"] == [json.loads((root / f"released-{slot}.json").read_bytes()) for slot in range(3)],
+            "publication differs from the three releases")
+    batch, cert = (pub[k]["header"] for k in ("batch", "certificate"))
+    holders, readers, binaries, states, finalized = [], [], set(), set(), set()
+    slots = [(i, f"{holder_prefix}-{i}", True) for i in range(3)]
+    slots.extend((i, f"{reader_prefix}-{i}", False) for i in range(2))
+    for slot, name, signing in slots:
+        log = (root / f"{name}.log").read_text()
+        first = log.partition("\n")[0]
+        require(first.startswith("test_binary_sha256=") and "test result: ok. 1 passed; 0 failed" in log, "incomplete native reader")
+        binaries.add(first.split("=", 1)[1])
+        [(pid, end)] = records(log, "fresh audit window end")
+        snapshot = end["committed_snapshot"]["Ok"]
+        finalized.add(snapshot["finalized"])
+        require(end["slot"] == slot and end["publication"] == "ready" and end["close"] == audit["close"]
+                and batch["parentsByLevel"][0] == [end["tip"]] and end["tip"] == snapshot["generation"]
+                and snapshot["finalized"] and snapshot["finalized"] == end["readiness"]["finalized"]["finalized"]
+                and end["readiness"]["generation"] == end["tip"] and end["state"] == batch["palwStateRoot"]
+                and audit["audit_from"] <= end["daa"] <= batch["daaScore"] <= cert["daaScore"] < audit["audit_deadline"]
+                and cert["blueScore"] == batch["blueScore"] + 1 == end["readiness"]["sinkBlue"] + 2,
+                "wrong publication parent, native finality or signed window")
+        if signing:
+            require(f"fresh audit signed holder={slot} tip={end['tip']} close={audit['close']}" in log, "missing holder release")
+            holders.append(pid)
+        else:
+            require("fresh audit signed holder=" not in log, "cold readback signed a fresh release")
+        if slot == 2 or not signing:
+            [(observed_pid, observed)] = records(log, "fresh audit certificate")
+            require(observed_pid == pid and observed["slot"] == slot and observed["tip"] == end["tip"]
+                    and all(observed[k] == v for k, v in expected.items()), "reader differs from reconstructed publication")
+            readers.append(pid)
+            states.add(observed["state"])
+    require(len(set(holders + readers)) == 5 and len(set(holders)) == len(set(readers)) == 3
+            and set(holders) & set(readers) == {holders[2]} and len(states) == len(binaries) == len(finalized) == 1,
+            "expected one publisher, two independent cold readers and identical builds and states")
+    return dict(**expected, state=states.pop(), holders=holders, publication_readers=readers, binary_sha256=binaries.pop())
 
 
 def verify(root, window, openssl, publisher_only=False):
@@ -94,10 +145,15 @@ def verify(root, window, openssl, publisher_only=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("--publisher-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--publisher-only", action="store_true")
+    mode.add_argument("--arithmetic", action="store_true")
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
-    verify_qualification(args.openssl)
-    window = json.loads((HERE / "fresh-pruning-transition.json").read_bytes())
-    result = verify(args.root, window, args.openssl, args.publisher_only)
+    if args.arithmetic:
+        result = arithmetic_seed(args.root, args.openssl)
+    else:
+        verify_qualification(args.openssl)
+        window = json.loads((HERE / "fresh-pruning-transition.json").read_bytes())
+        result = verify(args.root, window, args.openssl, args.publisher_only)
     print(json.dumps(result, indent=2))

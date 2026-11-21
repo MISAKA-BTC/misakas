@@ -1150,3 +1150,19 @@ for name in qf1-arithmetic-audit-close-public qf1-arithmetic-audit-work-public q
 done
 python3 -B "$p/check_fresh_final.py" "$out" --arithmetic-work | cmp - "$p/qf1-arithmetic-8k-final.json"
 ```
+
+### 算術監査の公開資料からの独立照合
+
+前回の監査で実際に署名された3件のreleaseを使い、元のcloseでは3ピアのseedと2件のchallengeを再現した。同じreleaseを今回の算術監査の入力にすると、holderが当初登録したshareのcommitmentとの照合で拒否された。[旧roundの対照結果](qf1-arithmetic-cross-round.json)
+
+算術監査の公開後は `check_arithmetic_submission.py` にslot 0〜2の署名ログ、公開済みrelease、publication、後続の提出ブロック、slot 0・1の再読込ログを置いたディレクトリと登録tokenizerを渡す。入力文・正解digit・HEX64入力列をseedから導き、停止位置、入力・回答・Readoutの各Rootと4件のRootからTicketを再計算する。traceの数値再実行は3者それぞれのnative観測に照合する。提出物のBorsh表現から計算したdigestはnativeテストの固定値とも照合した。この照合の対象は提出時点までである。
+
+### G-COSTの1回推論の再測定予定
+
+既存の4件を逆順に並べ、同じバイナリの同一プロセスで各仕事の1回推論と2回実行を1回ずつ測る。4件が偶数なので、各仕事で先に測る経路も前回と入れ替わる。機材・3スレッド・モデル・元Ticketをそろえ、準備時間と最大常駐メモリを別に記録する。実測前に固定した計画に前回のログをそのまま渡すと、仕事とTicketの順序が異なるため照合に失敗する。G-COSTの公開閾値は未採択である。[再測定の順序とバイナリ](g-cost-online-repeat-schedule.json)
+
+```sh
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --reverse-online > "$out/repeat-plan.json"
+RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --online-stop "$parent" "$out/scales.section" "$out/repeat-plan.json" > "$out/repeat-run.jsonl"
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --reverse-online --online-log "$out/repeat-run.jsonl"
+```

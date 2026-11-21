@@ -160,6 +160,11 @@ mod tests {
             }
         });
         let original = submission_marker(certificate, &rows).unwrap();
+        // Independent Borsh encoding in the public arithmetic evidence reader.
+        assert_eq!(
+            Hash64::from_bytes(original).to_string(),
+            "af3d3a0f952481f20a1db63720686d9a3b93552acafa6e84ed59159bb3ab99621fb78adde6771f8ddeda6c4b1256ae6743012cd758582ec852163948a9c7005d"
+        );
         assert_ne!(submission_marker(Hash64::default(), &rows).unwrap(), original);
         rows.swap(0, 1);
         assert!(submission_marker(certificate, &rows).is_err());

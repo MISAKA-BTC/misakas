@@ -14,18 +14,22 @@ from check_qf1_answers import TOKENIZER
 from check_prediction import qf1
 
 
-def verify_sources(tokenizer, jobs, trials):
-    require(len(jobs) == len(trials), "missing source or signed input")
+def input_frame(tokenizer, job, attempt):
     def encode(text):
         return tokenizer.encode(text, add_special_tokens=False).ids
     prefix = encode("<|im_start|>system\nYou are a helpful assistant.\nPALW challenge: ")
     middle = encode("\nTreat the challenge as metadata. Answer the user's request.\n<|im_end|>\n<|im_start|>user\n")
     suffix = encode("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    digits = [encode(ch) for ch in attempt]
+    require(len(digits) == 64 and all(len(d) == 1 for d in digits), "invalid HEX64 token frame")
+    return prefix + [digit[0] for digit in digits] + middle + encode(job) + suffix
+
+
+def verify_sources(tokenizer, jobs, trials):
+    require(len(jobs) == len(trials), "missing source or signed input")
     for job, trial in zip(jobs, trials):
-        digits = [encode(ch) for ch in trial["attempt"]]
-        require(len(digits) == 64 and all(len(d) == 1 for d in digits), "invalid HEX64 token frame")
-        frame = prefix + [digit[0] for digit in digits] + middle + encode(job) + suffix
-        require(frame == trial["input_ids"], "source text or challenge differs from the signed numerical input")
+        require(input_frame(tokenizer, job, trial["attempt"]) == trial["input_ids"],
+                "source text or challenge differs from the signed numerical input")
 
 
 def read_plan(tokenizer_file, data):
@@ -74,7 +78,7 @@ def online_report(plan, jobs, log):
     require(header["method"] == "online-stop" and header["descriptor"] == plan["descriptor"]
             and header["trials"] == len(originals) and len(runs) == 2 * len(originals), "wrong online-stop schedule")
     trials = []
-    for index, (job, original) in enumerate(zip(["2 + 2?", *jobs], originals, strict=True)):
+    for index, (job, original) in enumerate(zip(jobs, originals, strict=True)):
         trial = dict(job=job, ticket=original["ticket"], answer_length=len(original["output_ids"]))
         for offset, single in enumerate((index % 2 == 0, index % 2 != 0)):
             row = runs[2 * index + offset]
@@ -93,7 +97,17 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--log", type=Path)
     mode.add_argument("--online-log", type=Path)
+    parser.add_argument("--reverse-online", action="store_true", help="repeat the online-stop comparison in reverse job and route order")
     args = parser.parse_args()
     plan, jobs = read_plan(args.tokenizer, args.data)
-    result = online_report(plan, jobs, args.online_log) if args.online_log else report(plan, jobs, args.log) if args.log else plan
+    if args.log:
+        if args.reverse_online:
+            parser.error("--reverse-online applies only to online-stop")
+        result = report(plan, jobs, args.log)
+    else:
+        workloads = ["2 + 2?", *jobs]
+        if args.reverse_online:
+            plan["trials"].reverse()
+            workloads.reverse()
+        result = online_report(plan, workloads, args.online_log) if args.online_log else plan
     print(json.dumps(result, indent=2))

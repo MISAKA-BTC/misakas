@@ -1,0 +1,27 @@
+{
+  "method": "online-stop",
+  "binary_sha256": "4b60b99b4ac9bab77fd6e2a43a8e5e750779ae4052064ae9fa9016b7764c5262",
+  "plan_sha256": "928d3fe85d82f4d5e2145d24adefeca1902b3a1792a043e0c1d183a741a31264",
+  "rayon_threads": 3,
+  "repetitions_per_job_per_route": 1,
+  "reference": "g-cost-online-stop-run.jsonl",
+  "trials": [
+    {
+      "ticket": "2788bffb35be5f79a980f284cb981c320d4807848aa2f04d2aa799e2d45c10eb",
+      "online_first": true
+    },
+    {
+      "ticket": "0de7d8bbbf0f54ba06a380d1d0ff2e6128df0da71ae2f424afee63c671dda069",
+      "online_first": false
+    },
+    {
+      "ticket": "471c584bb1587658f3fc8e2df90e9e90297b9d88ab691406c26689a4ab89a5d4",
+      "online_first": true
+    },
+    {
+      "ticket": "64eb136e34ed36bcd79ece3d38643d101bf5edc17de3cf293c0e93ad64fbdf18",
+      "online_first": false
+    }
+  ],
+  "g_cost": "UNKNOWN"
+}
