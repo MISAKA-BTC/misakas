@@ -90,6 +90,136 @@ fn observe_capital(node: &Rig, class: Hash64, what: &str) -> serde_json::Value {
     observation
 }
 
+/// Replay the archived heartbeat bodies up to the certified claim's own
+/// retirement. Inspect the two adjacent native states even when their DAA
+/// scores repeat. The rule, due time and work identity come from the node.
+async fn replay_work_retirement(
+    node: &mut Rig,
+    branch: &Path,
+    audit_close: Hash64,
+    deadline: u64,
+    cut: &PreparedAudit<'_>,
+    q: &Tb1Qualification<'_>,
+) {
+    use kaspa_consensus_core::{palw_native_settlement_v1::native_delta_evidence_v1, palw_state_v2::PalwDeltaEntryV2};
+    use std::io::{BufRead, BufReader};
+
+    let (base, initial) = node.chain.tip_state();
+    let (_, delta) = node.vp().palw_state_v2_store.read().delta_of(base).unwrap();
+    let cert = native_delta_evidence_v1(&delta);
+    let &[id] = cert.certified_claims.as_slice() else { panic!("expected the original Gate C block") };
+    let claim = initial.claim(&id).unwrap();
+    let due = initial.deadline_of(&id).unwrap();
+    let work = claim.work_id.expect("certified native work identity");
+    let source_key = [id.as_byte_slice().as_slice(), work.as_byte_slice().as_slice()].concat();
+    let snapshot = |node: &Rig| {
+        let (tip, state) = node.chain.tip_state();
+        let (_, delta) = node.vp().palw_state_v2_store.read().delta_of(tip).unwrap();
+        let deleted = delta.entries.iter().any(
+            |e| matches!(e, PalwDeltaEntryV2::Claim { key, old: Some(old), new: None } if *key == id && old.work_id == claim.work_id),
+        );
+        let route = state.kernel_route_state_v1().unwrap();
+        let source = route.aux.get(&(kaspa_consensus_core::palw_state_v2::LEGACY_PENDING_FACT_TABLE_V1, source_key.clone()));
+        let closed: Option<kaspa_consensus_core::palw_native_closed_facts_v1::NativeClosedFactRowV1> =
+            route.aux_row(kaspa_consensus_core::palw_native_closed_facts_v1::NATIVE_CLOSED_FACTS_TABLE_V1, work.as_byte_slice());
+        if let Some(row) = &closed {
+            row.validate_v1(work).unwrap();
+            assert_eq!(row.origin.subject, id);
+        }
+        let ready = readiness_of(node);
+        let blocking = ready.blocking.unwrap();
+        serde_json::json!({"tip":tip,"daa":node.chain.daa_of(tip),"state":state.state_root(),"claim_live":state.claim(&id).is_some(),
+            "bond_live":state.bond(&claim.bond).is_some(),"due":state.deadline_of(&id),"deleted":deleted,
+            "pending_source":source.is_some(),"closed_maturity":closed.map(|r|r.fact.matured_daa),"earliest_in":blocking.earliest_ready_in_daa,
+            "blocking":blocking.block,"evidence":blocking.evidence,"safe":ready.safe,"finalized":ready.finalized.finalized})
+    };
+    let start = snapshot(node);
+    let maturity = node.chain.daa_of(base).checked_add(start["earliest_in"].as_u64().unwrap()).unwrap();
+    let mut n = 0usize;
+    let mut sampled = false;
+    for line in BufReader::new(File::open(branch).unwrap()).lines() {
+        let raw: RpcRawBlock = serde_json::from_str(&line.unwrap()).unwrap();
+        let block_daa = raw.header.daa_score;
+        assert!(block_daa <= deadline);
+        // A native deadline remains live throughout its own DAA score.
+        let before = (!sampled && block_daa > due).then(|| snapshot(node));
+        genesis_seats::replay(node, &raw).await;
+        n += 1;
+        if let Some(before) = before {
+            let after = snapshot(node);
+            if after["deleted"] != true {
+                continue;
+            }
+            peer_log!(
+                "signed work retirement {} {}",
+                std::process::id(),
+                serde_json::json!({"close":audit_close,"base":base,"deadline":deadline,"claim":id,"work":work,
+                "trace_retention_daa":claim.trace_retention_daa,"local_at_acceptance":node.bundle.state.claim_local_settlement_active_at(claim.accepted_daa),
+                "local_at_observation":node.bundle.state.claim_local_settlement_active_at(block_daa),
+                "scheduled":due,"blocks":n,"start":start,"before":before,"after":after})
+            );
+            sampled = true;
+        }
+    }
+    assert_eq!(node.chain.daa_of(node.chain.sink()), deadline);
+    let check_expired = |node: &Rig| {
+        assert_eq!(
+            cut.observe(node.api().as_ref(), audit_close, q).err().expect("original release deadline").kind(),
+            std::io::ErrorKind::TimedOut
+        );
+    };
+    check_expired(node);
+    let expired = snapshot(node);
+    let write = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_MATURITY_WRITE");
+    let read = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_MATURITY_READ");
+    assert!(write.is_none() || read.is_none());
+    if write.is_none() && read.is_none() {
+        return;
+    }
+    let mut output = write.map(|path| std::io::BufWriter::new(File::create_new(path).unwrap()));
+    let mut input = read.map(|path| BufReader::new(File::open(path).unwrap()).lines());
+    let step = node.config.params.target_time_per_block();
+    let mut count = 0;
+    loop {
+        let parent = node.chain.sink();
+        let witness = node.chain.daa_of(parent) >= maturity;
+        let observation = witness.then(|| {
+            check_expired(node);
+            (snapshot(node), node.chain.tip_state().1.state_root())
+        });
+        let tip = if let Some(input) = &mut input {
+            let raw: RpcRawBlock = serde_json::from_str(&input.next().expect("incomplete maturity history").unwrap()).unwrap();
+            genesis_seats::replay(node, &raw).await;
+            node.chain.sink()
+        } else {
+            let b = node.chain.heartbeat(step, vec![]).await;
+            let archive = output.as_mut().unwrap();
+            serde_json::to_writer(&mut *archive, &RpcRawBlock::from(&b)).unwrap();
+            archive.write_all(b"\n").unwrap();
+            b.hash()
+        };
+        assert_eq!(node.api().get_ghostdag_data(tip).unwrap().selected_parent, parent);
+        if let Some((observed, parent_root)) = observation {
+            assert_eq!(node.api().get_header(tip).unwrap().palw_state_root, parent_root);
+            if let Some(mut writer) = output {
+                writer.flush().unwrap();
+                writer.get_ref().sync_all().unwrap();
+            }
+            if let Some(mut lines) = input {
+                assert!(lines.next().is_none(), "trailing maturity history");
+            }
+            peer_log!(
+                "signed work maturity {} {}",
+                std::process::id(),
+                serde_json::json!({"close":audit_close,"base":base,"claim":id,
+                "work":work,"scheduled":due,"start":start,"maturity":maturity,"expired":expired,"blocks":count,"observed":observed,"witness":tip})
+            );
+            break;
+        }
+        count += 1;
+    }
+}
+
 /// Continue the original signed audit on its certified branch, without
 /// replacing the candidate, pruning point, clock policy or native work facts.
 async fn follow_release_window(
@@ -304,7 +434,9 @@ pub(super) async fn exercise(
                         serde_json::json!({"close":close,"deadline":deadline,"tip":tip,"daa":now,
                             "state":node.chain.tip_state().1.state_root(),"publication":publication,"readiness":readiness_of(&node)})
                     );
-                    if let Some(out) = std::env::var_os("MISAKA_PRIVATE_AUDIT_FOLLOW_WINDOW") {
+                    if let Some(input) = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_RETIREMENT_READ") {
+                        replay_work_retirement(&mut node, Path::new(&input), close, deadline, cut, qualification).await;
+                    } else if let Some(out) = std::env::var_os("MISAKA_PRIVATE_AUDIT_FOLLOW_WINDOW") {
                         follow_release_window(&mut node, cut, close, qualification, deadline, Path::new(&out)).await;
                     }
                 }

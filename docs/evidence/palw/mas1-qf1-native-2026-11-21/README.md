@@ -652,6 +652,29 @@ zstd -dc "$p/genesis-audit-release-window.txt.zst" > "$out/window.log"
 python3 -B "$p/check_audit_release_window.py" "$out/window.jsonl" "$out/window.log"
 ```
 
+### 8K の認証済み仕事が成熟したブロック
+
+同じ隔離チェーン上で Qwen2.5 の claim `8748971c…` と Qwen3 の監査 close `653ff4fa…` を追跡した。DAA 15,121 の監査期限では、readiness が返す未成熟件数は0だったが、元の仕事IDの保存台帳（table 196）には記録が残っていた。以後、通常の heartbeat で DAA 17,931 まで進めると、その仕事IDが成熟済み台帳（table 195）に現れ、`safe` は元の8K claim受付ブロック `3250abac…` に達した。そこでの blue score は35,922、検証済み pruning point は genesis、`finalized` は空だった。genesis から pruning point が進むための最低深度74,920までは、なお38,998 blue score 必要だった。DAA と blue score は別の時計である。
+
+認証ブロックとその次のブロックはいずれも DAA 11,673 だった。後者でも元のclaimと1件の未成熟仕事（1,388,926,972,416）が存在した。最初の DAA 11,674 のブロックで、元の仕事IDのclaim削除が native delta に記録された。bondと保存台帳の行は残った。readiness が示す0件は、その時点の先頭の未決済ブロックについての件数である。
+
+元の監査は成熟時点でも `TimedOut` を返した。後続5,621ブロックには、成熟時の状態rootをヘッダーに固定した直後の1ブロックを含む。再現にはこの節の前で使った署名済み監査・資本・認証の履歴一式を用いる。[追加ブロック](genesis-work-maturity-blocks.jsonl.zst)・[生成側ログ](genesis-work-maturity-writer.txt.zst)
+
+生成側は `7120c11d…`、削除直後の観測と保存ブロックの読み戻しを加えた読取側は `43b452fc…` を使用した。読み取り側は別の新規DBで、認証履歴、元期限までの6,896ブロック、成熟時点を含む追加ブロックを順に検証した。照合器はヘッダーの親とハッシュ、状態を観測した各ブロックの直後のヘッダーに入る状態root、両プロセスの成熟時の観測を比較する。[削除・成熟の照合結果](genesis-work-maturity.json)・[読取側ログ](genesis-work-maturity-reader.txt.zst)
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+zstd -dc "$p/genesis-audit-release-window-blocks.jsonl.zst" > "$out/window.jsonl"
+zstd -dc "$p/genesis-work-maturity-blocks.jsonl.zst" > "$out/maturity.jsonl"
+zstd -dc "$p/genesis-work-maturity-writer.txt.zst" > "$out/maturity-writer.log"
+zstd -dc "$p/genesis-work-maturity-reader.txt.zst" > "$out/maturity-reader.log"
+python3 -B "$p/check_work_maturity.py" "$out/window.jsonl" "$out/maturity.jsonl" \
+  "$out/maturity-reader.log" "$out/maturity-writer.log" > "$out/maturity-checked.json"
+cmp "$out/maturity-checked.json" "$p/genesis-work-maturity.json"
+```
+
+nativeで再生するには、上の認証readerの設定に `MISAKA_PRIVATE_AUDIT_WORK_RETIREMENT_READ="$out/window.jsonl"` と `MISAKA_PRIVATE_AUDIT_WORK_MATURITY_READ="$out/maturity.jsonl"` を加え、同じ `private_registered_audit_legacy_work` を新規DBで実行する。成熟区間の生成時は `MISAKA_PRIVATE_AUDIT_WORK_MATURITY_WRITE` に新規ファイルを指定する。
+
 ### G-COST 改訂後の予備検査
 
 同一の整数 Qwen3-8B descriptor で、Panel が承認した過去の6回の隔離実行を生ログから照合した。6試行では EXEC seed と入力列が各回で異なり、回答列は同一だった。試行の全15組で数値 Readout `z` が異なり、別試行の `z` を変更せずに再利用すると正規値に一致する例は0件だった。先頭の共通入力は組ごとに14〜16 token あった。この照合は採掘値全体をそのまま再利用する場合を対象とする。共通 prefix の費用は次節で実測した。QF1 の G-COST は UNKNOWN である。[検査結果](g-cost-readout-reuse.json)・[生ログからの照合器](check_g_cost_readout_reuse.py)
