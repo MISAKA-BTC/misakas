@@ -629,3 +629,7 @@ zstd -dc "$p/genesis-funded-certificate-writer.txt.zst" > "$out/cert-writer.log"
 zstd -dc "$p/genesis-draw-block.json.zst" > "$out/original-attempt.json"
 python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert-writer.log" "$out/original-attempt.json"
 ```
+
+### MODEL_AUDIT の公開期限と holder の署名予約
+
+登録済みモデルの非報酬監査で、close は DAA 6、公開窓の終了は DAA 33 だった。finality が未成立のまま元期限に達したとき、3ピアすべてが未公開 holder の署名予約と監査の公開判定の両方で `TimedOut` を返した。同じビルドで、すでに公開した holder が finality 撤回後と再起動後も停止する回帰試験に合格した。[3ピアの期限境界](registered-audit-exclusive-deadline.txt.zst)

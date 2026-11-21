@@ -138,8 +138,27 @@ impl Tb1HolderFreeze {
         })
     }
 
+    fn check_deadline(self, daa: u64) -> io::Result<()> {
+        if daa >= self.deadline_exclusive_daa {
+            return Err(Error::new(ErrorKind::TimedOut, "TB1 original release deadline elapsed"));
+        }
+        Ok(())
+    }
+
+    // Finality may still be unavailable at expiry. A coherent selected tip
+    // supplies the deadline clock without granting permission to release.
+    fn check_tip_deadline(self, native: &dyn ConsensusApi) -> io::Result<()> {
+        let tip = native.get_sink();
+        let daa = native.get_header(tip).map_err(Error::other)?.daa_score;
+        if native.get_sink() != tip {
+            return Err(ErrorKind::WouldBlock.into());
+        }
+        self.check_deadline(daa)
+    }
+
     fn check_window(self, daa: u64) -> io::Result<()> {
-        if !(self.release_from_daa..self.deadline_exclusive_daa).contains(&daa) {
+        self.check_deadline(daa)?;
+        if daa < self.release_from_daa {
             return Err(invalid("native tip outside original TB1 release window"));
         }
         Ok(())
@@ -330,6 +349,7 @@ impl Tb1ExposureJournal {
             Some(previous) if previous != body => return Err(invalid("TB1 round already reserved for a different exposure")),
             Some(_) => {}
             None => {
+                freeze.check_tip_deadline(native)?;
                 let (state, daa, _) = anchor_state(native, freeze.accepting_block)?;
                 freeze.check_window(daa)?;
                 if !matches!(state, AnchorState::Finalized) {

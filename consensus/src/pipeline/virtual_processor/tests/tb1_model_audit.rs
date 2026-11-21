@@ -178,7 +178,8 @@ pub(super) async fn registered_cut(
     }
     let at = node.chain.sink();
     let api = node.api().as_ref();
-    assert!(journal.reserve_signing_message(api, freeze, &q, &row, 2048).is_err());
+    assert_eq!(journal.reserve_signing_message(api, freeze, &q, &row, 2048).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    assert_eq!(cut.observe(api, close.hash(), &q).err().unwrap().kind(), std::io::ErrorKind::TimedOut);
     peer_log!(
         "MAS1 audit expiry pid={} tip={} daa={} blocks={} close_daa={} prosecution_daa={} earliest_attempt_cert_daa={} finalized=none",
         std::process::id(),

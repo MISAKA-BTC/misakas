@@ -108,12 +108,11 @@ impl NativePublicationGate {
         q: &Tb1Qualification<'_>,
     ) -> io::Result<Self> {
         let freeze = Tb1HolderFreeze::resolve(native, close, closure, q)?;
+        freeze.check_tip_deadline(native)?;
         let (state, daa, stable_block) = anchor_state(native, close)?;
+        freeze.check_deadline(daa)?;
         if !matches!(state, AnchorState::Finalized) {
             return Err(Error::new(ErrorKind::WouldBlock, "TB1 close has not finalized"));
-        }
-        if daa >= freeze.deadline_exclusive_daa {
-            return Err(invalid("TB1 publication already expired"));
         }
         let header = native.get_header(close).map_err(Error::other)?;
         let stable = native.get_header(stable_block).map_err(Error::other)?;
