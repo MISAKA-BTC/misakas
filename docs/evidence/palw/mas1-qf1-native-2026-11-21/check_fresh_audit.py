@@ -44,7 +44,8 @@ def coinbase_extra(block):
     return payload[19 + payload[18]:]
 
 
-def verify(root, arithmetic_close=False):
+def verify(root, arithmetic_close=False, arithmetic_work=False):
+    arithmetic_close = arithmetic_close or arithmetic_work
     archive, *blocks = [json.loads(x) for x in (root / "public.jsonl").read_text().splitlines()]
     require(archive["floor"] is None and archive["count"] == len(blocks) and
             [len(rows) for rows in archive["signatures"]] == [9, 9], "incomplete public audit")
@@ -119,9 +120,21 @@ def verify(root, arithmetic_close=False):
             coinbase_extra(close) == freeze, "different close commitment")
 
     if arithmetic_close:
-        return dict(audit=common, suite=suite.hex(), required_correct=2, cases=2, decode_limit=16, max_leaves=32_000_000,
+        arithmetic = dict(audit=common, suite=suite.hex(), required_correct=2, cases=2, decode_limit=16, max_leaves=32_000_000,
                     holder_processes=pids, binary_sha256=binaries.pop(), public_prefix_blocks=archive["count"],
                     archive_sha256=hashlib.sha256((root/"public.jsonl").read_bytes()).hexdigest())
+        if not arithmetic_work:
+            return arithmetic
+        writer = root / "work.log"
+        log = writer.read_text()
+        [(pid, bound)] = records(log, "fresh retained audit")
+        require(bound["close"] == common["close"] and bound["rounds"] == common["rounds"]
+                and pid not in pids, "different work branch or producer")
+        [(seat_pid, seats), (renew_pid, later)] = records(log, "legacy genesis boundary")
+        [(capital_pid, capital)] = records(log, "legacy genesis capital")
+        [(initial_pid, initial)] = records(log, "legacy-work result")
+        require(pid == seat_pid == renew_pid == capital_pid == initial_pid, "mixed work logs")
+        renewed = dict(initial=initial, seats=seats, capital=capital, renewed=later)
     state = common["state"]
     for name, stage in (("capital", "initial"), ("seats", "seats"), ("genesis-capital", "capital"), ("renew", "renewed")):
         ext = json.loads((root / f"{name}.json").read_bytes())
@@ -149,6 +162,12 @@ def verify(root, arithmetic_close=False):
             "different genesis model")
     require(draw["base"] == tip and draw["class_id"] != common["class"] and draw["daa"] < common["audit_deadline"],
             "wrong 8K work basis or timing")
+    if arithmetic_work:
+        native = verify_readers(draw, [writer], 1)
+        require(native["processes"] == [pid] and native["phase"] == "Provisional"
+                and native["binary_sha256"] == arithmetic["binary_sha256"], "wrong producer replay or phase")
+        return dict(**arithmetic, native_8k_draw=draw, native_replay=native, ready_seats=later["ready"],
+                    assigned_sompi=capital["assigned_sompi"])
     replay = verify_readers(draw, readers, 3)
     require(replay["processes"] == pids[1:] and replay["phase"] == "Provisional"
             and replay["binary_sha256"] in binaries, "different cold readers or claim phase")
@@ -164,5 +183,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="extracted public evidence")
     parser.add_argument("--arithmetic-close", action="store_true")
+    parser.add_argument("--arithmetic-work", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.arithmetic_close), indent=2))
+    print(json.dumps(verify(args.root, args.arithmetic_close, args.arithmetic_work), indent=2))

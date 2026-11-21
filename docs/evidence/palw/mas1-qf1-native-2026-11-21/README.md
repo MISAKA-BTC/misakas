@@ -1111,3 +1111,14 @@ out=$(mktemp -d)
 tar -xf "$p/qf1-arithmetic-audit-close-public.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-close | cmp - "$p/qf1-arithmetic-audit-close.json"
 ```
+
+### 算術試験用の枝で旧規則の仕事を受理
+
+上記のcloseから進めた隔離枝で検証者8席を準備し、DAA 6491で旧規則のQwen2.5-1.5B 8Kのclaim `de2c19ea…` がProvisionalになった。1回の実行で得たticketは `715025e5aa3875b700f4853b2124d35a`。ノードが提示した元の閾値で受理し、同じnativeプロセスが数値記録を再実行した。Qwen3の算術採点は後続のMODEL_AUDIT抽選を必要とする。[受理・ticket・再実行記録](qf1-arithmetic-audit-work.json)・[追加のブロック・採掘記録](qf1-arithmetic-audit-work-public.tar.zst)
+
+上記closeの展開先に追加記録を展開して照合する。対照試験では、展開した `accepted/capture.bin` の先頭1ビットを変更すると、nativeが記録したSHA-256と一致せず検査に失敗した。
+
+```sh
+tar -xf "$p/qf1-arithmetic-audit-work-public.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-work | cmp - "$p/qf1-arithmetic-audit-work.json"
+```
