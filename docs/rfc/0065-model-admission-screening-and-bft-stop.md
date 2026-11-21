@@ -125,7 +125,7 @@ test合格はそのsuiteについての実用性根拠に限定する。有限te
 | 局所的な規則違反・実行反証 | 元rootへのopening、位置、数値規則を検査してFAILを確定する |
 | 実用testの結果 | 第4.1節の非報酬評価caseをPanel＋Court条件の下で終結し、有限scoreを計算する |
 | 全weightが満たす大域的な性質 | 既存FOW1 TheoremRuleが認める認証付き適合検査がなければUNKNOWN |
-| 未知の代替算法が存在しないという主張 | 有効なTheoremRuleと全適合条件が必要。worker署名やBFT署名で代替しない |
+| G-COST の費用比較 | 現世代の suite に固定した入力・経路・閾値と認証済みの反復測定記録を照合し、[RFC-0062 §4.3](0062-palw-function-output-and-work-admissibility.md#g-cost-review) の規則で判定する。PASS の範囲は検査した条件に限る |
 
 登録者の`.root`属性、JSONの`full_rank=true`、Merkle membershipの数件、解析したというACKだけから全重みの性質を認めない。有限個のopeningは、その位置の内容を確認するだけである。万能なプログラム困難性判定器又は新しいSNARKを暗黙に仮定しない。
 
