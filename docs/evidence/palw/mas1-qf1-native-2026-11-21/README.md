@@ -756,3 +756,46 @@ cmp "$out/checked-final.json" "$p/fresh-8k-final.json"
 ```
 
 native の生成側は前節の再生設定に `MISAKA_PRIVATE_GENESIS_FINAL_WRITE` を追加して、まだ存在しない出力ファイルを指定する。署名済みの Final から再開するプロセスでは、代わりに `MISAKA_PRIVATE_GENESIS_SUFFIX_READ` にそのファイルを指定する。fixture の鍵を持つ1プロセスで選出席ごとに再実行しており、別々の運営者による署名を実証したものではない。
+
+### 新しい監査 close と同じ枝での Gate C 認証
+
+前節の Final を新規 DB で再生した時点では、Gate C の抽選・承認はともに0枠だった。カード5が floor 用に 46,953,160,500,520 sompi の資本を割り当てた。DAA 7,932 に予算が 1,021,082 microblocks となり、通常の実行ブロック `89e2e2f3…` から75枠が抽選された。元の抽選期限は DAA 8,793。採掘者を除く7枚のカードが、それぞれ元の8K仕事を再実行し、同じ transcript に署名した。DAA 11,673 のブロック `0b30c252…` が claim `50f0da2d…` を75枠の承認で `Certified` とした。
+
+2つの別の新規 DB が受付から認証までの10,366ブロックを受理した。生成側を含む3プロセスが同じバイナリを使った。照合器は3席の Panel receipt、資本割当、7件の Gate C 取引の対象・署名者・transcript を確認し、2つの読み取り側の状態 root と監査の公開判定を比較する。各署名者の再実行には隔離試験鍵を用いた。[照合結果](fresh-8k-certificate.json)・[抽選・認証ブロックと各プロセスの記録](fresh-8k-certificate.tar.zst)
+
+認証直後の2つの読み取り側で、当該 prefix の仕事 1,388,926,972,416 は1件の成熟待ちだった。台帳が示した最早成熟 DAA は 17,931（残り6,258 DAA）。今回の監査の署名済み期限 DAA 90,641 より前である。DAA 11,673 では `safe` と `finalized` はともに空、監査 seed の公開判定は保留だった。
+
+同じバイナリで別途 Studio モデルを登録した3プロセスは、登録に伴う市場生成と MOE2 の配分を再生した。試験用の160単位のうち買付48、永久LP32、worker80（miner64・Panel16）。購入した2 Position を永久LPに1、burn に1配分し、巻き戻しと再適用後の市場・worker 権利・LP が3者で一致した。成熟と支払条件には fixture を用いた。8K claim の実支払いはこの観測に含まれない。
+
+公開記録を次の手順で照合できる。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+out=$(mktemp -d)
+zstd -dc "$p/fresh-retained-audit-public.tar.zst" | tar -xf - -C "$out" accepted/winning.json
+zstd -dc "$p/fresh-8k-final.tar.zst" | tar -xf - -C "$out"
+zstd -dc "$p/fresh-8k-certificate.tar.zst" | tar -xf - -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" > "$out/checked-certificate.json"
+cmp "$out/checked-certificate.json" "$p/fresh-8k-certificate.json"
+```
+
+
+native の生成は前節の `MISAKA_PRIVATE_GENESIS_SUFFIX_READ` に Final の履歴を指定し、`MISAKA_PRIVATE_GENESIS_FUNDED_ANCHOR` に未作成のディレクトリを指定する。生成された `draw.json` と `certification.json` は、それぞれ前区間の tip を base に持つ。読み取り側は次のファイルを `MISAKA_PRIVATE_GENESIS_CERTIFY_READ` に指定し、前節の元の8K受付・holder資料を使って同じ ignored test を新規 DB で実行する。読み取り側には Final の生成・再開用の環境変数を渡さない。
+
+```sh
+python3 - "$out" <<'PYTHON'
+import json, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+names = ("final.json", "funded/draw.json", "funded/certification.json")
+parts = [json.loads((root / name).read_bytes()) for name in names]
+chain = parts[0]
+for part in parts[1:]:
+    assert (part["base"], part["claim"]) == (chain["tip"], chain["claim"])
+    chain["blocks"].extend(part["blocks"])
+    chain["tip"] = part["tip"]
+with (root / "accepted-to-certified.json").open("x") as output:
+    json.dump(chain, output, separators=(",", ":"))
+PYTHON
+```

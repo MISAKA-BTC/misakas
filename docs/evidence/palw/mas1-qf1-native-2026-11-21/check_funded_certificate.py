@@ -9,9 +9,11 @@ from check_genesis_draw import header_hash, keyed, verify_readers
 from check_legacy_work import HERE, require
 
 
-def verify(branch_path, writer_path, winning_path):
-    funded = json.loads((HERE / "genesis-funded-draw.json").read_bytes())
-    original = json.loads((HERE / "genesis-draw-reexecution.json").read_bytes())
+def verify(branch_path, writer_path, winning_path, *, funded=None, original=None):
+    if funded is None:
+        funded = json.loads((HERE / "genesis-funded-draw.json").read_bytes())
+    if original is None:
+        original = json.loads((HERE / "genesis-draw-reexecution.json").read_bytes())
     claim = original["claim"]
     job = json.loads(winning_path.read_bytes())
     h = job["raw"]["header"]

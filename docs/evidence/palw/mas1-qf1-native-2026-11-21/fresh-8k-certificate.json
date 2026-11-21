@@ -1,0 +1,254 @@
+{
+  "panel": {
+    "claim": "50f0da2d6daafd3571b6cef638bfb5bf9ced1f6b5e85f3d59c436a6312d76d1bcd0143ff06a8858aaa060466964ffba1a91d96c78a96d3406e4a251e290a0cf5",
+    "accepted": "5292996bea7057622435449112b9b501e1bc0eadfb3b1b6e9f9f2371c503314cd96cea658a716db81b9b812b301a668a9666218c819ca15e8dddf4baf5407f7d",
+    "audit_close": "67a7b2b03deaec69c39452c7645a9ae245cc890bcc5329e2f52366e838a97a2c94a6d680e0d0ad27fbef78c3623e2c5f7283766e992ae4bf121c1fe1b6eb0b04",
+    "anchor": "a63633f0281149fd465d2121ba1fe54a4a789648b49d659ab0be3186641a07a813820801c097b201e51fbe8375decd26f689ce741bc0060e97f372f42c311285",
+    "anchor_daa": 6511,
+    "cards": [
+      0,
+      3,
+      4
+    ],
+    "receipt_daa": 6511,
+    "tip": "a615adb3baad81e8436664b36393a0a337aad9fbb8f9f8ad28ebd2af5e61c5dc300eb59f4cc4701e17160c21b642ef7c45f048dab5755a3e64387f1bf6314a3b",
+    "daa": 6633,
+    "state": "4d1cfbd0de32b9262485bf56859d360a8eb7786edfe3288804ccc5bc5308bfc038cb49e448c22ee923a8d6efcc7fb27608356fdff7b1cf814916d8935538dac3",
+    "blocks": 285,
+    "transcript": "b8020b67fa1ba614689910c65234890f698ef3dd17ee3299c9764953d2287c60e1bcffa6e06fa087f3e5017f51bb2bd70ba51c3ed89a906815840a0db24ffb01",
+    "binary_sha256": "399e147f1b83b4d1a248a4a73e8c6554138d52be8018be58b80dbc95ad954c87",
+    "writer": 3902
+  },
+  "funding": {
+    "card": 5,
+    "model": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+    "collateral_sompi": 46953160500520,
+    "microblocks": 1021082,
+    "daa": 7932,
+    "anchor_claim": "fc7535bfa2ce7b3217c3637b0e83dad9c1706839ec6d1fa8769550a0c5f6b8b05a68e1d949d881294095c98f1061397b2191428288cedd5c01c3cdb4038ecceb",
+    "anchor": "89e2e2f37a0c46f6256a34374f0681ef883f49ea3507e3fb848095b5e26706b3ede185641c2f38906190dda32dd1163beb32b4f75ef4c6ff1934b2282f23b141",
+    "tip": "4565ecd49d85dbc0c8a5bb5dc1e8fdb0ec0a9bf2cf16eaea8336989c2d09c8698a9d4093e5b6a1b3ea9310b499f5a255715236a4220092cc2bedee5f74e23ef3"
+  },
+  "certificate": {
+    "claim": "50f0da2d6daafd3571b6cef638bfb5bf9ced1f6b5e85f3d59c436a6312d76d1bcd0143ff06a8858aaa060466964ffba1a91d96c78a96d3406e4a251e290a0cf5",
+    "accepted": "5292996bea7057622435449112b9b501e1bc0eadfb3b1b6e9f9f2371c503314cd96cea658a716db81b9b812b301a668a9666218c819ca15e8dddf4baf5407f7d",
+    "draw_daa": 7932,
+    "certified_daa": 11673,
+    "tip": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e",
+    "positive_positions": 75,
+    "transcript": "b8020b67fa1ba614689910c65234890f698ef3dd17ee3299c9764953d2287c60e1bcffa6e06fa087f3e5017f51bb2bd70ba51c3ed89a906815840a0db24ffb01",
+    "attestations": [
+      {
+        "card": 0,
+        "verifier": "61d581e3816f36086e3c18d1e1bae3e54b67b373aa8b1d787b2ef8235665d505d2573cb72aac16b1aabc2206e6eff457d98dfaf2c99d105c75704c98bee905e1",
+        "block": "d9bc7b3204896b08981d5ae39bc0c001f93a9caf03a4604ad54da695b26de5ff8ec0de1f828c5efeda40686757ced6c76c30b1dc816f9312584d9ab8c9c40f55",
+        "daa": 7933
+      },
+      {
+        "card": 2,
+        "verifier": "3bb3b1c1beef9191a44a09b66affd278fec9517d72c90d62db416a4d49e46811a2b2cc8a775ea940bcdfd4b49ffa9eef14f4e946a1bf33ea8848c19269f3b560",
+        "block": "66ba24b8ad2eb84bc5fbb8df1d726d025b1885f49b57a182bc7800bfcd760ff71251576318515aa9a4f35bba7fca519181e6867c64bc71c01945dca33424d8aa",
+        "daa": 7934
+      },
+      {
+        "card": 3,
+        "verifier": "3bb4c79ea2e4742e4ce3e1394afa65feef29518537bac82584a7cbf142cdd31ec039f2bc45767865eb2c03fbfe774c5a45ea71e705684ad793916b587e725a31",
+        "block": "3f5033890ca99cef0cfda853a5d4ba4944b842a9b9e9cc8e3910246a2e59217f54650fc819726fc85d2d2a3e9ed9c09504f9a26b36b2166c8892a35b2a11e97a",
+        "daa": 7935
+      },
+      {
+        "card": 4,
+        "verifier": "eabbbfc60b769ce88bf40c99ad625015abb5ca56756aa409b462c048d4c2f17da3366868eeafb062eab7f0a355777b3aeb0ffd090672d0e77d39eab2c595af3d",
+        "block": "cba582d42459097a99d79514bbd21607680c56145fb9776e48b86c6156277d01012e346eda6a277705d910276ad903a0e661a6c78d711ad8c1c283bc09db891f",
+        "daa": 7936
+      },
+      {
+        "card": 5,
+        "verifier": "0e64341a718a2d4f24daadc86b9a3ee16c6dec546f210a3253b606d99212c3a888243262268361df62372b1be676008b7f219982526699d92f61b47ebb986074",
+        "block": "43b7b56c512bae6ec3fdeef9751ec8f959e8d3c0aafa328f326f6261f4e579a60d2ca851bc2b562b9e8800e56190f6b2ba195ec0f5a0739006ece5e98e2e28f9",
+        "daa": 7937
+      },
+      {
+        "card": 6,
+        "verifier": "fbb2adaab288a2529ab9b8005c747e7b57deae3ac340e2787c83c3a664461e8055abe928968dd20a2ac132169cab1a80e469a7946c9e423ef67d99453304274a",
+        "block": "8ebb50457cd61338576861df102d9dd0bcac33855aa6ed1adf7a5d9a1ca5612b81e45c5e38e3bd9a0c2a9b700a7720f2d56d3c3b1963672e54aba6f1a03d3020",
+        "daa": 7938
+      },
+      {
+        "card": 7,
+        "verifier": "0a99a814134495d97da29c2952347b7cbd1854c27bb116e7bd8557e92cc237916470e9764623e6b62d0241dd665af0296f2655be94219b156b7810268b423963",
+        "block": "7944ce4e32a5521132309c5166a3bc323d459209a79aad2e3cc16105646ba1714216c7b8d552e7540c2a175c0fbee4bbf99ffc20924443ac516ba1174a7b07b5",
+        "daa": 7939
+      }
+    ],
+    "blocks": 7481,
+    "archive_sha256": "8d27daf09b0967f5683f18604a6d21494e5316ebdb0c91c0dc63f2c6145c99b3",
+    "writer": 4771,
+    "binary_sha256": "399e147f1b83b4d1a248a4a73e8c6554138d52be8018be58b80dbc95ad954c87"
+  },
+  "readers": [
+    5629,
+    5848
+  ],
+  "native": {
+    "accepted": "5292996bea7057622435449112b9b501e1bc0eadfb3b1b6e9f9f2371c503314cd96cea658a716db81b9b812b301a668a9666218c819ca15e8dddf4baf5407f7d",
+    "approvals": 75,
+    "certified_daa": 11673,
+    "claim": "50f0da2d6daafd3571b6cef638bfb5bf9ced1f6b5e85f3d59c436a6312d76d1bcd0143ff06a8858aaa060466964ffba1a91d96c78a96d3406e4a251e290a0cf5",
+    "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+    "drawn": 75,
+    "final_daa": 6633,
+    "frontier": [
+      12984,
+      "5292996bea7057622435449112b9b501e1bc0eadfb3b1b6e9f9f2371c503314cd96cea658a716db81b9b812b301a668a9666218c819ca15e8dddf4baf5407f7d"
+    ],
+    "replay": "b8020b67fa1ba614689910c65234890f698ef3dd17ee3299c9764953d2287c60e1bcffa6e06fa087f3e5017f51bb2bd70ba51c3ed89a906815840a0db24ffb01",
+    "state": "7ad446062669d5732e12be711dbb998746c4a4e8393e03d8d624d946d7a370ebe450b7aad3510cf1b3c8c30093b2c31a66ad6a0d2721303652485bd15ebd789a",
+    "tip": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e"
+  },
+  "audit": {
+    "close": "67a7b2b03deaec69c39452c7645a9ae245cc890bcc5329e2f52366e838a97a2c94a6d680e0d0ad27fbef78c3623e2c5f7283766e992ae4bf121c1fe1b6eb0b04",
+    "daa": 11673,
+    "deadline": 90641,
+    "publication": "held",
+    "readiness": {
+      "blocking": {
+        "block": "d41b25ea2655daf005db7c33f518345a11478402baa18f0f7cba544843e7409e00db8bb76ab149f4f9340af6c09f2d4fc0bf64ab4149649da208855e3601c99b",
+        "blue": 1,
+        "daa": 0,
+        "earliestReadyInDaa": 6258,
+        "evidence": {
+          "anchors": 0,
+          "maturedFacts": 0,
+          "pendingFacts": 1,
+          "pendingWork": "1388926972416",
+          "work": "0"
+        },
+        "inSafePrefix": false,
+        "openClaimsTotal": 0,
+        "openSessionsTotal": 0,
+        "waits": [
+          {
+            "have": 0,
+            "kind": "insufficientDepth",
+            "need": 1
+          },
+          {
+            "have": "0",
+            "kind": "insufficientWork",
+            "need": "1"
+          },
+          {
+            "earliestMaturedDaa": 17931,
+            "facts": 1,
+            "kind": "waitingMaturity",
+            "readyDaa": 17931,
+            "waitDaa": 6258,
+            "work": "1388926972416"
+          }
+        ]
+      },
+      "executedEffects": 23350,
+      "finalized": {
+        "finalized": null,
+        "pruningBlue": 0,
+        "pruningPoint": "20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69",
+        "wait": {
+          "kind": "noSafePrefix"
+        },
+        "withdrawnFrom": null
+      },
+      "generation": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e",
+      "maturity": {
+        "claimRetirementDaa": 3000,
+        "quantumMaturityDaa": 120,
+        "rule": "v1"
+      },
+      "policy": {
+        "maxClassPermille": 1000,
+        "maxOperatorPermille": 1000,
+        "settledAnchorDepth": 1,
+        "uniqueMatureWork": "1"
+      },
+      "safe": null,
+      "safeLagBlue": null,
+      "safeLagDaa": null,
+      "sinkBlue": 23350,
+      "sinkDaa": 11673,
+      "skipped": {
+        "baseClass": 0,
+        "bondNotHeld": 0,
+        "missingReceipt": 0,
+        "openDa": 0,
+        "uncertified": 1,
+        "unpriced": 0,
+        "voided": 0
+      },
+      "stop": "insufficientDepth",
+      "stoppedEarly": null,
+      "tip": {
+        "block": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e",
+        "blue": 23350,
+        "daa": 11673,
+        "earliestReadyInDaa": null,
+        "evidence": {
+          "anchors": 0,
+          "maturedFacts": 0,
+          "pendingFacts": 0,
+          "pendingWork": "0",
+          "work": "0"
+        },
+        "inSafePrefix": false,
+        "openClaimsTotal": 1,
+        "openSessionsTotal": 0,
+        "waits": [
+          {
+            "effectBlue": 23350,
+            "frontierBlue": 12984,
+            "frontierOnBranch": true,
+            "kind": "frontierBehind"
+          },
+          {
+            "acceptedBlue": 12984,
+            "claim": "50f0da2d6daafd3571b6cef638bfb5bf9ced1f6b5e85f3d59c436a6312d76d1bcd0143ff06a8858aaa060466964ffba1a91d96c78a96d3406e4a251e290a0cf5",
+            "kind": "openClaim",
+            "nextDeadlineDaa": 11673,
+            "retentionDaa": 17931,
+            "stage": "final",
+            "waitDaa": 6258
+          },
+          {
+            "have": 0,
+            "kind": "insufficientDepth",
+            "need": 1
+          },
+          {
+            "have": "0",
+            "kind": "insufficientWork",
+            "need": "1"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "state": "7ad446062669d5732e12be711dbb998746c4a4e8393e03d8d624d946d7a370ebe450b7aad3510cf1b3c8c30093b2c31a66ad6a0d2721303652485bd15ebd789a",
+    "tip": "0b30c252696ba43a5fddca4ea2dfa7cd4685491d73e58b34a91f9ae8e0875ca3559539782a830c815409a24f363802a4948c7202cd32c61d06ffaeff7c61e67e"
+  },
+  "separate_studio_moe2": {
+    "processes": [
+      5110,
+      5112,
+      5113
+    ],
+    "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "inventory": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "registration": "ed96b9531672e85d486a9c4bfd8863f3a10d34a83731724ac5064740fba2e62bf31a7ccb487744bc9444f96a7915687b44b7f07775a0d950679b27112329ebc7",
+    "settlement_parent": "fbf5c2a7153415e4bdc92e090916da3e61afda666905c9dd49c1781bb57f75bbb2487b38f68e2845a96da27c507c5e46a6453382edffe74a0884ece79e184b34",
+    "settlement_child": "34ca387828cb5d26d31983cc425e4577dedc64f429ff7eeb2ec663862e9c885d4e0dbeb9bd4cf4183bae9e7e965d674c04d0fa5fbceeedf17cc638f6e0e156e9",
+    "reservation_sompi": 16000000000,
+    "market_sompi": 8000000000,
+    "retired_units": 1,
+    "miner_sompi": 6400000000,
+    "panel_sompi": 1600000000
+  }
+}
