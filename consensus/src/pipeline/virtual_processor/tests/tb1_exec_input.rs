@@ -31,7 +31,7 @@ pub(super) fn terms(anchor: Hash64) -> ExecInputTerms<'static> {
         target,
         accounting: [22; 64],
         open_daa: 0,
-        deadline_exclusive_daa: 12,
+        deadline_exclusive_daa: 40,
     }
 }
 

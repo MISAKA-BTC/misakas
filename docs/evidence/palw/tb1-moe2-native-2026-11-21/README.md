@@ -32,6 +32,16 @@ VSS の終了記録、資源予約参照、consumer と policy の内容、成�
 
 実モデルを伴う再現には、SHA-256 が `48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90` の `model.palwtir`（180,336,320バイト）を所持する環境で、下記の native 試験を実行する際に `MISAKA_PRIVATE_TB1_TIR_ARTIFACT` へそのパスを指定する。変数を省略した通常の試験では、登録・入力の導出・分岐後の停止までを検査する。
 
+### EXEC・PANEL 両方の資格記録を署名付き登録に含めた試験
+
+隔離3プロセスが、EXEC と PANEL それぞれについて3 dealer × 3 holder の署名付き Ready から別々の QualRoot を計算した。最初の heartbeat は、2個の RoundRef とそれぞれの QualRoot から計算した64バイトのハッシュを coinbase に記録した。登録者はそのブロックのハッシュと両ラウンドの記録に署名した。各プロセスはブロック本文と選択鎖上の順序を照合し、次の heartbeat で登録集合を凍結した。PANEL の資格記録への EXEC 記録の流用、準備ブロックより古い登録アンカー、別の PANEL 記録に対する登録者署名はいずれも拒否された。登録集合が空でも、準備ブロックの記録は必須になる。
+
+初回は凍結記録を attempt ブロックに載せたところ、そのブロックが新しい claim を開き、holder は finality を確認できず share を公開する前に停止した。heartbeat を使った再試験では、3プロセスが同じ EXEC seed を復元し、38個の入力 token から通常の回答 token ID `198` を生成した。input・execution・trace・output の各 root と trace leaf 数 191,967 が一致した。分岐後には元の凍結ブロックが選択鎖に残ったまま finality が撤回され、holder は公開を停止した。[バイナリとモデルの SHA-256、各プロセスの観測値](joint-qualification.txt)
+
+同じバイナリで別の隔離チェーンに Studio モデルを登録した。3プロセスで登録直後の市場と state root が一致し、再編成後には登録者の担保 100,000,000 sompi が戻った。
+
+今回の新しい隔離仕事の期限は DAA 40、PANEL の公開予定期間は DAA 20 以上 30 未満。VSS 終了記録・資源予約・資金参照は試験入力である。両ラウンドの資格記録を登録時点で固定するところまでを検証した。独立した PANEL seed の公開と抽選、選出者の完全再実行、FOW1 出力 z、Court・Final・受賞・決済は引き続き未検証。
+
 ## MOE2
 
 隔離した状態遷移は、追加モデルの登録ブロックの delta に class と初期市場を一緒に書き込む。分類には登録時点の native catalog、登録者、モデル ID、artifact root を使う。core の登録では市場行を作らない。決済帳簿は delta の旧値・新値とブロック後の市場を照合する。登録を巻き戻すと市場も同じ遷移で取り消される。

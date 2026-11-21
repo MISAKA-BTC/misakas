@@ -97,6 +97,10 @@ pub struct NativePublicationGate {
 }
 
 impl NativePublicationGate {
+    pub fn holder_freeze(&self) -> Tb1HolderFreeze {
+        self.freeze
+    }
+
     pub fn observe(
         native: &dyn ConsensusApi,
         close: Hash64,

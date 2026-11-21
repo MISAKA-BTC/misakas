@@ -20,7 +20,7 @@ use std::{
     io,
 };
 
-pub const REGISTRATION_DOMAIN: &[u8] = b"MISAKA/private/FOW1/input-owner/v1";
+pub const REGISTRATION_DOMAIN: &[u8] = b"MISAKA/private/FOW1/input-owner/v2";
 
 /// The fixed token interface of this private profile is BOS=0, POW=1, SEP=2,
 /// ByteToken[b]=3+b. The exact model/class and its tokenizer are bound before release.
@@ -50,23 +50,20 @@ pub struct ExecInputTerms<'a> {
 impl ExecInputTerms<'_> {
     fn context(
         &self,
-        exec: &Tb1MiningRound,
-        panel: &Tb1MiningRound,
+        preparation: Hash64,
+        rounds: &QualifiedExecPanel,
         owner: &MLDSA65VerificationKey,
         max_tokens: usize,
     ) -> io::Result<Vec<u8>> {
         let n = u32::try_from(self.job_tokens.len()).map_err(|_| invalid("TB1 job too long"))?;
         let positions = n.checked_add(35).and_then(|n| n.checked_add(self.decode_tokens.checked_sub(1)?));
-        if exec.purpose != Tb1MiningPurpose::Exec
-            || panel.purpose != Tb1MiningPurpose::Panel
-            || exec.chain_id != panel.chain_id
-            || panel.close_blue_score <= exec.close_blue_score
-            || self.vocab < 259
+        if self.vocab < 259
             || self.max_leaves == 0
             || n == 0
             || self.job_tokens.len() > max_tokens
             || positions.is_none_or(|n| n > self.max_positions)
             || self.job_tokens.iter().any(|&id| id >= self.vocab)
+            || rounds.panel.release_from_daa >= self.deadline_exclusive_daa
             || self.open_daa >= self.deadline_exclusive_daa
             || self.target[0] > 1
             || (self.target[0] == 1 && self.target[1..].iter().any(|&b| b != 0))
@@ -75,10 +72,10 @@ impl ExecInputTerms<'_> {
         }
         let job = prompt_token_ids_root_v1(self.job_tokens).map_err(|_| invalid("invalid job token commitment"))?;
         let mut c = Vec::new();
-        c.extend_from_slice(b"MISAKA/private/FOW1/TIR-input/012-byte3/v1");
+        c.extend_from_slice(b"MISAKA/private/FOW1/TIR-input/012-byte3/v2");
         for field in [
-            exec.id(),
-            panel.id(),
+            preparation.as_bytes(),
+            rounds.commitment(),
             self.registration_anchor.as_bytes(),
             self.candidate_set,
             self.beneficiary,
@@ -106,12 +103,12 @@ impl ExecInputTerms<'_> {
 
     pub fn registration_key(
         &self,
-        exec: &Tb1MiningRound,
-        panel: &Tb1MiningRound,
+        preparation: Hash64,
+        rounds: &QualifiedExecPanel,
         owner: &MLDSA65VerificationKey,
         max_tokens: usize,
     ) -> io::Result<[u8; 64]> {
-        Ok(reg_key(&self.context(exec, panel, owner, max_tokens)?))
+        Ok(reg_key(&self.context(preparation, rounds, owner, max_tokens)?))
     }
 }
 
@@ -128,9 +125,60 @@ pub struct SignedExecInput<'a> {
     pub funding_ref: [u8; 64],
 }
 
+/// The two signed qualification cuts of the private input profile. Dealer
+/// termination and resource references are inputs to qualification. The
+/// commitment authenticates those inputs as of the preparation block.
+pub struct QualifiedExecPanel {
+    exec: Tb1MiningRound,
+    panel: Tb1MiningRound,
+    exec_qual: [u8; 64],
+    marker: [u8; 64],
+}
+
+impl QualifiedExecPanel {
+    pub fn new(
+        exec: Tb1MiningRound,
+        exec_q: &Tb1Qualification<'_>,
+        panel: Tb1MiningRound,
+        panel_q: &Tb1Qualification<'_>,
+    ) -> io::Result<Self> {
+        if exec.purpose != Tb1MiningPurpose::Exec
+            || panel.purpose != Tb1MiningPurpose::Panel
+            || exec.chain_id != panel.chain_id
+            || exec.close_blue_score >= panel.close_blue_score
+            || exec.release_from_daa >= panel.release_from_daa
+        {
+            return Err(invalid("invalid private EXEC/PANEL schedule"));
+        }
+        for (round, q) in [(&exec, exec_q), (&panel, panel_q)] {
+            if q.round_ref() != round.id()
+                || q.roster().root().ok() != Some(round.roster_root)
+                || round.release_from_daa >= round.deadline_exclusive_daa
+            {
+                return Err(invalid("qualification does not match the scheduled round"));
+            }
+        }
+        let marker = Sha3_512::new()
+            .chain_update(b"MISAKA/private/TB1/qualified-exec-panel/v1")
+            .chain_update(exec.id())
+            .chain_update(exec_q.root())
+            .chain_update(panel.id())
+            .chain_update(panel_q.root())
+            .finalize()
+            .into();
+        Ok(Self { exec, panel, exec_qual: exec_q.root(), marker })
+    }
+
+    pub fn commitment(&self) -> [u8; 64] {
+        self.marker
+    }
+}
+
 pub struct ExecInputBatch<'a> {
     root: [u8; 64],
     round: [u8; 64],
+    exec_qual: [u8; 64],
+    preparation: Hash64,
     #[cfg(feature = "private-tb1-tir")]
     chain: [u8; 64],
     entries: BTreeMap<u64, (Vec<u8>, &'a ExecInputTerms<'a>)>,
@@ -140,8 +188,9 @@ impl<'a> ExecInputBatch<'a> {
     /// Validate each signed preimage, reject any slot or RegKey alias and
     /// hash in slot order. ML-DSA signing randomness cannot change a launch.
     pub fn from_signed(
-        exec: &Tb1MiningRound,
-        panel: &Tb1MiningRound,
+        native: &dyn ConsensusApi,
+        preparation: Hash64,
+        rounds: &QualifiedExecPanel,
         rows: &[SignedExecInput<'a>],
         max_records: usize,
         max_job_tokens: usize,
@@ -149,12 +198,28 @@ impl<'a> ExecInputBatch<'a> {
         if rows.len() > max_records {
             return Err(invalid("EXEC batch exceeds registration budget"));
         }
+        let exec = &rounds.exec;
+        let tip = native.get_sink();
+        let header = native.get_header(preparation).map_err(io::Error::other)?;
+        if header.blue_score >= exec.close_blue_score
+            || header.daa_score >= exec.release_from_daa
+            || !native.is_chain_ancestor_of(preparation, tip).map_err(io::Error::other)?
+            || !native.palw_coinbase_commits_to(exec.chain_id, preparation, &rounds.marker).map_err(io::Error::other)?
+        {
+            return Err(invalid("missing joint qualification before EXEC close"));
+        }
         let count = u32::try_from(rows.len()).map_err(|_| invalid("EXEC registration count overflow"))?;
         let mut entries = BTreeMap::new();
         let mut keys = BTreeSet::new();
         let mut allocations = BTreeMap::new();
         for row in rows {
-            let c = row.terms.context(exec, panel, row.owner, max_job_tokens)?;
+            let anchor = row.terms.registration_anchor;
+            if !native.is_chain_ancestor_of(preparation, anchor).map_err(io::Error::other)?
+                || !native.is_chain_ancestor_of(anchor, tip).map_err(io::Error::other)?
+            {
+                return Err(invalid("registration anchor outside prepared selected history"));
+            }
+            let c = row.terms.context(preparation, rounds, row.owner, max_job_tokens)?;
             let key = reg_key(&c);
             if !keys.insert(key) || entries.insert(row.slot, (c, row.terms)).is_some() {
                 return Err(invalid("duplicate EXEC slot or RegKey"));
@@ -164,15 +229,21 @@ impl<'a> ExecInputBatch<'a> {
             allocations.insert(row.slot, (key, row.funding_ref));
         }
         let mut h = Sha3_512::new()
-            .chain_update(b"MISAKA/private/FOW1/exec-input-set/v1")
-            .chain_update(exec.id())
+            .chain_update(b"MISAKA/private/FOW1/exec-input-set/v2")
+            .chain_update(rounds.marker)
+            .chain_update(preparation.as_bytes())
             .chain_update(count.to_be_bytes());
         for (slot, (key, funding)) in allocations {
             h.update(slot.to_be_bytes());
             h.update(key);
             h.update(funding);
         }
+        if native.get_sink() != tip {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC registration view moved"));
+        }
         Ok(Self {
+            preparation,
+            exec_qual: rounds.exec_qual,
             root: h.finalize().into(),
             round: exec.id(),
             #[cfg(feature = "private-tb1-tir")]
@@ -194,12 +265,16 @@ impl<'a> ExecInputBatch<'a> {
     ) -> io::Result<FrozenExecInputs<'a>> {
         if closure.round.purpose != Tb1MiningPurpose::Exec
             || closure.round.id() != self.round
+            || closure.qual_root != self.exec_qual
             || closure.consumer_set_root != self.root
         {
             return Err(invalid("EXEC input set differs from closure"));
         }
         let header = native.get_header(close).map_err(io::Error::other)?;
         let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
+        if !native.is_chain_ancestor_of(self.preparation, parent).map_err(io::Error::other)? {
+            return Err(invalid("EXEC close does not descend from its preparation"));
+        }
         for (_, terms) in self.entries.values() {
             if terms.policy != closure.policy_root
                 || !(terms.open_daa..terms.deadline_exclusive_daa).contains(&header.daa_score)
@@ -261,6 +336,11 @@ impl DerivedExecInput<'_> {
 }
 
 impl<'a> FrozenExecInputs<'a> {
+    /// Use the gate checked against these exact consumers for holder signing and publication.
+    pub fn publication_gate(&self) -> &NativePublicationGate {
+        &self.gate
+    }
+
     pub fn derive(
         &self,
         native: &dyn ConsensusApi,
