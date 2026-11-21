@@ -1,7 +1,10 @@
 //! Read-only comparison of two replay schedules on previously recorded Originals.
 use kaspa_consensus_core::Hash64;
 use misaka_palw_sdk::qf1_local::residual_tiles::Candidate;
-use misaka_palw_tir_exec::node::{TirArtifactV1, qf1::cost_review::ArchivedOriginal};
+use misaka_palw_tir_exec::node::{
+    TirArtifactV1,
+    qf1::{LocalInstance, cost_review::ArchivedOriginal},
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::{error::Error, fs, path::Path, time::Instant};
@@ -52,14 +55,59 @@ struct Plan {
     trials: Vec<Record>,
 }
 
+fn measure_length_prediction(
+    instance: &LocalInstance<'_>,
+    trials: &[ArchivedOriginal],
+    limit: u32,
+    cap: u64,
+) -> Result<(), Box<dyn Error>> {
+    let (first, targets) = trials.split_first().ok_or("missing calibration input")?;
+    let start = Instant::now();
+    instance.verify_independent_original(first, limit, cap)?;
+    let predicted = u32::try_from(first.answer.len())?;
+    println!("{}", json!({"calibration_ticket":first.ticket,"predicted":predicted,"elapsed_us":start.elapsed().as_micros()}));
+    for (index, original) in targets.iter().enumerate() {
+        for predict in [index % 2 == 0, index % 2 != 0] {
+            let start = Instant::now();
+            let retry_reason = if predict {
+                instance.verify_predicted_length(original, predicted, limit, cap)?
+            } else {
+                instance.verify_independent_original(original, limit, cap)?;
+                None
+            };
+            println!(
+                "{}",
+                json!({"target":index,"predict":predict,"retry_reason":retry_reason,"elapsed_us":start.elapsed().as_micros(),
+                                  "verified_ticket":original.ticket})
+            );
+        }
+    }
+    // A control outside the timed sample exercises the cost of a wrong guess.
+    // Only the calibration length determines this guess.
+    let wrong = if predicted == 1 { 2 } else { predicted - 1 };
+    let start = Instant::now();
+    let control = targets.first().ok_or("missing prediction target")?;
+    let retry_reason = instance.verify_predicted_length(control, wrong, limit, cap)?;
+    println!(
+        "{}",
+        json!({"control_target":0,"predicted":wrong,"retry_reason":retry_reason,"elapsed_us":start.elapsed().as_micros(),
+                          "verified_ticket":control.ticket})
+    );
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let [parent, section, plan_path] = args.as_slice() else {
-        return Err("usage: qf1-paired-cost <parent> <tile-section> <plan.json>".into());
+    let (args, predict) = match args.as_slice() {
+        [flag, rest @ ..] if flag == "--predict-length" => (rest, true),
+        rest => (rest, false),
+    };
+    let [parent, section, plan_path] = args else {
+        return Err("usage: qf1-paired-cost [--predict-length] <parent> <tile-section> <plan.json>".into());
     };
     let plan: Plan = serde_json::from_slice(&fs::read(plan_path)?)?;
-    if plan.trials.len() < 2 || plan.trials.len() % 2 != 0 {
-        return Err("expected a nonempty series of pairs".into());
+    if plan.trials.len() < 2 || (!predict && plan.trials.len() % 2 != 0) || (predict && plan.decode_limit < 2) {
+        return Err("insufficient trials or decode budget for the selected comparison".into());
     }
     let trials: Vec<_> = plan.trials.into_iter().map(Record::original).collect::<Result<_, _>>()?;
     let start = Instant::now();
@@ -70,6 +118,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let id = instance.identity();
     if (id.class, id.inventory, id.descriptor) != (plan.class_id, plan.inventory, plan.descriptor) {
         return Err("model differs from archived instance".into());
+    }
+    if predict {
+        println!(
+            "{}",
+            json!({"method":"predict-length","setup_ms":start.elapsed().as_millis(),"class_id":id.class,
+                              "descriptor":id.descriptor,"inventory":id.inventory,"trials":trials.len(),
+                              "decode_limit":plan.decode_limit,"max_leaves":plan.max_leaves})
+        );
+        return measure_length_prediction(&instance, &trials, plan.decode_limit, plan.max_leaves);
     }
     println!(
         "{}",

@@ -69,6 +69,34 @@ impl LocalInstance<'_> {
         )?)
     }
 
+    /// Measure a length prediction on an archived Original. The numerical run
+    /// still determines every token and Stop. Include the complete independent
+    /// retry when the prediction misses and retain the failed trace diagnostic.
+    /// The caller times both paths together.
+    pub fn verify_predicted_length(
+        &self,
+        original: &ArchivedOriginal,
+        predicted: u32,
+        limit: u32,
+        cap: u64,
+    ) -> Result<Option<String>, String> {
+        if predicted == 0 || predicted > limit {
+            return Err("predicted length outside QF1 decode budget".into());
+        }
+        let request = TraceRequest { context_digest: original.context, answer_len: predicted, open: None };
+        match self.replay_trace(&original.prompt, limit, cap, original.context, original.attempt, request) {
+            Ok(trace) => {
+                original.compare(trace)?;
+                Ok(None)
+            }
+            Err(error) if original.answer.len() == predicted as usize => Err(error),
+            Err(error) => {
+                self.verify_independent_original(original, limit, cap)?;
+                Ok(Some(error))
+            }
+        }
+    }
+
     /// Compute the common prefill once, while feeding both originals every
     /// committed value. Export/import and each attempt-specific rehash are
     /// part of the measured route. The last prefill position predicts a token
