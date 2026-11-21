@@ -118,6 +118,11 @@ impl FrozenExecInputs<'_> {
 }
 
 impl LocalPanelCut {
+    /// Committed consumer-set digest for retaining the public closure preimage.
+    pub fn consumer_set_root(&self) -> [u8; 64] {
+        self.closure.consumer_set_root
+    }
+
     pub fn commitment(&self, parent: Hash64) -> [u8; 64] {
         self.closure.commitment(parent)
     }

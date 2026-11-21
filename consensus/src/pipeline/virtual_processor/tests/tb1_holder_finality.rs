@@ -180,11 +180,22 @@ fn qualified<'a>(
     session: u8,
     transcripts: Option<&[Hash64; 4]>,
 ) -> Tb1Qualification<'a> {
+    qualified_recording_ready(round_ref, roster, keys, dealers, session, transcripts, |_| {})
+}
+
+fn qualified_recording_ready<'a>(
+    round_ref: &'a [u8],
+    roster: Tb1Roster<'a>,
+    keys: &[ml_dsa_65::MLDSA65KeyPair],
+    dealers: &'a [usize],
+    session: u8,
+    transcripts: Option<&[Hash64; 4]>,
+    mut record: impl FnMut(&[u8]),
+) -> Tb1Qualification<'a> {
     qualification_from_ready(round_ref, roster, dealers, session, transcripts, |_, r| {
-        ml_dsa_65::sign(&keys[r.holder_slot].signing_key, &ready_message(r, 2048).unwrap(), READY_CONTEXT, [9; 32])
-            .unwrap()
-            .as_slice()
-            .to_vec()
+        let sig = ml_dsa_65::sign(&keys[r.holder_slot].signing_key, &ready_message(r, 2048).unwrap(), READY_CONTEXT, [9; 32]).unwrap();
+        record(sig.as_slice());
+        sig.as_slice().to_vec()
     })
     .unwrap()
 }
@@ -406,7 +417,10 @@ async fn run(stable: bool, registered: bool) {
     let q = qualified(round_ref, roster, &keys, &dealers, 7, None);
     let slot = if child_dir.is_some() { std::env::var(READER_SLOT).unwrap().parse::<usize>().unwrap() } else { 0 };
     let setup = stable.then(|| stable_panel::provision(dir.path(), child_dir.as_deref(), slot, &panel_id));
-    let panel_q = qualified(&panel_id, roster, &keys, &dealers, 29, setup.as_ref().map(|p| &p.roots));
+    let mut panel_ready = Vec::new();
+    let panel_q = qualified_recording_ready(&panel_id, roster, &keys, &dealers, 29, setup.as_ref().map(|p| &p.roots), |sig| {
+        panel_ready.push(sig.to_vec())
+    });
     assert!(QualifiedExecPanel::new(round, &q, panel, &q).is_err());
     assert!(QualifiedExecPanel::new(round, &panel_q, panel, &q).is_err());
     let rounds = QualifiedExecPanel::new(round, &q, panel, &panel_q).unwrap();
@@ -1190,6 +1204,7 @@ async fn run(stable: bool, registered: bool) {
                 &keys[slot],
                 &panel_q,
                 &panel_id,
+                &panel_ready,
                 &cut,
                 close_parent,
                 block.hash(),

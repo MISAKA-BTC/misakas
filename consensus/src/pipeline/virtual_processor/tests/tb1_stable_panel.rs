@@ -220,6 +220,67 @@ struct ColdPanelReceipt {
     deadline: u64,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ColdPanelSeed {
+    keys: Vec<Vec<u8>>,
+    transcript_roots: [Hash64; 4],
+    ready: Vec<Vec<u8>>,
+    consumers: Hash64,
+    releases: Vec<ReleaseRecord>,
+}
+
+fn recover_cold_panel_seed(dir: &Path, meta: &ColdPanelReceipt, observation: &TestConsensus, expired: &TestConsensus) {
+    use misaka_palw_remote::tb1_exposure::publication::NativePublicationGate;
+    let path = dir.join("seed-evidence.json");
+    let file = File::open(path).unwrap();
+    assert!(file.metadata().unwrap().len() <= 512 * 1024);
+    let saved: ColdPanelSeed = serde_json::from_reader(file).unwrap();
+    assert_eq!((saved.keys.len(), saved.ready.len(), saved.releases.len()), (4, 9, 3));
+    let public: Vec<_> = saved.keys.iter().map(|k| ml_dsa_65::MLDSA65VerificationKey::new(k.as_slice().try_into().unwrap())).collect();
+    let coordinates: Vec<_> = (1..=4).map(field).collect();
+    let roster = Tb1Roster { coordinates: &coordinates, holder_keys: &public, f: 1 };
+    // The isolated unregistered fixture fixes these values before EXEC.
+    let round = Tb1MiningRound {
+        chain_id: meta.domain.as_bytes(),
+        roster_root: roster.root().unwrap(),
+        role_epoch: 1,
+        logical_round: 3,
+        purpose: Tb1MiningPurpose::Panel,
+        schedule_id: [9; 64],
+        close_blue_score: 25,
+        release_from_daa: 26,
+        deadline_exclusive_daa: 50,
+    };
+    let id = round.id();
+    let q =
+        qualification_from_ready(&id, roster, &[0, 1, 2], 29, Some(&saved.transcript_roots), |i, _| saved.ready[i].clone()).unwrap();
+    let closure = Tb1MiningClosure {
+        round,
+        qual_root: q.root(),
+        consumer_set_root: saved.consumers.as_bytes(),
+        policy_root: LocalReplayPolicy::new(2).unwrap().id().as_bytes(),
+    };
+    let gate = NativePublicationGate::observe(observation.as_ref(), meta.close, &closure, &q).unwrap();
+    let parent = observation.get_ghostdag_data(meta.close).unwrap().selected_parent;
+    let freeze_id = closure.commitment(parent);
+    assert_eq!(freeze_id, meta.close_marker.as_bytes());
+    let decoded: Vec<_> = saved.releases.iter().map(ReleaseRecord::decode).collect();
+    let rows = views(&decoded, Tb1ReleaseContext { round_ref: &id, qual_root: q.root(), freeze_id });
+    let seed = gate.read_seed(expired.as_ref(), meta.batch, meta.certificate, &rows, &q, LIMITS).unwrap();
+    assert!(gate.read_seed(expired.as_ref(), meta.batch, meta.certificate, &rows[..2], &q, LIMITS).is_err());
+    for dealer in 0..3 {
+        let points: Vec<_> = decoded.iter().map(|r| Tb1DealerPoint { holder_slot: r.holder, value: r.shares[dealer].1 }).collect();
+        let polynomial = reconstruct_dealer(&coordinates, 1, &points, LIMITS.matrix_cells).unwrap();
+        assert_eq!(digest(&id, dealer, &polynomial.coefficients), saved.transcript_roots[dealer]);
+    }
+    println!(
+        "QF1 restored seed pid={} qualification={} seed={}",
+        std::process::id(),
+        Hash64::from_bytes(q.root()),
+        faster_hex::hex_string(seed.as_bytes())
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires the two completed native checkpoints of a private QF1 peer"]
 async fn private_read_cold_panel_receipt() {
@@ -233,7 +294,6 @@ async fn private_read_cold_panel_receipt() {
     assert_eq!(snapshot.generation, meta.observed);
     assert!(observation.is_chain_ancestor_of(meta.close, snapshot.finalized.unwrap()).unwrap());
     assert!(observation.palw_coinbase_commits_to(meta.domain.as_bytes(), meta.close, &meta.close_marker.as_bytes()).unwrap());
-    drop(observation);
     let expired = reopen_checkpoint(&config, &dir.join("at-original-deadline"));
     assert_eq!(expired.get_sink(), meta.deadline_tip);
     let current = expired.get_native_settlement_snapshot().unwrap().unwrap();
@@ -254,6 +314,9 @@ async fn private_read_cold_panel_receipt() {
     }
     assert!(expired.get_header(meta.accepted).unwrap().daa_score < meta.deadline);
     assert_eq!(expired.get_header(meta.deadline_tip).unwrap().daa_score, meta.deadline);
+    if std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_SEED").is_some() {
+        recover_cold_panel_seed(&dir, &meta, &observation, &expired);
+    }
     let path = dir.join("accepted-panel-replies");
     assert_eq!(LocalReplayPolicy::new(2).unwrap().read_reply_evidence(File::open(&path).unwrap()).unwrap().len(), 2);
     println!(
@@ -274,6 +337,7 @@ pub(super) async fn release(
     key: &ml_dsa_65::MLDSA65KeyPair,
     q: &Tb1Qualification<'_>,
     id: &[u8; 64],
+    panel_ready: &[Vec<u8>],
     cut: &LocalPanelCut,
     close_parent: Hash64,
     original_receipt: Hash64,
@@ -369,6 +433,16 @@ pub(super) async fn release(
     let seed = gate.read_seed(api, batch.hash(), cert.hash(), &rows, q, LIMITS).unwrap();
     assert!(gate.read_seed(api, batch.hash(), cert.hash(), &rows[..2], q, LIMITS).is_err());
     assert_ne!(seed.as_bytes(), exec_seed);
+    if let Some(path) = &archive_dir {
+        let saved = ColdPanelSeed {
+            keys: q.roster().holder_keys.iter().map(|k| k.as_slice().to_vec()).collect(),
+            transcript_roots: setup.roots,
+            ready: panel_ready.to_vec(),
+            consumers: Hash64::from_bytes(cut.consumer_set_root()),
+            releases: records,
+        };
+        std::fs::write(path.join("seed-evidence.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
+    }
     for d in 0..3 {
         let points: Vec<_> = decoded.iter().map(|r| Tb1DealerPoint { holder_slot: r.holder, value: r.shares[d].1 }).collect();
         let recovered = reconstruct_dealer(q.roster().coordinates, 1, &points, LIMITS.matrix_cells).unwrap();

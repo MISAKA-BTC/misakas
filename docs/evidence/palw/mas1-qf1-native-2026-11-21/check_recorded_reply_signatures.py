@@ -13,7 +13,8 @@ from check_real_lifecycle import check
 DOMAIN = b"MISAKA/private/TB1/QF1/complete-replay/v1"
 
 
-def verify(log, openssl, *, checkpoints=False, cold_readers=()):
+def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=False):
+    require(not require_seed or len(cold_readers) == 3, "seed recovery requires three cold readers")
     full = json.loads((HERE / "qf1-native-tile-artifacts.json").read_bytes())["full"]
     claim = check(log, {"class_id": full["class_id"], "artifact_root": full["inventory"]},
                   decode_limit=16, recorded_replies=True)
@@ -51,6 +52,10 @@ def verify(log, openssl, *, checkpoints=False, cold_readers=()):
         expected = dict(observed=observed, deadline_tip=deadline_tip, accepted=block, marker=marker, deadline=panel["deadline"],
                         close=panel["panel_close"], batch=panel["panel_batch"], certificate=panel["panel_certificate"],
                         close_marker=panel["panel_marker"])
+        if require_seed:
+            qpids, (qualification,) = shared_rows(log, r"TB1 qualification pid=(\d+) preparation=[0-9a-f]{128} exec=[0-9a-f]{128} panel=([0-9a-f]{128}) consumer=")
+            require(qpids == pids, "unexpected qualification writers")
+            result.update(panel_qualification=qualification, panel_seed=panel["panel_seed"])
         mapping = {}
         domains = set()
         for reader_log in cold_readers:
@@ -58,6 +63,9 @@ def verify(log, openssl, *, checkpoints=False, cold_readers=()):
             rows = re.findall(r"QF1 cold reader pid=(\d+) receipt=(\{[^\n]*\}) replies=([0-9a-f]+)", reader_log)
             require(len(rows) == 1, "missing or duplicate cold reader result")
             pid, meta, stored = rows[0]
+            if require_seed:
+                recovered = re.findall(r"QF1 restored seed pid=(\d+) qualification=([0-9a-f]{128}) seed=([0-9a-f]{64})", reader_log)
+                require(recovered == [(pid, qualification, panel["panel_seed"])], "cold reader seed or qualification mismatch")
             meta = json.loads(meta)
             writer = meta["writer"]
             require(all(meta.get(k) == v for k, v in expected.items()) and stored == data, "cold evidence differs from signed receipt")
@@ -76,6 +84,7 @@ if __name__ == "__main__":
     parser.add_argument("--openssl", default="openssl")
     parser.add_argument("--checkpoints", action="store_true")
     parser.add_argument("--cold-readers", nargs=3, type=Path, metavar="LOG")
+    parser.add_argument("--require-seed", action="store_true")
     args = parser.parse_args()
     print(json.dumps(verify(args.log.read_text(), args.openssl, checkpoints=args.checkpoints,
-                            cold_readers=[p.read_text() for p in args.cold_readers or []]), indent=2))
+                            cold_readers=[p.read_text() for p in args.cold_readers or []], require_seed=args.require_seed), indent=2))

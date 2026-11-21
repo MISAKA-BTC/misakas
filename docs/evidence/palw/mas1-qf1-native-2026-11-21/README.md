@@ -1015,3 +1015,21 @@ for slot in 0 1 2; do
 done
 python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
 ```
+
+### 新しいプロセスでのPANEL資格集合とseedの復元
+
+非報酬のQwen3-8B試験で、署名時の9件のREADY、holder公開鍵、dealerのtranscript root、公開済みの3件の署名行を保存した。元の3プロセスの終了後、各peerの新しいreaderは元のREADYからqualificationを構築し、公開前DBの確定状態とcloseのcommitmentを検査した。期限側DBのbatch・certificateと署名行から導出したseedは、元の3ピアと一致した。各dealerの復元多項式も保存したtranscriptと一致した。署名2席の承認はDAA 27、排他期限はDAA 60だった。[元プロセスとreaderの照合](recovered-panel-seed.json)
+
+READY署名の変更、公開行の署名変更、公開行を2件へ削減、consumer集合のroot変更、dealer transcriptの変更を個別に拒否した。consumer集合のrootはcloseのpreimageとして検査しており、受付した全Originalからこの集合を再集計する部分は残る。あわせて同じバイナリでMOE2の登録市場と巻き戻しを再照合した。初回の市場試験は並行出力が混在して照合器が完了行を認識できなかったため、独立に取り直した実行を収録した。[実行ログ・否定例・市場帳簿](recovered-panel-seed-run.tar.zst)
+
+[再現用チェックポイントと公開資料](recovered-panel-seed-databases.tar.zst)を展開し、別の3プロセスからも再検証できた。
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/recovered-panel-seed-run.tar.zst" -C "$out"
+tar -xf "$p/recovered-panel-seed-databases.tar.zst" -C "$out"
+for slot in 0 1 2; do
+    MISAKA_PRIVATE_COLD_PANEL_SEED=1 MISAKA_PRIVATE_COLD_PANEL_DIR="$out/peers/$slot" RUST_MIN_STACK=67108864 "$TEST_BINARY" private_read_cold_panel_receipt --ignored --test-threads=1 --nocapture > "$out/fresh-$slot.log" 2>&1 || break
+done
+python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --require-seed --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
+```
