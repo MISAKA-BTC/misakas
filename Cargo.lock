@@ -3836,6 +3836,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.8",
+ "sha3",
  "smallvec",
  "thiserror 1.0.64",
  "tokio",

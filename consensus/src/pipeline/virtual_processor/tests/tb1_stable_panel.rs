@@ -229,6 +229,112 @@ struct ColdPanelSeed {
     releases: Vec<ReleaseRecord>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub(super) struct IntakeRow {
+    pub slot: u64,
+    pub registration: Hash64,
+    pub original: Hash64,
+    pub block: Hash64,
+    pub funding: Hash64,
+    pub material: Hash64,
+    pub deadline: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct ColdPanelIntake {
+    pub exec_inputs: Hash64,
+    pub exec_close: Hash64,
+    pub exec_certificate: Hash64,
+    pub exec_seed: [u8; 32],
+    pub rows: Vec<IntakeRow>,
+    pub candidates: Vec<(Hash64, u64)>,
+}
+
+impl ColdPanelIntake {
+    fn verify(&self, dir: &Path, meta: &ColdPanelReceipt, db: &TestConsensus, expected_root: Hash64, seed: &[u8; 32]) {
+        use kaspa_consensus_core::palw_panel_v2::{
+            palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1, palw_panel_stake_ticket_v1,
+        };
+        use sha3::Sha3_512;
+        let [row] = self.rows.as_slice() else { panic!("expected the private fixture's single submitted Original") };
+        assert_eq!(self.candidates.len(), 3);
+        let ancestor = |a, b| assert!(a != b && db.is_chain_ancestor_of(a, b).unwrap());
+        ancestor(self.exec_close, self.exec_certificate);
+        ancestor(self.exec_certificate, row.block);
+        ancestor(row.block, meta.close);
+        assert_eq!(row.deadline, meta.deadline);
+        assert!(db.palw_coinbase_commits_to(meta.domain.as_bytes(), row.block, &row.original.as_bytes()).unwrap());
+        let mut hash = Sha3_512::new()
+            .chain_update(b"MISAKA/private/QF1/local-panel-inputs/v1")
+            .chain_update(self.exec_inputs.as_bytes())
+            .chain_update(self.exec_close.as_bytes())
+            .chain_update(self.exec_certificate.as_bytes())
+            .chain_update(self.exec_seed)
+            .chain_update((self.rows.len() as u32).to_be_bytes());
+        for r in &self.rows {
+            hash.update(r.slot.to_be_bytes());
+            for v in [r.registration, r.original, r.block, r.funding, r.material] {
+                hash.update(v.as_bytes());
+            }
+            hash.update(r.deadline.to_be_bytes());
+        }
+        hash.update((self.candidates.len() as u32).to_be_bytes());
+        assert!(self.candidates.windows(2).all(|w| w[0].0 < w[1].0));
+        for (id, weight) in &self.candidates {
+            assert!(*weight > 0);
+            hash.update(id.as_bytes());
+            hash.update(weight.to_be_bytes());
+        }
+        let root = Hash64::from_bytes(hash.finalize().into());
+        assert_eq!(root, expected_root);
+        let anchor = Hash64::from_bytes(
+            Sha3_512::new()
+                .chain_update(b"MISAKA/private/TB1/PANEL/draw-anchor/v1")
+                .chain_update(meta.close_marker.as_bytes())
+                .chain_update(seed)
+                .finalize()
+                .into(),
+        );
+        let mut ranked: Vec<_> = self
+            .candidates
+            .iter()
+            .map(|&(id, weight)| {
+                let ticket = palw_panel_stake_ticket_v1(anchor, &row.original, &id);
+                (palw_draw_neg_log2_q64_v1(palw_draw_ticket_u64_v1(&ticket)), weight, id)
+            })
+            .collect();
+        ranked.sort_by(|a, b| palw_draw_key_cmp_v1(a.0, a.1, &a.2, b.0, b.1, &b.2));
+        let duty: [u8; 64] = Sha3_512::new()
+            .chain_update(REPLAY_SIGNATURE_DOMAIN)
+            .chain_update(meta.close_marker.as_bytes())
+            .chain_update(row.original.as_bytes())
+            .chain_update(row.block.as_bytes())
+            .chain_update(meta.certificate.as_bytes())
+            .chain_update(anchor.as_bytes())
+            .finalize()
+            .into();
+        let replies =
+            LocalReplayPolicy::new(2).unwrap().read_reply_evidence(File::open(dir.join("accepted-panel-replies")).unwrap()).unwrap();
+        let mut commitment = Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/reply-set/v1").chain_update(duty);
+        for ((public, sig), (_, _, expected)) in replies.iter().zip(&ranked) {
+            assert_eq!(actor_id(public), *expected);
+            let msg: [u8; 64] = Sha3_512::new().chain_update(duty).chain_update(expected.as_bytes()).finalize().into();
+            ml_dsa_65::verify(public, &msg, REPLAY_SIGNATURE_DOMAIN, sig).unwrap();
+            commitment.update(expected.as_bytes());
+            commitment.update(sig.as_slice());
+        }
+        assert_eq!(Hash64::from_bytes(commitment.finalize().into()), meta.marker);
+        println!(
+            "QF1 recovered intake pid={} root={} original={} seats={},{}",
+            std::process::id(),
+            root,
+            row.original,
+            ranked[0].2,
+            ranked[1].2
+        );
+    }
+}
+
 fn recover_cold_panel_seed(dir: &Path, meta: &ColdPanelReceipt, observation: &TestConsensus, expired: &TestConsensus) {
     use misaka_palw_remote::tb1_exposure::publication::NativePublicationGate;
     let path = dir.join("seed-evidence.json");
@@ -268,6 +374,12 @@ fn recover_cold_panel_seed(dir: &Path, meta: &ColdPanelReceipt, observation: &Te
     let rows = views(&decoded, Tb1ReleaseContext { round_ref: &id, qual_root: q.root(), freeze_id });
     let seed = gate.read_seed(expired.as_ref(), meta.batch, meta.certificate, &rows, &q, LIMITS).unwrap();
     assert!(gate.read_seed(expired.as_ref(), meta.batch, meta.certificate, &rows[..2], &q, LIMITS).is_err());
+    if std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_INTAKE").is_some() {
+        let file = File::open(dir.join("intake.json")).unwrap();
+        assert!(file.metadata().unwrap().len() <= 64 * 1024);
+        let intake: ColdPanelIntake = serde_json::from_reader(file).unwrap();
+        intake.verify(dir, meta, expired, saved.consumers, seed.as_bytes());
+    }
     for dealer in 0..3 {
         let points: Vec<_> = decoded.iter().map(|r| Tb1DealerPoint { holder_slot: r.holder, value: r.shares[dealer].1 }).collect();
         let polynomial = reconstruct_dealer(&coordinates, 1, &points, LIMITS.matrix_cells).unwrap();

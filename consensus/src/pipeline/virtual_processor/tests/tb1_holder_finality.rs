@@ -1221,6 +1221,30 @@ async fn run(stable: bool, registered: bool) {
                 *id,
             )
             .await;
+            if let Some(root) = std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_WRITE") {
+                let entry = entries
+                    .iter()
+                    .find(|e| e.terms.registration_key(parent, &rounds, e.owner, 16).unwrap() == *r.registration_key())
+                    .unwrap();
+                let intake = stable_panel::ColdPanelIntake {
+                    exec_inputs: Hash64::from_bytes(closure.consumer_set_root),
+                    exec_close: anchor,
+                    exec_certificate: certificate.hash(),
+                    exec_seed: *seed.as_bytes(),
+                    candidates,
+                    rows: vec![stable_panel::IntakeRow {
+                        slot: entry.slot,
+                        registration: Hash64::from_bytes(*r.registration_key()),
+                        original: *id,
+                        block: block.hash(),
+                        funding: Hash64::from_bytes(entry.funding_ref),
+                        material: reservation,
+                        deadline: entry.terms.deadline_exclusive_daa,
+                    }],
+                };
+                let path = std::path::PathBuf::from(root).join(slot.to_string()).join("intake.json");
+                std::fs::write(path, serde_json::to_vec(&intake).unwrap()).unwrap();
+            }
         }
         Some((block, closed, cut))
     } else {

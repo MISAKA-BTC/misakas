@@ -1033,3 +1033,19 @@ for slot in 0 1 2; do
 done
 python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --require-seed --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
 ```
+
+### PANEL受付集合と抽選の再現
+
+隔離3ピアの各writerが終了してから、各DBを開いたreaderが、提出済みOriginal 1件の受付行と3候補の重みからconsumer集合のrootを再計算した。元のcloseに一致することを確認し、復元したseedで2席を引き直して、それぞれの完全再実行承認署名と受付ブロックのcommitmentを照合した。承認はDAA 27、排他期限はDAA 60。公開資料のアーカイブを展開した別の3プロセスでも同じ結果を得た。この試験は受付済みの1件を対象とし、readerがQwen推論をもう一度実行する試験や、新しいclaimの報酬決済は含まない。[照合結果](recovered-panel-intake.json)
+
+受付行の除去、資料予約の変更、候補の重み変更、2席の承認の入れ替えを個別に拒否した。[実行ログ](recovered-panel-intake-run.tar.zst)・[DBと公開資料](recovered-panel-intake-databases.tar.zst)
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/recovered-panel-intake-run.tar.zst" -C "$out"
+tar -xf "$p/recovered-panel-intake-databases.tar.zst" -C "$out"
+for slot in 0 1 2; do
+    MISAKA_PRIVATE_COLD_PANEL_INTAKE=1 MISAKA_PRIVATE_COLD_PANEL_SEED=1 MISAKA_PRIVATE_COLD_PANEL_DIR="$out/peers/$slot" RUST_MIN_STACK=67108864 "$TEST_BINARY" private_read_cold_panel_receipt --ignored --test-threads=1 --nocapture > "$out/fresh-$slot.log" 2>&1 || break
+done
+python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --require-intake --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
+```

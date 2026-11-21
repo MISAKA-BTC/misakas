@@ -13,7 +13,8 @@ from check_real_lifecycle import check
 DOMAIN = b"MISAKA/private/TB1/QF1/complete-replay/v1"
 
 
-def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=False):
+def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=False, require_intake=False):
+    require_seed = require_seed or require_intake
     require(not require_seed or len(cold_readers) == 3, "seed recovery requires three cold readers")
     full = json.loads((HERE / "qf1-native-tile-artifacts.json").read_bytes())["full"]
     claim = check(log, {"class_id": full["class_id"], "artifact_root": full["inventory"]},
@@ -58,6 +59,7 @@ def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=Fal
             result.update(panel_qualification=qualification, panel_seed=panel["panel_seed"])
         mapping = {}
         domains = set()
+        roots = set()
         for reader_log in cold_readers:
             require("test result: ok. 1 passed; 0 failed;" in reader_log, "incomplete cold reader")
             rows = re.findall(r"QF1 cold reader pid=(\d+) receipt=(\{[^\n]*\}) replies=([0-9a-f]+)", reader_log)
@@ -66,6 +68,12 @@ def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=Fal
             if require_seed:
                 recovered = re.findall(r"QF1 restored seed pid=(\d+) qualification=([0-9a-f]{128}) seed=([0-9a-f]{64})", reader_log)
                 require(recovered == [(pid, qualification, panel["panel_seed"])], "cold reader seed or qualification mismatch")
+            if require_intake:
+                rows = re.findall(r"QF1 recovered intake pid=(\d+) root=([0-9a-f]{128}) original=([0-9a-f]{128}) seats=([0-9a-f]{128}),([0-9a-f]{128})", reader_log)
+                require(len(rows) == 1, "expected one intake recovery")
+                reader, root, original, *selected = rows[0]
+                require(reader == pid and original == panel["original"] and selected == panel["selected"], "intake draw mismatch")
+                roots.add(root)
             meta = json.loads(meta)
             writer = meta["writer"]
             require(all(meta.get(k) == v for k, v in expected.items()) and stored == data, "cold evidence differs from signed receipt")
@@ -74,6 +82,9 @@ def verify(log, openssl, *, checkpoints=False, cold_readers=(), require_seed=Fal
             mapping[writer] = int(pid)
             domains.add(meta["domain"])
         require(len(domains) == 1, "inconsistent native chain domain")
+        if require_intake:
+            require(len(roots) == 1, "inconsistent recovered consumer roots")
+            result["consumer_root"] = roots.pop()
         result["cold_readers_by_writer"] = mapping
     return result
 
@@ -85,6 +96,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoints", action="store_true")
     parser.add_argument("--cold-readers", nargs=3, type=Path, metavar="LOG")
     parser.add_argument("--require-seed", action="store_true")
+    parser.add_argument("--require-intake", action="store_true")
     args = parser.parse_args()
     print(json.dumps(verify(args.log.read_text(), args.openssl, checkpoints=args.checkpoints,
-                            cold_readers=[p.read_text() for p in args.cold_readers or []], require_seed=args.require_seed), indent=2))
+                            cold_readers=[p.read_text() for p in args.cold_readers or []], require_seed=args.require_seed,
+                            require_intake=args.require_intake), indent=2))
