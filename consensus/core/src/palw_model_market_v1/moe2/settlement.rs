@@ -6,7 +6,9 @@ use super::{
     Moe2RewardAllocation, Moe2WorkerPlan, PurchaseCurve,
 };
 use crate::Hash64;
-use crate::palw_bond_budget_v1::{PalwBondBudgetStateV1, PalwBudgetDimV1, PalwBudgetOriginV1, PalwBudgetWriteV1};
+use crate::palw_bond_budget_v1::{
+    PALW_BUDGET_TABLE_CLAIMS_V1, PalwBondBudgetStateV1, PalwBudgetClaimRowV1, PalwBudgetDimV1, PalwBudgetOriginV1, PalwBudgetWriteV1,
+};
 use crate::palw_model_market_v1::PalwModelMarketV1;
 use crate::palw_settlement_liability_v1::{
     PalwSettlementLiabilityRefusalV1, PalwSettlementTermsSourcedV1, palw_settlement_liability_sourced_v1,
@@ -14,7 +16,7 @@ use crate::palw_settlement_liability_v1::{
 use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2Position {
     pub point: PalwBlockContextV2,
     pub ordinal: u32,
@@ -32,7 +34,7 @@ impl Moe2Position {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2SettlementTerms {
     pub claim: Hash64,
     pub funding_bond: PalwBondKeyV2,
@@ -57,8 +59,32 @@ impl Moe2SettlementTerms {
     }
 }
 
+/// Bounded private store record for disconnecting a settlement. The block
+/// owner may discard it after the rollback horizon. Its digest in the settled
+/// entry binds the exact admission and the history of both LP indexes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Moe2SettlementUndo {
+    terms: Moe2SettlementTerms,
+    reference: Option<PurchaseCurve>,
+    before_model: Moe2RegisteredModel,
+    before_budget: PalwBudgetClaimRowV1,
+    draw: u64,
+    position: Moe2Position,
+    previous_position: Option<Moe2Position>,
+    had_model_lp: bool,
+    had_root_lp: bool,
+}
+
+impl Moe2SettlementUndo {
+    fn digest(&self) -> Hash64 {
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/settlement-undo/v1").to_state();
+        h.update(&borsh::to_vec(self).expect("fixed-size settlement undo serializes"));
+        Hash64::from_bytes(*h.finalize().as_array())
+    }
+}
+
 /// Accounting history. The recorded quantities have already entered the market.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct LockedLiquidityReceipt {
     pub claim: Hash64,
     pub policy: Hash64,
@@ -85,7 +111,7 @@ pub struct Moe2SettlementFunding {
     pub panel_now: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2SettledReward {
     pub allocation: Moe2RewardAllocation,
     pub miner_now: u64,
@@ -120,16 +146,18 @@ pub enum Moe2SettlementError {
     AlreadySettled,
     ReservationMismatch,
     PositionOutOfOrder,
+    UndoMismatch,
+    CheckpointMismatch,
     OutsideWindow,
     Quote(Moe2QuoteRefusal),
     Liability(PalwSettlementLiabilityRefusalV1),
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2SettlementBook {
     models: BTreeMap<Hash64, Moe2RegisteredModel>,
     admitted: BTreeMap<Hash64, (Moe2SettlementTerms, Option<PurchaseCurve>)>,
-    settled: BTreeMap<Hash64, Moe2SettledReward>,
+    settled: BTreeMap<Hash64, (Moe2SettledReward, Hash64)>,
     receipts: BTreeMap<Hash64, LockedLiquidityReceipt>,
     permanent_lp_models: BTreeSet<Hash64>,
     permanent_lp_roots: BTreeSet<Hash64>,
@@ -137,6 +165,33 @@ pub struct Moe2SettlementBook {
 }
 
 impl Moe2SettlementBook {
+    /// Commit a private store snapshot to its companion native state root. The
+    /// owner retains this commitment independently of the checkpoint bytes.
+    fn checkpoint_digest(native_root: Hash64, bytes: &[u8]) -> Hash64 {
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/store/v1").to_state();
+        h.update(native_root.as_byte_slice());
+        h.update(bytes);
+        Hash64::from_bytes(*h.finalize().as_array())
+    }
+
+    pub fn checkpoint(&self, native_root: Hash64) -> (Hash64, Vec<u8>) {
+        let bytes = borsh::to_vec(self).expect("MOE2 store rows serialize");
+        (Self::checkpoint_digest(native_root, &bytes), bytes)
+    }
+
+    /// The byte budget and committed root come from the owner, never the snapshot sender.
+    pub fn from_checkpoint(
+        native_root: Hash64,
+        expected: Hash64,
+        bytes: &[u8],
+        byte_budget: usize,
+    ) -> Result<Self, Moe2SettlementError> {
+        if bytes.len() > byte_budget || Self::checkpoint_digest(native_root, bytes) != expected {
+            return Err(Moe2SettlementError::CheckpointMismatch);
+        }
+        borsh::from_slice(bytes).map_err(|_| Moe2SettlementError::CheckpointMismatch)
+    }
+
     /// Apply new registrations and native repricing of existing pairs in one batch. The
     /// owning fold commits this projection together with that block's class
     /// delta. A second registration in a block cannot leave the first half-installed.
@@ -222,7 +277,7 @@ impl Moe2SettlementBook {
         self.models.get(model)
     }
     pub fn entitlement(&self, claim: &Hash64) -> Option<&Moe2SettledReward> {
-        self.settled.get(claim)
+        self.settled.get(claim).map(|(reward, _)| reward)
     }
     pub fn receipt(&self, claim: &Hash64) -> Option<&LockedLiquidityReceipt> {
         self.receipts.get(claim)
@@ -288,6 +343,19 @@ impl Moe2SettlementBook {
         budget: &mut PalwBondBudgetStateV1,
         journal: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<Moe2SettledReward, Moe2SettlementError> {
+        self.settle_recorded(claim, position, anchor, funding, budget, journal).map(|(reward, _)| reward)
+    }
+
+    /// Return the block-owned rollback record together with the funded result.
+    pub fn settle_recorded(
+        &mut self,
+        claim: Hash64,
+        position: Moe2Position,
+        anchor: Hash64,
+        funding: &Moe2SettlementFunding,
+        budget: &mut PalwBondBudgetStateV1,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
         use Moe2SettlementError::*;
         if self.settled.contains_key(&claim) {
             return Err(AlreadySettled);
@@ -330,6 +398,17 @@ impl Moe2SettlementBook {
         {
             return Err(ReservationMismatch);
         }
+        let undo = Moe2SettlementUndo {
+            terms,
+            reference,
+            before_model: *model,
+            before_budget: *row,
+            draw: liability.draw,
+            position,
+            previous_position: self.last_settlement,
+            had_model_lp: self.permanent_lp_models.contains(&terms.model),
+            had_root_lp: self.permanent_lp_roots.contains(&terms.artifact_root),
+        };
         budget
             .consume(&key, PalwBudgetDimV1::Reward, liability.draw.into(), true, journal)
             .ok_or(ReservationMismatch)?
@@ -358,9 +437,60 @@ impl Moe2SettlementBook {
             model.allocation = Moe2ModelAllocation::Additional(q.after);
         }
         self.admitted.remove(&claim);
-        self.settled.insert(claim, payment);
+        self.settled.insert(claim, (payment, undo.digest()));
         self.last_settlement = Some(position);
-        Ok(payment)
+        Ok((payment, undo))
+    }
+
+    /// Disconnect the last settlement in reverse canonical order. A sibling's
+    /// journal or a later trade/debit refuses before changing either ledger.
+    /// Reconnection uses the original admission and the ordinary settle path.
+    pub fn revert_settlement(
+        &mut self,
+        undo: &Moe2SettlementUndo,
+        budget: &mut PalwBondBudgetStateV1,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), Moe2SettlementError> {
+        use Moe2SettlementError::*;
+        let terms = undo.terms;
+        let (reward, digest) = self.settled.get(&terms.claim).ok_or(UndoMismatch)?;
+        if self.last_settlement != Some(undo.position) || *digest != undo.digest() {
+            return Err(UndoMismatch);
+        }
+        let mut after_model = undo.before_model;
+        if let Some(q) = reward.allocation.market {
+            after_model.allocation = Moe2ModelAllocation::Additional(q.after);
+        }
+        if self.model(&terms.model) != Some(&after_model) {
+            return Err(UndoMismatch);
+        }
+        let key = terms.reservation_key();
+        let mut after_row = undo.before_budget;
+        after_row.consumed.reward_sompi = after_row.consumed.reward_sompi.checked_add(undo.draw).ok_or(UndoMismatch)?;
+        if budget.claim_row(&key) != Some(&after_row) {
+            return Err(ReservationMismatch);
+        }
+        if undo.draw != 0 {
+            let table = PALW_BUDGET_TABLE_CLAIMS_V1;
+            let key = borsh::to_vec(&key).expect("budget key serializes");
+            let old = Some(borsh::to_vec(&after_row).expect("budget row serializes"));
+            let new = Some(borsh::to_vec(&undo.before_budget).expect("budget row serializes"));
+            budget.apply_row(table, &key, &old, &new, false).map_err(|_| ReservationMismatch)?;
+            journal.push(PalwBudgetWriteV1::Row { table, key, old, new });
+        }
+        self.models.insert(terms.model, undo.before_model);
+        if self.receipts.remove(&terms.claim).is_some() {
+            if !undo.had_model_lp {
+                self.permanent_lp_models.remove(&terms.model);
+            }
+            if !undo.had_root_lp {
+                self.permanent_lp_roots.remove(&terms.artifact_root);
+            }
+        }
+        self.settled.remove(&terms.claim);
+        self.admitted.insert(terms.claim, (terms, undo.reference));
+        self.last_settlement = undo.previous_position;
+        Ok(())
     }
 }
 
@@ -503,6 +633,106 @@ mod tests {
                 assert!(book.receipt(&claim).is_some() && book.entitlement(&claim).is_some());
             }
         }
+    }
+
+    #[test]
+    fn recorded_settlements_unwind_in_order_and_preserve_prior_alias_liquidity() {
+        use crate::palw_bond_budget_v1::{PalwBondBudgetPolicyV1, PalwBudgetVectorV1};
+        let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        let mut budget = PalwBondBudgetStateV1::new(0, &policy);
+        let mut book = Moe2SettlementBook::default();
+        let mut journal = Vec::new();
+        let at = Moe2Position { point: PalwBlockContextV2 { block: h(20), blue_score: 10, daa_score: 3, subsidy: 1000 }, ordinal: 1 };
+        let mut history = Vec::new();
+        // Two aliases share a root. A third settlement reuses the first model.
+        for (i, model_id) in [1, 2, 1].into_iter().enumerate() {
+            let model = *book.models.entry(h(model_id)).or_insert(Moe2RegisteredModel {
+                model: h(model_id),
+                artifact_root: h(90),
+                registration_daa: 1,
+                owner: None,
+                allocation: Moe2ModelAllocation::Additional(market()),
+            });
+            let terms = Moe2SettlementTerms {
+                claim: h(100 + i as u64),
+                model: model.model,
+                artifact_root: model.artifact_root,
+                funding_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), i as u32)),
+                policy: h(60),
+                quote_anchor: h(70 + i as u64),
+                valid_from: 2,
+                deadline: 5,
+                limits: LIMITS,
+                plan: Moe2WorkerPlan::MinerAndPanel20,
+                price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 10_000 },
+            };
+            book.admit(terms, |_, _| Some(model)).unwrap();
+            budget
+                .reserve_liable(
+                    &policy,
+                    3000,
+                    terms.reservation_key(),
+                    terms.funding_bond,
+                    Some((model.model, 0)),
+                    terms.valid_from,
+                    PalwBudgetVectorV1 { reward_sompi: 1000, ..Default::default() },
+                    2000,
+                    PalwBudgetOriginV1::Attempt,
+                    true,
+                    &mut journal,
+                )
+                .unwrap();
+            let position = Moe2Position { ordinal: i as u32 + 1, ..at };
+            let (_, undo) = book
+                .settle_recorded(
+                    terms.claim,
+                    position,
+                    terms.quote_anchor,
+                    &funding(terms.claim, position, 1000),
+                    &mut budget,
+                    &mut journal,
+                )
+                .unwrap();
+            history.push(undo);
+        }
+        let child = (book.clone(), budget.clone());
+        let j = journal.len();
+        let mut changed = history[2];
+        changed.had_root_lp = false;
+        for invalid in [&changed, &history[0]] {
+            assert_eq!(book.revert_settlement(invalid, &mut budget, &mut journal), Err(Moe2SettlementError::UndoMismatch));
+        }
+        assert_eq!((&book, &budget, journal.len()), (&child.0, &child.1, j));
+        // A changed budget row must refuse even when the market matches.
+        let mut closed = budget.clone();
+        closed.close(&history[2].terms.reservation_key(), &mut Vec::new());
+        let before = closed.clone();
+        assert_eq!(book.revert_settlement(&history[2], &mut closed, &mut journal), Err(Moe2SettlementError::ReservationMismatch));
+        assert_eq!((&book, &closed, journal.len()), (&child.0, &before, j));
+        for i in (0..history.len()).rev() {
+            let undo = history[i];
+            book.revert_settlement(&undo, &mut budget, &mut journal).unwrap();
+            assert_eq!(budget.claim_row(&undo.terms.reservation_key()).unwrap().consumed.reward_sompi, 0);
+            assert!(book.entitlement(&undo.terms.claim).is_none() && book.receipt(&undo.terms.claim).is_none());
+            assert_eq!(book.permanent_lp_roots.contains(&h(90)), i > 0);
+            assert_eq!(book.permanent_lp_models.contains(&h(1)), i > 0);
+            assert_eq!(book.permanent_lp_models.contains(&h(2)), i > 1);
+        }
+        for undo in history {
+            let t = undo.terms;
+            let (_, again) = book
+                .settle_recorded(
+                    t.claim,
+                    undo.position,
+                    t.quote_anchor,
+                    &funding(t.claim, undo.position, 1000),
+                    &mut budget,
+                    &mut journal,
+                )
+                .unwrap();
+            assert_eq!(again, undo);
+        }
+        assert_eq!((book, budget), child);
     }
 
     #[test]

@@ -14,7 +14,8 @@ use libcrux_ml_dsa::ml_dsa_87;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Observation {
-    pub(super) enrollment: Hash64,
+    enrollment: Hash64,
+    checkpoint: Hash64,
     position: Hash64,
     reservation: Hash64,
     consumed: u64,
@@ -28,6 +29,7 @@ pub(super) struct Observation {
 pub(super) struct Replay {
     blocks: [RpcRawBlock; 2],
     signature: Vec<u8>,
+    undo: Vec<u8>,
 }
 
 pub(super) async fn exercise(
@@ -36,6 +38,7 @@ pub(super) async fn exercise(
     mut book: Moe2SettlementBook,
     model: Hash64,
     remote: Option<Replay>,
+    fork: &[Block],
 ) -> (Observation, Replay) {
     let point = *state.last_point().unwrap();
     let registered = *book.model(&model).unwrap();
@@ -65,6 +68,7 @@ pub(super) async fn exercise(
         price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 2000 },
     };
     let source = terms.reservation_key();
+    let shared_undo = remote.as_ref().map(|r| r.undo.as_slice().to_vec());
     // Peers receive the signed enrollment and both raw blocks. Only the first peer
     // signs. Each reader resolves the verification key from its own native bond.
     const DOMAIN: &[u8] = b"MISAKA/private/MOE2/accounting-enrollment/v1";
@@ -164,14 +168,34 @@ pub(super) async fn exercise(
     assert_eq!(budget, before);
     assert_eq!(journal.len(), start);
     assert!(book.receipt(&terms.claim).is_none());
-    let pay = book.settle(terms.claim, at, point.block, &funding, &mut budget, &mut journal).unwrap();
+    let admitted = book.clone();
+    let (pay, undo) = book.settle_recorded(terms.claim, at, point.block, &funding, &mut budget, &mut journal).unwrap();
     assert_eq!(
         book.settle(terms.claim, at, point.block, &funding, &mut budget, &mut journal),
         Err(Moe2SettlementError::AlreadySettled)
     );
-    let receipt = book.receipt(&terms.claim).unwrap();
+    let receipt = *book.receipt(&terms.claim).unwrap();
+    let directory = kaspa_database::utils::get_kaspa_tempdir();
+    let store = directory.path();
+    let native = checkpoint::NativeSettlement::project(
+        store,
+        env,
+        state,
+        enrollment.hash(),
+        execution.hash(),
+        &journal[..start],
+        &journal[start..],
+        receipt,
+    );
+    let (checkpoint, checkpoint_bytes) = book.checkpoint(native.child_root);
+    let undo_bytes = borsh::to_vec(&undo).unwrap();
+    if let Some(shared) = shared_undo {
+        assert_eq!(shared, undo_bytes);
+    }
+
     let obs = Observation {
         enrollment: enrollment.hash(),
+        checkpoint,
         position: execution.hash(),
         reservation: source,
         consumed: budget.claim_row(&source).unwrap().consumed.reward_sompi,
@@ -184,10 +208,48 @@ pub(super) async fn exercise(
     assert_eq!((receipt.purchased_units, receipt.liquidity_units, obs.retired), (2, 1, 1));
     assert_eq!((obs.reserve, obs.miner, obs.panel), (80 * SOMPI_PER_KASPA, 64 * SOMPI_PER_KASPA, 16 * SOMPI_PER_KASPA));
     assert_eq!(obs.consumed, obs.reserve + obs.miner + obs.panel);
-    let [PalwBudgetWriteV1::Row { table, key, old, new }] = &journal[start..] else { panic!("one debit") };
-    budget.apply_row(*table, key, old, new, true).unwrap();
-    assert_eq!(budget, before);
     assert!(state.bond_budget().unwrap().claim_row(&source).is_none());
+    std::fs::write(store.join("settled"), &checkpoint_bytes).unwrap();
+    std::fs::write(store.join("disconnect"), &undo_bytes).unwrap();
+    drop(book);
+    drop(budget);
+    for block in fork {
+        arrive(&env.chain, block.clone(), "branch without MOE2 enrollment").await;
+    }
+    let (fork_tip, _) = env.chain.tip_state();
+    for detached in [enrollment.hash(), execution.hash()] {
+        assert!(!env.chain.ctx.consensus.is_chain_ancestor_of(detached, fork_tip).unwrap());
+    }
+    let loaded = std::fs::read(store.join("settled")).unwrap();
+    const BOOK_BYTE_BUDGET: usize = 16 * 1024;
+    let mut book = Moe2SettlementBook::from_checkpoint(native.child_root, checkpoint, &loaded, BOOK_BYTE_BUDGET).unwrap();
+    assert!(Moe2SettlementBook::from_checkpoint(native.parent_root, checkpoint, &loaded, loaded.len()).is_err());
+    assert!(Moe2SettlementBook::from_checkpoint(native.child_root, checkpoint, &loaded, loaded.len() - 1).is_err());
+    let restored_undo = borsh::from_slice(&std::fs::read(store.join("disconnect")).unwrap()).unwrap();
+    let restored_native = native.reload(env);
+    let mut budget = restored_native.bond_budget().unwrap().clone();
+    let mut inverse = Vec::new();
+    book.revert_settlement(&restored_undo, &mut budget, &mut inverse).unwrap();
+    assert_eq!(book, admitted);
+    assert_eq!(budget.claim_row(&source), before.claim_row(&source));
+    assert_eq!(inverse.len(), 1);
+    assert_eq!(book.revert_settlement(&restored_undo, &mut budget, &mut inverse), Err(Moe2SettlementError::UndoMismatch));
+    assert_eq!(inverse.len(), 1);
+    native.disconnect_and_replay(env, state, &restored_native, &budget, &inverse);
+    // Replay only on the archived original branch, with its own position and signed terms.
+    let (_, replayed) = book.settle_recorded(terms.claim, at, point.block, &funding, &mut budget, &mut Vec::new()).unwrap();
+    assert_eq!(replayed, undo);
+    assert_eq!(book.checkpoint(native.child_root), (checkpoint, checkpoint_bytes));
     println!("MOE2 accounting projection pid={} {obs:?} rollback=true", std::process::id());
-    (obs, Replay { blocks: [RpcRawBlock::from(&enrollment), RpcRawBlock::from(&execution)], signature })
+    println!(
+        "MOE2 pid={} detached_enrollment=true native_parent={} native_child={} undo_bytes={} restored_market=true restored_worker_rights=true restored_lp=true replay=true",
+        std::process::id(),
+        native.parent_root,
+        native.child_root,
+        undo_bytes.len()
+    );
+    (obs, Replay { blocks: [RpcRawBlock::from(&enrollment), RpcRawBlock::from(&execution)], signature, undo: undo_bytes })
 }
+
+#[path = "moe2_checkpoint.rs"]
+mod checkpoint;

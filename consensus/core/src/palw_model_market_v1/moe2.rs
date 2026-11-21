@@ -4,7 +4,7 @@ pub mod settlement;
 
 use super::{PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2RewardSplit {
     pub purchase: u64,
     pub liquidity: u64,
@@ -21,7 +21,7 @@ impl Moe2RewardSplit {
 
 /// Separate limits on the reward, the BILI spent on each market leg and the
 /// Position quantities it moves. The minimum output is in purchased Positions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2QuantityLimits {
     pub max_reward: u64,
     pub max_purchase_sompi: u64,
@@ -34,7 +34,7 @@ pub struct Moe2QuantityLimits {
 /// Admission-selected limits for this local quote rule. Slippage measures a
 /// shortfall in bought units from the anchor quote for the same B. Impact
 /// measures the premium of B/q over the current pre-buy spot price X/U.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2PriceLimits {
     pub max_output_slippage_bps: u16,
     pub max_purchase_impact_bps: u32,
@@ -42,7 +42,7 @@ pub struct Moe2PriceLimits {
 
 const BASIS_POINTS: u128 = 10_000;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 struct PurchaseCurve {
     x: u128,
     inventory: u64,
@@ -90,7 +90,7 @@ impl Moe2PriceLimits {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2MarketQuote {
     pub split: Moe2RewardSplit,
     pub purchased_units: u64,
@@ -145,7 +145,7 @@ pub fn quote_additional_reward(
 
 /// Economic state created at registration for the isolated MOE2 cohort. The
 /// model ID, root and owner come from the same canonical native registration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2RegisteredModel {
     pub model: crate::Hash64,
     pub artifact_root: crate::Hash64,
@@ -154,7 +154,7 @@ pub struct Moe2RegisteredModel {
     pub allocation: Moe2ModelAllocation,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Moe2ModelAllocation {
     Core,
     Additional(PalwModelMarketV1),
@@ -192,13 +192,13 @@ impl Moe2RegisteredModel {
 
 /// The two residual plans for jobs without delegated prefix work. The selected
 /// plan is bound at admission. Additional plans need their own role allocation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum Moe2WorkerPlan {
     Miner,
     MinerAndPanel20,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2RewardAllocation {
     pub miner: u64,
     pub panel_pool: u64,

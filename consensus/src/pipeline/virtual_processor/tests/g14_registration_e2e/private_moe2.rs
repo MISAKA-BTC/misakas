@@ -142,15 +142,10 @@ async fn private_moe2_three_process_registration() {
         economic_env.chain.ctx.simulated_time = blocks.last().unwrap().header.timestamp;
         let (_, economic_state) = economic_env.chain.tip_state();
         assert_eq!(economic_state.state_root(), root);
-        let observed = moe2_reservation::exercise(&mut economic_env, &economic_state, book, class_id, remote_economics).await;
-        for block in &fork {
-            arrive(&economic_env.chain, block.clone(), "branch without MOE2 enrollment").await;
-        }
+        let observed = moe2_reservation::exercise(&mut economic_env, &economic_state, book, class_id, remote_economics, &fork).await;
         let (economic_tip, rolled_back) = economic_env.chain.tip_state();
         assert_eq!(economic_tip, fork.last().unwrap().hash());
         assert_eq!(rolled_back.state_root(), fork_root);
-        assert!(!economic_env.chain.ctx.consensus.is_chain_ancestor_of(observed.0.enrollment, economic_tip).unwrap());
-        println!("MOE2 pid={} detached_enrollment=true", std::process::id());
         observed
     };
     let control = mas1_stop::exercise(&mut env, class_id, artifact_root, tip, remote_control.as_ref(), &fork).await;
