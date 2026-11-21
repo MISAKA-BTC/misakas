@@ -290,7 +290,9 @@ pub(super) async fn follow_release_window(
                     serde_json::json!({
                         "base":base,"close":close,"tip":tip,"blocks":blocks,"daa":h.daa_score,"blue":h.blue_score,"deadline":deadline,
                         "pruning":pruning,"header_pruning":h.pruning_point,"pruning_depth":node.config.params.pruning_depth(),
-                        "finality_depth":node.config.params.finality_depth(),"covers_close":covers,"publication":status,"readiness":readiness_of(node)
+                        "finality_depth":node.config.params.finality_depth(),"covers_close":covers,"publication":status,
+                        "committed_snapshot":node.api().get_native_settlement_snapshot().map_err(|e|e.to_string()),
+                        "readiness":readiness_of(node)
                     })
                 );
             }

@@ -223,7 +223,8 @@ pub(super) async fn replay_window(
         std::process::id(),
         serde_json::json!({
         "slot":slot,"base":base,"close":close,"tip":tip,"state":state.state_root(),"blocks":count,
-        "daa":node.chain.daa_of(tip),"readiness":readiness_of(node),"publication":match &gate {
+        "daa":node.chain.daa_of(tip),"committed_snapshot":api.get_native_settlement_snapshot().map_err(|e|e.to_string()),
+        "readiness":readiness_of(node),"publication":match &gate {
             Ok(_) => "ready".to_owned(), Err(e) => format!("{:?}: {e}",e.kind()),
         }})
     );
