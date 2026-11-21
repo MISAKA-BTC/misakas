@@ -1,5 +1,8 @@
 # QF1適用・移行 — Qwen3のFOW1実行具体化
 
+2026-11-21改訂。新規採掘のG-COSTには、現世代の固定条件での反復費用検査を適用する。未検査はUNKNOWN、再現された安価な正規TicketはFAILとし、合格の範囲と未検査条件を記録する。[RFC-0062 §4.3](../rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)
+
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
 - 正本: [RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)
@@ -24,4 +27,4 @@ QF1の受入試験では、Minerへの追加質問なしで、正常なclaimの�
 
 ## 現在の到達点
 
-Qwen3-8Bの固定整数実行について、隔離3ピアで通常のPanel承認、Endの直接裁定、資料欠落時の承認不足と元期限を確認した。QF1-10の一貫検証、変換後の実用性、適合する費用定理、公開有効化は未完了である。各試験が確認した範囲は[RFC-0066 §12](../rfc/0066-qwen3-fow1-execution-and-readout.md#12-受入試験と完成判定)に記録する。
+Qwen3-8Bの固定整数実行について、隔離3ピアで通常のPanel承認、Endの直接裁定、資料欠落時の承認不足と元期限を確認した。QF1-10の一貫検証、変換後の実用性、実機での反復費用検査、公開有効化は未完了である。各試験が確認した範囲は[RFC-0066 §12](../rfc/0066-qwen3-fow1-execution-and-readout.md#12-受入試験と完成判定)に記録する。

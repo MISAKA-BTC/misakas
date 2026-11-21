@@ -5,22 +5,22 @@
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。本RFCの抽象ReadoutをQwen3-8B向けに具体化するprofileはQF1。全36blockの第二残差後とfinal norm後の各4096 i16を、次tokenの各予測位置で読む。
 
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
 
 
 <!-- MAS1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。採掘資格の入口にkernel/graph解析・実用性G-USE・UNKNOWN保留・BFT停止状態を追加する。未完成のG-COSTは引き続き採掘不可である。
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。採掘資格の入口にkernel/graph解析・実用性G-USE・UNKNOWN保留・BFT停止状態を追加する。未確認のG-COSTは引き続き採掘不可である。
 
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
 
 旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
 <!-- MAS1-ADOPTED-20261120-END -->
 
 - 日付: 2026-11-20（Asia/Tokyo）
-- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**（要求・責務・移行方針の採択。適合する本番モデル、費用定理、native実装、公開有効化の完成ではない）
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**（要求・責務・移行方針の採択。適合する本番モデル、反復費用検査、native実装、公開有効化の完成ではない）
 - 系列: **PALW-FOW1**（Function Output and Work admissibility。論理名でありwire IDは未割当）
 - 対応ADR: [ADR-0230](../adr/0230-palw-function-output-and-work-admissibility.md)
 - 乱数正本: [RFC-0061 PALW-TB1](0061-palw-internal-threshold-beacon.md)／[ADR-0229](../adr/0229-palw-internal-threshold-beacon.md)
@@ -33,9 +33,9 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 FOW1を有効化する新規採掘では、登録された推論関数の採掘出力の非衝突性、複数試行の新規評価費用、全実行関係の検証可能性を**全て採掘適格性の必須条件**とする。単にreceiptを付ける登録、入力が違うだけのAN1登録、通常のモデル名による登録は、この条件を満たさない。
 
-本RFCは必要な定理を要求する契約を採択する。既存Qwen又は任意のLLMについて、その定理が完成したと宣言するものではない。適合する具体的な関数系列・定理・検査器がない間はFOW1の採掘を有効化しない。適格性が空である状態を「実用的LLM-PoWが完成した」と表示しない。
+非衝突性には§4.2の定理、費用には§4.3の反復検査を要求する。既存Qwen又は任意のLLMについて、その定理が完成したと宣言するものではない。適合する具体的な関数系列・定理・検査器がない間はFOW1の採掘を有効化しない。適格性が空である状態を「実用的LLM-PoWが完成した」と表示しない。
 
-モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。Groth16等の実行validity proof、新しいBFT finality、HF取得可否の審査委員会は導入しない。後続MAS1では公開suiteに基づく実用性G-USEと限定BFT安全停止を追加するが、未証明の費用条件を多数決で承認しない。
+モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。Groth16等の実行validity proof、新しいBFT finality、HF取得可否の審査委員会は導入しない。後続MAS1では公開suiteに基づく実用性G-USEと限定BFT安全停止を追加するが、未確認の費用条件を多数決で承認しない。
 
 ## 1. 四つの値と二種類の一回性
 
@@ -75,13 +75,13 @@ $$\operatorname{CoreExec}_{M,P}(x)=(y,z,\tau),\qquad z=\operatorname{Readout}_{P
 | コア関数 | kernel系列、全演算、生成・停止、`y`と`z`の役割、Readout・canonical符号化 |
 | trace | Init/全Step/Readout/End、四Root、canonical木、全局所checkerと資源上限 |
 | 数学的根拠 | TheoremRuleId、定理本文digest、証明・仮定、許容parameter、全適合predicate |
-| 費用 | 計算モデル、計数単位、前処理・共有・外注の会計、複数試行bound、失敗確率予算 |
+| 費用 | 計算モデル、計数単位、前処理・共有・外注の会計、比較経路、反復試行、基準実装と閾値 |
 | 乱数・時間 | TB1 suite、EXEC/PANELのRoundRef型と選択規則、role epoch制約、TimingPlan規則ID、freeze・公開gate |
 | consensus | 新Ticket domain、元claim署名、仕事キー、会計版、用途、移行・停止条件 |
 
 未知の実beacon、`s`、`y,z`、実行Root、receipt、閉鎖集合Root、将来のPanel結果をdescriptor自身のdigestへ循環的に入れない。descriptorが認める規則に従った具体的なepoch・EXEC/PANEL RoundRef・原期限・TimingPlan instanceは試行文脈`C`又はそこから一意に認証されるnative recordへ固定し、epochが変わるだけで重みのModel IDを再定義しない。先に確定するRoundRefと後から確定するcertificate／FreezeRecordも別型にする。
 
-### 2.3 TheoremRuleと決定論的適合
+### 2.3 G-COLLのTheoremRuleと決定論的適合
 
 `TheoremRuleId`は、合意が有効とする具体的なモデル／kernel系列、数学的定理、前提の分類と適合検査器の不変recordを指す。任意の文書URL又は登録者の「証明済み」という署名を参照するIDではない。新しい定理系列の採択・rule更新は版を付けたプロトコル変更であり、実行ごとのSNARKを導入する手続きではない。
 
@@ -92,7 +92,7 @@ $$\operatorname{CoreExec}_{M,P}(x)=(y,z,\tau),\qquad z=\operatorname{Readout}_{P
 1. 当該ruleが現在のfamily/security profileで有効である。
 2. 実artifact identity、program、shape、kernel、数値規則、入力・出力規則が定理の対象に一致する。
 3. 定理が各登録artifactに要求する**全て**の適合前提を、認証された値を用いる登録済みの有界な適合検査器で確認できる。
-4. 第4節の三つのgateが満たされ、費用・衝突・暗号・検証の各失敗確率と累積予算が指定される。
+4. 第4節の三つのgateが満たされ、費用検査の範囲・累積予算、および衝突・暗号・検証に用いる失敗確率が指定される。
 5. 必要なchecker、資源、TB1契約、claim consumer、移行が実装・検証され、当該familyの有効化条件が満たされる。
 
 Nodeは全重みを取得せず、既存の認証されたregistration/program identityと有界な適合情報を扱う。しかし、Nodeが読まない全重みの性質を、未認証のheader、`.root`属性、graphの見た目、単独Panelの署名から推定してはならない。全重みや未知の意味論に関する仮定を持ち、その成立をこの方式で確認できないruleは**未適格**とする。未知の汎用proof checker、モデル取得又は新しい登録委員会で補うことを黙認しない。
@@ -135,7 +135,7 @@ UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否す�
 
 **対話による不一致箇所の絞り込みは任意とする。** 提供する場合も対話を待たずに直接反証を受理し、追加質問で元期限・予約・責任を変更しない。任意の問い合わせに答えなかったことを、受理済みの資料供給義務の不履行として扱わない。対話を提供する実装も、そこで見つけた不一致を同じ直接反証の形式で提出できる。対話を実装しないNodeは、元claimと提出された証拠だけで同じ裁定を再現できなければならない。
 
-FOW1の実装・受入試験・公開有効化に対話機能を要求しない。有効化前には、対話なしの構成で必要資料の取得、完全再実行、単独での有界な直接反証の構成・搬送・裁定、資料未充足時の成功停止が元期限内に機能することを確認する。新しいTicketの生成費用の数学的下界は§4.3のG-COSTで独立に評価する。
+FOW1の実装・受入試験・公開有効化に対話機能を要求しない。有効化前には、対話なしの構成で必要資料の取得、完全再実行、単独での有界な直接反証の構成・搬送・裁定、資料未充足時の成功停止が元期限内に機能することを確認する。新しいTicketの生成費用は§4.3の反復検査で独立に評価する。
 
 ## 4. 採掘適格性の三つの独立gate
 
@@ -159,31 +159,26 @@ MOR1の`rho`、`s`のhash、後付けnonceの非衝突性は本gateを満たさ�
 
 具体hashを使う関数系列は、hashの仮定と推論状態の分布・評価困難性を分ける。古典ROでのbirthday boundを量子攻撃・QROMへ無条件に移さない。既存PQ方針に適合する主張と、残る量子・適応・合成上の前提をsecurity profileで特定する。
 
-### 4.3 G-COST: 新規機会の追加費用と非償却性
+<a id="g-cost-review"></a>
 
-ruleは、既知入力の評価を安くする全ての許容アルゴリズムを対象に、**初回Ticket照会より前**の累積費用を評価する。対象はMiner本人のGPU利用履歴ではなく、前処理・外注・協力者を含む攻撃者全体が新しい正しい採掘機会を得るための費用である。
+### 4.3 G-COST — 新しい正しいTicketを安く作れる経路の反復検査（2026-11-21改訂）
 
-計算モデル`\mathfrak C`、費用単位、前処理とsetupの会計、記憶・I/O・並列性・batchの扱い、許容モデル選別、予算上限`B`を固定する。通常実装のFLOPs、MAC数の上界、GPU実測、料金、hash木の処理量を最良アルゴリズムの下界へ読み替えない。beacon生成、余分なproof生成、検証者の再実行、意図的に追加した重いhashだけで、LLMコアの評価費用を満たしたとしない。
+新規採掘の対象instanceで、初回Ticket照会に必要な正規入力を基準実行より安く作れる経路を複数回検査する。PASSの主張は、指定した条件と予算で調べた経路の範囲に限る。全アルゴリズムに対する数学的費用下界は採掘の要件から外す。G-COLLは§4.2に従う。反復検査には新しい費用policy版を割り当て、過去に固定したrule・署名・claimの意味を変更しない。
 
-`K_A(B)`を、攻撃者と協力者が予算`B`内で、異なる有効試行の**正しい規範実行に対応する唯一のTicket入力**へ初めて照会した数とする。未照会候補をNodeが最初にhashする場合も数える。正しいtraceを本人が保有していたかを定義上仮定せず、偶然正しいRootを当てた経路も失敗確率又は費用分析に含める。
-
-必要な複数試行定理の形は、例えば次である。
-
-$$\Pr\!\left[K_A(B)>\left\lfloor B/c_{\min}\right\rfloor\right]\le\varepsilon_{\rm work}(B,Q,\lambda).$$
-
-ここで`c_min>0`と誤差の根拠は具体的なruleに必要である。式を仕様へ書いたことは証明の完了ではない。共通prefix、KV cache、weightsの前処理、零・低rank・冗長モデル、量子化・相殺、batch GEMM、再計算の償却、他者の既存成果からの再構成、部分計算による当選先読みを分析対象へ含める。定理が除外する攻撃を実profileが許す場合は不適格である。
-
-多モデル・異なる費用classを混在させる場合は、共通単位での総予算とinstanceごとの下界を明示して合成する。都合のよい一モデルの`c_min`を全モデルの合意weightへ使わない。具体的GPU秒・金銭費用の保証を公表する場合は、その物理モデルへの追加根拠を必要とし、抽象演算量の定理だけから値を発行しない。
+1. **検査前に固定するもの。** descriptor・artifact・数値profile、検査世代、基準実装、機材・費用単位、試す経路、異なる入力を導く試行予定と回数、予算、安価と判定する基準費用比をsuiteへ固定する。比較基準を結果に合わせて動かさない。新規の候補を調べる場合は新世代に記録する。
+2. **反復と比較。** 各経路について別々に導出した複数の入力で独立した完全実行と比較する。確認対象は回答だけでなく、その試行の四Rootを含む正規Ticket入力である。共通prefix/KV、前処理、batchや複数候補への費用配分を含め、準備と実行の総費用、生成した候補数、適用範囲を残す。測定誤差で境界を決められない結果は未確定とする。
+3. **判定。** 正しいTicket入力を事前閾値未満で生成する再現可能な結果があればFAIL。修正し、新たな世代で確認する。全予定試行・全経路の比較が完了し該当例がなければ、その範囲でPASS。資料不足、未設定の閾値、試行不足、旧世代の記録だけならUNKNOWN。正しい高速化それ自体をclaimの算術不正として裁定しない。
+4. **追跡。** 入力・基準出力・計測記録・実装版・再現手順と検査外の経路を残す。各Nodeは同じ認証済み計測記録を整数単位で判定し、Node自身の時計や機材の速さを合意入力にしない。後から安価な経路が判明した場合はMAS1の停止・再検査を適用する。検査のPASSから全入力の費用、予算当たりのTicket数、未知の経路の発見確率を推定しない。
 
 ### 4.4 現在の完成状態
 
-本改訂で、既存Qwen系列のG-COLLとG-COSTを満たす完成済みTheoremRule又は本番conformance checkerを追加したとはしない。旧FULL1の部分和生成量、MOR1のreceipt衝突、TB1の乱数保証、Panelの正当性保証を結合して、その不足を解消したとは主張しない。
+本改訂で、既存Qwen系列のG-COLLの適合定理又はG-COSTの採択済み実機検査結果を追加したとはしない。旧FULL1の部分和生成量、MOR1のreceipt衝突、TB1の乱数保証、Panelの正当性保証を結合して、その不足を解消したとは主張しない。
 
 現在採択するのは三gateを必須とする設計である。未証明のruleを`verified=true`として登録する経路、テスト合格だけで適格化する経路、正しい局所Courtの数で代替する経路を禁止する。
 
 ### 4.5 MAS1対象の追加条件
 
-本節の三gateに、RFC0065のG-USE、構造検査、最新検査世代・rule・安全停止状態を追加する。有限の実用testは用途別の品質根拠であり、三gateの数学的根拠を代替しない。採掘専用の無用な重い枝、巨大trace生成又は高価な証明を、コアLLMの有用計算費用として認定しない。
+本節の三gateに、RFC0065のG-USE、構造検査、最新検査世代・rule・安全停止状態を追加する。有限の実用testは用途別の品質根拠であり、各gate固有の根拠を代替しない。採掘専用の無用な重い枝、巨大trace生成又は高価な証明を、コアLLMの有用計算費用として認定しない。
 
 ## 5. 四Root、Ticket、補助receipt
 
@@ -205,25 +200,17 @@ $$T=H_{\rm FOW1-ticket}\!\left(\operatorname{Enc}_{P}(s,R_x,R_y,R_z,R_\tau)\righ
 
 固定context、正規TB1 EXEC、決定的コア関数、canonical四Root、固定Ticket encodingがあると、同じ試行の正しいTicket入力は一つである。再署名、別envelope、再送、holderのshare subset、Panel交替によって別の正しいTicketを作れない。
 
-これは決定性と符号化から導ける。ただし、別の試行へ進む費用が高いことはG-COSTから別に必要である。
+これは決定性と符号化から導ける。別の試行に要する費用は§4.3の対象として調べる。
 
-### 6.2 費用と当選の接続
+### 6.2 Ticket数と当選確率
 
-古典的なTicket ROを仮定し、正しい入力の成立がその初回返値を読む前に定まり、targetが事前固定され、G-COSTから事前予算`B`に対し正しい初回照会数が高々`k=floor(B/c_min)`となる事象を用いると、`p=theta/2^256`について
-
-$$\Pr[\text{正しい当選を少なくとも一つ得る}]\le\min\{1,1-(1-p)^k+\varepsilon_{\rm work}\}.$$
-
-この導出では、最初の`k`個までの相異なる正しい照会を順に数える。各照会の正否と固定targetは返値を読む前に定まり、未照会のTicket返値が一様なので、その範囲で一つ以上当たる確率は高々`1-(1-p)^k`となる。`k`を超える経路の確率を最後に加える。費用boundを満たす事象へ事後条件付けしてから、返値が独立と仮定する証明にはしない。
-
-成功Finalまで主張する場合は、TB1、binding、G-EXEC、資料・包含・native gate等の失敗を全候補・全期間で評価し、その合成上界を別に加える。未構築の保証を根拠なく小さな誤差と置かない。G-COLLはコア出力の別性を支える独立条件であり、この確率式だけから得られるものではない。
-
-この節は必要なG-COSTが証明された場合の接続を示す。現在その前提を既存Qwenについて証明したものではなく、量子攻撃へ同じ`pk`評価をそのまま適用するものでもない。
+古典的Ticket ROと事前固定targetを仮定する。返値を見る前に正しい入力であることが定まる相異なる初回照会を高々 `k` 件に限れば、1件以上当たる確率の上界は `1 − (1 − theta/2^256)^k` である。§4.3の実測から、任意の計算予算で作れるTicket数 `k` の上限は導けない。実測最小値を普遍的な `c_min` として当選確率や合意weightに使わない。
 
 ## 7. 再利用・仕事キー・経済責任
 
 | 対象 | FOW1での扱い |
 | --- | --- |
-| 同じモデル重み・固定programの保存/配布 | 内容認証を維持して共有できる。費用定理はその事前取得・前処理を含める |
+| 同じモデル重み・固定programの保存/配布 | 内容認証を維持して共有できる。費用比較はその事前取得・前処理を含める |
 | 同じ試行の再送・Panel再実行 | 同じ`y,z`とRootを使う。追加Ticket・仕事creditなし |
 | 別試行でのprefix/KV/cache/batch | 規範意味とoriginを満たし、G-COSTがその共有・償却を含む場合に許す |
 | 別ownerによる成果のコピー | 入力・`z`・trace・帰属を新試行へ付け替えられない。同じ実仕事の二重会計も拒否する |
@@ -238,7 +225,7 @@ $$\Pr[\text{正しい当選を少なくとも一つ得る}]\le\min\{1,1-(1-p)^k+
 
 ## 8. 全consumerの単一gate
 
-FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissible`、対応TheoremRule、TB1 certificate/FreezeRecord、正規`z`と四Root、唯一のTicket、一回消費を加える。MAS1対象ではさらにRFC0065のEffectiveMiningAllowedを必要とし、同batchの安全停止を成功sweep・発行・未消費受賞権利の消費より先に反映する。モデル登録画面、miner、Panel、Node、SDK、RPC、import/repair、snapshot/IBD、reorg、reward/credit/weightの全consumerが同じ型・版・gateを使う。
+FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissible`、G-COLLの対応TheoremRuleと現世代の費用検査、TB1 certificate/FreezeRecord、正規`z`と四Root、唯一のTicket、一回消費を加える。MAS1対象ではさらにRFC0065のEffectiveMiningAllowedを必要とし、同batchの安全停止を成功sweep・発行・未消費受賞権利の消費より先に反映する。モデル登録画面、miner、Panel、Node、SDK、RPC、import/repair、snapshot/IBD、reorg、reward/credit/weightの全consumerが同じ型・版・gateを使う。
 
 同batchでは適格notice/資料case、反証、失効、依存取消を成功・発行・消費より先に適用する。現在の適格性を過去snapshotの合格表示で代替しない。証拠不足、未知rule、未対応Readout、TB1不成立、元期限切れは成功にしない。
 
@@ -276,7 +263,7 @@ FOW1の有効なruleが一件もない、又はTB1のbootstrap・容量・安定
 | --- | --- |
 | 対話経路を実装しない構成 | 正常claimは完全再実行から既定の承認へ進む。不正なtraceは協力不要の直接反証で裁定でき、資料欠落や未解決caseのまま成功しない |
 | コア出力 | 同一試行の`y,z,tau`再現、別試行のz衝突上界、Readout/Endの完全な局所関係 |
-| 費用 | 前処理・shared seed・cache・batch・零/低rank・特殊入力・外注を含むG-COSTの証明と独立review |
+| 費用 | 前処理・shared seed・cache・batch・零/低rank・特殊入力・外注を含むG-COSTの反復測定、再現と独立review |
 | 代替拒否 | `z=s`、`H(s)`、回答へのtag、receiptのrename、重い証明だけの仕事量認定を合格にしない |
 | 登録 | 偽TheoremRule、未確認のweights predicate、未知kernel、自己申告属性、同名旧profileを拒否 |
 | TB1 | EXEC/PANEL別秘密、最初の正直share前freeze、全Q、独立RoundRef、公開拒否、曝露reorg、no fallback |

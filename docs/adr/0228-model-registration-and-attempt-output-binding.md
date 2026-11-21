@@ -7,7 +7,7 @@
 
 新規採掘は[ADR-0230](0230-palw-function-output-and-work-admissibility.md)／[RFC-0062 PALW-FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md)へ、乱数生成は[ADR-0229](0229-palw-internal-threshold-beacon.md)／[RFC-0061 PALW-TB1](../rfc/0061-palw-internal-threshold-beacon.md)へ統一する。新方針は**ADOPTED_DESIGN_NOT_ACTIVATED**であり、FOW1のz・四Root Ticket・三つの必須gateを適用する。MOR1のreceipt定理は補助保証として保持する。
 
-以下の旧判断で自然回答yの一致を許すことは、FOW1のzの衝突を無条件に許すことを意味しない。「失効させる節はない」という初版記録は、今回の明示的置換より優先しない。0062のactivation A以後は旧MOR1の新規採掘受付を閉じ、旧署名済みclaimの履歴・固定drainは保持する。具体的なLLM費用定理・本番実装・公開activationは未完成である。
+以下の旧判断で自然回答yの一致を許すことは、FOW1のzの衝突を無条件に許すことを意味しない。「失効させる節はない」という初版記録は、今回の明示的置換より優先しない。0062のactivation A以後は旧MOR1の新規採掘受付を閉じ、旧署名済みclaimの履歴・固定drainは保持する。対象LLMでの反復費用検査・本番実装・公開activationは未完成である。
 <!-- FOW1-TB1-20261120-END -->
 
 - 日付: 2026-11-20（Asia/Tokyo）

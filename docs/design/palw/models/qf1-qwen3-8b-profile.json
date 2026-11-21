@@ -14,6 +14,13 @@
   "qwen_quality_measured": false,
   "G_COLL_proved": false,
   "G_COST_proved": false,
+  "g_cost_admission": {
+    "revision": "2026-11-21",
+    "method": "repeated_empirical_comparison",
+    "normative_contract": "docs/rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review",
+    "universal_cost_proof_required": false,
+    "incomplete": "UNKNOWN"
+  },
   "source_family": {
     "repository": "Qwen/Qwen3-8B",
     "source_kind": "dense causal text decoder",

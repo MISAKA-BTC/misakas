@@ -3,14 +3,14 @@
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。QF1 descriptorでは36層・QK norm・StateMap・HEX64・整数scale・hash chunk checkerを検査する。QwenのG-COLL/G-COST未証明はUNKNOWNのまま採掘不可。
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。QF1 descriptorでは36層・QK norm・StateMap・HEX64・整数scale・hash chunk checkerを検査する。QwenのG-COLLの定理が未確認、又はG-COSTの反復検査が未完ならUNKNOWNで採掘を保留する。
 
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
 
 
 - 日付: 2026-11-20（Asia/Tokyo）
-- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示による設計変更であり、検査器・BFT停止処理・Qwenの費用定理・公開有効化の完成ではない。
+- 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示による設計変更であり、検査器・BFT停止処理・Qwenの反復費用検査・公開有効化の完成ではない。
 - 論理profile: **MAS1（Model Admission Safety）**。nativeのwire ID、fence、高さ、実committee又は本番parameterは未割当。
 - 判断記録: [ADR-0233](../adr/0233-model-admission-screening-and-bft-stop.md)
 - 基礎契約: [FOW1](0062-palw-function-output-and-work-admissibility.md)、[TB1](0061-palw-internal-threshold-beacon.md)、[追加モデルburn停止](0053-additional-model-burn-pause.md)、[MOE2](0064-reward-buy-and-permanent-liquidity.md)
@@ -46,7 +46,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 | `UsefulStateMapRoot` | 回答yに必要な状態、zのReadout元、共有部分と採掘専用部分の対応 |
 | `InputDomainId` | 許容job、challenge frame、長さ、sampling、cache origin、入力選別の範囲 |
 | `PracticalSuiteId` | 利用用途、客観的score、正確な閾値、資源上限、test生成規則、基準profile |
-| `WorkCostContractId` | TheoremRule、c_min、前処理・共有・最適化・外注の計算モデルと失敗予算 |
+| `WorkCostContractId` | 比較する経路・入力数・費用単位・閾値、前処理・共有・最適化・外注の会計 |
 | `AdmissionPolicyId` | 判定規則、署名suite、BFT停止scope、期限、受付・再検査・異議容量 |
 | `AdmissionGeneration` | 同じdescriptorに対する検査世代。旧判定・旧解除の再利用を拒否する単調な識別 |
 
@@ -81,7 +81,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 
 ### 3.2 下界と安いアルゴリズムの扱い
 
-既知の安い算法が全許容入力で同じ結果を作り、規範計算モデルでの上界が採用c_minを下回るなら、費用ruleへの反例である。ランダム入力下の確率的下界の場合は、一件の安い入力だけで反証済みとはしない。入力選別を含めて、許容された失敗確率・予算boundを破ることを確認する。
+G-COSTは[RFC-0062 §4.3](0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復費用検査で判定する。再現された正規Ticket入力の費用が事前閾値を下回れば当該世代はFAIL。旧世代のPASSは新しいartifact・suiteへ引き継がない。
 
 未証明の性能測定又は特定GPUでの高速化は、危険を報告する材料になるが、そのまま数学的な反例とはしない。モデルの用途を維持する正しい高速化をslashせず、仕事単価・適格性ruleの再検討と停止へ接続する。
 
@@ -99,11 +99,11 @@ PracticalSuiteは、少なくとも次を固定する。具体的suite・閾値�
 
 `UsefulStateMap`は、yに必要な計算とzに使う状態の対応を明示する。独立した重いhash puzzle、無意味な巨大行列、不要な長文生成、使われないexpert又は全MAC途中値の書出しを追加し、その費用を「Qwenの通常の有用推論費用」として認定しない。必要な軽量Readout・資料供給・検証処理は許すが、費用を分離し、追加負担の上限と根拠をprofileに明記する。
 
-安全な解析で不要枝と確定できる場合は排除する。意味的な必要性が確認できない場合はUNKNOWNであり、graph上で線をつないだだけの証明を認めない。source-levelの数値意味を保つ変換でも、G-COSTの別証明は必要である。
+安全な解析で不要枝と確定できる場合は排除する。意味的な必要性が確認できない場合はUNKNOWNであり、graph上で線をつないだだけの証明を認めない。source-levelの数値意味を保つ変換でも、G-COSTの別検査は必要である。
 
 ### 4.1 testの実行とNodeの責務
 
-モデル・descriptor・suite・test予算・固定期限を登録者が変更できない形でfreezeした後、独立した`TB1-MODEL_AUDIT`でtest instanceを導出する。このpurposeは[TB1用途表](../design/palw/consensus/tb1-beacon-consumers.json)に追加する。EXEC/PANELの既知値をhashして未知のtest乱数としない。複数候補を事前登録して有利なものだけ選ぶ機会は受付予算・費用定理の候補数へ数える。
+モデル・descriptor・suite・test予算・固定期限を登録者が変更できない形でfreezeした後、独立した`TB1-MODEL_AUDIT`でtest instanceを導出する。このpurposeは[TB1用途表](../design/palw/consensus/tb1-beacon-consumers.json)に追加する。EXEC/PANELの既知値をhashして未知のtest乱数としない。複数候補を事前登録して有利なものだけ選ぶ機会は受付予算・費用検査の候補数へ数える。
 
 評価は`NON_REWARDING_MODEL_EVALUATION`として行う。未適格モデルを検査するための実行であり、FOW1採掘claim、work weight、EXEC credit、受賞権利、モデル帰属報酬又はMOE2買付を発生させない。評価の成功を同じtraceの採掘成功へ変換しない。資源は事前の登録/評価予算から予約する。
 
@@ -273,7 +273,7 @@ pruning/snapshot/IBDでは、有効なAdmissionPolicy、descriptor、最新gener
 | 解析 | 定数Readout、challenge脱落、死んだ重い枝、既知の短絡、未対応op、MoE分岐、打切りUNKNOWNを区別できる |
 | 有界性 | 全重みの自己申告、欠落coverage、偽manifest、解析上限超過をPASSにしない |
 | 有用性 | 固定suite/閾値、nonce後の品質、非報酬評価、評価の採掘転用拒否、費用分離 |
-| 数学 | 具体TheoremRuleと全適合predicate。構造testやBFTをG-COSTの代用にしない |
+| 数学 | G-COLLの具体TheoremRuleと全適合predicate。G-COSTは別途、固定したsuiteで反復検査 |
 | BFT | roster権限・fault仮定・署名suite、重複署名、別purpose/branch/epoch、拒否・交替、証明搬送 |
 | 遷移 | UNKNOWN待機中の採掘拒否、timeout終端、停止優先、burn/owner/alias迂回、stale解除、再検査 |
 | 消費 | Final/credit/weight/permit/受賞権利/報酬の全入口、停止中の元期限と責任継続 |

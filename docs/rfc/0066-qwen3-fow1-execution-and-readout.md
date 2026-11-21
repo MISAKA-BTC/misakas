@@ -344,7 +344,7 @@ win = T_ticket < theta
 
 `D_z`はZ treeのleaf数1、§6の`DOM_Z`は固定domain bytesである。thetaはFOW1で事前固定した`0..2^256`の整数。nonce/owner/job/model/profileはC→s→実入力と元claimに結合済みであり、自由にTicketへ足し直さない。署名、Panel/Court、slot再包装、receiptはTicket入力に入らない。
 
-正しいrootであっても、新しいTicketを安く生成できない費用保証は別のG-COSTである。偽rootをhashして当選した候補だけ提出する行為自体をhash式だけで防いだと主張しない。不正実行のFinal排除はPanel＋Court、資料・包含・活性条件、MAS1 gateに依存する。
+正しいrootであっても、新しいTicketを安く生成できる経路の確認には別途G-COSTの反復検査が必要である。偽rootをhashして当選した候補だけ提出する行為自体をhash式だけで防いだと主張しない。不正実行のFinal排除はPanel＋Court、資料・包含・活性条件、MAS1 gateに依存する。
 
 ## 9. cache・batch・正当な高速化
 
@@ -367,7 +367,7 @@ cache keyは少なくともnumeric artifact/program/profile、実入力prefix全
 | Court | 全演算＋Readout＋Endの有界checker、最大case bytes/CPU、資料取得 | 永続検閲の解消 |
 | G-USE | この整数・HEX64・greedy実行の回答と資源 | G-COSTの代替 |
 
-省略されたlayer、readoutだけ別計算、ゼロscale等の**立証された違反**はFAIL。有効で安い短絡を発見した場合は該当WorkCostContract/TheoremRuleへの反例として採掘適格性を止める。単なる疎性・ランク・経験的速さだけから個々のMinerをslashしない。
+省略されたlayer、readoutだけ別計算、ゼロscale等の**立証された違反**はFAIL。有効で安い短絡を発見した場合は該当WorkCostContractの不合格事例として採掘適格性を止める。単なる疎性・ランク・経験的速さだけから個々のMinerをslashしない。
 
 ### 10.2 実用性を保つ評価
 
@@ -379,7 +379,7 @@ PracticalSuiteは少なくとも、指示応答、QA/推論、日本語等の対
 
 ### 10.3 UNKNOWNからの経路
 
-QF1 instanceのG-COLL又はG-COSTが未証明なら`REVIEW_HOLD`。MAS1のModelRiskCaseと限定BFT MODEL_STOP/RESOLVEへつなぐ。BFTは費用証明の欠落を多数決で埋めず、全必須PASS・正規停止解除・native inclusionなしに採掘を開始しない。自動検査で未判定のまま「まず報酬付きで動かして後からslash」はしない。
+QF1 instanceのG-COLLの定理が未確認、又は[RFC-0062 §4.3の反復費用検査](0062-palw-function-output-and-work-admissibility.md#g-cost-review)が未完なら`REVIEW_HOLD`。MAS1のModelRiskCaseと限定BFT MODEL_STOP/RESOLVEへつなぐ。BFTは費用検査の欠落を多数決で埋めず、全必須PASS・正規停止解除・native inclusionなしに採掘を開始しない。自動検査で未判定のまま「まず報酬付きで動かして後からslash」はしない。
 
 停止scopeはartifact/profile又はrule version。通常の固定prefix reuseや正しい速い算法を、過去の計算詐欺へ遡及再分類しない。既確定の決済、burn解除、BFTの台帳権限についてRFC0065を変更しない。
 
@@ -407,14 +407,14 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 | QF1-06 trace/court | 別重みindex、別layer/position、KV差替え、hash counter/padding/chain、End長とrootの違反を局所反証 |
 | QF1-07 roots/ticket | 木形、padding、kind、leaf数、D=1、target境界、再署名/別carrierで再抽選なし |
 | QF1-08 useful | 実artifact・実job・実hardwareでG-USEとoverhead上限。前処理・batch/cacheの条件を公開 |
-| QF1-09 eligibility | 未証明TheoremRule、UNKNOWN、停止中、評価専用のclaimが全成功consumerで拒否 |
+| QF1-09 eligibility | G-COLLの定理未確認、費用検査の未完・不合格、停止中、評価専用のclaimを全成功consumerで拒否 |
 | QF1-10 end-to-end | 対話経路を無効または未実装とし、非報酬評価で元資料を取得してPanelが完全再実行する。一致時の承認、不一致時の直接反証と局所Court、資料欠落時の成功停止を個別に確認する。MAS1判定、同時停止・再起動/reorg/履歴復元も確認 |
 
 同梱の小規模Python参照の対象は、QF1-04/05/07の論理codecの一部と否定例である。
 
 2026-11-21の隔離・非報酬試験では、同一バイナリの3ピアでQF1-10の3ケースを個別に確認した。正常時は選出2席がQwen3-8Bの整数実行を再現して承認した。署名済みReadoutとEndが矛盾する場合は追加質問を経ずに局所裁定した。1席の資料が欠けた場合は承認が1件にとどまり、元期限で新規受付が終了した。資料義務違反の裁定、合意状態での未検証終了、Final・決済を含む一貫検証は残る。これらの試験によるG-COST判定は行わない。[正常時](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-undisputed-replay.json)・[Endの直接裁定](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-replay-deadline-refuted.json)・[資料不足と元期限](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-missing-replay-material.json)
 
-有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、適合定理、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
+有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、G-COLLの適合定理、G-COSTの反復費用検査、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
 
 ## 13. 一次資料と今回の確認範囲
 

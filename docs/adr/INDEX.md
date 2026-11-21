@@ -239,7 +239,7 @@
 | ADR-0227 | [PALW-AN1の実入力束縛をPanel＋Courtへ接続する](0227-palw-an1-input-binding-and-panel-court.md) | AN1の履歴と今回の置換 / ADR229/230優先 |
 | ADR-0228 | [モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md) | MOR1の履歴と今回の置換 / ADR230のコアz条件優先 |
 | ADR-0229 | [全対象乱数源をPALW内部閾値beaconへ統合する](0229-palw-internal-threshold-beacon.md) | ADOPTED_DESIGN_NOT_ACTIVATED / TB1選択・移行 |
-| ADR-0230 | [推論関数の採掘出力と費用定理を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計 |
+| ADR-0230 | [推論関数の採掘出力と反復費用検査を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計 |
 | ADR-0231 | [追加モデル限定MisakaOptionと新しい報酬・売買・移転規則](0231-additional-model-option-economics.md) | 旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
 | ADR-0232 | [30%買付・20%永久流動性・余剰Position burnを採択する](0232-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約 |
 | ADR-0233 | [モデル追加時の構造・実用性検査と限定BFT停止を採択する](0233-model-admission-screening-and-bft-stop.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAS1限定停止権限・UNKNOWN閉鎖 |

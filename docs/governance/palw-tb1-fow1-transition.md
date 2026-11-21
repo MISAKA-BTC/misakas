@@ -1,11 +1,14 @@
 # PALW-TB1 / FOW1 — 関数出力・乱数・仕事会計の統一と移行
 
+2026-11-21改訂。新規採掘のG-COSTには、現世代の固定条件での反復費用検査を適用する。未検査はUNKNOWN、再現された安価な正規TicketはFAILとし、合格の範囲と未検査条件を記録する。[RFC-0062 §4.3](../rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)
+
+
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](qwen-fow1-profile-transition.md)。QF1の具体profileと限定adapter置換を追加する。TB1の用途や停止・freeze前提は変更しない。
 
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
 
 
@@ -14,7 +17,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。FOW1三gateにMAS1を加え、非報酬評価には独立TB1-MODEL_AUDITを用いる。既知のEXEC/PANEL値から未知の評価seedを作らない。
 
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
 
 旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
 <!-- MAS1-ADOPTED-20261120-END -->
@@ -34,7 +37,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 旧RFC/ADR、統合版の「原条文の統合収録」「原条文の完全収録」、旧snapshot、過去の測定・レビューの原文は履歴として保持する。これらにある旧beacon、未来anchor hash、seal-reveal、BFT/BLS、free-prompt、quantum、出力envelopeの条文を、FOW1/TB1の新規受付条件として選択してはならない。原文の存在や古いAccepted表示は、新profileへの再採用を意味しない。
 
-本改定は設計方針と規範の採択であり、native実装・暗号合成評価・Qwen用費用定理・公開activationの完了ではない。公開activationの具体的なnetwork、fence、wire ID、suite parameter、TheoremRuleIdを未承認の既定値で補完しない。
+本改定は設計方針と規範の採択であり、native実装・暗号合成評価・Qwen用の反復費用検査・公開activationの完了ではない。公開activationの具体的なnetwork、fence、wire ID、suite parameter、TheoremRuleIdを未承認の既定値で補完しない。
 
 ## 2. 保証対象を固定する
 
@@ -77,7 +80,7 @@ TB1は完全BGW VSS、PQ認証私信、署名付きshareの公開復元certifica
 
 FOW1のTicketは、規定context、モデルと実入力、コア採掘値z、回答とcanonical traceのRootへ一意に束縛する。自由salt、署名乱数、Panel nonce、receipt再包装、後続beaconから別Ticketを作らない。同一の試行・実仕事・用途の再送は新しい報酬を生まない。
 
-保存・配信・認証済み重みの共有と、試行間の演算の償却を区別する。正しいcache、batch、最適化、外注・共同計算は費用定理の攻撃者モデルに含める。禁止宣言や本人の申告で計算費用を確保したとしない。正しい計算を安く行ったこと自体へslashを課さない。
+保存・配信・認証済み重みの共有と、試行間の演算の償却を区別する。正しいcache、batch、最適化、外注・共同計算は反復費用検査の対象に含める。禁止宣言や本人の申告で計算費用を確保したとしない。正しい計算を安く行ったこと自体へslashを課さない。
 
 旧prefix exportは生成元と責任を認証する契約として維持できるが、その再利用を無料の新FOW1仕事へ変換しない。reuse可能な部分、費用に算入する部分、BaseWorkKey・AttemptUse・creditの消費をRFC0062の同じprofileへ結合する。
 
@@ -101,7 +104,7 @@ FOW1のTicketは、規定context、モデルと実入力、コア採掘値z、�
 ## 6. 移行と失敗
 
 1. **現在:** 設計採択のみ。現行ネットワークの受理・報酬をこの文書更新だけで変更しない。
-2. **準備:** 有効化するnetwork/profile、TB1全suite/codec、各purpose、安定freeze、holder bootstrap、資源予約、FOW1 TheoremRuleIdと適合checker、全consumer、原子的会計を固定する。
+2. **準備:** 有効化するnetwork/profile、TB1全suite/codec、各purpose、安定freeze、holder bootstrap、資源予約、G-COLLのTheoremRuleIdと適合checker、G-COSTの反復検査suite、全consumer、原子的会計を固定する。
 3. **適格性の確認:** 未完成の定理や未対応kernelを仮のPASSにしない。現在Qwenに対する必要な定理・適合検査が未完成なら、そのFOW1入口を開けない。
 4. **明示したactivation境界:** 新規PALW採掘・報酬・合意workはFOW1/TB1を必須とする。旧Attempt、FreePrompt、AN1/MOR1、SWC1、別API、import/repair経路を新規採掘fallbackとして受理しない。
 5. **旧責任のdrain:** 境界より前の有効なclaim/caseは受理時の署名・型・期限・予約で終える。既払い権利、旧signature、資料保持、再起動・reorg責任を新形式へ黙って変更しない。旧claimから新FOW1 creditを二重発行しない。
@@ -110,6 +113,6 @@ FOW1のTicketは、規定context、モデルと実入力、コア採掘値z、�
 
 ## 7. 完成判定
 
-文書検査、参照fixture、有限体の小規模算術、native実装、暗号合成評価、実LLM測定、モデル系列の費用定理、公開activationを別々に記録する。添付のTB1参照モデルは完全BGW、PQ暗号、native合意を実装していない。新purposeのSCHEDULE/ROLE/ADMISSIONやFOW1のコア関数定理を、元の29テストの成功で検証済みにしない。
+文書検査、参照fixture、有限体の小規模算術、native実装、暗号合成評価、実LLM測定、対象instanceでの反復費用検査、公開activationを別々に記録する。添付のTB1参照モデルは完全BGW、PQ暗号、native合意を実装していない。新purposeのSCHEDULE/ROLE/ADMISSIONやFOW1のコア関数定理を、元の29テストの成功で検証済みにしない。
 
 全条件を満たす具体profileが存在し、必要なレビュー・測定・明示的activation記録がそろうまで、新profileを本番対応済みと表示しない。これは旧beaconに戻る許可ではない。

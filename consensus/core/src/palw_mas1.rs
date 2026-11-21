@@ -1,5 +1,8 @@
 //! RFC-0065 local decision functions. Inputs are verdicts from the owning
 //! canonical evidence reducers. This module assigns no control wire tags.
+pub mod cost;
+use cost::CostReview;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Verdict {
     Pass,
@@ -20,7 +23,7 @@ pub enum Admission {
 pub struct Assessment {
     pub execution: Verdict,
     pub collision: Verdict,
-    pub cost: Verdict,
+    pub cost: CostReview,
     pub usefulness: Verdict,
     pub structure: Verdict,
     pub current_rules_and_evidence: Verdict,
@@ -32,7 +35,7 @@ impl Default for Assessment {
         Self {
             execution: Verdict::Unknown,
             collision: Verdict::Unknown,
-            cost: Verdict::Unknown,
+            cost: CostReview::default(),
             usefulness: Verdict::Unknown,
             structure: Verdict::Unknown,
             current_rules_and_evidence: Verdict::Unknown,
@@ -42,7 +45,8 @@ impl Default for Assessment {
 
 impl Assessment {
     pub fn decision(&self) -> Admission {
-        let gates = [self.execution, self.collision, self.cost, self.usefulness, self.structure, self.current_rules_and_evidence];
+        let gates =
+            [self.execution, self.collision, self.cost.verdict(), self.usefulness, self.structure, self.current_rules_and_evidence];
         if gates.contains(&Verdict::Fail) {
             Admission::Rejected
         } else if gates.contains(&Verdict::Unknown) {
@@ -87,12 +91,23 @@ pub fn new_mining_allowed(
 mod tests {
     use super::*;
 
+    fn checked_cost() -> CostReview {
+        use cost::{CostPlan, CostRun, RouteRun};
+        let inputs = [[1; 64], [2; 64]];
+        let routes = [[3; 64]];
+        let plan = CostPlan { scope: [4; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
+        let run = |input| CostRun { scope: plan.scope, input, ticket_input: input, units: 10 };
+        let references = inputs.map(run);
+        let candidates = inputs.map(|input| RouteRun { route: routes[0], run: run(input) });
+        CostReview::assess(&plan, &references, &candidates)
+    }
+
     #[test]
     fn mas1_new_mining_checks_every_gate_and_keeps_timeout_closed() {
         let mut a = Assessment {
             execution: Verdict::Pass,
             collision: Verdict::Pass,
-            cost: Verdict::Pass,
+            cost: checked_cost(),
             usefulness: Verdict::Pass,
             structure: Verdict::Pass,
             current_rules_and_evidence: Verdict::Pass,
@@ -109,7 +124,7 @@ mod tests {
         }
         assert!(!new_mining_allowed(false, Admission::Passed, &a, &[], true));
         assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], false));
-        a.cost = Verdict::Unknown;
+        a.cost = CostReview::default();
         assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], true));
         assert_eq!(a.decision().risk_deadline(9, 10), Admission::ReviewHold);
         assert_eq!(a.decision().risk_deadline(10, 10), Admission::RejectedUnresolved);

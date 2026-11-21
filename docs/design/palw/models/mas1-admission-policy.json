@@ -11,6 +11,13 @@
   "wire_ids_assigned": false,
   "native_implemented_here": false,
   "qwen_cost_theorem_proved": false,
+  "g_cost_admission": {
+    "revision": "2026-11-21",
+    "method": "repeated_empirical_comparison",
+    "normative_contract": "docs/rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review",
+    "universal_cost_proof_required": false,
+    "incomplete": "UNKNOWN"
+  },
   "automatic_shortcut_detection_complete": false,
   "states": [
     "UNASSESSED",

@@ -2,7 +2,7 @@
 
 2026-11-21 に受領した `misaka_docs_MOE2_MAS1_QF1_20261120.zip` の SHA-256 は `95f460df28fd5a8f7aad2ce50f12f0c20d7cbb15a3de3958523f1de58ac41303`。展開した3,094ファイルがすべてリポジトリの同じパスとバイト一致した。統合前の台帳にあった Studio 実行記録は対応する[隔離試験の記録](../studio-winning-receipt-2026-11-20/README.md)に保存した。
 
-配布原本の改訂検査は入力3,012件、変更51件、履歴保存51件を照合した。対話が任意であることと隔離試験の到達点を記述した後、ZIP 内の3,094ファイルを再照合した。差分は RFC-0054・0062・0066、統合版 RFC-v2-0017・0018 とその索引、裁定方針、QF1 移行文書の8件だった。さらに同梱の変更前ファイルを SHA-256 で検査して MAS1 版を復元し、その改訂検査も実施した。QF1 の Python 参照検査は57項目成功。過去の原本と照合する RFC・ADR の全体検査には配布版と同じ7件・157件の指摘が残る。文書全体の strict 検査にも配布原本から引き継いだ指摘が残っている。
+配布原本の改訂検査は入力3,012件、変更51件、履歴保存51件を照合した。G-COST改訂前、対話が任意であることと隔離試験の到達点を記述した時点で、ZIP 内の3,094ファイルを再照合した。差分は RFC-0054・0062・0066、統合版 RFC-v2-0017・0018 とその索引、裁定方針、QF1 移行文書の8件だった。さらに同梱の変更前ファイルを SHA-256 で検査して MAS1 版を復元し、その改訂検査も実施した。QF1 の Python 参照検査は57項目成功。過去の原本と照合する RFC・ADR の全体検査には配布版と同じ7件・157件の指摘が残る。文書全体の strict 検査にも配布原本から引き継いだ指摘が残っている。
 
 ## QF1
 
@@ -650,4 +650,12 @@ python3 -B "$p/check_funded_certificate.py" "$out/certification.json" "$out/cert
 zstd -dc "$p/genesis-audit-release-window-blocks.jsonl.zst" > "$out/window.jsonl"
 zstd -dc "$p/genesis-audit-release-window.txt.zst" > "$out/window.log"
 python3 -B "$p/check_audit_release_window.py" "$out/window.jsonl" "$out/window.log"
+```
+
+### G-COST 改訂後の予備検査
+
+同一の整数 Qwen3-8B descriptor で、Panel が承認した過去の6回の隔離実行を生ログから照合した。6試行では EXEC seed と入力列が各回で異なり、回答列は同一だった。試行の全15組で数値 Readout `z` が異なり、別試行の `z` を変更せずに再利用すると正規値に一致する例は0件だった。先頭の共通入力は組ごとに14〜16 token あった。対象は採掘値全体の再利用で、部分計算・KV・batch の費用、正しい Ticket 入力を生成する経路の費用比は未測定。QF1 の G-COST は UNKNOWN である。[検査結果](g-cost-readout-reuse.json)・[生ログからの照合器](check_g_cost_readout_reuse.py)
+
+```sh
+python3 -B "$p/check_g_cost_readout_reuse.py"
 ```

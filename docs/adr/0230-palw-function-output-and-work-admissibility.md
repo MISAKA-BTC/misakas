@@ -1,11 +1,11 @@
-# ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする
+# ADR-0230 — 推論関数の採掘出力と反復費用検査を新規採掘の共通条件にする
 
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。QF1を具体的な関数profileとして追加する。FOW1の三gateを弱めず、receiptの非衝突性へ置換しない。
 
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
 
 
@@ -14,7 +14,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。モデル名・人気による裁量的承認を使わず、公開suiteのG-USEと構造検査を追加する。未知の適合前提はBFTの署名でPASSにしない。
 
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
 
 旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
 <!-- MAS1-ADOPTED-20261120-END -->
@@ -36,15 +36,15 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 1. **PALW-FOW1を新しい共通採掘profileとする。** 規範コア実行は`CoreExec(M,P,x)=(y,z,tau)`である。回答y、関数由来の採掘出力z、試行ID s、補助receipt rhoを別型にする。
 2. **別試行の非衝突性をzへ要求する。** zは同じ推論の規定状態からReadoutされ、全traceとEnd関係で検証する。s又はH(s)のecho、後付けnonce、receiptの名称変更をモデル関数の保証としない。自然回答yが同じであることだけは不正にしない。
 3. **採掘適格性をモデル保存登録と分離する。** 全permissionless候補に同じTheoremRuleと決定論的な適合predicateを適用する。モデル名、評判又は取得可否による裁量的審査ではない。後続MAS1では公開・共通の実用性G-USEと構造検査・限定BFT停止を追加する。個別artifactに関する未確認の適合前提又は未知checkerがあれば採掘不適格とする。暗号・腐敗上限・ネットワーク等の外部安全性仮定は明示して条件付き保証とし、Nodeが登録時にそれらの成立を証明したとは扱わない。
-4. **三つのgateを必須化する。** 全実行関係と局所反証の完全性、コア採掘値の非衝突性、初回Ticket照会前の複数試行費用下界を別々に示す。MOR1のhash衝突定理、TB1の予測不能性、Panelによる正当性を費用定理へ読み替えない。
+4. **三つのgateを必須化する。** 全実行関係と局所反証の完全性、コア採掘値の非衝突性、初回Ticket照会前の複数試行での費用比較を別々に確認する。MOR1のhash衝突定理、TB1の予測不能性、Panelによる正当性を費用定理へ読み替えない。
 5. **乱数生成はTB1に固定する。** EXEC/PANELは独立秘密と別freeze。最初の正直share公開前の固定、全qualified dealer、曝露journal、no fallbackを継承する。BFT台帳finality、BLS候補、旧anchor fold／seal-revealを新規FOW1の代替乱数源にしない。
 6. **一試行一Ticketを四Rootへ結合する。** `T=H_FOW1-ticket(Enc(s,R_x,R_y,R_z,R_tau))`。新family/domainを用い、旧三Root codecの意味を変えない。future R_ticket、Final後receipt抽選、旧quantum複数drawを重ねない。
-7. **追加計算と再利用を同じ定理へ含める。** cache、batch、prefix、前処理、外注、特殊モデル、入力選別を含む最良アルゴリズムの費用を分析する。正しい最適化を自動的にslashせず、高価な証明・検証・罰金でLLM評価下界を代替しない。
+7. **追加計算と再利用を費用検査へ含める。** cache、batch、prefix、前処理、外注、特殊モデル、入力選別を含む最良アルゴリズムの費用を分析する。正しい最適化を自動的にslashせず、高価な証明・検証・罰金でLLM評価下界を代替しない。
 8. **新規受付の移行を閉じる。** 明示したactivation A以後の新規PALW採掘はFOW1＋TB1を必要とし、旧profileの新規受付を閉じる。既受理旧claimは原期限・旧署名・固定drain規則で処理する。旧履歴readerから新規乱数・Ticket・creditを生成させない。
 
 ## 証明と未完成事項
 
-同じ固定試行の正規実行・Root・Ticketが一つになることは、決定性とcanonical encodingから示せる。費用Bで作れる相異なる正しい初回Ticket入力の数に上界が証明されれば、明示した古典Ticket ROの下でその数から当選確率の上界を導ける。この接続と、必要な費用下界そのものの証明は別である。
+同じ固定試行の正規実行・Root・Ticketが一つになることは、決定性とcanonical encodingから示せる。2026-11-21改訂でG-COSTの採掘判定を[RFC-0062 §4.3](../rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復検査に変更した。費用予算から任意の実装のTicket数や当選確率の上界を主張しない。
 
 本改訂は、既存Qwenの重み、特定LLM/kernel、実GPU費用についてG-COLLとG-COSTを完成させたと主張しない。現在、FOW1適合を認定できる完成済みTheoremRule・native適合検査器・本番モデルをこの変更で追加したわけではない。未完の間は新profileを有効化せず、適格集合が空である状態を完成済みPoWとして公表しない。
 
@@ -59,7 +59,7 @@ Nodeに一般のプログラムの評価困難性を自動証明する万能機�
 | モデル無審査登録 | 一般登録は維持。新規採掘には全提出者共通の数学的・構造的適合を要求 |
 | 未指定/旧方式の未来beacon | 新規対象は0061のTB1へ統一。旧資料は履歴検査・drainに限定 |
 | 旧三Root Ticketとreceipt/quantum抽選 | FOW1四Root・一試行一Ticketへ置換 |
-| prefix等の正しい再利用 | 意味・originに加え、採掘費用定理の分析範囲内であることを必要化 |
+| prefix等の正しい再利用 | 意味・originに加え、反復費用検査の範囲内であることを必要化 |
 
 保有人数、裁量的な品質評判、HF取得可否による審査、年次指定以外のtier昇格、mutable Model ID、延期された画像・動画／自動モデル改善は復活させない。MAS1の客観的G-USEと限定BFT停止はADR0233による今回の明示的な追加である。既存1.0/0.3、資本・発行量・容量の上限は維持し、政策係数を費用の定理へ読み替えない。
 

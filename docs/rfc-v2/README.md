@@ -1,5 +1,8 @@
 # MISAKA RFC v2 — 現行20本
 
+**2026-11-21のG-COST改訂。** 以下の統合冊に収録した旧採択時の費用定理に関する記述は、新規採掘について[RFC-0062 §4.3](../rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)の反復検査が置き換える。G-COLLの定理要件は引き続き適用する。
+
+
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 

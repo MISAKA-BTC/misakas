@@ -5,7 +5,7 @@
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。今回のユーザー明示指示による例外は、モデル追加時の共通安全検査と限定BFT停止である。旧DNS-BFT又はHF取得可否認定は復活させない。
 
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未知の費用定理の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
+構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
 
 旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
 <!-- MAS1-ADOPTED-20261120-END -->
@@ -536,13 +536,16 @@ EXEC負荷とcourt負荷が重なっても約束した供給を維持するこ�
 <!-- TB1-FOW1-PRINCIPLE15-BEGIN -->
 ## 15. TB1乱数・FOW1コア採掘値 — 2026-11-20採択
 
+**2026-11-21の限定改訂。** 新規採掘のG-COSTは、固定した実行条件で安価な生成経路を複数回調べて判定する。費用下界の数学的証明を採掘要件から外し、検査範囲と残った不確実性を公開する。G-COLL・G-EXEC・G-USE、モデル登録・係数、公開有効化の個別判断を維持する。[RFC-0062 §4.3](rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)
+
+
 ユーザーは前回監査の五項目の修正と、添付TB1への乱数生成変更を明示した。[新規採掘の共通移行契約](governance/palw-tb1-fow1-transition.md)を採択し、同契約の対象profileでは従来の不特定beacon・BFT/BLS候補・rhoのみの非衝突性を用いる規則に優先させる。
 
 採掘のコア値zは登録されたLLM関数の実行出力であり、自然回答yや認証envelopeとは別に定義する。非衝突性の対象系列と初回Ticket照会前の複数試行費用条件を、採掘適格性へ結合する。登録artifactについて要求する全ての構造・数値・入出力の適合前提は有界に検査する。暗号、故障上限、正直Panel、native安定性等の外部安全性仮定は、採択するsecurity profileの条件として明示し、Nodeが機械検査で真偽を証明したと扱わない。モデルの一般登録自由は維持し、定理が未確立なQwen等をFOW1適格と認定しない。正しい最適化・cache・外注をslashで排除せず費用モデルに含める。
 
 新profileの実行乱数とPanel乱数は独立TB1-EXEC/PANELとする。必要なschedule、次roster、別controlの受付順位はRFC0061のSCHEDULE/ROLE/ADMISSIONへ分離する。FOW1受付には新たなADMISSION抽選を課さない。Courtの既受理negative・資料・終端は新beacon待ちを持たない。新第三Ticket乱数、旧sourceへの自動fallback、曝露roundの別freezeへの再使用を禁止する。
 
-完全BGW VSSとPQ認証私信を採る。保持者のq share certificateは台帳finality投票でもLLM全体の正当性証明でもない。TB1の故障上限、native安定性・包含、一人の能動的な正直Panel、FOW1の関数/費用定理をそれぞれ明示する。
+完全BGW VSSとPQ認証私信を採る。保持者のq share certificateは台帳finality投票でもLLM全体の正当性証明でもない。TB1の故障上限、native安定性・包含、一人の能動的な正直Panel、FOW1のG-COLLの定理と、G-COSTで検査した経路・測定条件をそれぞれ明示する。
 
 状態はADOPTED_DESIGN_NOT_ACTIVATED。公開activation境界以後の新規PALW採掘・報酬・合意workはFOW1/TB1必須、旧受理claimは旧署名・原期限・責任でdrainする。現行runtimeの動作を文書更新だけで変更したとしない。新規入口は完全BGW/PQ/native実装・合成評価と具体モデルの定理/有界適合checkerがそろうまで開かない。
 <!-- TB1-FOW1-PRINCIPLE15-END -->

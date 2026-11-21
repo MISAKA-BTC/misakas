@@ -5,7 +5,7 @@
 
 **ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../governance/qwen-fow1-profile-transition.md)。Qwenの具体例QF1でも、G-USE・構造解析・費用定理・現行停止状態の全条件を維持する。
 
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用定理・native有効化は未完であり、旧claimやMOE2経済を変更しない。
+QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
 <!-- QF1-ADOPTED-20261120-END -->
 
 
@@ -32,7 +32,7 @@ FOW1はG-EXEC・G-COLL・G-COSTを要求するが、既存のQwenや任意の学
 7. **BFTへ台帳決定権を与えない。** certificateは既存native順序で処理する停止controlである。fork choice、reorg拒否、block finality、claimの算術真偽、既確定残高の改変を権限に含めない。DNS-BFTを復活させない。
 8. **解除は全適格性の再確認を必要とする。** artifact/profileの解除にはfreshな全PASSと、現在rosterのq署名による対象StopId集合の解除を必要とする。G-COST不明を多数決でPASSへ変えない。burn Resume、owner変更、core指定、旧解除証明は安全停止を消さない。TheoremRule versionの停止は個別モデルの解除で消さず、別途採択した新rule versionと全適合再検査を必要とする。
 9. **全成功consumerへ接続する。** 同batchでは安全停止を新しい成功・発行・受賞権利消費より先に反映する。停止中も元期限・Court・資料・返還を維持する。既確定の効果はBFTだけで遡及没収しない。
-10. **未知の安価算法を完全に発見したとはしない。** 検出coverage、未証明の費用条件、誤停止、停止までの遅延、BFTとnativeの活性前提を公表する。正しい高速化そのものをslashしない。
+10. **未知の安価算法を完全に発見したとはしない。** 検出coverage、未確認の費用条件、誤停止、停止までの遅延、BFTとnativeの活性前提を公表する。正しい高速化そのものをslashしない。
 
 ## 旧規範の置換範囲
 
@@ -49,7 +49,7 @@ FOW1はG-EXEC・G-COLL・G-COSTを要求するが、既存のQwenや任意の学
 
 ## 検討した代替案
 
-- 全ての未知モデルをBFT承認だけで許す案は不採用。未証明の費用下界を署名に置き換えるため。
+- 全ての未知モデルをBFT承認だけで許す案は不採用。必要な反復費用検査を署名で省くため。
 - benchmark合格又は非衝突testだけで採掘可能とする案は不採用。過学習・短絡・共有・安い入力選別を排除できないため。
 - 採掘専用の大きなhash/行列演算、Groth16の証明費用を仕事根拠にする案は不採用。今回の「実用的なLLM推論を使う」という目的を満たさないため。
 - 単独の未検証通報で既PASSEDモデルを停止する案は不採用。許可された通報の大量投入が無期限vetoになるため。

@@ -20,7 +20,7 @@ FOW1は同一の有用推論からコア採掘値zを得ることを要求する
 6. **実値を順番にstream hashする。** zはBLAKE2b-512の64 byte。試行ID・owner・nonceをzへ直付けせず、実数値の試行依存性とmetadataの非重複性を混同しない。hashを内部stateへ戻すXORや追加の重い採掘層を置かない。
 7. **Readoutも局所反証対象にする。** 元TIR producerと数値bytesの対応、固定4096-byte hash chunkの連鎖、Stop/End、四Rootまで認証する。1 chunkは最大32 compressionであり、全readoutを一回のCourtへ渡さない。全bodyの検査はPanel＋既存TIR Courtで行う。
 8. **四Root・Ticketの論理codecを一つにする。** 木形、field幅、順序、domain、empty/padding、target境界をRFC0066で固定する。native IDは別の実装gateで割り当てる。
-9. **費用・非衝突性の未証明を維持する。** G-COLL/G-COSTはこの固定関数・入力分布・前処理/cache/batchを対象に必要。公式Qwen名、37 vector、実行一致、BFT署名を定理の代替にしない。
+9. **費用は反復検査、非衝突性はG-COLLの定理で評価する。** G-COLL/G-COSTはこの固定関数・入力分布・前処理/cache/batchを対象に必要。公式Qwen名、37 vector、実行一致、BFT署名を定理の代替にしない。
 10. **MAS1の閉鎖を保つ。** 未対応・未検証・未証明は非報酬評価とUNKNOWN/BFT停止の経路へ接続し、仮採掘を許さない。モデル追加時のMOE2市場生成は独立して維持する。
 
 ## 選択しなかった構成
@@ -44,4 +44,4 @@ QF1は37 vectorを使った関数を具体化するが、状態のentropyや評�
 
 旧RFC/ADRの歴史payloadと過去実測は保存する。現行FOW1/MAS1、TIR/登録/元claim/Panel/Courtの入口に本profileへの参照を追加する。20冊RFC-v2／50冊ADR-v2の構成を変えない。
 
-native lowerer、hash chunk checker、実8B artifact、tokenizer binding、二実装差分、G-USE、費用定理、公開activationは別の完了gateである。同梱参照コードの合格は小さなcodec・位置規則の検査に限る。公開設定・配備・支払を変更しない。
+native lowerer、hash chunk checker、実8B artifact、tokenizer binding、二実装差分、G-USE、反復費用検査、公開activationは別の完了gateである。同梱参照コードの合格は小さなcodec・位置規則の検査に限る。公開設定・配備・支払を変更しない。

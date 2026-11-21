@@ -127,7 +127,7 @@
 - [ADR-0222 — 公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md)
 - [ADR-0224 — 全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md)
 - [ADR-0226 — 実行commit・段階別抽選・仕事の一回性を設計案として分離する](0226-staged-work-commitments-and-consensus-eligibility.md)
-- [ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md)
+- [ADR-0230 — 推論関数の採掘出力と反復費用検査を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md)
 - [ADR-0234 — Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する](0234-qwen3-fow1-execution-and-readout.md)
 
 ## EVM / wallet

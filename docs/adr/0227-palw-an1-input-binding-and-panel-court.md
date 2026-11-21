@@ -24,7 +24,7 @@ Groth16をFinal必須条件とする作業中の案は本改訂へ含めない�
 
 ## 判断
 
-以下の判断1・3の未指定beaconは、新規FOW1でTB1 EXEC/PANELへ限定する。判断8の費用定理はFOW1では必須の採掘gateであり、AN1三Root Ticketをそのまま新familyへ用いない。
+以下の判断1・3の未指定beaconは、新規FOW1でTB1 EXEC/PANELへ限定する。新規FOW1の費用gateはRFC-0062 §4.3の反復検査であり、AN1三Root Ticketをそのまま新familyへ用いない。
 
 1. **AN1を別familyにする。** 旧SWC1の未来R_ticket方式とは異なり、事前登録Cと実行beaconからsを作り、実入力・出力・traceの三RootからTicketを導出する。旧codecの意味を黙って変更せず、Dを二重に適用しない。
 2. **nonceを実tokenへ入れる。** 固定単射のbyte→token表とchallenge prefixを使い、実際の入力読出しまで検査する。切詰め、UNK、template削除で束縛を失わせない。

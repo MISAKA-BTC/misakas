@@ -1805,7 +1805,7 @@
       "kind": "adr",
       "number": "0230",
       "path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
-      "title": "ADR-0230 — 推論関数の採掘出力と費用定理を新規採掘の共通条件にする",
+      "title": "ADR-0230 — 推論関数の採掘出力と反復費用検査を新規採掘の共通条件にする",
       "topic": "Consensus / architecture",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計"
     },
