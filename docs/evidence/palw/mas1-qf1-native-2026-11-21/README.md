@@ -1175,3 +1175,5 @@ uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_co
 tar -xf "$p/qf1-arithmetic-8k-draw.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --draw-only | cmp - "$p/qf1-arithmetic-8k-draw.json"
 ```
+
+上のコマンドに `--openssl "$(brew --prefix openssl@3)/bin/openssl"` を加えると、元ブロックの各Panel署名について、network・claim・Valid判定・署名DAAからメッセージを再構成してML-DSA-87を検証する。算術監査枝のカード4・6・2で成功した。カード4の署名について署名の1ビット、カード、メッセージの1ビット、署名contextを個別に置換すると、4件すべてで検証に失敗した。Gate Cではネットワーク・bond・元のattestationバイト列を使用する。以前の認証済み8K枝では、署名付き7取引も同じOpenSSLで検証できた。[隔離用カード公開鍵8件](isolated-card-public-keys.bin)は `TestConsensus::palw_v2_registry_keypair` のカード番号順で、1鍵2,592バイト。実際の算術監査枝のGate C認証は `--arithmetic-work --writer-only --openssl` とOpenSSLのパスで生成ノードから、続いて `--writer-only` を外して2台の再読込ノードと照合する。

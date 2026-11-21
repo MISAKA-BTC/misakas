@@ -5,12 +5,13 @@ import json
 import re
 import struct
 from pathlib import Path
+from check_fresh_qualification import verify_card
 from check_genesis_draw import header_hash, keyed, verify_readers
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
 
 
-def verify(branch_path, writer_path, winning_path, *, funded=None, original=None):
+def verify(branch_path, writer_path, winning_path, *, funded=None, original=None, openssl=None):
     if funded is None:
         funded = json.loads((HERE / "genesis-funded-draw.json").read_bytes())
     if original is None:
@@ -58,6 +59,9 @@ def verify(branch_path, writer_path, winning_path, *, funded=None, original=None
             require(inner[4:68] == network and inner[68:132] == exam and inner[132:196] == keyed("misaka-palw/kernel-route/bond-id/v1", bond),
                     "attestation network, exam or verifier")
             require(inner[196] == 0 and inner[197:261].hex() == transcript and inner[261:] == bytes(4), "different verdict or execution")
+            if openssl:
+                message = keyed("misaka-palw/kernel-route/object-message/v1", network, bond, struct.pack("<Q", len(inner)), inner)
+                verify_card(openssl, by_bond[bond], message, rest[72:], "misaka-palw/kernel-route/object/v1")
             carriers.append(dict(card=by_bond[bond], verifier=inner[132:196].hex(), block=tip, daa=h["daaScore"]))
     [(c, end, daa, approvals)] = re.findall(r"^funded floor certified claim=(\w+) tip=(\w+) outcome=Some\(\(Certified, (\d+)\)\) approvals=(\d+)$", log, re.M)
     require((c,end,int(daa),int(approvals)) == (claim,tip,h["daaScore"],75) and tip == branch["tip"], "writer certification outcome")

@@ -69,7 +69,7 @@ def funded_draw(root, final, writer):
                 positions=int(positions), deadline=int(deadline), blocks=len(headers), writer=pid)
 
 
-def verify(root, winning, arithmetic_work=False, draw_only=False):
+def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, writer_only=False):
     if arithmetic_work:
         fresh = verify_audit(root, arithmetic_work=True)
         replay = fresh["native_replay"]
@@ -80,15 +80,17 @@ def verify(root, winning, arithmetic_work=False, draw_only=False):
         writer = root / "funded-1.log"
     original = fresh["native_8k_draw"]
     claim = original["claim"]
-    final = panel(root, arithmetic_work)
+    final = panel(root, arithmetic_work, openssl)
     funding, draw = funded_draw(root, final, writer)
     pid = draw["writer"]
     if draw_only:
         return dict(panel=final, funding=funding, draw=draw)
     cert = verify_certificate(root / "funded/certification.json", writer, winning,
                               original=dict(original, reexecution=replay),
-                              funded=draw)
+                              funded=draw, openssl=openssl)
     require(cert["writer"] == pid and cert["binary_sha256"] == final["binary_sha256"], "different writer build")
+    if writer_only:
+        return dict(panel=final, funding=funding, certificate=cert)
     peers = [root / f"read-cert-{i}.log" for i in (0, 2)]
     cold = verify_readers(original, peers, 2)
     require(cold["binary_sha256"] == cert["binary_sha256"] and pid not in cold["processes"], "independent certificate readback")
@@ -124,6 +126,9 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("winning", type=Path, help="accepted/winning.json from the original fresh audit archive")
     parser.add_argument("--arithmetic-work", action="store_true")
-    parser.add_argument("--draw-only", action="store_true", help="verify only through the first funded Gate C draw")
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument("--writer-only", action="store_true", help="verify the certificate before cold replica checks")
+    stage.add_argument("--draw-only", action="store_true", help="verify only through the first funded Gate C draw")
+    parser.add_argument("--openssl", help="verify the isolated Panel and Gate C card signatures")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only), indent=2))
+    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only, args.openssl, args.writer_only), indent=2))

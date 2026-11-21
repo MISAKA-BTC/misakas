@@ -37,6 +37,10 @@ def public_keys():
 def verify_signature(openssl, key, message, signature, context, directory):
     # SubjectPublicKeyInfo for id-ml-dsa-65 with absent parameters.
     der = bytes.fromhex("308207b2300b0609608648016503040312038207a100") + key
+    return verify_der_signature(openssl, der, message, signature, context, directory)
+
+
+def verify_der_signature(openssl, der, message, signature, context, directory):
     (directory / "key.der").write_bytes(der)
     (directory / "signature").write_bytes(signature)
     (directory / "message").write_bytes(message)
@@ -44,6 +48,15 @@ def verify_signature(openssl, key, message, signature, context, directory):
                              "-inkey", "key.der", "-sigfile", "signature", "-in", "message",
                              "-pkeyopt", "context-string:" + context], cwd=directory, capture_output=True)
     return result.returncode == 0
+
+
+def verify_card(openssl, card, message, signature, context):
+    keys = (HERE / "isolated-card-public-keys.bin").read_bytes()
+    require(len(keys) == 8 * 2592 and card in range(8), "unknown isolated verifier card")
+    der = bytes.fromhex("30820a32300b060960864801650304031303820a2100") + keys[card*2592:(card+1)*2592]
+    with tempfile.TemporaryDirectory() as tmp:
+        require(verify_der_signature(openssl, der, message, signature, context, Path(tmp)),
+                f"invalid ML-DSA-87 approval by card {card}")
 
 
 def verify(openssl, arithmetic=False):

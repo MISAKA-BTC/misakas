@@ -6,7 +6,8 @@ import struct
 from pathlib import Path
 
 from check_fresh_audit import records, verify as verify_audit
-from check_genesis_draw import header_hash, verify_readers
+from check_fresh_qualification import verify_card
+from check_genesis_draw import keyed, header_hash, verify_readers
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
 
@@ -26,7 +27,7 @@ def walk(path, base, claim, blue):
     return branch, headers
 
 
-def panel(root, arithmetic_work=False):
+def panel(root, arithmetic_work=False, openssl=None):
     if arithmetic_work:
         fresh = verify_audit(root, arithmetic_work=True)
         reference = fresh["native_replay"]
@@ -76,6 +77,10 @@ def panel(root, arithmetic_work=False):
         bond = f"({row[65:129].hex()}, {index})"
         require(size == 4627 and len(row) >= 145 + size and int(anchor_daa) <= signed_at <= carrying_daa <= int(final_daa),
                 "invalid signed receipt envelope or time")
+        if openssl:
+            network = bytes(headers[anchor]["palwCommitment"])[6:70]
+            message = keyed("misaka-palw/receipt-v2/message/v1", network, bytes.fromhex(claim), bytes([1]), struct.pack("<Q", signed_at))
+            verify_card(openssl, by_bond[bond], message, row[145:145+size], "misaka-palw/receipt-v2/mldsa87/v1")
         cards.append(by_bond[bond])
         position += 145 + size
     signed = [int(card) for c, card in re.findall(r"^verified execution (\w+) for signing card (\d+)$", log, re.M) if c == claim]
@@ -90,5 +95,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="extracted native logs and raw Final suffix")
     parser.add_argument("--arithmetic-work", action="store_true")
+    parser.add_argument("--openssl", help="verify the isolated cards’ ML-DSA-87 signatures")
     args = parser.parse_args()
-    print(json.dumps(panel(args.root, args.arithmetic_work), indent=2))
+    print(json.dumps(panel(args.root, args.arithmetic_work, args.openssl), indent=2))
