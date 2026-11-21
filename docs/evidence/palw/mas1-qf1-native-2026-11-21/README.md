@@ -501,3 +501,14 @@ zstd -dc "$p/genesis-draw-block.json.zst" > "$out/winning.json"
 zstd -dc "$p/genesis-draw-material.bin.zst" > "$out/capture.bin"
 python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p/genesis-draw-receipt.txt"
 ```
+
+## 提出時の Stop 資料を使った直接 Court
+
+QF1 の trace を一回ストリーム処理する間に、指定された tile と Stop の両方の Merkle path を収集した。通常の署名済み Original と一緒に最後の回答・Stop の資料を渡し、各ピアが独立再実行した値と照合してディスクへ保存した。その後の Court は各ピアのローカルファイルから両方の opening を検証する。この順序では、Court のために Miner へ再照会したり、Miner がもう一度推論を実行したりする手順がない。
+
+この実行では3ピアが同じバイナリで Original `87f8603b…` の資料 1,622 bytes を receipt **より前**に保存した。事後に抽選した2名が完全再実行して署名し、3ピアは全て正しい EOS に対する異議を退けた。照合スクリプトは保存時点、署名済み Original、回答・trace の2本の opening、局所裁定、ピアの集合を照合する。対象は非報酬 EXEC と Stop 関係。全演算の反証 coverage、任意資料の可用性、G-COST はこの実行の対象外。[生ログ](qf1-held-stop-three-peer.txt.zst)・[照合結果](qf1-held-stop-lifecycle.json)
+
+```sh
+zstd -dc "$p/qf1-held-stop-three-peer.txt.zst" > "$out/held-stop.txt"
+python3 -B "$p/check_real_lifecycle.py" "$out/held-stop.txt" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop
+```

@@ -188,20 +188,38 @@ impl TreeRoot {
     }
 }
 
-/// Stream a tree of known logical length, optionally collecting the siblings of
-/// one index for later disclosure. Space is logarithmic in the padded length.
-pub struct TreeBuilder {
+/// Stream one tree with a fixed number of requested openings. Each path uses
+/// logarithmic space and shares the leaf and parent hashes with all other paths.
+pub struct TreeBuilder<const N: usize = 1> {
     root: TreeRoot,
     padded: u64,
     next: u64,
-    path_for: Option<u64>,
+    path_for: [Option<u64>; N],
     stack: Vec<[u8; 64]>,
-    path: Vec<[u8; 64]>,
+    paths: [Vec<[u8; 64]>; N],
 }
 
 impl TreeBuilder {
     pub fn new(attempt: [u8; 32], kind: TreeKind, count: u64, budget: u64, path_for: Option<u64>) -> Result<Self, &'static str> {
-        if count == 0 || count > budget || (kind == TreeKind::Readout && count != 1) || path_for.is_some_and(|i| i >= count) {
+        Self::with_openings(attempt, kind, count, budget, [path_for])
+    }
+
+    pub fn finish(self) -> Result<(TreeRoot, Vec<[u8; 64]>), &'static str> {
+        let (root, [path]) = self.finish_with_openings()?;
+        Ok((root, path))
+    }
+}
+
+impl<const N: usize> TreeBuilder<N> {
+    pub fn with_openings(
+        attempt: [u8; 32],
+        kind: TreeKind,
+        count: u64,
+        budget: u64,
+        path_for: [Option<u64>; N],
+    ) -> Result<Self, &'static str> {
+        if count == 0 || count > budget || (kind == TreeKind::Readout && count != 1) || path_for.iter().flatten().any(|&i| i >= count)
+        {
             return Err("QF1 tree length or opening index");
         }
         Ok(Self {
@@ -210,7 +228,7 @@ impl TreeBuilder {
             next: 0,
             path_for,
             stack: Vec::new(),
-            path: Vec::new(),
+            paths: std::array::from_fn(|_| Vec::new()),
         })
     }
 
@@ -227,13 +245,14 @@ impl TreeBuilder {
         let mut height = 0;
         while pos & 1 == 1 {
             let left = self.stack.pop().expect("completed left sibling");
-            if let Some(target) = self.path_for {
+            for (target, path) in self.path_for.iter().zip(&mut self.paths) {
+                let Some(target) = target else { continue };
                 let owner = target >> height;
                 if owner == pos {
-                    self.path.push(left);
+                    path.push(left);
                 }
                 if owner == pos - 1 {
-                    self.path.push(node);
+                    path.push(node);
                 }
             }
             pos >>= 1;
@@ -244,7 +263,7 @@ impl TreeBuilder {
         self.next += 1;
     }
 
-    pub fn finish(mut self) -> Result<(TreeRoot, Vec<[u8; 64]>), &'static str> {
+    pub fn finish_with_openings(mut self) -> Result<(TreeRoot, [Vec<[u8; 64]>; N]), &'static str> {
         if self.next != self.root.count {
             return Err("QF1 missing leaf");
         }
@@ -252,7 +271,7 @@ impl TreeBuilder {
             self.append_hash(*self.root.hash(1).update(&self.next.to_le_bytes()).finalize().as_array());
         }
         self.root.digest = self.stack.pop().expect("nonempty tree");
-        Ok((self.root, self.path))
+        Ok((self.root, self.paths))
     }
 }
 

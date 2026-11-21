@@ -12,7 +12,7 @@ from check_prediction import qf1, shared_rows
 from check_stop import verify_case
 
 
-def check(log, artifact, decode_limit=3):
+def check(log, artifact, decode_limit=3, retained_stop=False):
     pids, (attempt, prompt_json) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64}) tokens=(\[[0-9, ]+\])")
     peers, (cls, descriptor, positions, answer_json, stop, z_hex) = shared_rows(
         log, r"QF1 fixture pid=(\d+) class=(\w+) descriptor=(\w+) positions=(\d+) tokens=(\[[0-9, ]+\]) stop=(\w+) z=(\w+)")
@@ -68,8 +68,16 @@ def check(log, artifact, decode_limit=3):
         raise ValueError("missing binary identity")
     panel = verify_draw(log, dict(**body, pids=ordered, receipt=receipt, panel_close=close, panel_close_blue_score=int(blue),
                                   panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]))
+    court = verify_case(log, panel, decode_limit)
+    if retained_stop:
+        rows = list(re.finditer(r"QF1 retained Stop pid=(\d+) original=([0-9a-f]{128}) bytes=(\d+)", log))
+        receipt_offset = log.index("QF1 receipt pid=")
+        if (len(rows) != len(ordered) or sorted(int(r[1]) for r in rows) != ordered
+                or any(r[2] != original or int(r[3]) != court["witness_bytes"] or r.end() > receipt_offset for r in rows)):
+            raise ValueError("missing matching Stop disclosure before the Original receipt")
+        court["retained_before_receipt"] = ordered
     return dict(class_id=cls,descriptor=descriptor,attempt=attempt,input_ids=prompt,output_ids=answer,stop=stop,
-                readout_z=z_hex,panel=panel,court=verify_case(log,panel,decode_limit))
+                readout_z=z_hex,panel=panel,court=court)
 
 
 def check_pending_freeze(log, artifact):
@@ -290,6 +298,7 @@ if __name__ == "__main__":
     parser.add_argument("class_check",type=Path)
     parser.add_argument("--decode-limit", type=int, default=3, help="precommitted generation bound for Original verification")
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--retained-stop", action="store_true", help="require producer disclosure on every peer before receipt")
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
     mode.add_argument("--live-offers", action="store_true", help="verify the same signed long offer before and after native capital seasoning")
     mode.add_argument("--exec-budget", action="store_true", help="check the signed offer and native monetary capacity at its close")
@@ -314,5 +323,5 @@ if __name__ == "__main__":
     if "full" in expected:
         expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
     log = args.log.read_text()
-    result = check(log, expected, args.decode_limit) if verify is check else verify(log, expected)
+    result = check(log, expected, args.decode_limit, args.retained_stop) if verify is check else verify(log, expected)
     print(json.dumps(result, indent=2))

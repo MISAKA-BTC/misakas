@@ -984,9 +984,10 @@ async fn run(stable: bool, registered: bool) {
             _ => bound.trace_leaf_count(r.tokens().len().try_into().unwrap(), declared, terms.max_leaves).unwrap() - 1,
         };
         let replay = r.replay_qf1_original(api, bound, declared, Some(opened)).unwrap();
-        let (body, sig) = if let Some(s) = parent_socket.as_mut() {
-            let (body, bytes) = receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>)>(s);
-            (body, ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap()))
+        let (body, sig, stop_material) = if let Some(s) = parent_socket.as_mut() {
+            let (body, bytes, stop) =
+                receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>, Vec<u8>)>(s);
+            (body, ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap()), stop)
         } else {
             let id = replay.id();
             let sig = ml_dsa_65::sign(
@@ -996,13 +997,21 @@ async fn run(stable: bool, registered: bool) {
                 [94; 32],
             )
             .unwrap();
+            let stop = replay.stop_witness().unwrap().encode();
             for (_, s) in &mut peers {
-                send(s, &(replay.body(), sig.as_slice().to_vec()));
+                send(s, &(replay.body(), sig.as_slice().to_vec(), &stop));
             }
-            (replay.body(), sig)
+            (replay.body(), sig, stop)
         };
         let original = r.verify_qf1_body(api, &body, &sig).unwrap();
         replay.verify(api, &body, &sig).unwrap();
+        // Retain the producer's authenticated disclosure locally before the PANEL close.
+        assert_eq!(stop_material, replay.stop_witness().unwrap().encode());
+        let path = stable_panel::stop_material_path(dir.path(), original);
+        let mut file = File::create_new(&path).unwrap();
+        file.write_all(&stop_material).unwrap();
+        file.sync_all().unwrap();
+        peer_log!("QF1 retained Stop pid={} original={} bytes={}", std::process::id(), original, stop_material.len());
         let mut changed = body.clone();
         changed.roots[3] = Hash64::from_u64_word(1);
         assert!(replay.verify(api, &changed, &sig).is_err());

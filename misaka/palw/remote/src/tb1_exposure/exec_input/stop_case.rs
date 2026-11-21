@@ -31,7 +31,10 @@ impl LocalOriginal<'_, '_> {
         let token = *answer.last().ok_or_else(|| invalid("empty answer"))?;
         let n = answer.len() as u64;
         let i = self.body().stop_index()?;
-        let open = trace.opening.as_ref().filter(|o| o.index == i).ok_or_else(|| invalid("Stop disclosure unavailable"))?;
+        let open = &trace.stop_opening;
+        if open.index != i {
+            return Err(invalid("Stop disclosure index"));
+        }
         let mut tree = TreeBuilder::new(self.input.attempt, TreeKind::Answer, n, n, Some(n - 1)).map_err(invalid)?;
         for id in answer {
             tree.push(&id.to_le_bytes()).map_err(invalid)?;

@@ -18,6 +18,8 @@ pub struct LocalTrace {
     pub roots: [TreeRoot; 4],
     pub ticket: [u8; 32],
     pub opening: Option<TraceOpening>,
+    /// Authenticated terminal record retained with the original for direct Court disclosure.
+    pub stop_opening: TraceOpening,
 }
 
 pub struct TraceOpening {
@@ -77,7 +79,8 @@ pub(super) struct Trace {
     steps: u32,
     layout: Geometry,
     input: TreeRoot,
-    tree: TreeBuilder,
+    tree: TreeBuilder<2>,
+    stop_record: Vec<u8>,
     next: u64,
     tiles: u64,
     opening: Option<(u64, Vec<u8>)>,
@@ -105,7 +108,8 @@ impl Trace {
             return Err("QF1 trace answer exceeds original limit".into());
         }
         let layout = Geometry::new(instance, len, steps, cap)?;
-        let tree = TreeBuilder::new(s, TreeKind::Trace, layout.count, cap, request.open)?;
+        let stop_index = layout.count - 2 - u64::from(layout.chunks);
+        let tree = TreeBuilder::with_openings(s, TreeKind::Trace, layout.count, cap, [request.open, Some(stop_index)])?;
         let input = tokens_root(s, TreeKind::Input, prompt)?;
         let mut trace = Self {
             s,
@@ -114,6 +118,7 @@ impl Trace {
             layout,
             input,
             tree,
+            stop_record: Vec::new(),
             next: 0,
             tiles: 0,
             opening: request.open.map(|i| (i, Vec::new())),
@@ -211,6 +216,7 @@ impl Trace {
             Stop::Limit => 1,
         });
         self.push()?;
+        self.stop_record.clone_from(&self.record);
         for c in chunks {
             let rec = self.start(4);
             rec.extend_from_slice(&c.index.to_le_bytes());
@@ -243,11 +249,16 @@ impl Trace {
 
     pub(super) fn finish(self, answer: LocalAnswer) -> Result<LocalTrace, String> {
         let (y, z) = self.tail.ok_or("missing QF1 End")?;
-        let (trace, siblings) = self.tree.finish()?;
+        let (trace, [siblings, stop_path]) = self.tree.finish_with_openings()?;
         let roots = [self.input, y, z, trace];
         let ticket = palw_qf1::ticket(roots.each_ref())?;
         let opening = self.opening.map(|(index, record)| TraceOpening { index, record, siblings });
-        Ok(LocalTrace { answer, roots, ticket, opening })
+        let stop_opening = TraceOpening {
+            index: self.layout.count - 2 - u64::from(self.layout.chunks),
+            record: self.stop_record,
+            siblings: stop_path,
+        };
+        Ok(LocalTrace { answer, roots, ticket, opening, stop_opening })
     }
 }
 

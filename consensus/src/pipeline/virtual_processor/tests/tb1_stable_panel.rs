@@ -340,19 +340,7 @@ pub(super) async fn release(
         accepted.hash()
     );
     use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};
-    let wire = if let Some(s) = parent {
-        receive::<Vec<u8>>(s)
-    } else {
-        let disclosure = input
-            .replay_qf1_original(node.api().as_ref(), instance, body.counts[1].try_into().unwrap(), Some(body.stop_index().unwrap()))
-            .unwrap();
-        disclosure.verify(node.api().as_ref(), body, owner).unwrap();
-        let wire = disclosure.stop_witness().unwrap().encode();
-        for (_, s) in peers.iter_mut() {
-            send(s, &wire);
-        }
-        wire
-    };
+    let wire = std::fs::read(stop_material_path(dir, original)).expect("Stop disclosure published with the Original");
     let api = node.api().as_ref();
     let witness = StopWitness::decode(body, &wire).unwrap();
     let mut changed = witness.clone();
@@ -375,4 +363,8 @@ pub(super) async fn release(
         outcome,
         faster_hex::hex_string(&wire)
     );
+}
+
+pub(super) fn stop_material_path(dir: &Path, original: Hash64) -> std::path::PathBuf {
+    dir.join(format!("{original}.stop"))
 }
