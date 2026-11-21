@@ -83,9 +83,33 @@ def verify(branch, log):
 
 
 
+def check_maturity(window, native_log):
+    source = json.loads((HERE / "fresh-8k-certificate.json").read_bytes())["native"]
+    log = native_log.read_text()
+    [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log, re.M)
+    [(pid, row)] = records(log, "fresh audit maturity")
+    [(cert_pid, cert)] = records(log, "legacy genesis certification")
+    require(pid == cert_pid and pid != window["writer"] and cert["claim"] == source["claim"] and
+            cert["state"] == source["state"] and cert["tip"] == source["tip"], "different cold certification")
+    cross = window["maturity_header"]
+    require((row["tip"], row["daa"], row["blocks"], row["state"]) ==
+            (cross["tip"], cross["daa"], cross["blocks"], cross["next_header_parent_state"]), "wrong mature state or block")
+    require(row["claim"] == source["claim"] and row["base"] == source["tip"] and row["close"] == window["close"] and
+            row["maturity"] == window["forecast_maturity"] == row["daa"] and re.fullmatch(r"[0-9a-f]{128}", row["work"]),
+            "maturity is not tied to the original work, claim and audit")
+    ready = row["readiness"]
+    require(ready["safe"] == source["accepted"] and ready["generation"] == row["tip"] and
+            ready["finalized"]["finalized"] is None and row["publication"] == "held", "wrong safe prefix or release state")
+    return dict(reader=pid, binary_sha256=binary, slot=row["slot"], claim=row["claim"], work=row["work"], close=row["close"],
+                blocks=row["blocks"], daa=row["daa"], state=row["state"], tip=row["tip"], safe=ready["safe"],
+                finalized=ready["finalized"]["finalized"], publication=row["publication"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("branch", type=Path)
     parser.add_argument("writer_log", type=Path)
+    parser.add_argument("--maturity-log", type=Path, help="cold holder log through the first native closed-fact row")
     args = parser.parse_args()
-    print(json.dumps(verify(args.branch, args.writer_log), indent=2))
+    window = verify(args.branch, args.writer_log)
+    print(json.dumps(check_maturity(window, args.maturity_log) if args.maturity_log else window, indent=2))

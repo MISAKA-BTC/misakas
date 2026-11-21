@@ -812,3 +812,10 @@ out=$(mktemp -d)
 tar -xf "$p/fresh-pruning-transition.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" | cmp - "$p/fresh-pruning-transition.json"
 ```
+
+同じ公開履歴を空のデータベースから読み直した holder 0 は、認証から12,516ブロック後の DAA 17,931 で、8K claim `50f0da2d…` の仕事 `70daa3ca…` を native 台帳の table 195 に確認した。行の claim と成熟 DAA を照合し、その状態 root が次の公開ヘッダーに含まれることも検査した。この時点の safe は元の受付ブロック `5292996b…`、finalized は空で、監査 share の公開は保留だった。下記のログは成熟時点までの抜粋である。[読み直しの記録](fresh-work-maturity.log)・[照合結果](fresh-work-maturity.json)
+
+```sh
+python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" \
+  --maturity-log "$p/fresh-work-maturity.log" | cmp - "$p/fresh-work-maturity.json"
+```
