@@ -528,3 +528,5 @@ python3 -B "$p/check_genesis_draw.py" "$out/winning.json" "$out/capture.bin" "$p
 ```
 
 同じ受付済み claim について、各席が待機中に保有証明を更新しない場合も調べた。DAA 6,491 から 40 heartbeat 後、DAA 6,511 の抽選位置へ進み、採掘した BASE-0 アンカーを受理した。ノードは元の claim ID について「必要5席、除外・operator 重複排除後は2席」と記録し、Panel を割り当てなかった。試験はここで失敗し、この枝でこの claim の Gate C 署名や支払いは生じていない。[対照試験のログ抜粋](genesis-unrenewed-panel.txt)
+
+同じ受付ブロック `3250abac…` から、保有証明を更新する別の隔離枝を検証した。両試験の元 claim・再実行 transcript・受付直後の state root は一致する。抽選 DAA 6,511 では既存の保有証明（有効期間 24 DAA）のうち 8席中6席が失効する。各席は登録済み Qwen2.5 の同じ artifact から新たな開示を取り、当該 span の challenge に署名し、通常の手数料を支払って提出した。抽選時の registry は ready 8、panel room 4。実行した BASE-0 アンカー `555089fe…` の受理後、元 claim は DAA 6,511 で `PanelBound` になった。この抜粋の終点は Panel の割当である。[保有証明の期限と PanelBound の記録](genesis-renewed-panel.txt)

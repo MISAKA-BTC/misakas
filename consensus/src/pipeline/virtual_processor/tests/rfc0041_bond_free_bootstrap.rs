@@ -492,9 +492,32 @@ pub(in crate::pipeline::virtual_processor::tests) async fn certify_executed_clai
 ) {
     let step = chain.config.params.target_time_per_block();
     let slot = chain.wait_for_anchor_slot(real.claim).await;
+    let before = chain.tip_state().1;
+    let class = before.claim(&real.claim).unwrap().class_id;
+    let registry = chain.vp().palw_model_registry_v1_impl().unwrap();
+    let readiness = registry.classes.iter().find(|row| row.class_id == class).unwrap();
+    eprintln!(
+        "executed claim {} at slot {} ready={} room={} lifecycle={:?}",
+        real.claim,
+        slot,
+        readiness.ready_seats_now,
+        readiness.panel_room,
+        readiness.row.as_ref().map(|r| &r.state)
+    );
     let anchor = chain.real_attempt(7, step).await;
     assert!(anchor.block.header.daa_score >= slot);
-    let panel = chain.tip_state().1.panel(&real.claim).expect("executed anchor draws the accepted claim's panel").clone();
+    let state = chain.tip_state().1;
+    let claim = state.claim(&real.claim).expect("original claim after the executed anchor");
+    eprintln!(
+        "executed panel anchor={} daa={} claim={} phase={:?} rebound={:?} state={}",
+        anchor.block.hash(),
+        anchor.block.header.daa_score,
+        real.claim,
+        claim.phase,
+        claim.rebound_daa,
+        state.state_root()
+    );
+    let panel = state.panel(&real.claim).expect("executed anchor draws the accepted claim's panel").clone();
     assert_eq!(panel.anchor, anchor.block.hash());
     authenticate(chain, funding, real.claim, Anchors::Executed, |chain, card| {
         let replay = real.replay_with_backend(chain, backend).expect("selected signer independently reproduces the accepted job");

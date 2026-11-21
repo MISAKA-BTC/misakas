@@ -89,6 +89,26 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
     match (write, read) {
         (Some(path), None) => {
             let mut funds = genesis_seats::funding_change(node, renewed);
+            let slot = claim.bind_base_daa() + node.bundle.panel.anchor_delay();
+            let registry = node.api().palw_model_registry_v1().unwrap();
+            let expires: Vec<_> = registry
+                .readiness
+                .iter()
+                .filter(|r| r.class_id == id)
+                .map(|r| (r.bond, r.row.proved_daa.saturating_add(registry.readiness_max_age_daa)))
+                .collect();
+            let stale_at_slot = expires.iter().filter(|(_, until)| *until < slot).count();
+            peer_log!(
+                "legacy genesis seat horizon claim={} slot={} max_age={} expiring_before_slot={} seats={:?}",
+                result.claim,
+                slot,
+                registry.readiness_max_age_daa,
+                stale_at_slot,
+                expires
+            );
+            if stale_at_slot > 0 {
+                genesis_seats::renew(node, held, &mut funds).await;
+            }
             certify_executed_claim(&mut node.chain, &mut funds, &result, &backend, digest).await;
             let end = node.chain.sink();
             let blocks = node.blocks_through(end);

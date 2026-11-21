@@ -56,6 +56,101 @@ pub(super) fn funding_change(node: &Rig, assigned: Hash64) -> (TransactionOutpoi
     node.api().get_virtual_utxos(None, 1_000_000, false).into_iter().find(|(o, _)| o == &change).unwrap()
 }
 
+/// Publish ordinary possession proofs for all harness seats at the current tip.
+/// Returns both the transaction carriers and their accepting blocks for replay.
+pub(super) async fn renew(
+    node: &mut Rig,
+    artifact_path: &Path,
+    funds: &mut (TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry),
+) -> Vec<RpcRawBlock> {
+    let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
+    let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
+    let span_daa = node.api().palw_model_registry_v1().unwrap().span_daa;
+    let map = std::sync::Arc::new(ReadOnlyMap::open(artifact_path).unwrap());
+    let artifact = decode_artifact_file_mapped_v1(map).unwrap();
+    let class = canonical_classes_v1(&node.bundle.court).into_iter().find(|c| c.class_id() == id).unwrap();
+    let (held_root, count) = a16_inventory_root_and_count_v1(&artifact, &class.profile).unwrap();
+    assert_eq!(held_root, root);
+    let mut openings = BTreeMap::<u32, PalwArtifactOpeningV1>::new();
+    let mut blocks = Vec::new();
+    for card in 0..8 {
+        let bond = node.chain.bonds[card];
+        let daa = node.chain.daa_of(node.chain.sink());
+        let span = daa / span_daa;
+        let bytes = borsh::to_vec(&bond).unwrap();
+        let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+        let v2 = node.config.params.palw_readiness_v2_at(daa);
+        let draw = challenge(id, &bytes, span, count, v2);
+        if !draw.iter().all(|i| openings.contains_key(i)) {
+            // Precompute upcoming paths for this cadence. Every signature uses
+            // the draw at the actual selected tip; a drift reloads missing paths.
+            let indices: BTreeSet<_> = node.chain.bonds[card..]
+                .iter()
+                .enumerate()
+                .flat_map(|(offset, b)| {
+                    let at = daa + offset as u64;
+                    challenge(id, &borsh::to_vec(b).unwrap(), at / span_daa, count, node.config.params.palw_readiness_v2_at(at))
+                })
+                .collect();
+            let indices: Vec<_> = indices.into_iter().collect();
+            let (opened_root, opened_count, paths) = a16_readiness_openings_streamed_v1(&artifact, &class.profile, &indices).unwrap();
+            assert_eq!((opened_root, opened_count), (root, count));
+            openings = paths.into_iter().map(|p| (p.leaf_index, p)).collect();
+            assert_eq!(openings.len(), indices.len());
+        }
+        let object = if v2 {
+            let mut opened = Vec::new();
+            let mut size = 0;
+            for i in &draw {
+                if size >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+                    break;
+                }
+                let path = &openings[i];
+                assert!(path.operand.bytes.len() <= PALW_READINESS_V2_LEAF_MAX_BYTES_V1);
+                size += path.operand.bytes.len();
+                opened.push(path.clone());
+            }
+            palw_readiness_v2_opening_is_the_challenge_v1(
+                &draw,
+                &opened.iter().map(|p| (p.leaf_index, p.operand.bytes.len())).collect::<Vec<_>>(),
+            )
+            .unwrap();
+            let proof = palw_artifact_multiproof_from_openings_v1(&opened).unwrap();
+            verify_artifact_multiproof_v1(&proof, root).unwrap();
+            let message = palw_seat_readiness_message_v2(node.domain, &bytes, &id, span, &proof);
+            let signature =
+                ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, [0x6d; 32])
+                    .unwrap()
+                    .as_slice()
+                    .to_vec();
+            PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id: id, span, proof: Box::new(proof), signature }
+        } else {
+            let opening = draw
+                .iter()
+                .map(|i| &openings[i])
+                .find(|p| p.operand.bytes.len() <= PALW_READINESS_OPENING_MAX_BYTES_V1)
+                .unwrap()
+                .clone();
+            let message = palw_seat_readiness_message_v1(node.domain, &bytes, &id, span, opening.leaf_index);
+            let signature =
+                ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, [0x6d; 32])
+                    .unwrap()
+                    .as_slice()
+                    .to_vec();
+            PalwConsensusObjectV2::SeatReadinessProved { bond, class_id: id, span, opening, signature }
+        };
+        send_lifecycle(&mut node.chain, funds, object).await;
+        let (tip, state) = node.chain.tip_state();
+        let row = state.seat_readiness(&bond, &id).expect("ordinary signed seat duty recorded");
+        assert_eq!(row.proved_span, span);
+        let issuer = node.api().get_ghostdag_data(tip).unwrap().selected_parent;
+        for h in [issuer, tip] {
+            blocks.push(RpcRawBlock::from(&node.api().get_block(h).unwrap()));
+        }
+    }
+    blocks
+}
+
 pub(super) async fn run(node: &mut Rig, assigned: Hash64, artifact_path: &Path, archive_prefix: &str) -> Hash64 {
     let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
     let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
@@ -66,7 +161,7 @@ pub(super) async fn run(node: &mut Rig, assigned: Hash64, artifact_path: &Path, 
     let span_daa = read.span_daa;
     let start = read.classes.iter().find(|r| r.class_id == id).unwrap();
     assert_eq!(start.artifact_root, root);
-    let mut blocks = Vec::new();
+    let blocks;
     let mut boundary_blocks = Vec::new();
     if let Some(path) = std::env::var_os(format!("{archive_prefix}_READ")) {
         let ext: Extension = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
@@ -78,89 +173,8 @@ pub(super) async fn run(node: &mut Rig, assigned: Hash64, artifact_path: &Path, 
             replay(node, raw).await;
         }
     } else {
-        let map = std::sync::Arc::new(ReadOnlyMap::open(artifact_path).unwrap());
-        let artifact = decode_artifact_file_mapped_v1(map).unwrap();
-        let class = canonical_classes_v1(&node.bundle.court).into_iter().find(|c| c.class_id() == id).unwrap();
-        let (held_root, count) = a16_inventory_root_and_count_v1(&artifact, &class.profile).unwrap();
-        assert_eq!(held_root, root);
-        let mut openings = BTreeMap::<u32, PalwArtifactOpeningV1>::new();
         let mut funds = funding_change(node, assigned);
-        for card in 0..8 {
-            let bond = node.chain.bonds[card];
-            let daa = node.chain.daa_of(node.chain.sink());
-            let span = daa / span_daa;
-            let bytes = borsh::to_vec(&bond).unwrap();
-            let key = TestConsensus::palw_v2_registry_keypair(card as u64);
-            let v2 = node.config.params.palw_readiness_v2_at(daa);
-            let draw = challenge(id, &bytes, span, count, v2);
-            if !draw.iter().all(|i| openings.contains_key(i)) {
-                // Precompute upcoming paths for this cadence. Every signature uses
-                // the draw at the actual selected tip; a drift reloads missing paths.
-                let indices: BTreeSet<_> = node.chain.bonds[card..]
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(offset, b)| {
-                        let at = daa + offset as u64;
-                        challenge(id, &borsh::to_vec(b).unwrap(), at / span_daa, count, node.config.params.palw_readiness_v2_at(at))
-                    })
-                    .collect();
-                let indices: Vec<_> = indices.into_iter().collect();
-                let (opened_root, opened_count, paths) =
-                    a16_readiness_openings_streamed_v1(&artifact, &class.profile, &indices).unwrap();
-                assert_eq!((opened_root, opened_count), (root, count));
-                openings = paths.into_iter().map(|p| (p.leaf_index, p)).collect();
-                assert_eq!(openings.len(), indices.len());
-            }
-            let object = if v2 {
-                let mut opened = Vec::new();
-                let mut size = 0;
-                for i in &draw {
-                    if size >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
-                        break;
-                    }
-                    let path = &openings[i];
-                    assert!(path.operand.bytes.len() <= PALW_READINESS_V2_LEAF_MAX_BYTES_V1);
-                    size += path.operand.bytes.len();
-                    opened.push(path.clone());
-                }
-                palw_readiness_v2_opening_is_the_challenge_v1(
-                    &draw,
-                    &opened.iter().map(|p| (p.leaf_index, p.operand.bytes.len())).collect::<Vec<_>>(),
-                )
-                .unwrap();
-                let proof = palw_artifact_multiproof_from_openings_v1(&opened).unwrap();
-                verify_artifact_multiproof_v1(&proof, root).unwrap();
-                let message = palw_seat_readiness_message_v2(node.domain, &bytes, &id, span, &proof);
-                let signature =
-                    ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT, [0x6d; 32])
-                        .unwrap()
-                        .as_slice()
-                        .to_vec();
-                PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id: id, span, proof: Box::new(proof), signature }
-            } else {
-                let opening = draw
-                    .iter()
-                    .map(|i| &openings[i])
-                    .find(|p| p.operand.bytes.len() <= PALW_READINESS_OPENING_MAX_BYTES_V1)
-                    .unwrap()
-                    .clone();
-                let message = palw_seat_readiness_message_v1(node.domain, &bytes, &id, span, opening.leaf_index);
-                let signature =
-                    ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, [0x6d; 32])
-                        .unwrap()
-                        .as_slice()
-                        .to_vec();
-                PalwConsensusObjectV2::SeatReadinessProved { bond, class_id: id, span, opening, signature }
-            };
-            send_lifecycle(&mut node.chain, &mut funds, object).await;
-            let (tip, state) = node.chain.tip_state();
-            let row = state.seat_readiness(&bond, &id).expect("ordinary signed seat duty recorded");
-            assert_eq!(row.proved_span, span);
-            let issuer = node.api().get_ghostdag_data(tip).unwrap().selected_parent;
-            for h in [issuer, tip] {
-                blocks.push(RpcRawBlock::from(&node.api().get_block(h).unwrap()));
-            }
-        }
+        blocks = renew(node, artifact_path, &mut funds).await;
     }
     let (tip, state) = node.chain.tip_state();
     let read = node.api().palw_model_registry_v1().unwrap();
