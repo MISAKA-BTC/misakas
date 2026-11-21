@@ -1318,6 +1318,12 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Read the single 64-byte miner commitment, optionally followed by an EXEC
+    /// trailer. Missing bodies or an unsupported reader must return an error.
+    fn palw_coinbase_commitment(&self, _block: BlockHash) -> ConsensusResult<Option<[u8; 64]>> {
+        Err(crate::errors::consensus::ConsensusError::General("native coinbase read unavailable"))
+    }
+
     /// Check the configured PALW network domain and read the miner's original extra data using the native coinbase codec.
     /// Private off-chain consumers must separately verify chain membership and stability.
     fn palw_coinbase_commits_to(&self, _network_domain: [u8; 64], _block: BlockHash, _commitment: &[u8; 64]) -> ConsensusResult<bool> {

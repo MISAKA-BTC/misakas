@@ -91,6 +91,31 @@ impl LocalPanelCut {
         Ok(draw)
     }
 
+    /// Recover the private duty after the live signing window. Callers still
+    /// have to check the included reply or expiry against this selected branch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recorded_draw(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+    ) -> io::Result<LocalReplayDraw> {
+        let tip = native.get_sink();
+        let (freeze, _) = self.resolve_on_selected_branch(native, close, q)?;
+        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(draw)
+    }
+
     /// Verify a previously included reply set from its retained cut and publication
     /// evidence, including when the original deadline has elapsed.
     #[allow(clippy::too_many_arguments)]
@@ -110,8 +135,7 @@ impl LocalPanelCut {
         replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
     ) -> io::Result<()> {
         let tip = native.get_sink();
-        let (freeze, _) = self.resolve_on_selected_branch(native, close, q)?;
-        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        let draw = self.recorded_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy)?;
         draw.read_replies(native, block, replies)?;
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -295,6 +319,71 @@ impl LocalReplayDraw {
             || !native.palw_coinbase_commits_to(self.chain, block, &marker).map_err(io::Error::other)?
         {
             return Err(invalid("local PANEL replies outside committed branch"));
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(())
+    }
+}
+
+impl LocalReplayDraw {
+    /// Reconstruct expiration from the selected chain when every timely block
+    /// has no possible private 64-byte receipt. An opaque commitment can be a
+    /// signed reply set: withholding its opening must never establish absence.
+    pub fn unverified_expiry_marker(&self, native: &dyn ConsensusApi, boundary: Hash64, scan_limit: usize) -> io::Result<[u8; 64]> {
+        let (daa, tip) = self.branch(native)?;
+        if daa < self.deadline {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let parent = |block| native.get_ghostdag_data(block).map(|v| v.selected_parent).map_err(io::Error::other);
+        let score = |block| native.get_header(block).map(|h| h.daa_score).map_err(io::Error::other);
+        let mut cursor = parent(boundary)?;
+        if !native.is_chain_ancestor_of(boundary, tip).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(self.certificate, cursor).map_err(io::Error::other)?
+            || score(boundary)? < self.deadline
+            || score(cursor)? >= self.deadline
+        {
+            return Err(invalid("wrong local PANEL deadline boundary"));
+        }
+        let mut remaining = scan_limit;
+        while cursor != self.certificate {
+            remaining =
+                remaining.checked_sub(1).ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "deadline scan budget exhausted"))?;
+            if native.palw_coinbase_commitment(cursor).map_err(io::Error::other)?.is_some() {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("unresolved timely PANEL commitment at {cursor}")));
+            }
+            cursor = parent(cursor)?;
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(Sha3_512::new()
+            .chain_update(b"MISAKA/private/TB1/PANEL/unverified-expiry/v1")
+            .chain_update(self.duty)
+            .chain_update(self.deadline.to_be_bytes())
+            .chain_update(boundary.as_bytes())
+            .finalize()
+            .into())
+    }
+
+    /// Accept the negative terminal only on the same branch as the independently
+    /// reconstructed boundary and the later block containing its marker.
+    pub fn read_unverified_expiry(
+        &self,
+        native: &dyn ConsensusApi,
+        boundary: Hash64,
+        terminal: Hash64,
+        scan_limit: usize,
+    ) -> io::Result<()> {
+        let tip = native.get_sink();
+        let marker = self.unverified_expiry_marker(native, boundary, scan_limit)?;
+        let parent = native.get_ghostdag_data(terminal).map_err(io::Error::other)?.selected_parent;
+        if !native.is_chain_ancestor_of(boundary, parent).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(terminal, tip).map_err(io::Error::other)?
+            || !native.palw_coinbase_commits_to(self.chain, terminal, &marker).map_err(io::Error::other)?
+        {
+            return Err(invalid("unverified expiry outside committed PANEL history"));
         }
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());

@@ -153,17 +153,23 @@ impl Actors {
         self.keys.keys().copied().zip([1, 2, 4]).collect()
     }
 }
-async fn carry_to_daa(
+async fn carry_to_daa<const N: usize>(
     node: &mut Rig,
     parent: &mut Option<UnixStream>,
     peers: &mut [(Child, UnixStream)],
     target: u64,
-    marker: [u8; 64],
+    marker: [u8; N],
 ) -> Block {
     let start = node.chain.daa_of(node.chain.sink());
     assert!(start < target);
     for _ in 0..=2 * (target - start) {
-        let block = local_carrier(node, parent, peers, 0, marker, "original PANEL deadline").await;
+        let next_score = node.api().get_virtual_daa_score();
+        let block = if next_score == target {
+            local_carrier(node, parent, peers, 0, marker, "original PANEL deadline").await
+        } else {
+            local_carrier(node, parent, peers, 0, [], "waiting for original PANEL deadline").await
+        };
+        assert_eq!(block.header.daa_score, next_score);
         if block.header.daa_score == target {
             return block;
         }
@@ -511,7 +517,7 @@ pub(super) async fn release(
         std::fs::create_dir(path).unwrap();
     }
     let checkpoint_dir = archive_dir.as_deref().unwrap_or(dir);
-    if checkpoint_replay {
+    if checkpoint_replay || std::env::var_os("MISAKA_PRIVATE_QF1_MISSING_REPLAY_MATERIAL").is_some() {
         node.api().checkpoint_database(&checkpoint_dir.join("before-panel-release"));
     }
     let msg = journal.reserve_signing_message(node.api().as_ref(), gate.holder_freeze(), q, &row, 2048).unwrap();
@@ -669,9 +675,13 @@ pub(super) async fn release(
                 ErrorKind::InvalidData
             );
             let deadline = input.terms().deadline_exclusive_daa;
-            carry_to_daa(node, parent, peers, deadline - 1, [84; 64]).await;
+            let early = carry_to_daa(node, parent, peers, deadline - 1, []).await;
+            assert_eq!(
+                draw.unverified_expiry_marker(node.api().as_ref(), early.hash(), 128).unwrap_err().kind(),
+                ErrorKind::WouldBlock
+            );
             assert_eq!(draw.reply_commitment(node.api().as_ref(), &replies).unwrap_err().kind(), ErrorKind::WouldBlock);
-            carry_to_daa(node, parent, peers, deadline, [84; 64]).await;
+            let boundary = carry_to_daa(node, parent, peers, deadline, []).await;
             let api = node.api().as_ref();
             assert_eq!(draw.reply_commitment(api, &replies).unwrap_err().kind(), ErrorKind::TimedOut);
             if selected {
@@ -690,6 +700,42 @@ pub(super) async fn release(
                 deadline - 1,
                 deadline,
                 node.chain.sink()
+            );
+            assert!(draw.unverified_expiry_marker(api, early.hash(), 128).is_err());
+            assert_eq!(draw.unverified_expiry_marker(api, boundary.hash(), 1).unwrap_err().kind(), ErrorKind::WouldBlock);
+            let marker = draw.unverified_expiry_marker(api, boundary.hash(), 128).unwrap();
+            assert!(draw.read_unverified_expiry(api, boundary.hash(), boundary.hash(), 128).is_err());
+            let terminal = local_carrier(node, parent, peers, 0, marker, "unverified PANEL expiry").await;
+            draw.read_unverified_expiry(node.api().as_ref(), boundary.hash(), terminal.hash(), 128).unwrap();
+            let path = checkpoint_dir.join("at-unverified-terminal");
+            node.api().checkpoint_database(&path);
+            let recovered = reopen_checkpoint(&node.config, &path);
+            assert_eq!(recovered.get_sink(), terminal.hash());
+            let before = reopen_checkpoint(&node.config, &checkpoint_dir.join("before-panel-release"));
+            let restored_gate = cut.observe(before.as_ref(), close.hash(), q).unwrap();
+            drop(before);
+            let restored = cut
+                .recorded_draw(
+                    recovered.as_ref(),
+                    close.hash(),
+                    &restored_gate,
+                    batch.hash(),
+                    cert.hash(),
+                    &rows,
+                    q,
+                    LIMITS,
+                    original,
+                    actors.policy,
+                )
+                .unwrap();
+            restored.read_unverified_expiry(recovered.as_ref(), boundary.hash(), terminal.hash(), 128).unwrap();
+            peer_log!(
+                "QF1 unverified expiry pid={} original={} boundary={} terminal={} marker={}",
+                std::process::id(),
+                original,
+                boundary.hash(),
+                terminal.hash(),
+                Hash64::from_bytes(marker)
             );
             return;
         }
@@ -720,9 +766,13 @@ pub(super) async fn release(
             file.sync_all().unwrap();
             drop(file);
             let deadline = input.terms().deadline_exclusive_daa;
-            carry_to_daa(node, parent, peers, deadline - 1, [84; 64]).await;
+            carry_to_daa(node, parent, peers, deadline - 1, []).await;
             let late = carry_to_daa(node, parent, peers, deadline, commitment).await;
             let api = node.api().as_ref();
+            let unresolved = draw.unverified_expiry_marker(api, late.hash(), 128).unwrap_err();
+            assert_eq!(unresolved.kind(), std::io::ErrorKind::WouldBlock);
+            assert_eq!(unresolved.to_string(), format!("unresolved timely PANEL commitment at {}", accepted.hash()));
+            peer_log!("QF1 expiry withheld pid={} boundary={} pending={}", std::process::id(), late.hash(), accepted.hash());
             draw.read_replies(api, accepted.hash(), &replies).unwrap();
             let recorded = |block, signatures| {
                 cut.read_recorded_replies(

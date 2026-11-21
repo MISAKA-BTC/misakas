@@ -134,12 +134,12 @@ fn child_reader(dir: &Path, slot: usize, stable: bool, registered: bool) -> (Chi
     (child, parent)
 }
 
-async fn local_carrier(
+async fn local_carrier<const N: usize>(
     node: &mut Rig,
     parent: &mut Option<UnixStream>,
     peers: &mut [(Child, UnixStream)],
     card: usize,
-    marker: [u8; 64],
+    marker: [u8; N],
     label: &str,
 ) -> Block {
     if let Some(socket) = parent {

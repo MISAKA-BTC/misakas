@@ -367,10 +367,13 @@ if __name__ == "__main__":
     mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
+    parser.add_argument("--unverified-expiry", action="store_true", help="verify the private deadline terminal or its refusal for timely approvals")
     parser.add_argument("--one-pass-original", action="store_true", help="require the producer to discover length and open Init in its one-pass Original before receipt")
     parser.add_argument("--retained-end", action="store_true", help="verify the retained final chunk, End and direct Court")
     parser.add_argument("--inconsistent-readout", action="store_true", help="require a signed contradictory Readout root, withheld replies and a direct End refutation")
     args=parser.parse_args()
+    if args.unverified_expiry and not (args.missing_material or args.undisputed):
+        parser.error("--unverified-expiry requires --missing-material or --undisputed")
     if args.inconsistent_readout and not (args.retained_stop and args.retained_end):
         parser.error("--inconsistent-readout requires both retained disclosures")
     if args.retained_end and (args.missing_material or args.undisputed):
@@ -404,4 +407,27 @@ if __name__ == "__main__":
                 or matches[0].end() >= log.index("QF1 receipt pid=")):
             raise ValueError("single-pass producer or signed Original mismatch")
         result["one_pass_producer"] = int(producer)
+    if args.unverified_expiry and args.undisputed:
+        panel = result["panel"]
+        peers, (boundary, pending) = shared_rows(
+            log, r"QF1 expiry withheld pid=(\d+) boundary=([0-9a-f]{128}) pending=([0-9a-f]{128})")
+        if (sorted(map(int, peers)) != panel["pids"] or boundary != panel["deadline_block"]
+                or pending != panel["accepted_replies"] or "QF1 unverified expiry pid=" in log):
+            raise ValueError("timely replies must prevent unverified expiry")
+        panel["expiry_withheld_for"] = pending
+    if args.unverified_expiry and args.missing_material:
+        panel = result["panel"]
+        peers, (original, boundary, terminal, marker) = shared_rows(
+            log, r"QF1 unverified expiry pid=(\d+) original=([0-9a-f]{128}) boundary=([0-9a-f]{128}) terminal=([0-9a-f]{128}) marker=([0-9a-f]{128})")
+        def digest(tag, *parts):
+            return hashlib.sha3_512(tag + b"".join(parts)).digest()
+        field = lambda key: bytes.fromhex(panel[key])
+        anchor = digest(b"MISAKA/private/TB1/PANEL/draw-anchor/v1", field("panel_marker"), field("panel_seed"))
+        duty = digest(b"MISAKA/private/TB1/QF1/complete-replay/v1", field("panel_marker"), field("original"),
+                      field("receipt"), field("panel_certificate"), anchor)
+        expected = digest(b"MISAKA/private/TB1/PANEL/unverified-expiry/v1", duty, panel["deadline"].to_bytes(8, "big"), field("deadline_block"))
+        if (sorted(map(int, peers)) != panel["pids"] or original != panel["original"] or boundary != panel["deadline_block"]
+                or terminal in {boundary, panel["receipt"], panel["panel_certificate"]} or marker != expected.hex()):
+            raise ValueError("wrong native unverified expiry")
+        panel.update(unverified_terminal=terminal, unverified_marker=marker)
     print(json.dumps(result, indent=2))

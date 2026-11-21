@@ -3820,6 +3820,10 @@ impl ConsensusApi for Consensus {
         if local_domain.as_bytes() != network_domain {
             return Ok(false);
         }
+        Ok(self.palw_coinbase_commitment(block)?.as_ref() == Some(commitment))
+    }
+
+    fn palw_coinbase_commitment(&self, block: BlockHash) -> ConsensusResult<Option<[u8; 64]>> {
         let body = self.get_block(block)?;
         let coinbase = body.transactions.first().ok_or(ConsensusError::MissingData(block))?;
         let extra = self
@@ -3827,9 +3831,12 @@ impl ConsensusApi for Consensus {
             .coinbase_manager
             .coinbase_extra_data(&coinbase.payload)
             .map_err(|error| ConsensusError::GeneralOwned(error.to_string()))?;
-        Ok(extra == commitment
-            || kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra)
-                .is_ok_and(|(original, trailer)| trailer.is_some() && original == commitment))
+        if let Ok(raw) = extra.try_into() {
+            return Ok(Some(raw));
+        }
+        Ok(kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra)
+            .ok()
+            .and_then(|(prefix, _)| prefix.try_into().ok()))
     }
 
     fn modify_coinbase_payload(&self, payload: Vec<u8>, miner_data: &MinerData) -> CoinbaseResult<Vec<u8>> {

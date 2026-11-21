@@ -430,6 +430,8 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 
 2026-11-21の隔離・非報酬試験では、同一バイナリの3ピアでQF1-10の3ケースを個別に確認した。正常時は選出2席がQwen3-8Bの整数実行を再現して承認した。署名済みReadoutとEndが矛盾する場合は追加質問を経ずに局所裁定した。1席の資料が欠けた場合は承認が1件にとどまり、元期限で新規受付が終了した。資料義務違反の裁定、合意状態での未検証終了、Final・決済を含む一貫検証は残る。これらの試験によるG-COST判定は行わない。[正常時](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-undisputed-replay.json)・[Endの直接裁定](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-replay-deadline-refuted.json)・[資料不足と元期限](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-missing-replay-material.json)
 
+2026-11-22の隔離3ピアでは、元期限までの選択鎖を走査し、完全承認の格納先がない場合に未検証終了を記録した。各ピアはDBを開き直して同じ記録を検証した。期限内に承認が入った対照では、その格納ブロックで走査が終了を保留した。この経路では判別できないcommitmentがある場合も保留する。公開合意の状態遷移と資料義務違反の処理は残る。[未検証終了](../evidence/palw/mas1-qf1-native-2026-11-21/native-unverified-expiry.json)・[期限内承認の保護](../evidence/palw/mas1-qf1-native-2026-11-21/native-unverified-expiry-positive.json)
+
 2026-11-22の隔離試験では、登録済みQwen3候補の非報酬MODEL_AUDITで、3 holderが元の監査closeに署名した。3件の公開行から復元したseedと、固定した1候補・2ケースのchallengeは、公開したpeerと、別々の新しいDBで再生した2 peerの結果に一致した。3 peerの受理後の状態Rootも一致した。ここで確認したのは監査の抽選までである。PracticalSuiteの採点、新規採掘資格、受賞は引き続き未確認である。[署名者・certificate・3 peerの照合結果](../evidence/palw/mas1-qf1-native-2026-11-21/fresh-audit-readback.json)
 
 有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、G-COLLの適合定理、G-COSTの反復費用検査、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。

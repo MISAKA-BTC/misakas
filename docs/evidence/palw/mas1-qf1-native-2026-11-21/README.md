@@ -1082,3 +1082,20 @@ for name in accepted court refuted; do
 done
 python3 -B "$p/check_studio_moe2_book.py" "$out/moe2-original-book" | cmp - "$p/native-one-pass-book.json"
 ```
+
+### 資料不足で元期限に到達したPANELの終端
+
+新しいQwenのOriginalに対し、選出2席のうち1席は登録scaleを取得できず、もう1席は完全再実行に署名した。各ピアは元の排他期限DAA 60に達すると、最初に期限へ到達したブロックのselected parentからPANEL certificateまでの区間を走査した。各ブロックのcoinbaseをnative codecで読み、期限内の完全承認を格納し得る64バイトのcommitmentがないことを確認した。その後のブロックに、元のduty・期限・境界ブロックに束縛した未検証終了markerを格納した。各ピアは公開前と終端側のDBを開き直し、PANELのdrawを復元して同じ終端を照合した。[未検証終了の記録](native-unverified-expiry.json)・[DBと公開資料](native-unverified-expiry-databases.tar.zst)
+
+同じバイナリで両席の承認が期限内に入った別のOriginalでは、承認署名を渡さずに終了を提案しても走査が承認の入ったブロックを特定し、未検証終了を保留した。そのブロックの署名を渡すと期限後も元の承認を検証できた。[期限内承認の対照](native-unverified-expiry-positive.json)
+
+この非報酬経路が対象とするのはPANEL certificate後の選択鎖と、その後の終端markerである。別用途か判別できない64バイトの値が一つでもあれば保留する。履歴を取得できない、走査予算が尽きる、確認中に枝が動く場合も終了を認定しない。資料提供者の責任判定、公開合意の状態遷移、Final・決済は別途必要である。
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/native-unverified-expiry-run.tar.zst" -C "$out"
+python3 -B "$p/check_real_lifecycle.py" "$out/native.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --missing-material --unverified-expiry --one-pass-original | cmp - "$p/native-unverified-expiry.json"
+python3 -B "$p/check_real_lifecycle.py" "$out/positive.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --undisputed --unverified-expiry --one-pass-original | cmp - "$p/native-unverified-expiry-positive.json"
+```
+
+初回の試験では待機中にも64バイトの値を格納し、走査が終了を保留した。修正版では次ブロックのDAAを確認し、待機ブロックを空にして再測定した。3ピアのMOE2市場決済も同じバイナリで再照合した。[市場帳簿](native-unverified-expiry-book.json)
