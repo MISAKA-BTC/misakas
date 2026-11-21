@@ -39,8 +39,9 @@ def verify_draw(log, result, *, expect_replies=True, missing_material=False):
         raise ValueError("wrong close or PANEL release window")
     if len({close, stable, batch, certificate, result["receipt"]}) != 5:
         raise ValueError("duplicate native block")
-    exec_seeds = re.findall(r"TB1 publication pid \d+ batch [0-9a-f]+ certificate [0-9a-f]+ seed " + hex32, log)
-    if len(exec_seeds) != 3 or len(set(exec_seeds)) != 1 or exec_seeds[0] == seed:
+    exec_events = re.findall(r"TB1 publication pid (\d+) batch " + hex64 + " certificate " + hex64 + " seed " + hex32, log)
+    if (len(exec_events) != 3 or {int(row[0]) for row in exec_events} != set(result["pids"])
+            or len({row[1:] for row in exec_events}) != 1 or exec_events[0][3] == seed):
         raise ValueError("unexpected EXEC seed")
     reply_pattern = hex64 if expect_replies else r"(none)"
     duties = re.findall(r"TB1 replay duty pid=(\d+) actor=" + hex64
@@ -53,7 +54,7 @@ def verify_draw(log, result, *, expect_replies=True, missing_material=False):
                               + r" signatures=(\d+) pending_daa=(\d+) deadline=(\d+) tip=" + hex64, log)
         if (len(material) != 3 or len({(r[2:5], r[7:]) for r in material}) != 1 or material[0][3] != certificate
                 or material[0][7] != "1" or int(material[0][8]) + 1 != int(material[0][9])
-                or material[0][10] in {certificate, close, result["receipt"]}):
+                or material[0][10] in {certificate, batch, stable, close, result["receipt"]}):
             raise ValueError("inconsistent incomplete reply or deadline observations")
         duties = [(r[0], r[1], r[6], r[4], r[2], None) for r in material]
     if (len(duties) != 3 or {int(row[0]) for row in duties} != set(result["pids"])
@@ -77,7 +78,7 @@ def verify_draw(log, result, *, expect_replies=True, missing_material=False):
         result.update(unavailable_actor=selected[0], signed_actor=selected[1], signatures=1,
                       pending_daa=int(material[0][8]), deadline=int(material[0][9]), deadline_block=material[0][10])
     result.update(panel_release="certified", stable=stable, stable_daa=int(stable_daa), release_daa=int(release_daa),
-                  panel_certificate=certificate, panel_batch=batch, panel_seed=seed, exec_seed=exec_seeds[0],
+                  panel_certificate=certificate, panel_batch=batch, panel_seed=seed, exec_seed=exec_events[0][3],
                   actors_by_weight=actors, selected=selected, accepted_replies=duties[0][5] if expect_replies else None)
     return result
 

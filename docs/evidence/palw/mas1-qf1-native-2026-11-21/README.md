@@ -966,3 +966,5 @@ RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --predict
 zstd -dc "$p/varied-build-direct-court.txt.zst" > "$out/varied-build-direct-court.log"
 python3 -B "$p/check_real_lifecycle.py" "$out/varied-build-direct-court.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end | cmp - "$p/varied-build-direct-court.json"
 ```
+
+同じバイナリで、日本の首都を問う仕事を新たに登録し、選出2席のうち1席で再実行資料を取得できない場合も検査した。3ピアが同じEXECのbatch・certificate・seedと同じ期限ブロックを読み取った。署名は1件で、DAA 59では承認集合が不足し、元の排他期限DAA 60で新規受付が終了した。これはローカルな承認受付の締切までの観測で、未検証終了の合意状態への記録は残る。[3ピアと期限の照合](varied-build-missing-material.json)・[元ログ](varied-build-missing-material.txt.zst)
