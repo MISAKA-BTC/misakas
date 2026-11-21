@@ -2,7 +2,7 @@
 
 2026-11-21 に受領した `misaka_docs_MOE2_MAS1_QF1_20261120.zip` の SHA-256 は `95f460df28fd5a8f7aad2ce50f12f0c20d7cbb15a3de3958523f1de58ac41303`。展開した3,094ファイルがすべてリポジトリの同じパスとバイト一致した。統合前の台帳にあった Studio 実行記録は対応する[隔離試験の記録](../studio-winning-receipt-2026-11-20/README.md)に保存した。
 
-最新版の改訂検査は入力3,012件、変更51件、履歴保存51件を照合した。さらに同梱の変更前ファイルを SHA-256 で検査して MAS1 版を復元し、その改訂検査も実施した。QF1 の Python 参照検査は57項目成功。過去の原本と照合する RFC・ADR の全体検査には配布版と同じ7件・157件の指摘が残る。文書全体の strict 検査にも配布原本から引き継いだ指摘が残っている。
+配布原本の改訂検査は入力3,012件、変更51件、履歴保存51件を照合した。対話が任意であることと隔離試験の到達点を記述した後、ZIP 内の3,094ファイルを再照合した。差分は RFC-0054・0062・0066、統合版 RFC-v2-0017・0018 とその索引、裁定方針、QF1 移行文書の8件だった。さらに同梱の変更前ファイルを SHA-256 で検査して MAS1 版を復元し、その改訂検査も実施した。QF1 の Python 参照検査は57項目成功。過去の原本と照合する RFC・ADR の全体検査には配布版と同じ7件・157件の指摘が残る。文書全体の strict 検査にも配布原本から引き継いだ指摘が残っている。
 
 ## QF1
 
@@ -29,7 +29,8 @@ MOE2 チェーンでは3プロセスが市場の生成、異なる鍵による3�
 ```sh
 export CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
 export CARGO_TARGET_DIR=target/protected-core-tests RUST_MIN_STACK=67108864
-python3 -B docs/maintenance/revisions/2026-11-20-qwen-fow1/check_revision.py
+# DOCS_BUNDLE_ROOT は受領 ZIP を展開したディレクトリ
+python3 -B "${DOCS_BUNDLE_ROOT:?}/docs/maintenance/revisions/2026-11-20-qwen-fow1/check_revision.py"
 python3 -B docs/design/palw/models/qf1/check_qf1_reference.py
 cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib palw_qf1
 cargo +1.93.0 test --locked --offline -p kaspa-consensus-core --lib palw_mas1
