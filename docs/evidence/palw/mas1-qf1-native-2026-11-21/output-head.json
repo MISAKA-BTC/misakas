@@ -1,0 +1,45 @@
+{
+  "argmax": 67155,
+  "input_scale": "1/1024",
+  "logit_scale": "1/4096",
+  "logits_i32le_sha256": "deb269b48c35427bbea93f0cb21c14d9e0a3e5b4dd01fbd90437cb444e03b006",
+  "max_logit": 18754,
+  "max_ties": 1,
+  "min_logit": -17984,
+  "mul_shift_sha256": "646d07cf0339721fdb9c957b15526757e1792e5fbea622ee5b74a2a2a6dc3eb6",
+  "rows": 151936,
+  "sample_rows": [
+    {
+      "accumulator": 4497,
+      "logit": 16,
+      "multiplier": 2012209087,
+      "row": 0,
+      "shift": 39
+    },
+    {
+      "accumulator": -1078186,
+      "logit": -3432,
+      "multiplier": 1750114627,
+      "row": 151643,
+      "shift": 39
+    },
+    {
+      "accumulator": -31126,
+      "logit": -56,
+      "multiplier": 1986845107,
+      "row": 151645,
+      "shift": 40
+    },
+    {
+      "accumulator": -329661,
+      "logit": -563,
+      "multiplier": 1876934527,
+      "row": 151935,
+      "shift": 40
+    }
+  ],
+  "source_bytes": 1244659840,
+  "source_sha256": "20c2d6366ab85c90786ccdd829cd2b9e7d30ef3b2ebbb998280e7e4014b542ff",
+  "weights_i8_sha256": "ef46321d287c7230e95a1974df89228d82d633138d1a8acee0113a661ff07287",
+  "width": 4096
+}

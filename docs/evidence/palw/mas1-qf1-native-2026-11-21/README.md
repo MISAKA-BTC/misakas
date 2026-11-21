@@ -102,3 +102,22 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_stop.py \
 固定リビジョンの config、分割 index、5個の safetensors header を取得した。config と index の内容を当該 Git オブジェクト ID と照合し、RFC-0066 §1 の36層、Q/K gain の各128値、Q/K/V/O の向き、MLP、独立した embedding と LM head、最終 gain まで全399テンソルの名前・shape・BF16型を検査した。各 shard のデータ領域の offset は重複・欠落がなく、合計8,190,735,360パラメータ、16,381,470,720バイトで index と一致した。
 
 [実行結果](upstream-geometry.json)には上流が公表した各 shard の LFS SHA-256 を収録した。今回の読み取りは header までで、重み全体の再ハッシュ、整数化された QF1 artifact、推論結果には各々の検証が残る。再現は `huggingface_hub==0.36.2` を利用できる Python で `python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_qwen_source.py` を実行する。[固定した上流リビジョン](https://huggingface.co/Qwen/Qwen3-8B/tree/b968826d9c46dd6066d109eabc6255188de91218)
+
+## 実際の出力ヘッドの整数化と照合
+
+上流の第5 shard は独立した `lm_head.weight` だけを収録する。全1,244,659,840バイトの SHA-256 が固定リビジョンの LFS digest と一致した。既存の TIR lowerer で151,936行×4,096列の BF16 重みを出力チャネルごとの absmax/127 で i8 に変換し、各行の倍率を TIR の整数 multiplier・shift へ落とした。
+
+この試験の hidden ベクトルは `((73*i+19) % 2047)-1023`、入力 scale は 1/1024、logit scale は 1/4096。全行について整数内積の native 版と scalar 版が一致した。Python は元 shard を別途読み、全 i8 重み、全倍率、全整数 logit の digest と境界4行の値を独立に照合した。最大 logit は18,754、該当する行は67,155の1件だった。入力と出力 scale はこの演算の試験値で、Qwen 全36層が出した hidden、実回答 token、採掘資格の測定はこの試験の対象外である。[全体 digest と境界行](output-head.json)
+
+`SHARD` に固定リビジョンの `model-00005-of-00005.safetensors` を指定して実行する。Python 側は NumPy を使用する。
+
+```sh
+cargo +1.93.0 run --locked -p misaka-palw-tir-lower --example check-qf1-output-head -- "$SHARD" > /tmp/qf1-head.json
+python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_output_head.py "$SHARD" /tmp/qf1-head.json
+```
+
+## 元の全重みの照合
+
+上流の固定リビジョンに対して、今度は5 shard の全16,381,516,776バイトを読み、各ファイル全体の SHA-256 が上流の LFS digest と一致することを確認した。399テンソルそれぞれについてデータの型・形状・長さ・offset と実データの SHA-256 を記録した。145本の norm gain は別途取り出し、保存した全616,448バイトをこの記録と照合した。[上流全399テンソルの実データの SHA-256](upstream-payloads.json)
+
+`check_qwen_weights.py` は5 shard 全てをストリームで読み、検査が揃ってから結果を出力する。`--local` で指定したディレクトリにある shard はそこから読み、残りは固定リビジョンから取得する。`--vectors` には gain の保存先として新しいディレクトリを指定できる。サンプル実行は `python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_qwen_weights.py`。ここまでで照合した全体は上流 BF16 の入力である。QF1 の整数化済み36層・scale・table・正規 program とその評価は個別に追跡する。
