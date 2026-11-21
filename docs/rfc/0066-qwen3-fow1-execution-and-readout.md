@@ -354,7 +354,7 @@ cache keyは少なくともnumeric artifact/program/profile、実入力prefix全
 
 一方、challengeより前の固定prefix、weights前処理、同じ意味の計算の再利用、数学的簡約が可能であることを隠さない。Readoutの全vectorが正しければ、それを作った高速な手順自体は算術不正ではない。G-COSTは、これらを許す攻撃者と複数候補を対象に、新しい正しいTicketの初回照会以前の費用を評価しなければならない。
 
-2026-11-21の非報酬評価では、過去の署名済み6試行を3組に分け、共通prefixを共有しても全試行の回答・数値Readout・四Root・Ticketが一致した。2経路の合計経過時間は共有時に5.87%短かった。各組1回ずつの測定であり、採択済みの費用閾値と誤差範囲は未設定のため、G-COSTはUNKNOWNを維持する。[測定結果と対象入力](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-shared-prefix.json)
+2026-11-21の非報酬評価では、過去の署名済み6試行を3組に分け、共通prefixを共有しても全試行の回答・数値Readout・四Root・Ticketが一致した。3組の合計経過時間は、独立実行475.835秒、共有実行447.899秒で、5.87%短縮した。各組1回ずつの測定であり、採択済みの費用閾値と誤差範囲は未設定のため、G-COSTはUNKNOWNを維持する。[測定結果と対象入力](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-shared-prefix.json)
 
 ## 10. MAS1登録・有用性・停止への接続
 
