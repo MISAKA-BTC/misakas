@@ -46,6 +46,9 @@ def verify_signature(openssl, key, message, signature, context, directory):
 
 
 def verify(openssl):
+    algorithms = subprocess.run([openssl, "list", "-signature-algorithms"], capture_output=True)
+    require(algorithms.returncode == 0 and b"ML-DSA-65" in algorithms.stdout,
+            "select an OpenSSL with ML-DSA-65 support using --openssl")
     keys = public_keys()
     roster = h512(b"MISAKA/private/TB1/roster/v1", u32(len(keys)),
                   *(x.to_bytes(66, "big") + key for x, key in enumerate(keys, 1)))

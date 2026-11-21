@@ -838,5 +838,6 @@ python3 -B "$p/check_fresh_window.py" "$out/after-cert.jsonl" "$out/writer.log" 
 
 ```sh
 p=docs/evidence/palw/mas1-qf1-native-2026-11-21
-python3 -B "$p/check_fresh_qualification.py" --openssl openssl | cmp - "$p/fresh-qualification.json"
+# macOS / Homebrew。PATH 上の openssl が ML-DSA-65 対応なら --openssl openssl でも実行できる。
+python3 -B "$p/check_fresh_qualification.py" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-qualification.json"
 ```
