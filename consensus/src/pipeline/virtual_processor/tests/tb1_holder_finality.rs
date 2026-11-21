@@ -514,11 +514,15 @@ async fn run(stable: bool, registered: bool) {
         use misaka_palw_remote::tb1_exposure::qf1::Qf1Prompt;
         let bytes = std::fs::read(path).unwrap();
         let expected: Hash64 = QF1_TEST_TOKENIZER.parse().unwrap();
+        let job = std::env::var("MISAKA_PRIVATE_QF1_JOB").unwrap_or_else(|error| match error {
+            std::env::VarError::NotPresent => "2 + 2?".to_owned(),
+            _ => panic!("QF1 job must be UTF-8"),
+        });
         Qf1Prompt::from_registered_tokenizer(
             &bytes,
             expected,
             instance.as_ref().unwrap().identity().descriptor,
-            "2 + 2?",
+            &job,
             16_000_000,
             128,
         )

@@ -1,0 +1,14 @@
+{
+  "calibration": "first previously signed 2 + 2? Original in g-cost-readout-reuse.json",
+  "fixed_length": 9,
+  "jobs": [
+    "日本の首都を都市名だけで答えてください。",
+    "Answer with only one digit: what is three minus two?",
+    "Write one sentence explaining why leaves look green."
+  ],
+  "decode_limit": 16,
+  "test": "private_tb1_stable_panel",
+  "replay": "every selected panelist independently replays each complete original; no dialogue",
+  "timing": "Compare independent two-pass and fixed predicted length 9, with full fallback, in alternating order for every job. Include every scheduled job and any unsuccessful result. Report calibration separately.",
+  "purpose": "private non-rewarding execution and empirical cost; no mining or scoring cutoff"
+}
