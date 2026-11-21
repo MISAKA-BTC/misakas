@@ -340,7 +340,7 @@ pub(super) async fn release(
         accepted.hash()
     );
     use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};
-    let wire = std::fs::read(stop_material_path(dir, original)).expect("Stop disclosure published with the Original");
+    let wire = std::fs::read(dir.join(format!("{original}.stop"))).expect("Stop disclosure published with the Original");
     let api = node.api().as_ref();
     let witness = StopWitness::decode(body, &wire).unwrap();
     let mut changed = witness.clone();
@@ -363,8 +363,21 @@ pub(super) async fn release(
         outcome,
         faster_hex::hex_string(&wire)
     );
-}
-
-pub(super) fn stop_material_path(dir: &Path, original: Hash64) -> std::path::PathBuf {
-    dir.join(format!("{original}.stop"))
+    let end_wire = std::fs::read(dir.join(format!("{original}.end"))).expect("terminal Readout and End published with the Original");
+    let case = input.prepare_end_case(node.api().as_ref(), original_receipt, body, owner, &end_wire).unwrap();
+    assert!(case.verdict_marker(node.api().as_ref(), opened.hash()).is_err());
+    let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 Readout / End case").await;
+    let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
+    let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 Readout / End verdict").await;
+    let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
+    assert_eq!(outcome, StopOutcome::ChallengeNotEstablished);
+    peer_log!(
+        "TB1 Court End pid={} original={} case={} verdict={} result={:?} witness={}",
+        std::process::id(),
+        original,
+        opened.hash(),
+        verdict.hash(),
+        outcome,
+        faster_hex::hex_string(&end_wire)
+    );
 }

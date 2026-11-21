@@ -11,11 +11,7 @@ pub struct StopWitness {
     pub trace_path: Vec<Hash64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StopOutcome {
-    ChallengeNotEstablished,
-    ComputationRefuted,
-}
+pub use super::terminal_case::{LocalTerminalCase as LocalStopCase, TerminalOutcome as StopOutcome};
 
 impl LocalOriginalBody {
     pub fn stop_index(&self) -> io::Result<u64> {
@@ -120,13 +116,6 @@ impl StopWitness {
     }
 }
 
-pub struct LocalStopCase<'i, 't> {
-    input: &'i DerivedExecInput<'t>,
-    receipt: Hash64,
-    marker: [u8; 64],
-    outcome: StopOutcome,
-}
-
 impl<'t> DerivedExecInput<'t> {
     /// Authenticate the submitted terminal material before issuing a receipt.
     /// A committed contradiction is retainable evidence even when replay disagrees.
@@ -165,47 +154,13 @@ impl<'t> DerivedExecInput<'t> {
                 h.update(p.as_bytes());
             }
         }
-        Ok(LocalStopCase { input: self, receipt, marker: h.finalize().into(), outcome })
-    }
-}
-
-impl LocalStopCase<'_, '_> {
-    pub fn marker(&self) -> [u8; 64] {
-        self.marker
-    }
-    fn included(&self, native: &dyn ConsensusApi, previous: Hash64, block: Hash64, marker: [u8; 64]) -> io::Result<()> {
-        let tip = native.get_sink();
-        self.input.check_live(native)?;
-        let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
-        if !native.is_chain_ancestor_of(previous, parent).map_err(io::Error::other)?
-            || !native.is_chain_ancestor_of(block, tip).map_err(io::Error::other)?
-            || !native.palw_coinbase_commits_to(self.input.chain, block, &marker).map_err(io::Error::other)?
-        {
-            return Err(invalid("local Stop case outside committed history"));
-        }
-        if native.get_sink() != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
-        }
-        Ok(())
-    }
-    pub fn verdict_marker(&self, native: &dyn ConsensusApi, case: Hash64) -> io::Result<[u8; 64]> {
-        self.included(native, self.receipt, case, self.marker)?;
-        let verdict = match self.outcome {
-            StopOutcome::ChallengeNotEstablished => 0,
-            StopOutcome::ComputationRefuted => 1,
-        };
-        Ok(Sha3_512::new()
-            .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1")
-            .chain_update(case.as_bytes())
-            .chain_update(self.marker)
-            .chain_update([verdict])
-            .finalize()
-            .into())
-    }
-    pub fn read_verdict(&self, native: &dyn ConsensusApi, case: Hash64, verdict: Hash64) -> io::Result<StopOutcome> {
-        let marker = self.verdict_marker(native, case)?;
-        self.included(native, case, verdict, marker)?;
-        Ok(self.outcome)
+        Ok(LocalStopCase {
+            input: self,
+            receipt,
+            marker: h.finalize().into(),
+            verdict_domain: b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1",
+            outcome,
+        })
     }
 }
 

@@ -20,6 +20,8 @@ pub struct LocalTrace {
     pub opening: Option<TraceOpening>,
     /// Authenticated terminal record retained with the original for direct Court disclosure.
     pub stop_opening: TraceOpening,
+    /// Last compression record and End, in their signed trace order.
+    pub end_openings: [TraceOpening; 2],
 }
 
 pub struct TraceOpening {
@@ -79,8 +81,9 @@ pub(super) struct Trace {
     steps: u32,
     layout: Geometry,
     input: TreeRoot,
-    tree: TreeBuilder<2>,
+    tree: TreeBuilder<4>,
     stop_record: Vec<u8>,
+    final_chunk_record: Vec<u8>,
     next: u64,
     tiles: u64,
     opening: Option<(u64, Vec<u8>)>,
@@ -109,7 +112,13 @@ impl Trace {
         }
         let layout = Geometry::new(instance, len, steps, cap)?;
         let stop_index = layout.count - 2 - u64::from(layout.chunks);
-        let tree = TreeBuilder::with_openings(s, TreeKind::Trace, layout.count, cap, [request.open, Some(stop_index)])?;
+        let tree = TreeBuilder::with_openings(
+            s,
+            TreeKind::Trace,
+            layout.count,
+            cap,
+            [request.open, Some(stop_index), Some(layout.count - 2), Some(layout.count - 1)],
+        )?;
         let input = tokens_root(s, TreeKind::Input, prompt)?;
         let mut trace = Self {
             s,
@@ -119,6 +128,7 @@ impl Trace {
             input,
             tree,
             stop_record: Vec::new(),
+            final_chunk_record: Vec::new(),
             next: 0,
             tiles: 0,
             opening: request.open.map(|i| (i, Vec::new())),
@@ -226,6 +236,7 @@ impl Trace {
             rec.extend_from_slice(&c.chain_after);
             self.push()?;
         }
+        self.final_chunk_record.clone_from(&self.record);
         let y = tokens_root(self.s, TreeKind::Answer, &answer.tokens)?;
         let z = TreeRoot::build(self.s, TreeKind::Readout, std::iter::once(answer.z.as_slice()), 1)?;
         let [rx, ry, rz] = [self.input.digest, y.digest, z.digest];
@@ -249,7 +260,7 @@ impl Trace {
 
     pub(super) fn finish(self, answer: LocalAnswer) -> Result<LocalTrace, String> {
         let (y, z) = self.tail.ok_or("missing QF1 End")?;
-        let (trace, [siblings, stop_path]) = self.tree.finish_with_openings()?;
+        let (trace, [siblings, stop_path, chunk_path, end_path]) = self.tree.finish_with_openings()?;
         let roots = [self.input, y, z, trace];
         let ticket = palw_qf1::ticket(roots.each_ref())?;
         let opening = self.opening.map(|(index, record)| TraceOpening { index, record, siblings });
@@ -258,7 +269,11 @@ impl Trace {
             record: self.stop_record,
             siblings: stop_path,
         };
-        Ok(LocalTrace { answer, roots, ticket, opening, stop_opening })
+        let end_openings = [
+            TraceOpening { index: self.layout.count - 2, record: self.final_chunk_record, siblings: chunk_path },
+            TraceOpening { index: self.layout.count - 1, record: self.record, siblings: end_path },
+        ];
+        Ok(LocalTrace { answer, roots, ticket, opening, stop_opening, end_openings })
     }
 }
 

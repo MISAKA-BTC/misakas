@@ -589,3 +589,9 @@ pub mod panel_cut;
 
 #[cfg(feature = "private-tb1-tir")]
 pub mod stop_case;
+
+#[cfg(feature = "private-tb1-tir")]
+pub mod end_case;
+
+#[cfg(feature = "private-tb1-tir")]
+pub mod terminal_case;

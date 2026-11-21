@@ -545,3 +545,9 @@ Qwen3-8B の全重みを使った隔離3ピアの非報酬試験では、Origina
 zstd -dc "$p/qf1-stop-intake-three-peer.txt.zst" > "$out/stop-intake.txt"
 python3 -B "$p/check_real_lifecycle.py" "$out/stop-intake.txt" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop
 ```
+
+## Readout 最終 chunk と End の直接反証
+
+非報酬の QF1 試験では、元の trace 生成時に最終 chunk と End の開示を保持できる。Node は、両レコードが署名済み trace に含まれることを確認してから、最終 chunk の番号・消費バイト数・終端フラグ、採掘値 `z` と署名済み Readout root、End の各 root・件数を照合する。検証者は保管した資料から直接 Court に提出できる。この関係が検査する範囲は終端の結合で、各 chunk の圧縮・全層の算術は個別の検査対象である。
+
+単体試験では、認証済みの誤った counter・終端フラグ・digest・End を反証として裁定し、開示の改変・欠落を裁定前に拒否した。[関連7試験の結果](qf1-readout-end-unit.txt)

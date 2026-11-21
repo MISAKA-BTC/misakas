@@ -3,7 +3,7 @@
 use super::{MAX_NEW, ROLES, WIDTH};
 use crate::palw_rendering_stream_v1::{IV, compress};
 
-const CHUNK: usize = 4096;
+pub const CHUNK_BYTES: usize = 4096;
 pub(super) const DOMAIN: &[u8] = b"misaka/palw/qf1/readout/v1\0";
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -15,12 +15,17 @@ pub struct HashChunk {
     pub chain_after: [u8; 64],
 }
 
-/// Number of authenticatable compression records at a successful QF1 stop.
-pub fn record_count(steps: u32) -> Result<u32, &'static str> {
+/// Byte length of the canonical domain, decision vectors and terminator.
+pub fn encoded_len(steps: u32) -> Result<u32, &'static str> {
     if !(1..=MAX_NEW).contains(&steps) {
         return Err("QF1 readout step count");
     }
-    Ok((DOMAIN.len() as u32 + steps * (5 + 2 * (ROLES * WIDTH) as u32) + 5).div_ceil(CHUNK as u32))
+    Ok(DOMAIN.len() as u32 + steps * (5 + 2 * (ROLES * WIDTH) as u32) + 5)
+}
+
+/// Number of authenticatable compression records at a successful QF1 stop.
+pub fn record_count(steps: u32) -> Result<u32, &'static str> {
+    Ok(encoded_len(steps)?.div_ceil(CHUNK_BYTES as u32))
 }
 
 fn initial() -> [u64; 8] {
@@ -49,15 +54,16 @@ fn encode(state: [u64; 8]) -> [u8; 64] {
 
 impl HashChunk {
     pub fn verify(&self, steps: u32, expected_index: u32, previous: Option<&HashChunk>, source: &[u8]) -> bool {
-        if !(1..=MAX_NEW).contains(&steps) || self.index != expected_index {
+        let Ok(total) = encoded_len(steps) else { return false };
+        if self.index != expected_index {
             return false;
         }
-        let total = DOMAIN.len() as u64 + u64::from(steps) * (5 + 2 * (ROLES * WIDTH) as u64) + 5;
-        let offset = u64::from(self.index) * CHUNK as u64;
+        let total = u64::from(total);
+        let offset = u64::from(self.index) * CHUNK_BYTES as u64;
         if offset >= total {
             return false;
         }
-        let length = (total - offset).min(CHUNK as u64);
+        let length = (total - offset).min(CHUNK_BYTES as u64);
         if self.consumed != offset + length
             || u64::from(self.length) != length
             || source.len() as u64 != length
@@ -67,7 +73,7 @@ impl HashChunk {
         }
         let state = match (previous, self.index) {
             (None, 0) => initial(),
-            (Some(p), i) if i > 0 && p.index == i - 1 && p.consumed == offset && p.length == CHUNK as u16 && !p.final_flag => {
+            (Some(p), i) if i > 0 && p.index == i - 1 && p.consumed == offset && p.length == CHUNK_BYTES as u16 && !p.final_flag => {
                 std::array::from_fn(|n| u64::from_le_bytes(p.chain_after[n * 8..n * 8 + 8].try_into().unwrap()))
             }
             _ => return false,
@@ -87,17 +93,17 @@ impl ChunkStream {
     }
     pub(super) fn push(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
-            if self.buffer.len() == CHUNK {
+            if self.buffer.len() == CHUNK_BYTES {
                 self.emit(false);
             }
-            let n = bytes.len().min(CHUNK - self.buffer.len());
+            let n = bytes.len().min(CHUNK_BYTES - self.buffer.len());
             self.buffer.extend_from_slice(&bytes[..n]);
             bytes = &bytes[n..];
         }
     }
     fn emit(&mut self, last: bool) {
         let index = self.records.len() as u32;
-        let offset = u64::from(index) * CHUNK as u64;
+        let offset = u64::from(index) * CHUNK_BYTES as u64;
         self.state = advance(self.state, offset, &self.buffer, last);
         self.records.push(HashChunk {
             index,

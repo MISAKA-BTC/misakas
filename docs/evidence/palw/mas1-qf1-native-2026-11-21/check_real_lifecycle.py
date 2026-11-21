@@ -12,7 +12,7 @@ from check_prediction import qf1, shared_rows
 from check_stop import verify_case
 
 
-def check(log, artifact, decode_limit=3, retained_stop=False):
+def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False):
     pids, (attempt, prompt_json) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64}) tokens=(\[[0-9, ]+\])")
     peers, (cls, descriptor, positions, answer_json, stop, z_hex) = shared_rows(
         log, r"QF1 fixture pid=(\d+) class=(\w+) descriptor=(\w+) positions=(\d+) tokens=(\[[0-9, ]+\]) stop=(\w+) z=(\w+)")
@@ -76,8 +76,39 @@ def check(log, artifact, decode_limit=3, retained_stop=False):
                 or any(r[2] != original or int(r[3]) != court["witness_bytes"] or r.end() > receipt_offset for r in rows)):
             raise ValueError("missing matching Stop disclosure before the Original receipt")
         court["retained_before_receipt"] = ordered
-    return dict(class_id=cls,descriptor=descriptor,attempt=attempt,input_ids=prompt,output_ids=answer,stop=stop,
+    result = dict(class_id=cls,descriptor=descriptor,attempt=attempt,input_ids=prompt,output_ids=answer,stop=stop,
                 readout_z=z_hex,panel=panel,court=court)
+    if retained_end:
+        peers, (bound, case, verdict, outcome, wire_hex) = shared_rows(
+            log, r"TB1 Court End pid=(\d+) original=(\w+) case=(\w+) verdict=(\w+) result=(\w+) witness=([0-9a-f]+)")
+        if (peers != pids or bound != original or outcome != "ChallengeNotEstablished"
+                or len({receipt, court["case"], court["verdict"], case, verdict}) != 5):
+            raise ValueError("End Court identity or carriers")
+        wire = bytes.fromhex(wire_hex)
+        depth = (d - 1).bit_length()
+        path_bytes = depth * 64
+        total = len(qf1.DOM_Z) + t * (5 + 2 * 37 * 4096) + 5
+        final_length = total - 4096 * (h - 1)
+        final_chunk = envelope(4, struct.pack("<IQHB", h - 1, total, final_length, 1) + z)
+        offset = 0
+        for index, record in [(d-2, final_chunk), (d-1, end)]:
+            if wire[offset:offset+len(record)] != record:
+                raise ValueError("terminal record differs from original counts, counters, roots or z")
+            offset += len(record)
+            path = [wire[i:i+64] for i in range(offset, offset + path_bytes, 64)]
+            if not qf1.verify_opening(s, 4, d, index, record, path, roots[3]):
+                raise ValueError("unverified terminal record opening")
+            offset += path_bytes
+        if offset != len(wire):
+            raise ValueError("End witness length")
+        rows = list(re.finditer(r"QF1 retained End pid=(\d+) original=([0-9a-f]{128}) bytes=(\d+)", log))
+        if (sorted(int(r[1]) for r in rows) != ordered or
+                any(r[2] != original or int(r[3]) != offset or r.end() > log.index("QF1 receipt pid=") for r in rows)):
+            raise ValueError("missing terminal records before Original receipt")
+        result["end_court"] = dict(case=case, verdict=verdict, result=outcome, readout_bytes=total,
+                                   final_chunk_length=final_length, last_chunk=d-2, end=d-1, witness_bytes=offset,
+                                   retained_before_receipt=ordered)
+    return result
 
 
 def check_pending_freeze(log, artifact):
@@ -305,6 +336,7 @@ if __name__ == "__main__":
     mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
+    parser.add_argument("--retained-end", action="store_true", help="verify the retained final chunk, End and direct Court")
     args=parser.parse_args()
     verify = check
     if args.certified_history:
@@ -323,5 +355,5 @@ if __name__ == "__main__":
     if "full" in expected:
         expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
     log = args.log.read_text()
-    result = check(log, expected, args.decode_limit, args.retained_stop) if verify is check else verify(log, expected)
+    result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end) if verify is check else verify(log, expected)
     print(json.dumps(result, indent=2))

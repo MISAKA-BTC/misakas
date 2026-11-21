@@ -984,10 +984,10 @@ async fn run(stable: bool, registered: bool) {
             _ => bound.trace_leaf_count(r.tokens().len().try_into().unwrap(), declared, terms.max_leaves).unwrap() - 1,
         };
         let replay = r.replay_qf1_original(api, bound, declared, Some(opened)).unwrap();
-        let (body, sig, stop_material) = if let Some(s) = parent_socket.as_mut() {
-            let (body, bytes, stop) =
-                receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>, Vec<u8>)>(s);
-            (body, ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap()), stop)
+        let (body, sig, stop_material, end_material) = if let Some(s) = parent_socket.as_mut() {
+            let (body, bytes, stop, end) =
+                receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>, Vec<u8>, Vec<u8>)>(s);
+            (body, ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap()), stop, end)
         } else {
             let id = replay.id();
             let sig = ml_dsa_65::sign(
@@ -998,22 +998,29 @@ async fn run(stable: bool, registered: bool) {
             )
             .unwrap();
             let stop = replay.stop_witness().unwrap().encode();
+            let end = replay.end_disclosure().unwrap();
             for (_, s) in &mut peers {
-                send(s, &(replay.body(), sig.as_slice().to_vec(), &stop));
+                send(s, &(replay.body(), sig.as_slice().to_vec(), &stop, &end));
             }
-            (replay.body(), sig, stop)
+            (replay.body(), sig, stop, end)
         };
         assert!(r.verify_qf1_stop_disclosure(api, &body, &sig, &[]).is_err());
+        assert!(r.verify_qf1_end_disclosure(api, &body, &sig, &[]).is_err());
+        let (end_original, end_disposition) = r.verify_qf1_end_disclosure(api, &body, &sig, &end_material).unwrap();
         let (original, disposition) = r.verify_qf1_stop_disclosure(api, &body, &sig, &stop_material).unwrap();
         // Preserve what the owner committed before comparing it to this peer's inference.
-        let path = stable_panel::stop_material_path(dir.path(), original);
-        let mut file = File::create_new(&path).unwrap();
-        file.write_all(&stop_material).unwrap();
-        file.sync_all().unwrap();
+        assert_eq!(original, end_original);
+        for (suffix, material) in [("stop", &stop_material), ("end", &end_material)] {
+            let mut file = File::create_new(dir.path().join(format!("{original}.{suffix}"))).unwrap();
+            file.write_all(material).unwrap();
+            file.sync_all().unwrap();
+        }
         File::open(dir.path()).unwrap().sync_all().unwrap();
         peer_log!("QF1 retained Stop pid={} original={} bytes={}", std::process::id(), original, stop_material.len());
+        peer_log!("QF1 retained End pid={} original={} bytes={}", std::process::id(), original, end_material.len());
         use misaka_palw_remote::tb1_exposure::exec_input::stop_case::StopOutcome;
         assert_eq!(disposition, StopOutcome::ChallengeNotEstablished);
+        assert_eq!(end_disposition, StopOutcome::ChallengeNotEstablished);
         replay.verify(api, &body, &sig).unwrap();
         let mut changed = body.clone();
         changed.roots[3] = Hash64::from_u64_word(1);
