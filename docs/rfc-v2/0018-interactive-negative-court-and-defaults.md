@@ -1,5 +1,9 @@
 # RFC-v2-0018 — 対話型 negative court・公開異議・提供義務違反
 
+## FOW1・QF1における適用範囲（2026-11-21 採択）
+
+[FOW1のPanel検証と紛争処理](../rfc/0062-palw-function-output-and-work-admissibility.md#fow1-panel-dialogue)に従い、対話による局所化とその手番に固有の試験は、その経路を提供する場合に適用する。直接反証の受理・局所裁定、資料case・未解決時の成功停止、既受理の責任と元期限はすべての構成で扱う。
+
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 

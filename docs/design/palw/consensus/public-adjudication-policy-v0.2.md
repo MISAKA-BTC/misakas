@@ -22,9 +22,11 @@ Minerは元の結果とcanonical trace／execution rootを先に署名固定す�
 
 必要なモデル・入力資料の配信、commit後の公開乱数、証拠提出の通信は残る。非対話は通信量ゼロではない。[RFC-v2-0017](../../../rfc-v2/0017-noninteractive-positive-verification.md)。
 
-## 4. 不一致は対話negative、資料不足は未検証
+## 4. 不一致の局所化と資料不足時の扱い
 
-root・出力が異なる場合、元の固定claimと双方のcommitmentに結び付いた対話で争点を局所化する。完成した反証があれば直接提出できる。Nodeが局所演算を裁き、責任を確定する。
+[2026-11-21採択のFOW1・QF1](../../../rfc/0062-palw-function-output-and-work-admissibility.md#fow1-panel-dialogue)では、完全再実行と単独で構成できる直接反証を基本とし、対話による局所化の実装は任意とする。資料caseと公開異議の受付は継続する。
+
+従来の対話経路では、root・出力が異なる場合、元の固定claimと双方のcommitmentに結び付いた対話で争点を局所化する。完成した反証があれば直接提出できる。Nodeが局所演算を裁き、責任を確定する。
 
 root不一致だけでMinerを有罪にしない。未取得・Panel停止・不完全証拠は、計算不正および客観的な提供義務違反と区別する。所定の肯定検証がないclaimを止めるために、negative証拠の完成は要求しない。[RFC-v2-0018](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)。
 

@@ -290,6 +290,8 @@ record bytesは`kind:u8 || payload_length:u32le || payload`とし、TIR payload�
 
 ### 7.4 完全再実行と局所裁定
 
+QF1には[FOW1の非対話検証と直接反証](0062-palw-function-output-and-work-admissibility.md#fow1-panel-dialogue)を適用する。正常なclaimの照合は公開済み資料と固定したinstanceから完結する。不一致時は元traceの該当record、opening、必要な依存値を使い、Minerへの追加質問なしで局所Courtを開始・完了できることを求める。対話による局所化も選択できる。
+
 Panelは元claimの同じinstanceを使い、全入力から、prefill、KV、36層、head、token選択、Readout、四Rootまで再現する。37 vectorだけの比較、他Panelのpositiveコピー、上流BF16の近似一致を完全検査にしない。計算再利用をした場合も、同じcanonical実行の全関係が検査対象である。
 
 Nodeは元claim、固定model/program/instance、正しい重みindexとopening、過去値、演算規則を認証し、対象tile又はhash chunkだけを再計算する。別モデル・別層・別試行のopeningは拒否する。モデル全体を保持せず、Merkle proofがglobalな費用下界を証明すると扱わない。
@@ -406,7 +408,7 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 | QF1-07 roots/ticket | 木形、padding、kind、leaf数、D=1、target境界、再署名/別carrierで再抽選なし |
 | QF1-08 useful | 実artifact・実job・実hardwareでG-USEとoverhead上限。前処理・batch/cacheの条件を公開 |
 | QF1-09 eligibility | 未証明TheoremRule、UNKNOWN、停止中、評価専用のclaimが全成功consumerで拒否 |
-| QF1-10 end-to-end | 非報酬評価→元資料取得→Panel再実行→局所Court→MAS1判定。同時停止・再起動/reorg/履歴復元も確認 |
+| QF1-10 end-to-end | 対話経路を無効または未実装とし、非報酬評価で元資料を取得してPanelが完全再実行する。一致時の承認、不一致時の直接反証と局所Court、資料欠落時の成功停止を個別に確認する。MAS1判定、同時停止・再起動/reorg/履歴復元も確認 |
 
 同梱の小規模Python参照はQF1-04/05/07の論理codecの一部と否定例を検査する。**Qwen weightsでの推論、QF1-03/06/08/10、G-COLL/G-COST、native wire・runtimeは未検証**である。toy vectorをQwenの実測と表示しない。
 

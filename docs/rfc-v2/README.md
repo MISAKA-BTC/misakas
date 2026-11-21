@@ -140,7 +140,7 @@ credit・予定表・producer・検証／包含容量の条件を付け、1秒�
 - **Nodeはモデル本体を取得・保持せず、全推論、GPU、モデル実行環境、Panel workerを必須にしない。** court・cold start・IBD・再起動でも同じ条件とする。Nodeは上限内の認証付き局所断片を検査する。
 - **モデル共有やモデル保有者内の正直な参加者を仮定しない。** 悪意ある運営者がモデルを隠し、そのモデルのMiner・通常Panel・providerを全て支配していても、そこだけの承認で成功Finalにしない。
 - Minerが元traceと結果を署名して固定し、global poolから独立に選ばれた検証者が資料を取得して全再実行する。canonical traceのrootと宣言出力が一致すれば、自分の記録からpositiveを一括作成できる。
-- 正常positiveに中間値を順次照合する対話を要求しない。不一致は対話negativeで局所化し、完成済み反証は直接提出も認める。
+- 正常positiveは非対話で完了する。[FOW1・QF1](../rfc/0062-palw-function-output-and-work-admissibility.md#fow1-panel-dialogue)では、不一致を単独で直接反証できることを求め、対話による局所化の実装は任意とする。旧profileは受付時の規則に従う。
 - 資料不足・検証未完了なら、反証を作れなくても成功Finalと仕事creditを与えない。計算不正、提供義務違反、未検証終了は別の結果である。
 - 小さなpositiveと承認署名だけで、全global検証者の共謀まで防げるとは主張しない。global抽選と誠実性の前提、Nodeの局所検査、資料供給義務の保証範囲を分ける。
 
