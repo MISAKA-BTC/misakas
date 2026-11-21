@@ -935,3 +935,20 @@ for file in fresh-holder-0-release fresh-holder-1-release fresh-audit-publicatio
 done
 python3 -B "$p/check_fresh_audit_seed.py" "$out" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/fresh-audit-readback.json"
 ```
+
+### 異なる3問での固定長予測
+
+抽選前に固定した順に、各問を異なるEXECとPANELで実行した。照合器は各EXECの試行IDと仕事の本文からtoken列を組み立て、署名対象の入力・回答・数値Readout・四Root・Ticketおよび選出Panelの期限内承認に照合する。どの問も、StudioのMOE2試験と同じバイナリ `ad5f222a…` を使った独立した3プロセスで一致した。[事前に固定した仕事](g-cost-varied-jobs-schedule.json)
+
+| 仕事 | 生成token数（EOSを含む場合あり） | 停止理由 | 署名済みOriginalとPanelのログ |
+| --- | ---: | --- | --- |
+| 日本の首都を都市名だけで答える | 2 | EOS | [第1問](varied-job-0.txt.zst) |
+| 3から2を引き、数字一つで答える | 2 | EOS | [第2問](varied-job-1.txt.zst) |
+| 葉が緑色に見える理由を英文1文で説明する | 16 | 生成上限 | [第3問](varied-job-2.txt.zst) |
+
+過去の算術の仕事で固定した長さ9は、この3問では一度も一致しなかった。各問は1回の独立抽選で、回答の実用性の採点は行っていない。完全な元の入力とTicketを含む計時用planを再構成するには、元のQF1 tokenizerと以下を使う。計時用planのSHA-256は `ebf752802d705f92fe4657a5911f15c7d311e0adfb95bd625597fed45fe2e33f`。
+
+```sh
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" > "$out/varied-plan.json"
+```
