@@ -35,6 +35,7 @@ pub mod positive_typed_adapter;
 pub mod positive_typed_capture;
 mod public_source;
 pub mod protected_original_material;
+pub mod qf1;
 pub mod residency;
 pub mod run;
 pub mod run_wide_q24_v2;

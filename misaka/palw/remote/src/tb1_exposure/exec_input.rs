@@ -462,3 +462,33 @@ impl DerivedExecInput<'_> {
         Ok(run)
     }
 }
+
+#[cfg(feature = "private-tb1-tir")]
+impl DerivedExecInput<'_> {
+    /// Replay the owner-pinned instance on the authenticated QF1 input. Recheck
+    /// the native window and certificate after numerical execution.
+    pub fn replay_qf1_local(
+        &self,
+        native: &dyn ConsensusApi,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> Result<misaka_palw_tir_exec::node::qf1::LocalAnswer, String> {
+        self.check_live(native).map_err(|e| e.to_string())?;
+        let terms = self.terms;
+        let frame = terms.qf1.ok_or("signed EXEC input has no QF1 frame")?.admitted().map_err(|e| e.to_string())?;
+        let id = instance.identity();
+        if (id.descriptor, id.inventory, id.class, id.tokenizer)
+            != (frame.instance_descriptor, terms.model_root, terms.class_id, terms.tokenizer)
+        {
+            return Err("local QF1 instance differs from owner-signed registration".into());
+        }
+        let answer = instance.replay(
+            &self.tokens,
+            terms.decode_tokens,
+            terms.max_leaves,
+            Hash64::from_bytes(self.registration_key),
+            self.attempt,
+        )?;
+        self.check_live(native).map_err(|e| e.to_string())?;
+        Ok(answer)
+    }
+}

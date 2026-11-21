@@ -184,7 +184,7 @@ pub fn miner_infer_v2(
     Ok(MinerInferenceV2 { output_root: palw_attempt_output_root_v1(ctx, &generated), generated })
 }
 
-fn greedy_index<T: Ord>(values: &[T]) -> Option<usize> {
+pub(super) fn greedy_index<T: Ord>(values: &[T]) -> Option<usize> {
     values.iter().enumerate().reduce(|a, b| if b.1 > a.1 { b } else { a }).map(|x| x.0)
 }
 

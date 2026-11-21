@@ -5,6 +5,8 @@
 use super::*;
 #[path = "tb1_exec_input.rs"]
 mod exec_input;
+#[path = "tb1_qf1_prediction_fixture.rs"]
+mod prediction;
 use kaspa_rpc_core::RpcRawBlock;
 use misaka_palw_remote::tb1_exposure::exec_input::{ExecInputBatch, QualifiedExecPanel, REGISTRATION_DOMAIN, SignedExecInput};
 use misaka_palw_remote::tb1_exposure::publication::{PublicationLimits, PublishedRelease, batch_commitment};
@@ -279,12 +281,23 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         .is_err()
     );
     // Optional non-rewarding RFC-0066 exercise, with the real pinned tokenizer.
-    // No registered QF1 weights/program are present in this rig.
+    // Each peer builds and opens the same small numerical schedule fixture.
+    let exercise =
+        std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|_| prediction::artifact(&dir.path().join("schedule.palwtir")));
+    let instance = exercise.as_ref().map(|(a, norm)| prediction::bind(a, *norm));
     let qf1 = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").map(|path| {
         use misaka_palw_remote::tb1_exposure::qf1::Qf1Prompt;
         let bytes = std::fs::read(path).unwrap();
         let expected: Hash64 = QF1_TEST_TOKENIZER.parse().unwrap();
-        Qf1Prompt::from_registered_tokenizer(&bytes, expected, Hash64::from_u64_word(234), "2 + 2?", 16_000_000, 128).unwrap()
+        Qf1Prompt::from_registered_tokenizer(
+            &bytes,
+            expected,
+            instance.as_ref().unwrap().identity().descriptor,
+            "2 + 2?",
+            16_000_000,
+            128,
+        )
+        .unwrap()
     });
     let qf1_terms = qf1.as_ref().map(|prompt| misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms {
         qf1: Some(Qf1Use::LocalInference(prompt)),
@@ -292,8 +305,9 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         job_tokens: prompt.job_tokens(),
         vocab: 151936,
         max_positions: 8192,
-        model_root: Hash64::from_u64_word(235),
-        class_id: Hash64::from_u64_word(236),
+        model_root: instance.as_ref().unwrap().identity().inventory,
+        class_id: instance.as_ref().unwrap().identity().class,
+        decode_tokens: 3,
         ..terms
     });
     if let (Some(prompt), Some(terms)) = (&qf1, &qf1_terms) {
@@ -456,6 +470,7 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert_eq!(request.tokens().len(), 38);
     assert_eq!(&request.tokens()[35..], terms.job_tokens);
     assert!(jobs.derive(api, 8, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
+    let mut retained_qf1 = None;
     if let Some(terms) = &qf1_terms {
         let r = jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
         assert_eq!(r.registration_key(), &terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap());
@@ -464,12 +479,35 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
         let line =
             format!("QF1 input pid={} attempt={} tokens={:?}\n", std::process::id(), faster_hex::hex_string(r.attempt()), r.tokens());
         std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
+        let bound = instance.as_ref().unwrap();
+        let (artifact, norm) = exercise.as_ref().unwrap();
+        let substituted = prediction::bind_scale(artifact, *norm, b"other scale");
+        assert!(matches!(r.replay_qf1_local(api, &substituted), Err(e) if e.contains("owner-signed registration")));
+        assert!(request.replay_qf1_local(api, bound).is_err());
+        let answer = r.replay_qf1_local(api, bound).unwrap();
+        prediction::check(r.tokens(), terms.decode_tokens, &answer);
+        assert_eq!(answer.tokens, [7, 151643]);
+        let report = (answer.tokens, answer.processed_positions, Hash64::from_bytes(answer.z));
+        let line = format!(
+            "QF1 fixture pid={} class={} descriptor={} positions={} tokens={:?} stop={:?} z={}\n",
+            std::process::id(),
+            bound.identity().class,
+            bound.identity().descriptor,
+            report.1,
+            report.0,
+            answer.stop,
+            report.2
+        );
+        std::io::stderr().lock().write_all(line.as_bytes()).unwrap();
         if let Some(socket) = parent_socket.as_mut() {
+            send(socket, &report);
             send(socket, &r.tokens());
         }
         for (_, socket) in &mut peers {
+            assert_eq!(receive::<(Vec<u32>, u32, Hash64)>(socket), report);
             assert_eq!(receive::<Vec<u32>>(socket), r.tokens());
         }
+        retained_qf1 = Some(r);
     }
     let ids = request.tokens().to_vec();
     eprintln!(
@@ -516,6 +554,11 @@ async fn native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_sele
     assert!(node.api().is_chain_ancestor_of(anchor, after.generation).unwrap());
     assert_eq!(after.finalized, None);
     assert!(request.check_live(node.api().as_ref()).is_err());
+    if let Some(r) = &retained_qf1 {
+        assert!(
+            matches!(r.replay_qf1_local(node.api().as_ref(), instance.as_ref().unwrap()), Err(e) if e.contains("live certificate"))
+        );
+    }
     assert!(gate.read_seed(node.api().as_ref(), batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
     assert_eq!(readiness_of(&node).finalized.withdrawn_from, Some(anchor));
     assert!(journal.observe_branch(node.api().as_ref()).unwrap_err().to_string().contains("halted"));

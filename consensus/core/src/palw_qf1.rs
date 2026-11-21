@@ -38,14 +38,17 @@ pub enum Stop {
     Limit,
 }
 
+pub fn is_eos(id: u32) -> bool {
+    matches!(id, 151643 | 151645)
+}
+
 pub fn stop_reason(prompt_len: u32, answer: &[u32], limit: u32) -> Result<Stop, &'static str> {
     check_capacity(prompt_len, limit)?;
     let (&last, before) = answer.split_last().ok_or("QF1 empty answer")?;
-    let eos = |t: u32| matches!(t, 151643 | 151645);
-    if answer.len() > limit as usize || answer.iter().any(|&t| t >= VOCAB) || before.iter().copied().any(eos) {
+    if answer.len() > limit as usize || answer.iter().any(|&t| t >= VOCAB) || before.iter().copied().any(is_eos) {
         return Err("invalid QF1 answer");
     }
-    if eos(last) {
+    if is_eos(last) {
         Ok(Stop::Eos)
     } else if answer.len() == limit as usize {
         Ok(Stop::Limit)
