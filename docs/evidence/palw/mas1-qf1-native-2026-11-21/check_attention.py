@@ -68,7 +68,7 @@ def projection(directory, name, width, norm, inventory):
                      for row in dots])
 
 
-def reference(directory, bundle, tokens):
+def input_stages(directory, bundle, tokens):
     data = bundle.read_bytes()
     if hashlib.sha256(data).hexdigest() != "04dbb6c1ca08772b35c89e1ab308699c24a30b0fc50e900787b682d3aa02a676":
         raise ValueError("unrecognized input embedding bundle")
@@ -88,7 +88,12 @@ def reference(directory, bundle, tokens):
         return np.array([rms(head, gain128, 10) for head in matrix.reshape(-1, 128)]).reshape(matrix.shape)
     matrices = (norm, q, k, v, per_head(q, "self_attn.q_norm"), per_head(k, "self_attn.k_norm"))
     positions = [ids.index(i) for i in tokens]
-    return [hashlib.sha256(m[positions].astype("<i2").tobytes()).hexdigest() for m in matrices]
+    return np.array([rows[i] for i in tokens]), [m[positions] for m in matrices]
+
+
+def reference(directory, bundle, tokens):
+    _, matrices = input_stages(directory, bundle, tokens)
+    return [hashlib.sha256(m.astype("<i2").tobytes()).hexdigest() for m in matrices]
 
 
 def check(directory, bundle, log):

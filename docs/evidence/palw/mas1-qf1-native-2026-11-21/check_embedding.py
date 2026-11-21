@@ -24,11 +24,7 @@ def inputs(path):
     return {pid: ast.literal_eval(tokens) for pid, _, tokens in records}
 
 
-def extract(target):
-    # All 16 hex digits occur in the retained prompt + challenge, so this set
-    # also covers a new seed for the same private job.
-    tokens = next(iter(inputs(HERE / "panel-run.txt").values()))
-    ids = set(tokens)
+def source_rows(ids):
     start = 9336  # first tensor, immediately after the pinned shard header
     end = start + VOCAB * ROW - 1
     whole = hashlib.sha256()
@@ -54,6 +50,15 @@ def extract(target):
     tensor_sha = json.loads((HERE / "upstream-payloads.json").read_text())["tensor_sha256"]["model.embed_tokens.weight"]
     if whole.hexdigest() != tensor_sha:
         raise ValueError("embedding differs from previously verified whole shard")
+    return rows, tensor_sha
+
+
+def extract(target):
+    # All 16 hex digits occur in the retained prompt + challenge, so this set
+    # also covers a new seed for the same private job.
+    tokens = next(iter(inputs(HERE / "panel-run.txt").values()))
+    ids = set(tokens)
+    rows, tensor_sha = source_rows(ids)
     target.write_bytes(rows)
     print(json.dumps(dict(rows=len(ids), source_bytes=VOCAB * ROW, tensor_sha256=tensor_sha,
                           bundle_sha256=hashlib.sha256(rows).hexdigest())))

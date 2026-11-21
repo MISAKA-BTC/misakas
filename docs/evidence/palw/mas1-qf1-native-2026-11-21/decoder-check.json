@@ -1,0 +1,21 @@
+{
+  "peers": 3,
+  "positions": 111,
+  "layer": 0,
+  "artifact_sha256": "0db27c06fa8980fa52a54e3bd6d24721ed7c3155e8d684d5416cb501c115697a",
+  "last_position_lanes_changed_by_history": 3667,
+  "sha256": {
+    "input_norm": "e8a9b95f1275586a51587c0080c718038b495b7ccf04d136485a6c58d25da5fc",
+    "q": "2f7a1c6dfc5d042d262184ff4e3cfad07a6f0ffbf8a3ed3415f13ceeb60228ff",
+    "k": "f3891871f40495b9ad57375268c9724672d4036c3e17efd42a4f5d4ffd7403a0",
+    "v": "dd0c9f63f2305d7cb07aa40a7f449404a630533667d4ca397e8fc9b88769b182",
+    "q_norm": "9e2acaa244bae4e215ce8dc441454c3ed07e3772a7ad7b0c9863acf37e4256e5",
+    "k_norm": "bf13c87c233e1005b2e12f764c41a8b6dc1409ec9e77762dfc68de4f0326f0a9",
+    "rotary_q": "231b51eade830ee4eefd42877a3d90c3074551a2cba5ee5bbfbfa2e4867c8f84",
+    "rotary_k": "055ffe2be4ed598cd3808b57d10fb0ca0c9ffe63164709fef3c8df85c0c73d78",
+    "causal_attention": "c5a08556fba7f236391303f9e52caf0e0fd00e170945bc0df5a2fcc8488fcfc6",
+    "attention_residual": "067b3ca7b1d6354c096378f02ef2c866fe1fa600ab380816d276b785303ccf02",
+    "gated_mlp": "5e25b7d82d1f6c450666109408001f75c59a5f384e9287b334444c17aad14685",
+    "post_block": "2d41f7279b6ccd3e1c523fda7fc0db2cb2fcc6d0947fc31917a797e7b1510d96"
+  }
+}

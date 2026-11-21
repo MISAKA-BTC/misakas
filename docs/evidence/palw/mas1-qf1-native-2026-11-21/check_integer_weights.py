@@ -43,7 +43,7 @@ def exact(stream, size):
     return data
 
 
-def shard(stream, item, shapes, pins):
+def shard(stream, item, shapes, pins, sink=None):
     size_bytes = exact(stream, 8)
     header_length = int.from_bytes(size_bytes, "little")
     if not 0 < header_length <= 1024**2:
@@ -64,6 +64,9 @@ def shard(stream, item, shapes, pins):
         rows = n // width
         step = max(1, 1024**2 // width)
         source, codes, peaks = (hashlib.sha256() for _ in range(3))
+        scale_bytes = bytearray()
+        if sink is not None:
+            sink.write(name.encode("ascii") + b"\n")
         for first in range(0, rows, step):
             chunk = exact(stream, min(rows - first, step)*width*2)
             source.update(chunk)
@@ -71,8 +74,13 @@ def shard(stream, item, shapes, pins):
             quantized, scales = encode(chunk, width, dtype)
             codes.update(quantized)
             peaks.update(scales)
+            if sink is not None:
+                sink.write(quantized)
+                scale_bytes.extend(scales)
         if source.hexdigest() != pins[name]:
             raise ValueError(f"upstream payload mismatch: {name}")
+        if sink is not None:
+            sink.write(scale_bytes)
         cursor += n*2
         result[name] = dict(dtype=dtype, shape=shape, codes_sha256=codes.hexdigest())
         if len(shape) == 2:
@@ -86,7 +94,10 @@ def shard(stream, item, shapes, pins):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--local", type=Path, help="directory with any available full source shards")
+    p.add_argument("--stream", action="store_true", help="binary tensor stream for the native full-model evaluator on stdout")
     args = p.parse_args()
+    if args.stream and sys.stdout.isatty():
+        p.error("--stream requires a pipe or binary file")
     geometry = json.loads((HERE / "upstream-geometry.json").read_text())
     inventory = json.loads((HERE / "upstream-payloads.json").read_text())
     if any((x["model"], x["revision"]) != (MODEL, REVISION) for x in (geometry, inventory)):
@@ -95,7 +106,7 @@ def main():
     result = {}
     for item in geometry["source_shards"]:
         with open_shard(item["file"], args.local) as stream:
-            values = shard(stream, item, shapes, inventory["tensor_sha256"])
+            values = shard(stream, item, shapes, inventory["tensor_sha256"], sys.stdout.buffer if args.stream else None)
         if result.keys() & values.keys():
             raise ValueError("duplicate source tensor")
         result.update(values)
@@ -105,7 +116,12 @@ def main():
     head = json.loads((HERE / "output-head.json").read_text())
     if result["lm_head.weight"]["codes_sha256"] != head["weights_i8_sha256"]:
         raise ValueError("integer head differs from the independent Rust converter")
-    print(json.dumps(dict(model=MODEL, revision=REVISION, tensors=result), sort_keys=True, indent=2))
+    if args.stream:
+        if result != json.loads((HERE / "integer-weights.json").read_text())["tensors"]:
+            raise ValueError("integer inventory differs; withholding stream completion")
+        sys.stdout.buffer.write(b"END\n")
+    else:
+        print(json.dumps(dict(model=MODEL, revision=REVISION, tensors=result), sort_keys=True, indent=2))
 
 
 if __name__ == "__main__":

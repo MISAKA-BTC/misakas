@@ -1,0 +1,21 @@
+{
+  "decode_limit": 3,
+  "input_positions": 111,
+  "integer_inventory_sha256": "b05a9dfc493f131e7bd2ca86dd8712cecee93e017bb0959faaa4427abfe59830",
+  "logits_sha256": [
+    "d42101e4d1960e15fcccb99a74002fc3b6031ab49471bdf004b7e353e8e4502f",
+    "c7a9db743204fa31b86b08b5df0c5a872b9c932909f22fdfdfd2fdbe7b11d848",
+    "5bafda93a1037d88200ac7537c7aaedb5cc250042fb50c8157609c90d6b36331"
+  ],
+  "output_ids": [
+    8820,
+    67942,
+    21856
+  ],
+  "prefix_layer0_sha256": "2d41f7279b6ccd3e1c523fda7fc0db2cb2fcc6d0947fc31917a797e7b1510d96",
+  "processed_positions": 113,
+  "program_sha256": "27bf72b7ad4f01071a9326e38f513de0a717470043a4435232a7843b8786fd34",
+  "readout_bytes": 909312,
+  "readout_i16le_sha256": "7cadb316cb55455cc18243c144b87ab5ab25afba089cb5b9fceb0dff2de35a63",
+  "stop": "Limit"
+}

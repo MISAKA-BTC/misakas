@@ -1,4 +1,5 @@
 """Fetch the BF16 source tensors used by the first pre-attention block."""
+from contextlib import contextmanager
 import argparse
 import hashlib
 import json
@@ -14,13 +15,23 @@ SHAPES = {"input_layernorm": [4096], "self_attn.q_proj": [4096, 4096],
           "self_attn.q_norm": [128], "self_attn.k_norm": [128]}
 
 
+@contextmanager
+def range_stream(start, end, shard, total):
+    with requests.get(f"https://huggingface.co/{MODEL}/resolve/{REVISION}/{shard}",
+                      params={"qf1_attention_range": f"{start}-{end}"},
+                      headers={"Range": f"bytes={start}-{end}", "Accept-Encoding": "identity"},
+                      stream=True, timeout=(15, 90)) as response:
+        if response.status_code != 206 or response.headers.get("Content-Range") != f"bytes {start}-{end}/{total}":
+            raise ValueError(f"invalid upstream shard range: {response.status_code}")
+        yield response.raw
+
+
 def read_range(start, end, shard=SHARD, total=3996250744):
-    r = requests.get(f"https://huggingface.co/{MODEL}/resolve/{REVISION}/{shard}",
-                     params={"qf1_attention_range": f"{start}-{end}"},
-                     headers={"Range": f"bytes={start}-{end}", "Accept-Encoding": "identity"}, timeout=(15, 90))
-    if r.status_code != 206 or r.headers.get("Content-Range") != f"bytes {start}-{end}/{total}" or len(r.content) != end-start+1:
-        raise ValueError("invalid upstream shard range")
-    return r.content
+    with range_stream(start, end, shard, total) as stream:
+        data = stream.read(end-start+1)
+        if len(data) != end-start+1 or stream.read(1):
+            raise ValueError("upstream range size")
+        return data
 
 
 def main(target):

@@ -145,3 +145,28 @@ python3 -B docs/evidence/palw/mas1-qf1-native-2026-11-21/check_output_head.py "$
 出力 head の全 i8 が既存の Rust 変換結果と一致した。保存していた上流 gain 全145本を独立に有理数で Q20 へ変換してコードハッシュを照合した。さらに上流 index・元の重み・整数台帳を使い、第0層の全11テンソルと7本の行スケール列を新しいディレクトリに復元した。18ファイルを再読した合計は193,049,600バイトで、全件が台帳に一致した。先頭 gain の期待ハッシュを改変した試験では、出力ディレクトリを公開する前に復元が失敗した。
 
 再現には本ディレクトリで `python check_integer_weights.py --local <保存済みshardの場所>` を使う。整数台帳から任意の1層を復元するには `python materialize_integer_layer.py <層番号0〜35> integer-weights.json <固定revisionのmodel.safetensors.index.json> <新しい出力ディレクトリ>` を実行する。これらのファイルは入力パラメータである。全36層を実行する登録用 TIR、活性値の全 scale と table、StateMap、推論品質、MAS1 採掘適格性は別途検証する。
+
+## 実重みの第0層と全36層の推論
+
+同一バイナリの隔離3ピアで、TB1 EXEC から得た同じ111入力位置を第0層の末端まで実行した。12か所の中間値を独立した整数計算と照合した。最後の位置の Q/K/V を固定して過去の KV を除くと、attention 出力の4,096成分中3,667成分が変化した。[3ピアの入力と段階別ハッシュ](decoder-run.txt)・[第0層の照合結果](decoder-check.json)
+
+次に単独の Rust evaluator で固定 revision の整数化済み399テンソルを読み、同じ111入力位置から全36層、最終 norm、151,936語の出力 head を実行した。回答上限を3とし、各位置の最大 logit から順に生成した ID は 8820、67942、21856、停止理由は Limit。各予測位置から36層の第二残差と最終 norm を取得した。3位置分の readout 入力は計909,312バイトだった。この全層実行は隔離計測で、署名済みの合成モデルの Original・Panel・Stop Court とは対象が異なる。[全層の入力](full-replay-input.json)・[native の結果](full-replay.json)・[生の readout 入力、i16 little-endian、zstd 圧縮](full-readout.i16le.zst)
+
+リポジトリのルートから次のコマンドで全層の生成を再現できる。Python は numpy、requests、huggingface-hub を使用する。SHARDS は保存済み上流 shard のディレクトリで、不足する shard は固定 revision から取得する。OUT は生成先の空ディレクトリを指定する。
+
+```sh
+set -o pipefail
+p=docs/evidence/palw/mas1-qf1-native-2026-11-21
+cargo +1.93.0 build --locked --offline --release -p misaka-palw-tir-lower --example replay-qf1-8b
+python "$p/check_integer_weights.py" --local "$SHARDS" --stream |
+  "${CARGO_TARGET_DIR:-target}/release/examples/replay-qf1-8b" \
+    "$p/integer-weights.json" "$p/full-replay-input.json" 3 "$OUT/readout.bin" > "$OUT/result.json"
+```
+
+独立した Python 実装では入力と既生成の2トークンの計113位置を層順に処理した。上流の値と整数台帳を照合し、全36層を経た3予測位置の全111ベクトルのバイト列、各位置の全151,936 logits のハッシュ、最大値の ID と停止条件が Rust と一致した。参照実装から得た readout Z と層ごとのハッシュは[独立再計算結果](full-replay-check.json)に記録した。再検査には固定 revision の safetensors index、最終 norm の BF16 バイト列、出力 head の元 shard を指定する。
+
+```sh
+python "$p/check_full_decoder.py" "$OUT/result.json" "$p/decoder-run.txt" "$OUT/readout.bin" \
+  "$SHARDS/source-model.safetensors.index.json" "$SHARDS/qwen-source-gains/model.norm.weight.bf16" \
+  "$SHARDS/model-00005-of-00005.safetensors"
+```

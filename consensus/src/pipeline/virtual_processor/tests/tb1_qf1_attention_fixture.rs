@@ -1,5 +1,7 @@
 //! Real first-layer input RMS, Q/K/V projections and per-head Q/K RMS on the
 //! native typed TIR executor, for the isolated source-row fixture.
+#[path = "tb1_qf1_decoder_fixture.rs"]
+mod decoder;
 use super::SourceRows;
 use kaspa_consensus_core::{
     Hash64,
@@ -50,7 +52,8 @@ fn parameter(p: &mut ProgramBuilder, inputs: &mut Vec<Buf>, name: &str, shape: &
 #[derive(Default)]
 struct Inspection {
     position: usize,
-    digests: [Sha256; 6],
+    nodes: Vec<(u16, usize)>,
+    digests: Vec<Sha256>,
 }
 
 impl StepSink for Inspection {
@@ -58,10 +61,12 @@ impl StepSink for Inspection {
         if value.layer != Some(0) {
             return;
         }
-        let (name, width) =
-            [("input_norm", 4096), ("q", 4096), ("k", 1024), ("v", 1024), ("q_norm", 4096), ("k_norm", 1024)][self.position];
-        let Slice::I16(lanes) = value.data else { panic!("QF1 committed value must contain i16 codes") };
-        assert_eq!(lanes.len(), width, "{name} lane count");
+        let Some(&(node, width)) = self.nodes.get(self.position) else { return };
+        if value.node != node {
+            return;
+        }
+        let Slice::I16(lanes) = value.data else { panic!("QF1 observation must contain i16 codes") };
+        assert_eq!(lanes.len(), width);
         self.digests[self.position].update(lanes.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
         self.position += 1;
     }
@@ -108,6 +113,8 @@ pub(super) fn check(path: &Path, rows: &SourceRows<'_>, tokens: &[u32]) {
     let eps = |fraction_bits| ((1_i128 << (24u32 + 2 * fraction_bits)) + 500_000) / 1_000_000;
     let input_eps = p.scalar(DType::I64, eps(15u32));
     let head_eps = p.scalar(DType::I64, eps(10u32));
+    let complete = std::env::var_os("MISAKA_PRIVATE_QF1_LAYER")
+        .map(|dir| decoder::operands(&mut p, &mut inputs, Path::new(&dir), input_eps, gain_narrow));
     let carry = vec![TensorType::fixed(DType::I16, &[WIDTH as u32])];
     let mut pre = p.block("input", vec![]);
     let x = pre.gather(table, Ref::Input(INPUT_TOKEN), 0, 0);
@@ -122,10 +129,29 @@ pub(super) fn check(path: &Path, rows: &SourceRows<'_>, tokens: &[u32]) {
     assert!(attention_input(&mut body, Ref::CarryIn(0), &operands).is_err());
     operands.projections.swap(0, 2);
     let a = attention_input(&mut body, Ref::CarryIn(0), &operands).unwrap();
-    for producer in [a.input_norm, a.q, a.k, a.v, a.q_norm, a.k_norm] {
-        body.commit(producer);
-    }
-    let layer = body.finish(&[a.q]);
+    let mut observed = vec![(a.input_norm, 4096), (a.q, 4096), (a.k, 1024), (a.v, 1024), (a.q_norm, 4096), (a.k_norm, 1024)];
+    let final_hidden = if let Some(ref args) = complete {
+        let out = misaka_palw_tir_lower::qf1::decoder_block_output(&mut body, Ref::CarryIn(0), &a, args).unwrap();
+        observed.extend([
+            (out.query, 4096),
+            (out.key, 1024),
+            (out.attention, 4096),
+            (out.after_attention, 4096),
+            (out.product, 12288),
+            (out.residual, 4096),
+        ]);
+        out.residual
+    } else {
+        a.q
+    };
+    let nodes: Vec<_> = observed
+        .into_iter()
+        .map(|(r, width)| {
+            let Ref::Node(n) = body.commit(r) else { unreachable!() };
+            (n, width)
+        })
+        .collect();
+    let layer = body.finish(&[final_hidden]);
     let mut post = p.block("observation", carry);
     let lanes = post.slice(Ref::CarryIn(0), 0, 0, ids.len() as u32);
     let tail = post.cast(lanes, DType::I32);
@@ -139,7 +165,7 @@ pub(super) fn check(path: &Path, rows: &SourceRows<'_>, tokens: &[u32]) {
         checkpoint_interval: 2,
         h_tile: 2,
         commit_tiles: program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).map(|_| 64).collect(),
-        state_tiles: Vec::new(),
+        state_tiles: vec![64; program.states.len()],
     };
     let dir = kaspa_database::utils::get_kaspa_tempdir();
     let file = dir.path().join("attention-input.palwtir");
@@ -149,7 +175,10 @@ pub(super) fn check(path: &Path, rows: &SourceRows<'_>, tokens: &[u32]) {
         &program,
         borsh::to_vec(&layout).unwrap(),
         tokenizer.as_bytes(),
-        format!("isolated QF1 pre-attention measurement; source rows in order: {ids:?}"),
+        format!(
+            "isolated QF1 {} measurement; source rows in order: {ids:?}",
+            if complete.is_some() { "first-block" } else { "pre-attention" }
+        ),
         &mut |j, _| Ok(inputs[j as usize].to_le_bytes()),
     )
     .unwrap();
@@ -157,15 +186,17 @@ pub(super) fn check(path: &Path, rows: &SourceRows<'_>, tokens: &[u32]) {
     let artifact_hash = faster_hex::hex_string(&Sha256::digest(fs::read(&file).unwrap()));
     let artifact = TirArtifactV1::open(&file).unwrap();
     let mut exec = TirExecutor::new(artifact.plan(), artifact.params()).unwrap();
-    let mut observer = Inspection::default();
+    let count = nodes.len();
+    let mut observer = Inspection { nodes, digests: vec![Sha256::new(); count], position: 0 };
     for id in tokens {
         observer.position = 0;
         exec.step(ids.binary_search(id).unwrap() as u32, &mut observer).unwrap();
-        assert_eq!(observer.position, 6);
+        assert_eq!(observer.position, count);
     }
-    let hashes = observer.digests.map(|d| faster_hex::hex_string(&d.finalize()));
+    let hashes: Vec<_> = observer.digests.into_iter().map(|d| faster_hex::hex_string(&d.finalize())).collect();
+    let stage = if complete.is_some() { "decoder" } else { "attention" };
     let line = format!(
-        "QF1 attention pid={} positions={} layer=0 artifact={artifact_hash} i16_sha256={}\n",
+        "QF1 {stage} pid={} positions={} layer=0 artifact={artifact_hash} i16_sha256={}\n",
         std::process::id(),
         tokens.len(),
         hashes.join(",")
