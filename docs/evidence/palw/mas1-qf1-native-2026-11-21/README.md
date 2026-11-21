@@ -512,3 +512,9 @@ QF1 の trace を一回ストリーム処理する間に、指定された tile 
 zstd -dc "$p/qf1-held-stop-three-peer.txt.zst" > "$out/held-stop.txt"
 python3 -B "$p/check_real_lifecycle.py" "$out/held-stop.txt" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop
 ```
+
+8K の[保管資料の native 照合](genesis-draw-material.json)では、署名済み envelope の ML-DSA-87 署名と manifest の class・inventory を検査した。保管資料の prompt は 1,023 tokens、decode は1 token（ID 220）。105,396,200 個の論理 step leaves を持つ sparse tree と 1,023 checkpoint leaves を含む資料から、commitment の execution・trace・output の各 root を照合した。末尾を1 byte切った資料は decode で、署名を1 bit変えた提出物は署名検査で拒否された。この検査で担当者による数値の完全再実行や Gate C 署名を代行することはできない。
+
+```sh
+cargo +1.93.0 run --locked --offline -p misaka-palw-base0 --example check-8k-capture -- "$out/winning.json" "$out/capture.bin"
+```
