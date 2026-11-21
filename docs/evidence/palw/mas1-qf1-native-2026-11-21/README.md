@@ -518,3 +518,5 @@ python3 -B "$p/check_real_lifecycle.py" "$out/held-stop.txt" "$p/qf1-native-tile
 ```sh
 cargo +1.93.0 run --locked --offline -p misaka-palw-base0 --example check-8k-capture -- "$out/winning.json" "$out/capture.bin"
 ```
+
+旧 8K 枝の再生では、MODEL_AUDIT の preparation で認証済みの candidate・suite・予約を保持し、同じ close を後から参照する。以前の試験は DAA 5,040 で preparation の state を再取得し、履歴再構築上限 4,000 DAA に達した。修正後は同じ署名済み close、同じ tip/state に対して、その時点の枝と native publication gate を再検査できた。DAA 5,040 の判定は `WouldBlock`、原期限は 15,121 のまま。これは監査参照の検証結果である。[同じ枝での修正前後の記録](signed-audit-retained-preparation.json)

@@ -36,6 +36,7 @@ pub struct AuditPlan {
     pub case_deadline_exclusive_daa: u64,
 }
 
+#[derive(Clone)]
 pub struct PreparedAudit<'a> {
     preparation: Hash64,
     candidates: &'a [AuditCandidate],
@@ -148,10 +149,12 @@ impl<'a> PreparedAudit<'a> {
         Tb1HolderFreeze::resolve(native, close, &self.closure, q)
     }
 
-    pub fn observe(self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<FrozenAudit<'a>> {
+    /// Recheck ancestry and the native publication gate for each observation. The
+    /// candidate set was authenticated at preparation, within the state proof window.
+    pub fn observe(&self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<FrozenAudit<'a>> {
         self.check_ancestry(native, close)?;
         let gate = NativePublicationGate::observe(native, close, &self.closure, q)?;
-        Ok(FrozenAudit { cut: self, gate })
+        Ok(FrozenAudit { cut: self.clone(), gate })
     }
 }
 

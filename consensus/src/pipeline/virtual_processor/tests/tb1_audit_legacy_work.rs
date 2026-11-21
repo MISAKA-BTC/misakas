@@ -90,12 +90,12 @@ fn observe_capital(node: &Rig, class: Hash64, what: &str) -> serde_json::Value {
     observation
 }
 
-pub(super) async fn exercise<'a>(
+pub(super) async fn exercise(
     mut node: Rig,
     parts: Parts,
     close: Hash64,
     qwen: Hash64,
-    prepare: impl Fn(&Rig) -> PreparedAudit<'a>,
+    cut: &PreparedAudit<'_>,
     qualification: &Tb1Qualification<'_>,
     deadline: u64,
 ) {
@@ -195,7 +195,7 @@ pub(super) async fn exercise<'a>(
     assert_eq!(seasoned, tip);
     let claims = state.claims_iter().count();
     assert_eq!(claims, 0);
-    let err = prepare(&node).observe(node.api().as_ref(), close, qualification).err().expect("audit shares remain held");
+    let err = cut.observe(node.api().as_ref(), close, qualification).err().expect("audit shares remain held");
     assert_eq!(err.kind(), std::io::ErrorKind::WouldBlock);
     let readiness = readiness_of(&node);
     assert_eq!(readiness.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
@@ -232,7 +232,7 @@ pub(super) async fn exercise<'a>(
                     let tip = node.chain.sink();
                     let now = node.chain.daa_of(tip);
                     assert!(now < deadline);
-                    let gate = prepare(&node).observe(node.api().as_ref(), close, qualification);
+                    let gate = cut.observe(node.api().as_ref(), close, qualification);
                     let publication = match gate {
                         Ok(_) => "ready",
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => "held",

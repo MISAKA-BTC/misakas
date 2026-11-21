@@ -1,0 +1,17 @@
+{
+  "previous_binary": "18e55868c35aa47cd25482ed3b5f18a8c56cdae85762321f5e674befdcb110ff",
+  "previous_node_error": {
+    "preparation": "f55e6c7fdcd496e1dbbf513cbe9e255f8f4c87420a815d0cfa9374a9b65845a627752244a2b823f04fdaf590d98661e681851e8db1d16a39a4829ef2ade6eafb",
+    "lag_daa": 5039,
+    "limit_daa": 4000
+  },
+  "binary": "566453a076aa862df9b5d6a16219a4ff94e36a3dd20261f6f4fe860134afce0d",
+  "process": 82557,
+  "observed_daa": 5040,
+  "original_close": "653ff4fae316a7f38201ab35a37484ac7262d0201817c06d52f8fc6886ca06075b11b35968f2cb4ee51bdf122c7373b698b30d7c1dfafe2d94c6fc5d148406a9",
+  "deadline": 15121,
+  "tip": "9a8bfb90e5292a50afa768778bdcbbda8d9a8584d5da2f8637602dcba471cc1ed0cdfef31083f30667939620f73cd888137cfaf3ea1f03c8649f576bb6c70dc9",
+  "state_root": "c0ee5428d1b4896c3f17897547524dc8325754e9398469fa7c86d5aecb8da3238fed2903ed032348ecfce1ee5a8e23eaf90cad8c38de66dae763ef10b15ad209",
+  "publication": "WouldBlock",
+  "readiness": "frontierNotCovered"
+}
