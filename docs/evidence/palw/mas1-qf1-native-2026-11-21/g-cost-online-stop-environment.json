@@ -1,0 +1,12 @@
+{
+  "machine": "Mac13,1",
+  "cpu": "Apple M1 Max",
+  "os": "26.7.1",
+  "rayon_threads": 3,
+  "profile": "dev, misaka-palw-tir-exec and misaka-palw-base0 opt-level=3",
+  "binary_sha256": "4b60b99b4ac9bab77fd6e2a43a8e5e750779ae4052064ae9fa9016b7764c5262",
+  "plan_sha256": "ebf752802d705f92fe4657a5911f15c7d311e0adfb95bd625597fed45fe2e33f",
+  "process_peak_resident_bytes": 18387058688,
+  "process_real_seconds": 520.63,
+  "cost_unit": "elapsed microseconds per invocation, 1 sample per route and job, same process"
+}

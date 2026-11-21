@@ -1,0 +1,35 @@
+{
+  "descriptor": "c1f12903e1ca7b611d2285fdba39bc45d0d6ff95c7b4ae83135540c21cff47155c461675545de13c5149ba13ccc3be021405b1a1cfc829de0168301c7914edb6",
+  "setup_ms": 26755,
+  "trials": [
+    {
+      "job": "2 + 2?",
+      "ticket": "64eb136e34ed36bcd79ece3d38643d101bf5edc17de3cf293c0e93ad64fbdf18",
+      "answer_length": 9,
+      "online_us": 41785527,
+      "reference_us": 79177175
+    },
+    {
+      "job": "\u65e5\u672c\u306e\u9996\u90fd\u3092\u90fd\u5e02\u540d\u3060\u3051\u3067\u7b54\u3048\u3066\u304f\u3060\u3055\u3044\u3002",
+      "ticket": "471c584bb1587658f3fc8e2df90e9e90297b9d88ab691406c26689a4ab89a5d4",
+      "answer_length": 2,
+      "reference_us": 77493555,
+      "online_us": 40433043
+    },
+    {
+      "job": "Answer with only one digit: what is three minus two?",
+      "ticket": "0de7d8bbbf0f54ba06a380d1d0ff2e6128df0da71ae2f424afee63c671dda069",
+      "answer_length": 2,
+      "online_us": 41154811,
+      "reference_us": 78923528
+    },
+    {
+      "job": "Write one sentence explaining why leaves look green.",
+      "ticket": "2788bffb35be5f79a980f284cb981c320d4807848aa2f04d2aa799e2d45c10eb",
+      "answer_length": 16,
+      "reference_us": 87881217,
+      "online_us": 46378447
+    }
+  ],
+  "g_cost": "UNKNOWN"
+}

@@ -259,6 +259,7 @@ impl<'a> LocalInstance<'a> {
         let (z, chunks) = readout.finish(len, &tokens, limit)?;
         let answer = LocalAnswer { tokens, stop, processed_positions: exec.pos(), z };
         if let Some(trace) = trace {
+            trace.resolve_length(self, answer.tokens.len() as u32, max_leaves)?;
             trace.end(&answer, &chunks)?;
         }
         self.artifact.check_weights_unmodified()?;

@@ -82,6 +82,7 @@ pub(super) struct Trace {
     layout: Geometry,
     input: TreeRoot,
     tree: TreeBuilder<4>,
+    buffered: Option<Vec<u8>>,
     stop_record: Vec<u8>,
     final_chunk_record: Vec<u8>,
     next: u64,
@@ -127,6 +128,7 @@ impl Trace {
             layout,
             input,
             tree,
+            buffered: None,
             stop_record: Vec::new(),
             final_chunk_record: Vec::new(),
             next: 0,
@@ -147,6 +149,35 @@ impl Trace {
         Ok(trace)
     }
 
+    /// Offline cost route. Init has already been encoded by begin; retain it
+    /// along with subsequent records until numerical stopping fixes the count.
+    pub(super) fn buffer_until_stop(&mut self) {
+        self.buffered = Some(self.record.clone());
+    }
+
+    pub(super) fn resolve_length(&mut self, instance: &LocalInstance<'_>, steps: u32, cap: u64) -> Result<(), String> {
+        let Some(records) = self.buffered.take() else { return Ok(()) };
+        let layout = Geometry::new(instance, self.len, steps, cap)?;
+        let mut tree = TreeBuilder::with_openings(
+            self.s,
+            TreeKind::Trace,
+            layout.count,
+            cap,
+            [None, Some(layout.count - 2 - u64::from(layout.chunks)), Some(layout.count - 2), Some(layout.count - 1)],
+        )?;
+        let mut rest = records.as_slice();
+        while !rest.is_empty() {
+            let length = u32::from_le_bytes(rest[1..5].try_into().unwrap()) as usize;
+            let (record, remaining) = rest.split_at(5 + length);
+            tree.push(record)?;
+            rest = remaining;
+        }
+        self.tree = tree;
+        self.steps = steps;
+        self.layout = layout;
+        Ok(())
+    }
+
     fn start(&mut self, kind: u8) -> &mut Vec<u8> {
         self.record.clear();
         self.record.extend_from_slice(&[kind, 0, 0, 0, 0]);
@@ -156,7 +187,20 @@ impl Trace {
     fn push(&mut self) -> Result<(), &'static str> {
         let len = u32::try_from(self.record.len() - 5).map_err(|_| "QF1 record length")?;
         self.record[1..5].copy_from_slice(&len.to_le_bytes());
-        self.tree.push(&self.record)?;
+        if let Some(buffer) = &mut self.buffered {
+            const MAX_BYTES: usize = 1 << 30;
+            let required = buffer.len().checked_add(self.record.len()).ok_or("QF1 buffer size overflow")?;
+            if required > MAX_BYTES {
+                return Err("QF1 offline trace buffer exceeds 1 GiB");
+            }
+            if required > buffer.capacity() {
+                let target = required.max(buffer.capacity().saturating_mul(2)).min(MAX_BYTES);
+                buffer.try_reserve_exact(target - buffer.len()).map_err(|_| "QF1 offline trace allocation failed")?;
+            }
+            buffer.extend_from_slice(&self.record);
+        } else {
+            self.tree.push(&self.record)?;
+        }
         if let Some((_, value)) = self.opening.as_mut().filter(|(i, _)| *i == self.next) {
             value.clone_from(&self.record);
         }

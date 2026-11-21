@@ -1049,3 +1049,14 @@ for slot in 0 1 2; do
 done
 python3 -B "$p/check_recorded_reply_signatures.py" "$out/native.log" --openssl "$(brew --prefix openssl@3)/bin/openssl" --require-intake --cold-readers "$out/fresh-0.log" "$out/fresh-1.log" "$out/fresh-2.log"
 ```
+
+### 停止位置を予測しない1回推論の費用
+
+署名済みの算術1件と上記3問を、登録済みQwen3-8Bの同じ整数profileで再実行した。1回推論する経路では、入力・commit対象の各tile・各tokenの選択記録を実行順にバッファへ格納する。EOS又は生成上限で実際の回答長が決まった後、正しいleaf数を使ってTRACEを構築する。記録バッファには1 GiBの上限を設けた。モデルと実行器を含むプロセス全体の最大常駐メモリは別に記録した。各経路で元の回答、数値Readout、四Root、Ticketがすべて一致してから計時行を出力する。
+
+同一プロセスで各問の1回推論と従来の2回実行を交互の順に1回ずつ測定した。モデル準備は各問の計時から分けた。仕事別の再現には、前節の計時用planと同じ登録済みartifact・scaleを使う。[問別の実測値](g-cost-online-stop.json)・[計時ログ](g-cost-online-stop-run.jsonl)・[機材・バイナリ・最大常駐メモリ](g-cost-online-stop-environment.json)
+
+```sh
+RAYON_NUM_THREADS=3 "$CARGO_TARGET_DIR/debug/examples/qf1-paired-cost" --online-stop "$parent" "$out/scales.section" "$out/varied-plan.json" > "$out/online-run.jsonl"
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --online-log "$p/g-cost-online-stop-run.jsonl" | cmp - "$p/g-cost-online-stop.json"
+```

@@ -68,11 +68,32 @@ def report(plan, jobs, log):
                 g_cost="UNKNOWN")
 
 
+def online_report(plan, jobs, log):
+    header, *runs = [json.loads(line) for line in log.read_text().splitlines()]
+    originals = plan["trials"]
+    require(header["method"] == "online-stop" and header["descriptor"] == plan["descriptor"]
+            and header["trials"] == len(originals) and len(runs) == 2 * len(originals), "wrong online-stop schedule")
+    trials = []
+    for index, (job, original) in enumerate(zip(["2 + 2?", *jobs], originals, strict=True)):
+        trial = dict(job=job, ticket=original["ticket"], answer_length=len(original["output_ids"]))
+        for offset, single in enumerate((index % 2 == 0, index % 2 != 0)):
+            row = runs[2 * index + offset]
+            require(row["target"] == index and row["single_pass"] is single and
+                    bytes(row["verified_ticket"]).hex() == original["ticket"] and
+                    type(row["elapsed_us"]) is int and row["elapsed_us"] > 0, "different trial, order, ticket or time")
+            trial["online_us" if single else "reference_us"] = row["elapsed_us"]
+        trials.append(trial)
+    return dict(descriptor=plan["descriptor"], setup_ms=header["setup_ms"], trials=trials, g_cost="UNKNOWN")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tokenizer", type=Path)
     parser.add_argument("data", type=Path)
-    parser.add_argument("--log", type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--log", type=Path)
+    mode.add_argument("--online-log", type=Path)
     args = parser.parse_args()
     plan, jobs = read_plan(args.tokenizer, args.data)
-    print(json.dumps(report(plan, jobs, args.log) if args.log else plan, indent=2))
+    result = online_report(plan, jobs, args.online_log) if args.online_log else report(plan, jobs, args.log) if args.log else plan
+    print(json.dumps(result, indent=2))

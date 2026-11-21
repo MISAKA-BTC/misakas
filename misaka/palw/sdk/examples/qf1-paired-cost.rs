@@ -98,15 +98,16 @@ fn measure_length_prediction(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (args, predict) = match args.as_slice() {
-        [flag, rest @ ..] if flag == "--predict-length" => (rest, true),
-        rest => (rest, false),
+    let (args, predict, online) = match args.as_slice() {
+        [flag, rest @ ..] if flag == "--predict-length" => (rest, true, false),
+        [flag, rest @ ..] if flag == "--online-stop" => (rest, false, true),
+        rest => (rest, false, false),
     };
     let [parent, section, plan_path] = args else {
-        return Err("usage: qf1-paired-cost [--predict-length] <parent> <tile-section> <plan.json>".into());
+        return Err("usage: qf1-paired-cost [--predict-length|--online-stop] <parent> <tile-section> <plan.json>".into());
     };
     let plan: Plan = serde_json::from_slice(&fs::read(plan_path)?)?;
-    if plan.trials.len() < 2 || (!predict && plan.trials.len() % 2 != 0) || (predict && plan.decode_limit < 2) {
+    if plan.trials.len() < 2 || (!predict && !online && plan.trials.len() % 2 != 0) || (predict && plan.decode_limit < 2) {
         return Err("insufficient trials or decode budget for the selected comparison".into());
     }
     let trials: Vec<_> = plan.trials.into_iter().map(Record::original).collect::<Result<_, _>>()?;
@@ -118,6 +119,27 @@ fn main() -> Result<(), Box<dyn Error>> {
     let id = instance.identity();
     if (id.class, id.inventory, id.descriptor) != (plan.class_id, plan.inventory, plan.descriptor) {
         return Err("model differs from archived instance".into());
+    }
+    if online {
+        println!(
+            "{}",
+            json!({"method":"online-stop","setup_ms":start.elapsed().as_millis(),"descriptor":id.descriptor,"trials":trials.len()})
+        );
+        for (index, original) in trials.iter().enumerate() {
+            for single_pass in [index % 2 == 0, index % 2 != 0] {
+                let start = Instant::now();
+                if single_pass {
+                    instance.verify_online_stop(original, plan.decode_limit, plan.max_leaves)?;
+                } else {
+                    instance.verify_independent_original(original, plan.decode_limit, plan.max_leaves)?;
+                }
+                println!(
+                    "{}",
+                    json!({"target":index,"single_pass":single_pass,"elapsed_us":start.elapsed().as_micros(),"verified_ticket":original.ticket})
+                );
+            }
+        }
+        return Ok(());
     }
     if predict {
         println!(

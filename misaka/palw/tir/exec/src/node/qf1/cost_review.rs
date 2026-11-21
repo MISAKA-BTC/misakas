@@ -69,6 +69,16 @@ impl LocalInstance<'_> {
         )?)
     }
 
+    /// Retain canonical records until the first numerical pass reaches Stop.
+    /// The archived result is consulted only after the ticket is complete.
+    pub fn verify_online_stop(&self, original: &ArchivedOriginal, limit: u32, cap: u64) -> Result<(), String> {
+        let request = TraceRequest { context_digest: original.context, answer_len: limit, open: None };
+        let mut trace = Trace::begin(self, &original.prompt, limit, cap, original.attempt, request)?;
+        trace.buffer_until_stop();
+        let answer = self.drive(&original.prompt, limit, cap, original.context, original.attempt, Some(&mut trace), None)?;
+        original.compare(trace.finish(answer)?)
+    }
+
     /// Measure a length prediction on an archived Original. The numerical run
     /// still determines every token and Stop. Include the complete independent
     /// retry when the prediction misses and retain the failed trace diagnostic.
