@@ -375,10 +375,7 @@ async fn authenticate(
     anchors: Anchors,
     review: impl Fn(&T12Chain, usize) -> [u8; 64],
 ) {
-    use kaspa_consensus_core::palw_kernel_route_v1::*;
     use kaspa_consensus_core::palw_panel_v2::*;
-    use kaspa_consensus_core::palw_security_certification_v1::*;
-    use misaka_palw_kernel::model_eligibility_v1::*;
     let panel = chain.tip_state().1.panel(&claim).unwrap().clone();
     let signed_daa = chain.ctx.consensus.get_virtual_daa_score();
     let receipts: Vec<_> = panel
@@ -434,6 +431,18 @@ async fn authenticate(
             chain.heartbeat(step, vec![]).await;
         }
     }
+    attest_drawn_final(chain, funding, claim, review).await;
+}
+
+pub(in crate::pipeline::virtual_processor::tests) async fn attest_drawn_final(
+    chain: &mut T12Chain,
+    funding: &mut (TransactionOutpoint, UtxoEntry),
+    claim: Hash64,
+    review: impl Fn(&T12Chain, usize) -> [u8; 64],
+) {
+    use kaspa_consensus_core::palw_kernel_route_v1::*;
+    use kaspa_consensus_core::palw_security_certification_v1::*;
+    use misaka_palw_kernel::model_eligibility_v1::*;
     let row = certification(chain, claim).unwrap();
     assert!(row.anchor.is_some(), "a later execution anchor draws the verifiers");
     assert_eq!(row.draws.len(), 75);

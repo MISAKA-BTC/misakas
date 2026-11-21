@@ -12,6 +12,9 @@ use misaka_palw_base0::{
 };
 use sha2::{Digest, Sha256};
 
+#[path = "tb1_legacy_genesis_anchor.rs"]
+mod funded_anchor;
+
 #[derive(Serialize, Deserialize)]
 struct WinningBlock {
     base: Hash64,
@@ -122,6 +125,19 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
                 "replay":faster_hex::hex_string(&digest)
             })
         );
+        if let Some(path) = std::env::var_os("MISAKA_PRIVATE_GENESIS_FUNDED_ANCHOR") {
+            assert!(row.outcome.is_none() && row.anchor.is_none() && row.draws.is_empty());
+            funded_anchor::continue_final(
+                node,
+                &branch,
+                &result,
+                &backend,
+                digest,
+                row.committed_daa + policy.certify_by_daa,
+                Path::new(&path),
+            )
+            .await;
+        }
         return;
     }
     match (write, read) {
