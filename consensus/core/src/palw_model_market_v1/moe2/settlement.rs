@@ -73,41 +73,78 @@ impl Moe2PreDrawQuote {
         state: &crate::palw_state_v2::PalwChainStateV2,
         reward: u64,
     ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
+        let point = state.last_point().ok_or(Moe2SettlementError::UnknownClaimContext)?;
+        self.preview_at_position(config, state, state, point.daa_score, reward)
+    }
+
+    /// Reprice the same signed offer at a later position. The caller supplies the
+    /// authenticated quote-anchor state and the pre-state of the execution block.
+    pub fn preview_at_position(
+        &self,
+        config: &crate::config::params::Params,
+        anchor: &crate::palw_state_v2::PalwChainStateV2,
+        current: &crate::palw_state_v2::PalwChainStateV2,
+        execution_daa: u64,
+        reward: u64,
+    ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
+        use Moe2SettlementError::*;
+        let a = anchor.last_point().ok_or(UnknownClaimContext)?;
+        let b = current.last_point().ok_or(UnknownClaimContext)?;
+        if a.block != self.quote_anchor || a.blue_score > b.blue_score || a.daa_score > b.daa_score || b.daa_score > execution_daa {
+            return Err(UnknownClaimContext);
+        }
+        if self.deadline == u64::MAX
+            || !(self.valid_from..=self.deadline).contains(&a.daa_score)
+            || !(self.valid_from..=self.deadline).contains(&execution_daa)
+        {
+            return Err(OutsideWindow);
+        }
+        if u128::from(self.price_limits.max_output_slippage_bps) > BASIS_POINTS {
+            return Err(Quote(Moe2QuoteRefusal::OutsideQuote));
+        }
+        let reference = self.allocation_at(config, anchor, a.daa_score)?;
+        let allocation = self.allocation_at(config, current, execution_daa)?;
+        let split = allocation.quote_reward(reward, self.plan, self.limits).map_err(Quote)?;
+        match (reference, allocation, split.market) {
+            (Moe2ModelAllocation::Additional(original), Moe2ModelAllocation::Additional(market), Some(q))
+                if original.opened_daa == market.opened_daa && original.virtual_sompi == market.virtual_sompi =>
+            {
+                self.price_limits.check(PurchaseCurve::from_market(&original).map_err(Quote)?, &market, &q).map_err(Quote)?;
+            }
+            (Moe2ModelAllocation::Core, Moe2ModelAllocation::Core, None) => {}
+            _ => return Err(UnknownRegistration),
+        }
+        Ok(split)
+    }
+
+    fn allocation_at(
+        &self,
+        config: &crate::config::params::Params,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        daa: u64,
+    ) -> Result<Moe2ModelAllocation, Moe2SettlementError> {
         use crate::palw_mode_v2::PalwConsensusMode;
         use crate::palw_model_tier_v1::palw_model_tier_of_v1;
         use Moe2SettlementError::*;
         let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
         let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
-        let point = state.last_point().ok_or(UnknownClaimContext)?;
-        let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(point.daa_score)).ok_or(UnknownRegistration)?;
+        let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or(UnknownRegistration)?;
         let class = state.class(&self.model).ok_or(UnknownRegistration)?;
-        if point.block != self.quote_anchor
-            || self.artifact_root != class.artifact_root
+        if class.artifact_root != self.artifact_root
             || self.valid_from < class.registered_daa
-            || !(self.valid_from..=self.deadline).contains(&point.daa_score)
-            || self.deadline == u64::MAX
-            || !bundle.state.bond_budget_active_at(point.daa_score)
+            || bundle.state.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
             || state.bond_budget().is_none_or(|b| b.header.policy_digest != self.policy)
             || state.bond(&self.funding_bond).is_none()
         {
             return Err(UnknownClaimContext);
         }
         let approved =
-            palw_model_tier_of_v1(Some(catalog), &self.model, &self.artifact_root, class.registrant_bond.is_none(), point.daa_score)
-                .is_approved();
-        let allocation = match (approved, state.model_market(&self.model)) {
-            (true, None) if point.daa_score >= from => Moe2ModelAllocation::Core,
-            (false, Some(market)) if class.registered_daa >= from => Moe2ModelAllocation::Additional(*market),
-            _ => return Err(UnknownRegistration),
-        };
-        if u128::from(self.price_limits.max_output_slippage_bps) > BASIS_POINTS {
-            return Err(Quote(Moe2QuoteRefusal::OutsideQuote));
+            palw_model_tier_of_v1(Some(catalog), &self.model, &self.artifact_root, class.registrant_bond.is_none(), daa).is_approved();
+        match (approved, state.model_market(&self.model)) {
+            (true, None) if daa >= from => Ok(Moe2ModelAllocation::Core),
+            (false, Some(market)) if class.registered_daa >= from => Ok(Moe2ModelAllocation::Additional(*market)),
+            _ => Err(UnknownRegistration),
         }
-        let split = allocation.quote_reward(reward, self.plan, self.limits).map_err(Quote)?;
-        if let (Moe2ModelAllocation::Additional(market), Some(q)) = (allocation, split.market) {
-            self.price_limits.check(PurchaseCurve::from_market(&market).map_err(Quote)?, &market, &q).map_err(Quote)?;
-        }
-        Ok(split)
     }
 
     /// The owning settlement fold supplies the independently authenticated claim.

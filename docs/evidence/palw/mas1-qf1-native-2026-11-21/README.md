@@ -369,3 +369,43 @@ python -B "$p/check_residual_scale.py" --cross-input-scale --reference-limit 12 
 ```sh
 python3 -B "$p/check_real_lifecycle.py" --exec-budget "$p/registered-exec-budget.txt" "$p/class-check.json"
 ```
+
+### PANEL 公開開始後と資本成熟後の MOE2 見積もり
+
+新しい隔離 EXEC の締切前に、同じ Qwen3 class に対して二つの仕事を登録した。slot 9 は DAA 6 まで、slot 10 は DAA 15,171 までの見積もりを持つ。slot 10 の owner は別の nonce・仕事期限・経済条件に署名し、資金提供者はその登録キーと slot に署名した。slot 7 に見積もりはない。3プロセスは同じ締切ブロックと入力集合を検証した。DAA 3 には、資金提供者の署名と通常の手数料を伴うモデル資本割当 128,000,000,000 sompi を受理した。割当額は2件の報酬上限に必要な担保の合計である。
+
+PANEL 公開開始は DAA 27。3つの独立した native DB で DAA 33 の先端ヘッダーと、そのヘッダーがコミットする親状態を照合した。slot 9 は期限切れを返し、slot 10 は元の署名条件で 160 BILI の配分を再計算できた。購入 48 BILI、永久 LP 32 BILI、購入した2 Position のうち1を LP に使い1を burn、Miner 64 BILI、Panel 16 BILI という見積もりである。入れ替えた親状態、先端の事後状態、署名上限を超える報酬は拒否された。
+
+その先に生成した heartbeat 2,816 ブロックを2つの受信側 DB も順に検証し、資本割当が有効になる epoch 2 に入った。続くブロックのヘッダーが DAA 1,441 の状態を認証した。単位は sompi。
+
+| 項目 | 3ピアの観測 |
+|---|---:|
+| 資金提供 bond の有効なモデル割当 | 128,000,000,000 |
+| 最初の7期間平均、端数切り捨て | 18,285,714,285 |
+| 当 epoch の累計 worker 原資 | 408,997,052,880 |
+| モデルがこの位置で使える報酬枠 | 408,997,052,880 |
+| 署名済み slot 10 を予算台帳の複製に予約した額 | 16,000,000,000 |
+| 元の台帳でのモデル報酬予約・引落し | 0 |
+
+この試験には T12 の[既存の tier 設定](../../../../consensus/core/src/config/params/full_activation_v1.rs)を使った。追加モデル係数は 300‰、追加 tier 全体の上限は 1,000‰。この履歴では当該モデルの利用枠がその epoch の累計額と一致した。署名したモデル資本割当には実際の状態遷移があり、受賞に伴う支出は0件だった。新規 claim の採掘資格、finality、当選、受賞 UTXO は引き続き未成立。[実行ログ](registered-live-offers.txt)・[3ピアと期限・資金の独立照合](registered-live-offers.json)
+
+再現には上記の実モデル・tokenizer と同じテスト実行ファイルを使う。
+
+```sh
+MISAKA_PRIVATE_MOE2_SEASON=1 "$bin" private_registered_tb1_pending_freeze --ignored --nocapture
+python3 -B "$p/check_real_lifecycle.py" --live-offers "$p/registered-live-offers.txt" "$p/class-check.json"
+```
+
+### QF1 の演算箇所別に固定した scale と出力
+
+署名済み入力の111位置を較正に使い、各層の Q・K・V・残差・MLP の up 投影と積について、絶対値の99.99パーセンタイルから i16 の固定小数点位置を選んだ。別の記録済み TB1 入力で全36層を再実行した。二つの入力には同じ質問 `2 + 2?` が含まれる。先に登録済み方式で native の3予測位置・各151,936 logits の SHA-256 を再現した。較正した方式は12 token とも `**` を返し、数字4の先頭位置の順位は語彙151,936件中153位だった。[固定した scale、入力ハッシュと出力](qf1-stage-scales.json)
+
+続いて同じ変換済み重みを使った FP32 参照計算で、入力を固定し、演算箇所を一つずつ整数の出力範囲に丸めた。単独で適用した6条件ではいずれも先頭 token は `2`。範囲を組み合わせた計算では `**` になり、MLP の up と積だけを参照精度に戻すと `2` に戻った。比較で「attention」を選んだときは、参照回転の後に Q/K と V を整数化し、履歴全体を使う整数 GQA を実行した。一部の出力表現は隣の段と重なる。これは先頭位置の比較である。[各条件の token・順位・クリップ数](qf1-stage-ablation.json)
+
+同じ較正入力で、MLP の up と積だけは観測最大値を収める固定 scale に変えた。整数版の別入力での出力は `2 + 2?` の後に EOS、合計6 token だった。入力の式を繰り返し、数字4を出していない。登録済み class、署名済み仕事、正式な G-USE の結果には変更を加えていない。[最大値を使った場合の全出力](qf1-mlp-maximum.json)
+
+```sh
+python -B "$p/check_residual_scale.py" --stage-scales --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+python -B "$p/check_residual_scale.py" --isolate-narrowing "$p/qf1-stage-scales.json" "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+python -B "$p/check_residual_scale.py" --stage-scales --preserve-mlp-range --reference-limit 12 "$MISAKA_PRIVATE_QF1_FULL" "$MISAKA_PRIVATE_QF1_TOKENIZER"
+```

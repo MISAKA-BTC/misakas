@@ -103,7 +103,7 @@ def check_pending_freeze(log, artifact):
                 publication="WouldBlock", signing="WouldBlock")
 
 
-def check_exec_quote(log, artifact):
+def check_exec_quote(log, artifact, *, slots=(7, 9)):
     frozen = check_pending_freeze(log, artifact)
     peers, (model, prep, close, anchor, deadline, reward, min_out, consent) = shared_rows(
         log, r"MOE2 closed quote pid=(\d+) class=(\w+) preparation=(\w+) close=(\w+) quote_anchor=(\w+) "
@@ -119,19 +119,27 @@ def check_exec_quote(log, artifact):
             or int(deadline) < frozen["observed_daa"] or int(min_out) != 2):
         raise ValueError("quote is not bound to the same peers, market anchor or EXEC close")
     allocations = []
-    for slot in (7, 9):
+    listed = re.findall(r"MOE2 allocation row pid=(\d+) rounds=\w+ slot=(\d+) ", log)
+    if sorted((pid, int(slot)) for pid, slot in listed) != sorted((pid, slot) for pid in peers for slot in slots):
+        raise ValueError("unexpected EXEC allocation set")
+    for slot in slots:
         observed, (rounds, key, reference) = shared_rows(
             log, rf"MOE2 allocation row pid=(\d+) rounds=(\w+) slot={slot} key=(\w+) reference=(\w+)")
         if observed != peers:
             raise ValueError("missing quote allocation")
         allocations.append((rounds, slot, bytes.fromhex(key), bytes.fromhex(reference)))
     rounds = allocations[0][0]
-    source = hashlib.sha3_512(b"MISAKA/private/FOW1/MOE2/quote-consent/v1" + allocations[1][2]
-                             + (9).to_bytes(8, "big")).digest()
-    if allocations[1][0] != rounds or source != allocations[1][3] or source.hex() != consent:
-        raise ValueError("quote consent differs from the signed EXEC registration and slot")
+    if len({key for _, _, key, _ in allocations}) != len(slots):
+        raise ValueError("duplicate EXEC registration key")
+    for identifier, slot, key, ref in allocations:
+        if identifier != rounds:
+            raise ValueError("different EXEC rounds")
+        if slot != 7:
+            source = hashlib.sha3_512(b"MISAKA/private/FOW1/MOE2/quote-consent/v1" + key + slot.to_bytes(8, "big")).digest()
+            if source != ref or (slot == 9 and source.hex() != consent):
+                raise ValueError("quote consent differs from signed registration and slot")
     h = hashlib.sha3_512(b"MISAKA/private/FOW1/exec-input-set/v2" + bytes.fromhex(rounds)
-                         + bytes.fromhex(prep) + (2).to_bytes(4, "big"))
+                         + bytes.fromhex(prep) + len(slots).to_bytes(4, "big"))
     for _, slot, key, ref in allocations:
         h.update(slot.to_bytes(8, "big") + key + ref)
     if h.hexdigest() != frozen["consumer_root"]:
@@ -153,8 +161,8 @@ def check_exec_quote(log, artifact):
                 native_funding_debit=0)
 
 
-def check_exec_budget(log, artifact):
-    quote = check_exec_quote(log, artifact)
+def check_exec_budget(log, artifact, *, slots=(7, 9)):
+    quote = check_exec_quote(log, artifact, slots=slots)
     peers, (close, parent_root, consent, collateral, rate, liability, reward, epoch, panel_release, bootstrap) = shared_rows(
         log, r"MOE2 budget preview pid=(\d+) close=(\w+) parent_root=([0-9a-f]{128}) slot=9 consent=(\w+) "
              r"collateral=(\d+) export_permille=(\d+) liability=(\d+) reward=(\d+) epoch=(\d+) panel_release=(\d+) bootstrap=(true|false) no_debit=true")
@@ -166,6 +174,39 @@ def check_exec_budget(log, artifact):
     return dict(**quote, close_parent_state_root=parent_root, collateral_sompi=collateral, export_cap_permille=rate,
                 minimum_liability_sompi=liability, model_allocation_epoch=epoch, allocation_bootstrap=(bootstrap == "true"),
                 earliest_panel_release_daa=int(panel_release))
+
+
+def check_live_offers(log, artifact):
+    result = check_exec_budget(log, artifact, slots=(7, 9, 10))
+    peers, (consent, parent, tip, root, now, release, deadline, assignment, assigned_daa, capital,
+            buy, lp, burned, miner, panel) = shared_rows(
+        log, r"MOE2 live offer pid=(\d+) slot=10 consent=(\w+) execution_parent=(\w+) tip=(\w+) root=(\w+) now=(\d+) "
+             r"panel_release=(\d+) deadline=(\d+) assignment=(\w+) assignment_daa=(\d+) assigned=(\d+) buy=(\d+) lp=(\d+) "
+             r"burned=(\d+) miner=(\d+) panel=(\d+) short_expired=true native_reward_debit=0")
+    rows, (_, key, ref) = shared_rows(log, r"MOE2 allocation row pid=(\d+) rounds=(\w+) slot=10 key=(\w+) reference=(\w+)")
+    if (rows != peers or sorted(map(int, peers)) != result["pids"] or consent != ref or consent == result["quote_consent"]
+            or len({result["preparation"], result["close"], assignment, parent, tip}) != 5
+            or root in (result["state_root"], result["close_parent_state_root"])
+            or not int(assigned_daa) < result["release_daa"] <= result["quote_deadline"] < int(release) <= int(now) <= int(deadline)
+            or int(release) != result["earliest_panel_release_daa"] or int(capital) != 2 * result["minimum_liability_sompi"]
+            or int(capital) > result["collateral_sompi"]
+            or list(map(int, (buy, lp, burned, miner, panel))) != [result[k] for k in ("purchase", "permanent_lp", "retired_units", "miner", "panel")]):
+        raise ValueError("later offer is not bound to the funded EXEC slot and original terms")
+    seasoned_peers, (source, previous, final, final_root, count, daa, epoch, start, assigned, mean_epochs, average, accrued, available, grant, reserved) = shared_rows(
+        log, r"MOE2 seasoned pid=(\d+) consent=(\w+) parent=(\w+) tip=(\w+) root=(\w+) blocks=(\d+) daa=(\d+) epoch=(\d+) "
+             r"start=(\d+) assigned=(\d+) avg_epochs=(\d+) average=(\d+) accrued=(\d+) available=(\d+) projected_grant=(\d+) reserved=(\d+) native_reward_debit=0")
+    if (seasoned_peers != peers or source != consent or assigned != capital or int(count) < 1
+            or len({tip, previous, final}) != 3 or final_root == root or int(epoch) <= result["model_allocation_epoch"]
+            or not int(now) < int(start) <= int(daa) <= int(deadline) or int(available) > int(accrued)
+            or int(mean_epochs) <= 0 or int(average) != int(assigned) // int(mean_epochs)
+            or int(available) < int(grant) or int(grant) != result["quote_max_reward"] or int(reserved) != 0):
+        raise ValueError("seasoned assignment or non-bootstrap grant mismatch")
+    return dict(**result, long_offer=dict(key=key, consent=consent, deadline=int(deadline), observed_daa=int(now),
+                parent=parent, tip=tip, state_root=root, assignment=assignment, assignment_daa=int(assigned_daa),
+                assigned_sompi=int(capital)), seasoned=dict(parent=previous, tip=final, state_root=final_root,
+                blocks=int(count), daa=int(daa), epoch=int(epoch), start_daa=int(start), average_epochs=int(mean_epochs),
+                model_average_capital_sompi=int(average), accrued_sompi=int(accrued),
+                available_sompi=int(available), projected_grant_sompi=int(grant), actual_reserved_sompi=int(reserved)))
 
 
 def check_model_audit(log, artifact):
@@ -249,6 +290,7 @@ if __name__ == "__main__":
     parser.add_argument("class_check",type=Path)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--certified-history", action="store_true", help="verify the native floor certificate and history replay on three peers")
+    mode.add_argument("--live-offers", action="store_true", help="verify the same signed long offer before and after native capital seasoning")
     mode.add_argument("--exec-budget", action="store_true", help="check the signed offer and native monetary capacity at its close")
     mode.add_argument("--exec-quote", action="store_true", help="recompute the signed quote reference, EXEC close and preview")
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
@@ -257,6 +299,8 @@ if __name__ == "__main__":
     verify = check
     if args.certified_history:
         verify = check_certified_history
+    elif args.live_offers:
+        verify = check_live_offers
     elif args.exec_budget:
         verify = check_exec_budget
     elif args.exec_quote:

@@ -38,6 +38,9 @@ macro_rules! peer_log {
 #[path = "tb1_model_audit.rs"]
 mod model_audit;
 
+#[path = "tb1_moe2_offers.rs"]
+mod offers;
+
 #[path = "tb1_stable_panel.rs"]
 mod stable_panel;
 
@@ -531,43 +534,29 @@ async fn run(stable: bool, registered: bool) {
             mining.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap_err().to_string().contains("REVIEW_HOLD")
         );
     }
+    // A separate fresh job uses the same model and funder. Its owner and
+    // funder sign a later economic horizon *before* this common close.
+    let long_terms = registered_quote.map(|quote| {
+        let cert = node.bundle.state.rfc0018_v1().unwrap().certification;
+        let deadline = panel.deadline_exclusive_daa + cert.verifier_maturity_daa + cert.prosecution_window_daa + cert.lifetime_daa();
+        misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms {
+            nonce: [0x36; 32],
+            deadline_exclusive_daa: deadline + 1,
+            moe2_quote: Some(kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote { deadline, ..quote }),
+            ..*qf1_terms.as_ref().unwrap()
+        }
+    });
     let mut entries = vec![entry];
-    let qf1_sig;
-    let quote_sig;
-    if let Some(terms) = &qf1_terms {
+    let mut signatures = Vec::new();
+    for (slot, terms) in [(9, qf1_terms.as_ref()), (10, long_terms.as_ref())] {
+        let Some(terms) = terms else { continue };
         let key = terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap();
-        // Readers verify the producer's original signature.
-        let file = child_dir.as_deref().unwrap_or(dir.path()).join("qf1.sig");
-        qf1_sig = if child_dir.is_some() {
-            ml_dsa_65::MLDSA65Signature::new(std::fs::read(file).unwrap().as_slice().try_into().unwrap())
-        } else {
-            let sig = ml_dsa_65::sign(&owner.signing_key, &key, REGISTRATION_DOMAIN, [85; 32]).unwrap();
-            std::fs::write(file, sig.as_slice()).unwrap();
-            sig
-        };
-        let mut entry = SignedExecInput {
-            terms,
-            owner: &owner.verification_key,
-            signature: &qf1_sig,
-            slot: 9,
-            funding_ref: [24; 64],
-            quote_consent: None,
-        };
+        let sig = offers::Signatures::read_or_sign(child_dir.as_deref(), dir.path(), &owner, key, slot, terms.moe2_quote.is_some());
+        signatures.push((slot, terms, sig));
+    }
+    for (slot, terms, sig) in &signatures {
+        let entry = sig.entry(terms, &owner.verification_key, *slot);
         if let Some(quote) = terms.moe2_quote {
-            use libcrux_ml_dsa::ml_dsa_87;
-            use misaka_palw_remote::tb1_exposure::exec_input::moe2::{QUOTE_DOMAIN, consent_ref};
-            let source = consent_ref(key, entry.slot);
-            let file = child_dir.as_deref().unwrap_or(dir.path()).join("funding.sig");
-            quote_sig = if child_dir.is_some() {
-                ml_dsa_87::MLDSA87Signature::new(std::fs::read(file).unwrap().as_slice().try_into().unwrap())
-            } else {
-                let funder = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(1);
-                let sig = ml_dsa_87::sign(&funder.signing_key, &source, QUOTE_DOMAIN, [49; 32]).unwrap();
-                std::fs::write(file, sig.as_slice()).unwrap();
-                sig
-            };
-            entry.funding_ref = source;
-            entry.quote_consent = Some(&quote_sig);
             exec_input::check_quote_substitutions(node.api().as_ref(), parent, &rounds, &entry, quote);
         }
         entries.push(entry);
@@ -588,8 +577,9 @@ async fn run(stable: bool, registered: bool) {
         let (prepared_tip, close_parent_state) = node.chain.tip_state();
         assert_eq!(prepared_tip, parent);
         let file = "pending-freeze-blocks.json";
-        let anchor = if let Some(dir) = &child_dir {
+        let (anchor, assignment) = if let Some(dir) = &child_dir {
             let raw: Vec<RpcRawBlock> = serde_json::from_reader(File::open(dir.join(file)).unwrap()).unwrap();
+            let assignment = Block::try_from(raw[2].clone()).unwrap().hash();
             let mut blocks = raw.into_iter().map(|r| Block::try_from(r).unwrap());
             let close = blocks.next().unwrap();
             let anchor = close.hash();
@@ -597,19 +587,22 @@ async fn run(stable: bool, registered: bool) {
             for block in blocks {
                 stable_panel::arrive(&mut node, block, "registered release window").await;
             }
-            anchor
+            (anchor, assignment)
         } else {
             let mut miner = new_miner_data();
             miner.extra_data = freeze_id.to_vec();
             let t = stable_panel::heartbeat(&mut node, miner);
             let close = node.take(t, "registered EXEC close").await;
             let mut blocks = vec![RpcRawBlock::from(&close)];
+            let mut funding = parts.3[0].clone();
+            blocks.extend(offers::assign(&mut node, registered_quote.unwrap(), &mut funding).await);
+            let assignment = node.chain.sink();
             while node.chain.daa_of(node.chain.sink()) < round.release_from_daa {
                 assert!(blocks.len() < 120, "native release DAA did not advance");
                 blocks.push(RpcRawBlock::from(&stable_panel::next(&mut node, 0).await));
             }
             serde_json::to_writer(File::create_new(dir.path().join(file)).unwrap(), &blocks).unwrap();
-            close.hash()
+            (close.hash(), assignment)
         };
         let before = snapshot_of(&node).unwrap();
         let daa = node.chain.daa_of(before.generation);
@@ -621,6 +614,8 @@ async fn run(stable: bool, registered: bool) {
         assert_eq!(ready.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
         let freeze = Tb1HolderFreeze::resolve(api, anchor, &closure, &q).unwrap();
         let closed_quote = inputs.read_closed_moe2_quote(api, anchor, &closure, &q, 9).unwrap();
+        let long = inputs.read_closed_moe2_quote(api, anchor, &closure, &q, 10).unwrap();
+        assert_eq!(long.terms(), long_terms.as_ref().unwrap().moe2_quote.unwrap());
         let quote = closed_quote.terms();
         assert_eq!(Some(quote), registered_quote);
         assert!(inputs.read_closed_moe2_quote(api, anchor, &closure, &q, 7).is_err());
@@ -643,7 +638,18 @@ async fn run(stable: bool, registered: bool) {
         assert!(budget_preview(&public_t12, &close_parent_state).is_err());
         assert!(budget_preview(&node.config.params, original_state).is_err());
         let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
-        assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9]);
+        assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9, 10]);
+        let long_source = full[&10].consent;
+        assert_ne!(long_source, full[&9].consent);
+        assert_eq!(long_source, Hash64::from_bytes(entries[2].funding_ref));
+        assert_eq!(full[&10].minimum_liability_sompi, full[&9].minimum_liability_sompi);
+        let funding = node.chain.tip_state().1;
+        let assignment_row = funding.bond_budget().unwrap().assignment_row(&quote.funding_bond).unwrap();
+        assert_eq!(
+            assignment_row.pending.as_deref(),
+            Some(&[(quote.model, u64::try_from(2 * full[&9].minimum_liability_sompi).unwrap())][..])
+        );
+        assert!(node.chain.daa_of(assignment) < round.release_from_daa);
         let value = full[&9];
         assert_eq!(value.consent, Hash64::from_bytes(entries[1].funding_ref));
         assert_eq!(value.reward_sompi, quote.limits.max_reward);
@@ -767,6 +773,10 @@ async fn run(stable: bool, registered: bool) {
             &q,
         )
         .await;
+        offers::observe(&node, original_state, &closed_quote, &long, assignment, panel.release_from_daa, long_source);
+        if std::env::var_os("MISAKA_PRIVATE_MOE2_SEASON").is_some() {
+            offers::season(&mut node, &mut parent_socket, &mut peers, original_state, &long, full[&10]).await;
+        }
         for (child, _) in &mut peers {
             assert!(child.wait().unwrap().success());
         }

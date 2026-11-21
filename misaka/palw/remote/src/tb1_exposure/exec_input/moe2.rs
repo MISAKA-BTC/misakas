@@ -55,6 +55,7 @@ pub(super) fn verify_consent(
 /// Historical quote read from a selected close and the state root committed by
 /// its preparation. Current settlement authorization must be checked separately.
 pub struct ClosedMoe2Quote {
+    close: Hash64,
     terms: Moe2PreDrawQuote,
     state_root: Hash64,
     network: Hash64,
@@ -76,6 +77,42 @@ impl ClosedMoe2Quote {
             return Err(invalid("MOE2 preview state or network differs from signed preparation"));
         }
         self.terms.preview_at_anchor(config, state, reward).map_err(|_| invalid("MOE2 preview outside signed quote or market policy"))
+    }
+
+    /// Recheck the signed economic terms against the pre-state committed by
+    /// the current selected tip. Reading a cached close alone is insufficient
+    /// after a reorganization, deadline, policy change or price movement.
+    pub fn preview_for_selected_tip(
+        &self,
+        native: &dyn ConsensusApi,
+        config: &Params,
+        anchor_state: &PalwChainStateV2,
+        execution_parent: &PalwChainStateV2,
+        reward: u64,
+    ) -> io::Result<kaspa_consensus_core::palw_model_market_v1::moe2::Moe2RewardAllocation> {
+        let tip = native.get_sink();
+        let header = native.get_header(tip).map_err(io::Error::other)?;
+        let parent = native.get_ghostdag_data(tip).map_err(io::Error::other)?.selected_parent;
+        let root = state_root_of_pinned_header_v1(&header, tip).map_err(io::Error::other)?;
+        let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
+        if self.network != network
+            || anchor_state.state_root() != self.state_root
+            || execution_parent.last_point().map(|p| p.block) != Some(parent)
+            || execution_parent.state_root() != root
+            || !native.is_chain_ancestor_of(self.close, parent).map_err(io::Error::other)?
+        {
+            return Err(invalid("MOE2 quote differs from selected execution history"));
+        }
+        let result = self.terms.preview_at_position(config, anchor_state, execution_parent, header.daa_score, reward);
+        if native.get_sink() != tip {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "MOE2 execution view moved"));
+        }
+        result.map_err(|err| match err {
+            kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2SettlementError::OutsideWindow => {
+                io::Error::new(io::ErrorKind::TimedOut, "MOE2 quote outside its original window")
+            }
+            _ => invalid("MOE2 reward outside original market terms or active rules"),
+        })
     }
 }
 
@@ -109,7 +146,7 @@ impl ExecInputBatch<'_> {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC quote view moved"));
         }
-        Ok(ClosedMoe2Quote { terms: quote, state_root, network: Hash64::from_bytes(self.rounds.exec.chain_id) })
+        Ok(ClosedMoe2Quote { close, terms: quote, state_root, network: Hash64::from_bytes(self.rounds.exec.chain_id) })
     }
     fn check_quote_close(
         &self,
