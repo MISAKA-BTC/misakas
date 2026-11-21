@@ -128,6 +128,20 @@ pub struct LocalStopCase<'i, 't> {
 }
 
 impl<'t> DerivedExecInput<'t> {
+    /// Authenticate the submitted terminal material before issuing a receipt.
+    /// A committed contradiction is retainable evidence even when replay disagrees.
+    pub fn verify_qf1_stop_disclosure(
+        &self,
+        native: &dyn ConsensusApi,
+        body: &LocalOriginalBody,
+        owner: &MLDSA65Signature,
+        wire: &[u8],
+    ) -> io::Result<(Hash64, StopOutcome)> {
+        let original = self.verify_qf1_body(native, body, owner)?;
+        let witness = StopWitness::decode(body, wire)?;
+        Ok((original, witness.judge(self.attempt, body, self.terms.decode_tokens)?))
+    }
+
     pub fn prepare_stop_case(
         &self,
         native: &dyn ConsensusApi,
@@ -198,7 +212,7 @@ impl LocalStopCase<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_qf1::ticket;
+    use kaspa_consensus_core::palw_qf1::{VOCAB, ticket};
 
     /// Isolate the two authenticated trees of this one Court relation.
     fn committed(token: u32, reason: u8, positions: u32, recorded_token: u32) -> (LocalOriginalBody, StopWitness) {
@@ -238,6 +252,7 @@ mod tests {
             (151643, 0, 1, 1, ChallengeNotEstablished),
             (151645, 0, 1, 2, ChallengeNotEstablished),
             (7, 1, 1, 1, ChallengeNotEstablished),
+            (VOCAB - 1, 1, 1, 1, ChallengeNotEstablished),
             (151643, 1, 1, 1, ComputationRefuted),
             (7, 1, 1, 2, ComputationRefuted),
             (151643, 0, 2, 2, ComputationRefuted),
@@ -253,6 +268,11 @@ mod tests {
             let mut changed = w;
             changed.token ^= 1;
             assert!(changed.judge([7; 32], &body, limit).is_err());
+        }
+        let (body, mut w) = committed(VOCAB - 1, 1, 1, VOCAB - 1);
+        for outside in [VOCAB, u32::MAX] {
+            w.token = outside;
+            assert!(w.judge([7; 32], &body, 1).is_err());
         }
         let (body, w) = committed(151643, 0, 1, 151645);
         assert_eq!(w.judge([7; 32], &body, 3).unwrap(), ComputationRefuted);

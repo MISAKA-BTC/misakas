@@ -1003,15 +1003,18 @@ async fn run(stable: bool, registered: bool) {
             }
             (replay.body(), sig, stop)
         };
-        let original = r.verify_qf1_body(api, &body, &sig).unwrap();
-        replay.verify(api, &body, &sig).unwrap();
-        // Retain the producer's authenticated disclosure locally before the PANEL close.
-        assert_eq!(stop_material, replay.stop_witness().unwrap().encode());
+        assert!(r.verify_qf1_stop_disclosure(api, &body, &sig, &[]).is_err());
+        let (original, disposition) = r.verify_qf1_stop_disclosure(api, &body, &sig, &stop_material).unwrap();
+        // Preserve what the owner committed before comparing it to this peer's inference.
         let path = stable_panel::stop_material_path(dir.path(), original);
         let mut file = File::create_new(&path).unwrap();
         file.write_all(&stop_material).unwrap();
         file.sync_all().unwrap();
+        File::open(dir.path()).unwrap().sync_all().unwrap();
         peer_log!("QF1 retained Stop pid={} original={} bytes={}", std::process::id(), original, stop_material.len());
+        use misaka_palw_remote::tb1_exposure::exec_input::stop_case::StopOutcome;
+        assert_eq!(disposition, StopOutcome::ChallengeNotEstablished);
+        replay.verify(api, &body, &sig).unwrap();
         let mut changed = body.clone();
         changed.roots[3] = Hash64::from_u64_word(1);
         assert!(replay.verify(api, &changed, &sig).is_err());
