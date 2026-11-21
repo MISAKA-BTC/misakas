@@ -1122,3 +1122,7 @@ python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-close | cmp - "$p/qf1-a
 tar -xf "$p/qf1-arithmetic-audit-work-public.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_audit.py" "$out" --arithmetic-work | cmp - "$p/qf1-arithmetic-audit-work.json"
 ```
+
+算術試験と同じバイナリ（SHA-256 `deb86d2b…`）でStudioの登録・市場生成・MOE2配分を3プロセスで再現した。試験用160 MSKから買付48、永久LP32、Miner64、Panel16となり、余剰の1 Positionをburnした。3プロセスとも巻き戻しと再適用で同じ市場・LP・worker権利を復元した。別試験ではholderがnative finalityの撤回を受け、再起動後も公開停止を維持した。[同じビルドの実行ログ](qf1-arithmetic-build-regressions.tar.zst)
+
+FinalとGate Cの公開記録の照合器は、各ブロックの署名を含む全取引からヘッダーの取引Merkle rootを再計算する。既存の8K claim `50f0da2d…` の受付後10,366ブロックで照合し、Panel receiptとGate C attestationの署名を各1ビット変えた対照では、いずれも元ヘッダーとの不一致を検出した。[取引のシリアライズと照合](check_transaction_root.py)

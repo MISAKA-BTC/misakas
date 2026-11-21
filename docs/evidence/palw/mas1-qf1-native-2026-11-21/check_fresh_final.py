@@ -5,9 +5,10 @@ import re
 import struct
 from pathlib import Path
 
-from check_fresh_audit import records
+from check_fresh_audit import records, verify as verify_audit
 from check_genesis_draw import header_hash, verify_readers
 from check_legacy_work import HERE, require
+from check_transaction_root import verify_block_transactions
 
 
 def walk(path, base, claim, blue):
@@ -15,6 +16,7 @@ def walk(path, base, claim, blue):
     require((branch["claim"], branch["base"]) == (claim, base), "wrong accepted branch")
     headers = {}
     for block in branch["blocks"]:
+        verify_block_transactions(block)
         h = block["header"]
         require(h["parentsByLevel"][0] == [base] and h["blueScore"] == blue + 1, "disconnected selected block")
         base = header_hash(h, bytes(h["palwCommitment"]), False).hex()
@@ -24,14 +26,22 @@ def walk(path, base, claim, blue):
     return branch, headers
 
 
-def panel(root):
-    fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
+def panel(root, arithmetic_work=False):
+    if arithmetic_work:
+        fresh = verify_audit(root, arithmetic_work=True)
+        reference = fresh["native_replay"]
+    else:
+        fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
+        reference = fresh["cold_8k_replay"]
     original = fresh["native_8k_draw"]
     claim, accepted = original["claim"], original["block"]
     writer = root / "final-0.log"
     log = writer.read_text()
     native = verify_readers(original, [writer], 1)
-    require(native["replay"] == fresh["cold_8k_replay"]["replay"], "different canonical material")
+    require(native["replay"] == reference["replay"], "different canonical material")
+    if arithmetic_work:
+        require(native["binary_sha256"] == reference["binary_sha256"] and native["processes"][0] not in reference["processes"],
+                "expected a fresh Final reader on the arithmetic work build")
     [(pid, audit)] = records(log, "fresh retained audit")
     require(pid == native["processes"][0] and audit["close"] == fresh["audit"]["close"]
             and audit["rounds"] == fresh["audit"]["rounds"], "different audit or process")
@@ -79,4 +89,6 @@ def panel(root):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="extracted native logs and raw Final suffix")
-    print(json.dumps(panel(parser.parse_args().root), indent=2))
+    parser.add_argument("--arithmetic-work", action="store_true")
+    args = parser.parse_args()
+    print(json.dumps(panel(args.root, args.arithmetic_work), indent=2))

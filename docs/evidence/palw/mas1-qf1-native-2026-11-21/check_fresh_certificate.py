@@ -5,7 +5,7 @@ import re
 import struct
 from pathlib import Path
 
-from check_fresh_audit import records
+from check_fresh_audit import records, verify as verify_audit
 from check_fresh_final import panel, walk
 from check_funded_certificate import verify as verify_certificate
 from check_genesis_draw import verify_readers
@@ -33,12 +33,18 @@ def studio_economics(path, binary):
                 miner_sompi=6_400_000_000, panel_sompi=1_600_000_000)
 
 
-def verify(root, winning):
-    fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
+def verify(root, winning, arithmetic_work=False):
+    if arithmetic_work:
+        fresh = verify_audit(root, arithmetic_work=True)
+        replay = fresh["native_replay"]
+        writer = root / "funded-0.log"
+    else:
+        fresh = json.loads((HERE / "fresh-retained-audit.json").read_bytes())
+        replay = fresh["cold_8k_replay"]
+        writer = root / "funded-1.log"
     original = fresh["native_8k_draw"]
     claim = original["claim"]
-    final = panel(root)
-    writer = root / "funded-1.log"
+    final = panel(root, arithmetic_work)
     log = writer.read_text()
     [(pid, recovered)] = records(log, "legacy genesis recovered")
     require(recovered["claim"] == claim and recovered["tip"] == final["tip"] and recovered["state"] == final["state"]
@@ -65,7 +71,7 @@ def verify(root, winning):
     [(txid, index)] = re.findall(r"\(([0-9a-f]{128}), (\d+)\)", views[-1][1]["cards"][int(card)]["bond"])
     require(payload[3:71] == bytes.fromhex(txid) + struct.pack("<I", int(index)), "wrong funding bond")
     cert = verify_certificate(root / "funded/certification.json", writer, winning,
-                              original=dict(original, reexecution=fresh["cold_8k_replay"]),
+                              original=dict(original, reexecution=replay),
                               funded=dict(tip=end, drawn_daa=int(drawn_at)))
     require(cert["writer"] == pid and cert["binary_sha256"] == final["binary_sha256"], "different writer build")
     peers = [root / f"read-cert-{i}.log" for i in (0, 2)]
@@ -103,5 +109,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("winning", type=Path, help="accepted/winning.json from the original fresh audit archive")
+    parser.add_argument("--arithmetic-work", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.winning), indent=2))
+    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work), indent=2))

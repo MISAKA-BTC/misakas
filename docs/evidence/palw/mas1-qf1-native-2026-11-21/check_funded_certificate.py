@@ -7,6 +7,7 @@ import struct
 from pathlib import Path
 from check_genesis_draw import header_hash, keyed, verify_readers
 from check_legacy_work import HERE, require
+from check_transaction_root import verify_block_transactions
 
 
 def verify(branch_path, writer_path, winning_path, *, funded=None, original=None):
@@ -40,6 +41,7 @@ def verify(branch_path, writer_path, winning_path, *, funded=None, original=None
     require((branch["base"], branch["claim"]) == (tip, claim), "certification branch")
     carriers = []
     for block in branch["blocks"]:
+        verify_block_transactions(block)
         h = block["header"]
         require(h["parentsByLevel"][0] == [tip], "disconnected selected header")
         tip = header_hash(h, bytes(h["palwCommitment"]), False).hex()
