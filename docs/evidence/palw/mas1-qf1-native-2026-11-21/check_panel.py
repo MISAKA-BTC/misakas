@@ -27,7 +27,7 @@ def check_panel(log):
     return verify_draw(log, verify(log, 1 << 256))
 
 
-def verify_draw(log, result):
+def verify_draw(log, result, *, expect_replies=True):
     hex64, hex32 = r"([0-9a-f]{128})", r"([0-9a-f]{64})"
     events = re.findall(r"TB1 stable PANEL pid=(\d+) slot=(\d+) close=" + hex64 + " stable=" + hex64
                         + r" stable_daa=(\d+) release_daa=(\d+) batch=" + hex64 + " certificate=" + hex64 + " seed=" + hex32, log)
@@ -42,11 +42,14 @@ def verify_draw(log, result):
     exec_seeds = re.findall(r"TB1 publication pid \d+ batch [0-9a-f]+ certificate [0-9a-f]+ seed " + hex32, log)
     if len(exec_seeds) != 3 or len(set(exec_seeds)) != 1 or exec_seeds[0] == seed:
         raise ValueError("unexpected EXEC seed")
+    reply_pattern = hex64 if expect_replies else r"(none)"
     duties = re.findall(r"TB1 replay duty pid=(\d+) actor=" + hex64
-                        + r" replayed=(true|false) selected=\[([^\]]+)\] original=" + hex64 + " replies=" + hex64, log)
+                        + r" replayed=(true|false) selected=\[([^\]]+)\] original=" + hex64 + " replies=" + reply_pattern, log)
     if (len(duties) != 3 or {int(row[0]) for row in duties} != set(result["pids"])
             or len({row[3:] for row in duties}) != 1 or duties[0][4] != result["original"]):
         raise ValueError("different PANEL duty receipts")
+    if not expect_replies and re.search(r"TB1 replay duty [^\n]*replies=[0-9a-f]{128}", log):
+        raise ValueError("unexpected positive replay receipt")
     actors = sorted(row[1] for row in duties)
     if len(set(actors)) != 3:
         raise ValueError("actor key repeated")
@@ -58,7 +61,7 @@ def verify_draw(log, result):
         raise ValueError("draw order or actual workers disagree")
     result.update(panel_release="certified", stable=stable, stable_daa=int(stable_daa), release_daa=int(release_daa),
                   panel_certificate=certificate, panel_batch=batch, panel_seed=seed, exec_seed=exec_seeds[0],
-                  actors_by_weight=actors, selected=selected, accepted_replies=duties[0][5])
+                  actors_by_weight=actors, selected=selected, accepted_replies=duties[0][5] if expect_replies else None)
     return result
 
 

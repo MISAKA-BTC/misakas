@@ -12,7 +12,7 @@ from check_prediction import qf1, shared_rows
 from check_stop import verify_case
 
 
-def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False):
+def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False, inconsistent_readout=False):
     pids, (attempt, prompt_json) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64}) tokens=(\[[0-9, ]+\])")
     peers, (cls, descriptor, positions, answer_json, stop, z_hex) = shared_rows(
         log, r"QF1 fixture pid=(\d+) class=(\w+) descriptor=(\w+) positions=(\d+) tokens=(\[[0-9, ]+\]) stop=(\w+) z=(\w+)")
@@ -43,8 +43,12 @@ def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False
     l, t, one, d = body["counts"]
     def token_root(kind, tokens):
         return qf1.root(s, kind, [struct.pack("<I", x) for x in tokens])
+    replayed_root = qf1.root(s, 3, [z])
+    signed_root = qf1.root(s, 3, [bytes(64)]) if inconsistent_readout else replayed_root
+    if inconsistent_readout and signed_root == replayed_root:
+        raise ValueError("negative control did not change the readout")
     if ([l,t,one] != [len(prompt), len(answer), 1]
-            or roots[:3] != [token_root(1, prompt), token_root(2, answer), qf1.root(s, 3, [z])]
+            or roots[:3] != [token_root(1, prompt), token_root(2, answer), signed_root]
             or qf1.ticket(s, body["counts"], roots).hex() != body["ticket"]
             or int(body["target"], 16) != 1 << 256 or not body["ticket_meets_target"]):
         raise ValueError("private target, ticket or input/answer/readout roots")
@@ -60,14 +64,14 @@ def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False
         raise ValueError("Init does not bind the signed instance and input")
     h = (len(qf1.DOM_Z) + t * (5 + 2*37*4096) + 5 + 4095) // 4096
     tiles = d - h - t - 3
-    end = envelope(5, b"".join(roots[:3]) + struct.pack("<IIIQIIQ", l,t,int(positions),tiles,t,h,d) + z)
+    end = envelope(5, b"".join([*roots[:2], replayed_root]) + struct.pack("<IIIQIIQ", l,t,int(positions),tiles,t,h,d) + z)
     if end != bytes.fromhex(openings[-1]["record"]):
         raise ValueError("End does not bind counts, roots and readout")
     binary = re.search(r"^test_binary_sha256=([0-9a-f]{64})$", log, re.MULTILINE)
     if binary is None:
         raise ValueError("missing binary identity")
     panel = verify_draw(log, dict(**body, pids=ordered, receipt=receipt, panel_close=close, panel_close_blue_score=int(blue),
-                                  panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]))
+                                  panel_marker=marker, readout_chunks=h, binary_sha256=binary[1]), expect_replies=not inconsistent_readout)
     court = verify_case(log, panel, decode_limit)
     if retained_stop:
         rows = list(re.finditer(r"QF1 retained Stop pid=(\d+) original=([0-9a-f]{128}) bytes=(\d+)", log))
@@ -81,7 +85,7 @@ def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False
     if retained_end:
         peers, (bound, case, verdict, outcome, wire_hex) = shared_rows(
             log, r"TB1 Court End pid=(\d+) original=(\w+) case=(\w+) verdict=(\w+) result=(\w+) witness=([0-9a-f]+)")
-        if (peers != pids or bound != original or outcome != "ChallengeNotEstablished"
+        if (peers != pids or bound != original or outcome != ("ComputationRefuted" if inconsistent_readout else "ChallengeNotEstablished")
                 or len({receipt, court["case"], court["verdict"], case, verdict}) != 5):
             raise ValueError("End Court identity or carriers")
         wire = bytes.fromhex(wire_hex)
@@ -105,6 +109,9 @@ def check(log, artifact, decode_limit=3, retained_stop=False, retained_end=False
         if (sorted(int(r[1]) for r in rows) != ordered or
                 any(r[2] != original or int(r[3]) != offset or r.end() > log.index("QF1 receipt pid=") for r in rows)):
             raise ValueError("missing terminal records before Original receipt")
+        if inconsistent_readout:
+            result["replayed_readout_root"] = replayed_root.hex()
+            result["signed_readout_root"] = roots[2].hex()
         result["end_court"] = dict(case=case, verdict=verdict, result=outcome, readout_bytes=total,
                                    final_chunk_length=final_length, last_chunk=d-2, end=d-1, witness_bytes=offset,
                                    retained_before_receipt=ordered)
@@ -337,7 +344,10 @@ if __name__ == "__main__":
     mode.add_argument("--model-audit", action="store_true", help="recompute the registered non-paying model audit freeze")
     mode.add_argument("--pending-freeze", action="store_true", help="verify held class registration and refusal before native finality")
     parser.add_argument("--retained-end", action="store_true", help="verify the retained final chunk, End and direct Court")
+    parser.add_argument("--inconsistent-readout", action="store_true", help="require a signed contradictory Readout root, withheld replies and a direct End refutation")
     args=parser.parse_args()
+    if args.inconsistent_readout and not (args.retained_stop and args.retained_end):
+        parser.error("--inconsistent-readout requires both retained disclosures")
     verify = check
     if args.certified_history:
         verify = check_certified_history
@@ -355,5 +365,5 @@ if __name__ == "__main__":
     if "full" in expected:
         expected = {"class_id": expected["full"]["class_id"], "artifact_root": expected["full"]["inventory"]}
     log = args.log.read_text()
-    result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end) if verify is check else verify(log, expected)
+    result = check(log, expected, args.decode_limit, args.retained_stop, args.retained_end, args.inconsistent_readout) if verify is check else verify(log, expected)
     print(json.dumps(result, indent=2))

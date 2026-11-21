@@ -566,3 +566,14 @@ Qwen3-8B の非報酬 Original `3c484ceb…` で、同じ実行ファイルの3�
 zstd -dc "$p/qf1-stop-end-three-peer.txt.zst" > "$out/qf1-stop-end.log"
 python3 -B "$p/check_real_lifecycle.py" "$out/qf1-stop-end.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end
 ```
+
+### 署名済み Readout の矛盾を3ピアで直接裁定
+
+隔離用の負例では、Qwen3-8B を実行して得た trace と最終 chunk と End を使い、試験用 owner がゼロの採掘値に対応する Readout root を含む Original に署名した。各ピアは署名・Ticket と開示の包含を受付時に検査し、同じ Original `5c929e66…` の資料を保存した。回答は `2 + 2 = 4.` と EOS。抽選された2名はいずれも完全再実行後に不一致を検出し、承認用メッセージの生成が拒否された。3ピアとも空の承認集合を拒否した。
+
+3ピアが非対話で裁定した結果、正しい Stop への異議は棄却され、Readout と End の不一致は `ComputationRefuted` となった。照合器は固定した入力・回答、実行結果に対応する Readout root と署名された root の差、2本の trace opening、Panel の抽選順、個別の case と verdict のブロックを照合した。対象は非報酬の隔離経路で、実行費用の下界・決済を検査する試験ではない。[3ピアの生ログ](qf1-signed-readout-refuted.txt.zst)・[直接反証の照合](qf1-signed-readout-refuted.json)
+
+```sh
+zstd -dc "$p/qf1-signed-readout-refuted.txt.zst" > "$out/refuted.log"
+python3 -B "$p/check_real_lifecycle.py" "$out/refuted.log" "$p/qf1-native-tile-artifacts.json" --decode-limit 16 --retained-stop --retained-end --inconsistent-readout
+```

@@ -16,7 +16,8 @@ pub struct LocalOriginalBody {
 }
 
 impl LocalOriginalBody {
-    fn id(&self, input: &DerivedExecInput<'_>) -> Hash64 {
+    /// Canonical signature message for the received fields and this EXEC instance.
+    pub fn signing_id(&self, input: &DerivedExecInput<'_>) -> Hash64 {
         let mut hash = Sha3_512::new()
             .chain_update(b"MISAKA/private/QF1/local-original/v1")
             .chain_update(input.chain)
@@ -56,7 +57,7 @@ impl LocalOriginal<'_, '_> {
         Ok(self.input.terms.threshold()?.admits_ticket_be(&self.trace.ticket))
     }
     pub fn id(&self) -> Hash64 {
-        self.body().id(self.input)
+        self.body().signing_id(self.input)
     }
 
     /// Verify the received owner's body by complete numerical replay.
@@ -100,7 +101,7 @@ impl DerivedExecInput<'_> {
         if ticket(roots.each_ref()).map_err(invalid)? != body.ticket {
             return Err(invalid("local Original ticket mismatch"));
         }
-        let original = body.id(self);
+        let original = body.signing_id(self);
         ml_dsa_65::verify(self.owner, original.as_byte_slice(), LOCAL_ORIGINAL_DOMAIN, sig)
             .map_err(|_| invalid("invalid local Original owner signature"))?;
         self.check_live(native)?;

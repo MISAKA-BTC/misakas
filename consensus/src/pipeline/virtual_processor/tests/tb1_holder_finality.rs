@@ -271,6 +271,10 @@ async fn private_registered_tb1_pending_freeze() {
     run(true, true).await;
 }
 
+fn inconsistent_readout_fixture() -> bool {
+    std::env::var_os("MISAKA_PRIVATE_QF1_INCONSISTENT_READOUT").is_some()
+}
+
 async fn run(stable: bool, registered: bool) {
     use super::super::g14_registration_e2e::{private_moe2::arm_private_registration, tb1_registration_prefix};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -279,6 +283,7 @@ async fn run(stable: bool, registered: bool) {
     let full = std::env::var_os("MISAKA_PRIVATE_QF1_FULL");
     let tokenizer = std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER");
     assert!(full.is_none() || (stable && tokenizer.is_some()), "the full class uses the stable round and pinned tokenizer");
+    assert!(!inconsistent_readout_fixture() || (stable && !registered && tokenizer.is_some()));
     let held = full.as_ref().map(|p| misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(p)).unwrap());
     let tiles = std::env::var_os("MISAKA_PRIVATE_QF1_TILES").map(|path| {
         let parent = held.as_ref().expect("QF1 tile scales require their registered parent");
@@ -989,7 +994,18 @@ async fn run(stable: bool, registered: bool) {
                 receive::<(misaka_palw_remote::tb1_exposure::exec_input::LocalOriginalBody, Vec<u8>, Vec<u8>, Vec<u8>)>(s);
             (body, ml_dsa_65::MLDSA65Signature::new(bytes.as_slice().try_into().unwrap()), stop, end)
         } else {
-            let id = replay.id();
+            let mut body = replay.body();
+            if inconsistent_readout_fixture() {
+                use kaspa_consensus_core::palw_qf1::{TreeKind, TreeRoot, ticket};
+                // Negative control: the signed readout commits zero while the
+                // published terminal records still contain the real execution.
+                assert_ne!(replay.trace().answer.z, [0; 64]);
+                let mut roots = replay.trace().roots;
+                roots[2] = TreeRoot::build(*r.attempt(), TreeKind::Readout, std::iter::once([0u8; 64].as_slice()), 1).unwrap();
+                body.roots[2] = Hash64::from_bytes(roots[2].digest);
+                body.ticket = ticket(roots.each_ref()).unwrap();
+            }
+            let id = body.signing_id(&r);
             let sig = ml_dsa_65::sign(
                 &owner.signing_key,
                 id.as_byte_slice(),
@@ -1000,9 +1016,9 @@ async fn run(stable: bool, registered: bool) {
             let stop = replay.stop_witness().unwrap().encode();
             let end = replay.end_disclosure().unwrap();
             for (_, s) in &mut peers {
-                send(s, &(replay.body(), sig.as_slice().to_vec(), &stop, &end));
+                send(s, &(&body, sig.as_slice().to_vec(), &stop, &end));
             }
-            (replay.body(), sig, stop, end)
+            (body, sig, stop, end)
         };
         assert!(r.verify_qf1_stop_disclosure(api, &body, &sig, &[]).is_err());
         assert!(r.verify_qf1_end_disclosure(api, &body, &sig, &[]).is_err());
@@ -1020,8 +1036,13 @@ async fn run(stable: bool, registered: bool) {
         peer_log!("QF1 retained End pid={} original={} bytes={}", std::process::id(), original, end_material.len());
         use misaka_palw_remote::tb1_exposure::exec_input::stop_case::StopOutcome;
         assert_eq!(disposition, StopOutcome::ChallengeNotEstablished);
-        assert_eq!(end_disposition, StopOutcome::ChallengeNotEstablished);
-        replay.verify(api, &body, &sig).unwrap();
+        if inconsistent_readout_fixture() {
+            assert_eq!(end_disposition, StopOutcome::ComputationRefuted);
+            assert!(replay.verify(api, &body, &sig).unwrap_err().to_string().contains("different replayed"));
+        } else {
+            assert_eq!(end_disposition, StopOutcome::ChallengeNotEstablished);
+            replay.verify(api, &body, &sig).unwrap();
+        }
         let mut changed = body.clone();
         changed.roots[3] = Hash64::from_u64_word(1);
         assert!(replay.verify(api, &changed, &sig).is_err());
@@ -1034,9 +1055,11 @@ async fn run(stable: bool, registered: bool) {
         let opening = trace.opening.as_ref().unwrap();
         assert!(trace.roots[3].verify_opening(opened, &opening.record, &opening.siblings));
         assert!(!trace.roots[3].verify_opening(opened, b"wrong", &opening.siblings));
-        let observed = serde_json::json!({ "pid":std::process::id(),"original":original,"roots":trace.roots.map(|r|Hash64::from_bytes(r.digest)),
-            "counts":trace.roots.map(|r|r.count()),"ticket":faster_hex::hex_string(&trace.ticket),
-            "target":faster_hex::hex_string(&terms.target),"ticket_meets_target":replay.ticket_meets_target().unwrap()});
+        let mut signed_ticket = [0u8; 33];
+        signed_ticket[1..].copy_from_slice(&body.ticket);
+        let observed = serde_json::json!({ "pid":std::process::id(),"original":original,"roots":body.roots,
+            "counts":body.counts,"ticket":faster_hex::hex_string(&body.ticket),
+            "target":faster_hex::hex_string(&terms.target),"ticket_meets_target":signed_ticket < terms.target});
         let witness = serde_json::json!({"pid":std::process::id(),"index":opened,"record":faster_hex::hex_string(&opening.record),
             "siblings":opening.siblings.iter().map(|h|Hash64::from_bytes(*h)).collect::<Vec<_>>()});
         for line in [format!("QF1 original {observed}\n"), format!("QF1 disclosure {witness}\n")] {

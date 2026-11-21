@@ -18,7 +18,7 @@ def verify_case(log, panel, decode_limit=3):
     original, case, verdict, outcome, wire = fields
     if sorted(map(int, peers)) != panel["pids"] or original != panel["original"]:
         raise ValueError("different case participants or Original")
-    if len({case, verdict, panel["accepted_replies"], panel["receipt"]}) != 4:
+    if len({case, verdict, panel["accepted_replies"] or panel["panel_certificate"], panel["receipt"]}) != 4:
         raise ValueError("duplicate receipt, case or verdict carrier")
     _, (attempt,) = shared_rows(log, r"QF1 input pid=(\d+) attempt=([0-9a-f]{64})")
     l, t, _, d = panel["counts"]

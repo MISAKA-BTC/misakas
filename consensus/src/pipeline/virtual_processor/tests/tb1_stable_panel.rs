@@ -292,53 +292,73 @@ pub(super) async fn release(
     let actor = actor_id(key);
     let selected = draw.selected().contains(&actor);
     let message = draw.replay_message(api, input, instance, body, owner, key);
-    let reply = if selected {
-        Some((
+    let before_stop = if inconsistent_readout_fixture() {
+        let reason = message.unwrap_err().to_string();
+        if selected {
+            assert!(reason.contains("different replayed local QF1 Original"), "{reason}");
+        } else {
+            assert!(reason.contains("not selected"), "{reason}");
+        }
+        assert!(draw.reply_commitment(api, &[]).is_err());
+        peer_log!(
+            "TB1 replay duty pid={} actor={} replayed={} selected={:?} original={} replies=none",
+            std::process::id(),
             actor,
-            ml_dsa_65::sign(&actors.mine.signing_key, &message.unwrap(), REPLAY_SIGNATURE_DOMAIN, rand::random())
-                .unwrap()
-                .as_slice()
-                .to_vec(),
-        ))
+            selected,
+            draw.selected(),
+            original
+        );
+        cert.hash()
     } else {
-        assert!(message.unwrap_err().to_string().contains("not selected"));
-        None
-    };
-    let ordered = if let Some(s) = parent {
-        send(s, &reply);
-        receive::<Vec<(Hash64, Vec<u8>)>>(s)
-    } else {
-        let mut votes = std::collections::BTreeMap::new();
-        for opt in std::iter::once(reply).chain(peers.iter_mut().map(|(_, s)| receive(s))) {
-            if let Some((id, signature)) = opt {
-                assert!(votes.insert(id, signature).is_none());
+        let reply = if selected {
+            Some((
+                actor,
+                ml_dsa_65::sign(&actors.mine.signing_key, &message.unwrap(), REPLAY_SIGNATURE_DOMAIN, rand::random())
+                    .unwrap()
+                    .as_slice()
+                    .to_vec(),
+            ))
+        } else {
+            assert!(message.unwrap_err().to_string().contains("not selected"));
+            None
+        };
+        let ordered = if let Some(s) = parent {
+            send(s, &reply);
+            receive::<Vec<(Hash64, Vec<u8>)>>(s)
+        } else {
+            let mut votes = std::collections::BTreeMap::new();
+            for opt in std::iter::once(reply).chain(peers.iter_mut().map(|(_, s)| receive(s))) {
+                if let Some((id, signature)) = opt {
+                    assert!(votes.insert(id, signature).is_none());
+                }
             }
-        }
-        let ordered: Vec<_> = draw.selected().iter().map(|id| (*id, votes.remove(id).unwrap())).collect();
-        assert!(votes.is_empty());
-        for (_, s) in peers.iter_mut() {
-            send(s, &ordered);
-        }
-        ordered
-    };
-    let sigs: Vec<_> = ordered.iter().map(|(_, b)| ml_dsa_65::MLDSA65Signature::new(b.as_slice().try_into().unwrap())).collect();
-    let replies: Vec<_> = ordered.iter().zip(&sigs).map(|((id, _), sig)| (&actors.keys[id], sig)).collect();
-    assert!(draw.reply_commitment(api, &replies[..1]).is_err());
-    assert!(draw.reply_commitment(api, &[replies[0], replies[0]]).is_err());
-    assert!(draw.verify_reply(api, replies[0].0, replies[1].1).is_err());
-    let commitment = draw.reply_commitment(api, &replies).unwrap();
-    assert!(draw.read_replies(api, cert.hash(), &replies).is_err());
-    let accepted = local_carrier(node, parent, peers, 0, commitment, "selected full replay replies").await;
-    draw.read_replies(node.api().as_ref(), accepted.hash(), &replies).unwrap();
-    peer_log!(
-        "TB1 replay duty pid={} actor={} replayed={} selected={:?} original={} replies={}",
-        std::process::id(),
-        actor,
-        selected,
-        draw.selected(),
-        original,
+            let ordered: Vec<_> = draw.selected().iter().map(|id| (*id, votes.remove(id).unwrap())).collect();
+            assert!(votes.is_empty());
+            for (_, s) in peers.iter_mut() {
+                send(s, &ordered);
+            }
+            ordered
+        };
+        let sigs: Vec<_> = ordered.iter().map(|(_, b)| ml_dsa_65::MLDSA65Signature::new(b.as_slice().try_into().unwrap())).collect();
+        let replies: Vec<_> = ordered.iter().zip(&sigs).map(|((id, _), sig)| (&actors.keys[id], sig)).collect();
+        assert!(draw.reply_commitment(api, &replies[..1]).is_err());
+        assert!(draw.reply_commitment(api, &[replies[0], replies[0]]).is_err());
+        assert!(draw.verify_reply(api, replies[0].0, replies[1].1).is_err());
+        let commitment = draw.reply_commitment(api, &replies).unwrap();
+        assert!(draw.read_replies(api, cert.hash(), &replies).is_err());
+        let accepted = local_carrier(node, parent, peers, 0, commitment, "selected full replay replies").await;
+        draw.read_replies(node.api().as_ref(), accepted.hash(), &replies).unwrap();
+        peer_log!(
+            "TB1 replay duty pid={} actor={} replayed={} selected={:?} original={} replies={}",
+            std::process::id(),
+            actor,
+            selected,
+            draw.selected(),
+            original,
+            accepted.hash()
+        );
         accepted.hash()
-    );
+    };
     use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};
     let wire = std::fs::read(dir.join(format!("{original}.stop"))).expect("Stop disclosure published with the Original");
     let api = node.api().as_ref();
@@ -347,7 +367,7 @@ pub(super) async fn release(
     changed.stop[17] ^= 1;
     assert!(input.prepare_stop_case(api, original_receipt, body, owner, &changed).is_err());
     let case = input.prepare_stop_case(api, original_receipt, body, owner, &witness).unwrap();
-    assert!(case.verdict_marker(api, accepted.hash()).is_err());
+    assert!(case.verdict_marker(api, before_stop).is_err());
     let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 last answer / Stop case").await;
     let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
     assert!(case.read_verdict(node.api().as_ref(), opened.hash(), opened.hash()).is_err());
@@ -370,7 +390,8 @@ pub(super) async fn release(
     let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
     let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 Readout / End verdict").await;
     let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
-    assert_eq!(outcome, StopOutcome::ChallengeNotEstablished);
+    let expected = if inconsistent_readout_fixture() { StopOutcome::ComputationRefuted } else { StopOutcome::ChallengeNotEstablished };
+    assert_eq!(outcome, expected);
     peer_log!(
         "TB1 Court End pid={} original={} case={} verdict={} result={:?} witness={}",
         std::process::id(),
