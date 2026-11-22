@@ -41,6 +41,8 @@
 
 use std::sync::Arc;
 
+use kaspa_consensus_core::block::Block;
+use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::palw_attempt_v2::{
@@ -58,6 +60,26 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
+
+struct PendingReceiptBlock {
+    parent: Hash64,
+    block: Block,
+    last_submission: std::time::Instant,
+}
+
+impl PendingReceiptBlock {
+    fn still_pending(&self, sink: Hash64, status: Option<BlockStatus>) -> bool {
+        sink == self.parent && status.is_some_and(BlockStatus::is_utxo_valid_or_pending)
+    }
+
+    fn retry_at(&mut self, now: std::time::Instant) -> Option<Block> {
+        if now.saturating_duration_since(self.last_submission) < std::time::Duration::from_secs(5) {
+            return None;
+        }
+        self.last_submission = now;
+        Some(self.block.clone())
+    }
+}
 
 /// RDA4's canonical ML-DSA fields fit within the receipt commitment cap.
 /// Limit reads on the opened file, including files replaced or grown during a scan.
@@ -1186,6 +1208,7 @@ impl PalwProducerService {
         let mut draws_reported_at: Option<std::time::Instant> = None;
         // Where the bucket walk stands on the template last drawn against — see `produce_one`.
         let mut cursor: Option<(Hash64, u64)> = None;
+        let mut pending_receipt = None;
         // The last receipt-lane failure printed, and when — the same once-per-change-then-every-
         // five-minutes rule as the holds. The receipt lane is now tried while the attempt lane
         // holds, on that branch's 5 s cadence, so an unchanging failure must not repeat per tick.
@@ -1353,8 +1376,10 @@ impl PalwProducerService {
             // only inside its use window, so the hold did not delay a free-prompt executor's pay, it
             // forfeited it. The bond that fills its ceiling is exactly the one committing
             // free-prompt claims.
-            if facts.ready_to_spend_receipts(&self.verification_key()).is_ok() {
-                match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
+            if facts.ready_to_spend_receipts(&self.verification_key()).is_ok()
+                && !self.retry_pending_receipt(&session, &mut pending_receipt).await
+            {
+                match self.produce_receipt(&session, network_domain, bond, miner_data.clone(), &mut pending_receipt).await {
                     Ok(Some(hash)) => {
                         produced += 1;
                         last_progress_at = std::time::Instant::now();
@@ -1371,7 +1396,10 @@ impl PalwProducerService {
                         // No winning quantum of this bond's own. **RFC-0009 builder mode**: a quantum another miner authorized the public to
                         // redeem. Past `palw_receipt_spend_v4` only; the directory is unread while the fence is dormant.
                         if let Some(dir) = self.config.redemption_auth_dir.clone() {
-                            match self.produce_redemption(&session, network_domain, bond, miner_data.clone(), &dir).await {
+                            match self
+                                .produce_redemption(&session, network_domain, bond, miner_data.clone(), &dir, &mut pending_receipt)
+                                .await
+                            {
                                 Ok(Some(hash)) => {
                                     produced += 1;
                                     last_progress_at = std::time::Instant::now();
@@ -1754,6 +1782,53 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] stopping ({produced} blocks this run)");
     }
 
+    /// Native body validation can finish while the virtual state still needs
+    /// local resources. Retry the signed carrier while it extends the same
+    /// parent so the next attempt cannot create a competing receipt child.
+    async fn retry_pending_receipt(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        pending: &mut Option<PendingReceiptBlock>,
+    ) -> bool {
+        let Some(receipt) = pending.as_mut() else { return false };
+        let hash = receipt.block.hash();
+        let status = session.async_get_block_status(hash).await;
+        if !receipt.still_pending(session.async_get_sink().await, status) {
+            *pending = None;
+            return false;
+        }
+        if let Some(block) = receipt.retry_at(std::time::Instant::now()) {
+            let active = self.consensus_manager.consensus().unguarded_session();
+            let still_current = session.with_consensus_api_v1(|observed| {
+                active.with_consensus_api_v1(|current| std::ptr::eq(observed, current) && current.get_sink() == receipt.parent)
+            });
+            if !still_current || !self.flow_context.is_consensus_participation_allowed() {
+                return true;
+            }
+            if let Some(Err(err)) =
+                palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block)).await
+            {
+                trace!("[{PALW_PRODUCER}] retained receipt {hash} still awaiting resolution: {err}");
+            }
+        }
+        true
+    }
+
+    async fn submit_receipt_block(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        parent: Hash64,
+        block: Block,
+        pending: &mut Option<PendingReceiptBlock>,
+    ) -> Result<(), String> {
+        let hash = block.hash();
+        *pending = Some(PendingReceiptBlock { parent, block: block.clone(), last_submission: std::time::Instant::now() });
+        palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
+            .await
+            .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
+            .map_err(|e| format!("the chain refused receipt block {hash}: {e}"))
+    }
+
     fn receipt_template_is_current_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -1791,6 +1866,7 @@ impl PalwProducerService {
         network_domain: Hash64,
         bond: TransactionOutpoint,
         miner_data: MinerData,
+        pending: &mut Option<PendingReceiptBlock>,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
         let Some((quoted_parent, next_daa, spendable)) =
@@ -1853,10 +1929,7 @@ impl PalwProducerService {
         let block: kaspa_consensus_core::block::Block =
             template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
-        palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
-            .await
-            .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: receipt block {hash} was not submitted"))?
-            .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
+        self.submit_receipt_block(session, quoted_parent, block, pending).await?;
         info!(
             "[{PALW_PRODUCER}] PFS3 submitted block={hash} claim={claim_id} quantum={quantum_index} parent={quoted_parent} daa={next_daa}"
         );
@@ -1879,6 +1952,7 @@ impl PalwProducerService {
         builder_bond: TransactionOutpoint,
         miner_data: MinerData,
         dir: &std::path::Path,
+        pending: &mut Option<PendingReceiptBlock>,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let next_daa = session.get_virtual_daa_score();
         if !self.consensus_config.params.palw_receipt_spend_v4_active_at(next_daa) {
@@ -1970,10 +2044,7 @@ impl PalwProducerService {
             let block: kaspa_consensus_core::block::Block =
                 template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
-            palw_until_exit_v1(&self.shutdown.listener, self.flow_context.submit_rpc_block(session, block))
-                .await
-                .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: redemption block {hash} was not submitted"))?
-                .map_err(|e| format!("the chain refused a redemption block this node produced: {e}"))?;
+            self.submit_receipt_block(session, quoted_parent, block, pending).await?;
             info!(
                 "[{PALW_PRODUCER}] PFS4 submitted block={hash} claim={} quantum={} parent={quoted_parent} daa={next_daa}",
                 win.claim_id, win.quantum_index
@@ -3481,6 +3552,29 @@ mod tests {
     use super::palw_da_court_in_force_v1;
 
     #[test]
+    fn receipt_retry_holds_only_a_retained_child_of_the_current_parent() {
+        use super::{Block, BlockStatus, Hash64, PendingReceiptBlock};
+        use kaspa_consensus_core::config::params::devnet_shipped_params;
+        let parent = Hash64::from_u64_word(1);
+        let block = Block::from(&devnet_shipped_params().genesis);
+        let hash = block.hash();
+        let submitted_at = std::time::Instant::now();
+        let mut pending = PendingReceiptBlock { parent, block, last_submission: submitted_at };
+        for status in [BlockStatus::StatusUTXOValid, BlockStatus::StatusUTXOPendingVerification] {
+            assert!(pending.still_pending(parent, Some(status)));
+            assert!(!pending.still_pending(Hash64::from_u64_word(2), Some(status)));
+        }
+        for status in [BlockStatus::StatusInvalid, BlockStatus::StatusDisqualifiedFromChain, BlockStatus::StatusHeaderOnly] {
+            assert!(!pending.still_pending(parent, Some(status)));
+        }
+        assert!(!pending.still_pending(parent, None));
+        let retry_at = submitted_at + std::time::Duration::from_secs(5);
+        assert!(pending.retry_at(submitted_at).is_none());
+        assert_eq!(pending.retry_at(retry_at).unwrap().hash(), hash);
+        assert!(pending.retry_at(retry_at).is_none());
+    }
+
+    #[test]
     fn attempt_capture_preserves_the_unbudgeted_volume_reserve() {
         let gib = 1 << 30;
         let capture = 2_409_135;
@@ -3549,7 +3643,7 @@ mod tests {
         assert!(production.contains("--palw-producer-class: {why} — production disabled"), "the nodelog phrase");
         let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
         let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
-        let redemption = worker.find("self.produce_redemption(").expect("the redemption lane");
+        let redemption = worker.find(".produce_redemption(").expect("the redemption lane");
         let registry_hold = worker.find("self.registry_holds_class(").expect("the registry's attempt hold");
         let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
         let attempt = worker.find("palw_producer_ready_v1(&facts,").expect("the attempt lane");
