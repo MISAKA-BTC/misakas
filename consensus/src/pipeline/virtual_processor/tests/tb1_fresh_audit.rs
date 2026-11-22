@@ -403,7 +403,7 @@ pub(super) async fn replay_window(
             _ => panic!("choose one PANEL prefix source"),
         };
         if let Some(archive) = archive {
-            let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.deadline_exclusive_daa, archive).await;
+            let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
             assert_eq!(
                 frozen
                     .read_arithmetic_submission(node.api().as_ref(), batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results)
@@ -500,12 +500,13 @@ impl PrefixArchive {
 }
 
 /// Retain or validate ordinary accepted blocks up to the parent of the PANEL close.
-async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, deadline: u64, mut archive: PrefixArchive) -> Hash64 {
+async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, release_from: u64, mut archive: PrefixArchive) -> Hash64 {
     use std::io::Write;
     assert_eq!(node.chain.sink(), submission);
     let submitted = node.api().get_header(submission).unwrap();
     let target = close_blue.checked_sub(1).unwrap();
-    assert!(submitted.blue_score <= target && submitted.daa_score < deadline);
+    assert!(submitted.blue_score <= target);
+    assert!(submitted.daa_score < release_from, "PANEL prefix reached the share release window");
     let mut tip = submission;
     let mut pruning_point = submitted.pruning_point;
     let step = node.config.params.target_time_per_block();
@@ -525,7 +526,7 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, deadl
         };
         assert_eq!(block.header.direct_parents(), &[tip]);
         assert_eq!(block.header.blue_score, blue);
-        assert!(block.header.daa_score < deadline);
+        assert!(block.header.daa_score < release_from, "PANEL prefix reached the share release window");
         assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID);
         assert_eq!(block.transactions.len(), 1);
         tip = block.hash();
@@ -569,6 +570,22 @@ async fn replay_to_original_panel_parent() {
     let observed = control_population(&writer, parent, class);
     assert_eq!(control_population(&reader, restored, class), observed);
     assert_eq!(observed["source"], serde_json::json!(writer.api().get_ghostdag_data(parent).unwrap().selected_parent));
+}
+
+#[tokio::test]
+#[should_panic(expected = "PANEL prefix reached the share release window")]
+async fn reject_panel_parent_at_share_release() {
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let path = dir.path().join("prefix.jsonl");
+    let parts = parts(Some(FENCE));
+    let mut writer = Rig::new(&parts, 1);
+    let start = writer.chain.sink();
+    stable_panel::arm(&mut writer);
+    let parent = panel_prefix(&mut writer, start, 9, 50, PrefixArchive::create(&path)).await;
+    let release = writer.chain.daa_of(parent);
+    assert!(release > writer.chain.daa_of(start));
+    let mut reader = Rig::new(&parts, 2);
+    panel_prefix(&mut reader, start, 9, release, PrefixArchive::open(&path, parent)).await;
 }
 
 /// Reopen the original short registration history without running the candidate

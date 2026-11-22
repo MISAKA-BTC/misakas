@@ -1306,3 +1306,5 @@ out=$(mktemp -d)
 tar -xf "$p/qf1-arithmetic-preclose-population.tar.zst" -C "$out"
 python3 -B "$p/check_arithmetic_control_population.py" "$out" --openssl "$(brew --prefix openssl@3)/bin/openssl" --before-close | cmp - "$p/qf1-arithmetic-preclose-population.json"
 ```
+
+Round 16 の close は share 公開開始（DAA 90741）より前のブロックに置く。親がすでにそのDAAに達していれば予定どおりのcloseは作れない。隔離ノードで短いブロック列を生成し、別ノードで公開開始前の親まで再生できることと、同じ親のDAAを公開開始に設定すると拒否することを検査した。対象テストは2件とも成功した。親の条件を満たした場合も、採用する子自身の時刻・位置・commitmentはholderが別途照合する。[native境界試験](qf1-panel-parent-release-bound.log)

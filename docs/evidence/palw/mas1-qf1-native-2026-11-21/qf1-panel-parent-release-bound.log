@@ -1,0 +1,9 @@
+running 2 tests
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::model_audit::fresh::reject_panel_parent_at_share_release - should panic ...
+thread 'pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::model_audit::fresh::reject_panel_parent_at_share_release' (3645020) panicked at consensus/src/pipeline/virtual_processor/tests/tb1_fresh_audit.rs:529:9:
+PANEL prefix reached the share release window
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::tb1_holder_finality::model_audit::fresh::replay_to_original_panel_parent ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1508 filtered out; finished in 0.34s
