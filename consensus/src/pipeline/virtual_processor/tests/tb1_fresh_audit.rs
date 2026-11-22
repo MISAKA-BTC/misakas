@@ -418,6 +418,8 @@ pub(super) async fn replay_window(
             (None, Some(path)) => Some((path, false)),
             _ => panic!("choose one arithmetic assessment close source"),
         };
+        let work_path = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_WORK_READ");
+        assert!(work_path.is_none() || close_path.is_some(), "replaying PANEL work requires a pinned assessment close");
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
             let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
@@ -488,7 +490,57 @@ pub(super) async fn replay_window(
                         "blue":close.header.blue_score, "daa":close.header.daa_score, "state":close.header.palw_state_root,
                         "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy.id()})
                 );
+                if let Some(path) = work_path {
+                    replay_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, Path::new(&path)).await;
+                }
             }
+        }
+    }
+}
+
+/// Independently process a real post-close suffix and stop at the first
+/// selected tip at which both the signed clock and native finality allow release.
+async fn replay_assessment_work(
+    node: &mut Rig,
+    assessment: &misaka_palw_remote::tb1_exposure::model_audit::arithmetic::ArithmeticPanelCut,
+    close: Hash64,
+    round: Tb1MiningRound,
+    q: &Tb1Qualification<'_>,
+    path: &Path,
+) {
+    use std::io::{BufRead, BufReader, ErrorKind};
+
+    let mut archive = BufReader::new(File::open(path).unwrap()).lines();
+    let mut tip = close;
+    let mut pruning_point = node.api().get_header(tip).unwrap().pruning_point;
+    loop {
+        let daa = node.chain.daa_of(tip);
+        assert!(daa < round.deadline_exclusive_daa, "arithmetic PANEL work exhausted the signed release window");
+        if daa >= round.release_from_daa {
+            match assessment.observe_publication(node.api().as_ref(), close, q) {
+                Ok(_) => {
+                    peer_log!(
+                        "arithmetic PANEL release ready {} {}",
+                        std::process::id(),
+                        serde_json::json!({"close":close, "tip":tip, "daa":daa, "state":node.chain.tip_state().1.state_root()})
+                    );
+                    return;
+                }
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {}
+                Err(e) => panic!("arithmetic PANEL release observation failed: {e}"),
+            }
+        }
+        let raw: RpcRawBlock =
+            serde_json::from_str(&archive.next().expect("PANEL work ends before native finality").unwrap()).unwrap();
+        let block = Block::try_from(raw).unwrap();
+        assert_eq!(block.header.direct_parents(), &[tip]);
+        let point = block.header.pruning_point;
+        tip = block.hash();
+        stable_panel::arrive(node, block, "arithmetic PANEL post-close work").await;
+        assert_eq!(node.chain.sink(), tip);
+        if point != pruning_point {
+            legacy_work::await_pruning_capture(node, point).await;
+            pruning_point = point;
         }
     }
 }
