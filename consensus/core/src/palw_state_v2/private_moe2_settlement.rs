@@ -7,8 +7,8 @@ use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2RewardSplit,
     settlement::{
-        Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementUndo,
-        Moe2WorkerRelease,
+        Moe2ExecSlot, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError, Moe2SettlementFunding,
+        Moe2SettlementUndo, Moe2WorkerRelease,
     },
 };
 use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
@@ -25,6 +25,34 @@ impl PalwChainStateV2 {
         claim: Hash64,
         position: Moe2Position,
         release: Moe2WorkerRelease,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.settle_private_moe2_funding(config, book, delta, claim, position, release, None)
+    }
+
+    /// Accounting entry point for the private block owner after validating the
+    /// new-profile claim, its unique EXEC slot and its award in this delta.
+    pub fn settle_private_moe2_exec_slot(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: &Moe2ExecSlot,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot))
+    }
+
+    fn settle_private_moe2_funding(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: Option<&Moe2ExecSlot>,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
@@ -63,7 +91,9 @@ impl PalwChainStateV2 {
         if budget.header.policy_digest != policy.digest() {
             return Err(ReservationMismatch);
         }
-        let row = budget.claim_row(&terms.reservation_key()).ok_or(ReservationMismatch)?;
+        let row = budget
+            .claim_row(&slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key))
+            .ok_or(ReservationMismatch)?;
         let (bond_collateral, other_live_liability, bond_locked_until) =
             self.bond_liability_terms_v1(&terms.funding_bond, row.liability_sompi);
         let paid_now =
@@ -95,7 +125,8 @@ impl PalwChainStateV2 {
         };
         let mut writes = Vec::new();
         let budget = self.bond_budget.as_mut().ok_or(ReservationMismatch)?;
-        let (reward, undo) = book.settle_recorded(claim, funding.position, terms.quote_anchor, &funding, budget, &mut writes)?;
+        let (reward, undo) =
+            book.settle_from_reservation(claim, funding.position, terms.quote_anchor, &funding, budget, &mut writes, slot)?;
         delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
         if let Some(q) = reward.allocation.market {
             if before != Some(q.after) {

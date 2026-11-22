@@ -64,6 +64,48 @@ pub struct Moe2PreDrawQuote {
     pub price_limits: Moe2PriceLimits,
 }
 
+/// Signed pre-draw slot as resolved by the private EXEC close reader. The
+/// block owner authenticates the registration, its close, and the winning
+/// claim's membership in this slot before invoking the accounting fold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+pub struct Moe2ExecSlot {
+    pub registration: [u8; 64],
+    pub slot: u64,
+    pub close: Hash64,
+    pub close_daa: u64,
+    pub quote: Moe2PreDrawQuote,
+}
+
+impl Moe2ExecSlot {
+    pub const CONSENT_DOMAIN: &'static [u8] = b"MISAKA/private/FOW1/MOE2/quote-consent/v1";
+
+    pub fn consent_ref(registration: [u8; 64], slot: u64) -> [u8; 64] {
+        use sha3::{Digest, Sha3_512};
+        Sha3_512::new()
+            .chain_update(Self::CONSENT_DOMAIN)
+            .chain_update(registration)
+            .chain_update(slot.to_be_bytes())
+            .finalize()
+            .into()
+    }
+
+    pub fn reservation_key(&self) -> Hash64 {
+        Hash64::from_bytes(Self::consent_ref(self.registration, self.slot))
+    }
+
+    fn binding(&self) -> (Hash64, Hash64) {
+        let encoded = borsh::to_vec(self).expect("fixed-size EXEC slot serializes");
+        (self.reservation_key(), kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &encoded))
+    }
+
+    fn undo_digest(&self, undo: &Moe2SettlementUndo) -> Hash64 {
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/exec-undo/v1").to_state();
+        h.update(&borsh::to_vec(self).expect("fixed-size EXEC slot serializes"));
+        h.update(undo.digest().as_byte_slice());
+        Hash64::from_bytes(*h.finalize().as_array())
+    }
+}
+
 impl Moe2PreDrawQuote {
     /// Price a hypothetical reward against the selected quote anchor's post-state.
     /// The caller authenticates the state root at its pinned preparation header.
@@ -328,21 +370,36 @@ pub struct Moe2SettlementBook {
     permanent_lp_models: BTreeSet<Hash64>,
     permanent_lp_roots: BTreeSet<Hash64>,
     last_settlement: Option<Moe2Position>,
+    exec_claims: BTreeMap<Hash64, (Hash64, Hash64)>,
+    assigned_slots: BTreeSet<Hash64>,
 }
 
 impl Moe2SettlementBook {
     /// Commit a private store snapshot to its companion native state root. The
     /// owner retains this commitment independently of the checkpoint bytes.
-    fn checkpoint_digest(native_root: Hash64, bytes: &[u8]) -> Hash64 {
-        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/store/v1").to_state();
+    fn checkpoint_digest(domain: &[u8], native_root: Hash64, bytes: &[u8]) -> Hash64 {
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
         h.update(native_root.as_byte_slice());
         h.update(bytes);
         Hash64::from_bytes(*h.finalize().as_array())
     }
 
     pub fn checkpoint(&self, native_root: Hash64) -> (Hash64, Vec<u8>) {
-        let bytes = borsh::to_vec(self).expect("MOE2 store rows serialize");
-        (Self::checkpoint_digest(native_root, &bytes), bytes)
+        if self.exec_claims.is_empty() {
+            let rows = (
+                &self.models,
+                &self.admitted,
+                &self.settled,
+                &self.receipts,
+                &self.permanent_lp_models,
+                &self.permanent_lp_roots,
+                &self.last_settlement,
+            );
+            let bytes = borsh::to_vec(&rows).expect("MOE2 legacy store rows serialize");
+            return (Self::checkpoint_digest(b"misaka-palw/private/moe2/store/v1", native_root, &bytes), bytes);
+        }
+        let bytes = borsh::to_vec(self).expect("MOE2 EXEC store rows serialize");
+        (Self::checkpoint_digest(b"misaka-palw/private/moe2/store/v2", native_root, &bytes), bytes)
     }
 
     /// The byte budget and committed root come from the owner, never the snapshot sender.
@@ -352,10 +409,26 @@ impl Moe2SettlementBook {
         bytes: &[u8],
         byte_budget: usize,
     ) -> Result<Self, Moe2SettlementError> {
-        if bytes.len() > byte_budget || Self::checkpoint_digest(native_root, bytes) != expected {
-            return Err(Moe2SettlementError::CheckpointMismatch);
+        use Moe2SettlementError::CheckpointMismatch;
+        if bytes.len() > byte_budget {
+            return Err(CheckpointMismatch);
         }
-        borsh::from_slice(bytes).map_err(|_| Moe2SettlementError::CheckpointMismatch)
+        if Self::checkpoint_digest(b"misaka-palw/private/moe2/store/v2", native_root, bytes) == expected {
+            let book: Self = borsh::from_slice(bytes).map_err(|_| CheckpointMismatch)?;
+            if book.exec_claims.is_empty()
+                || book.exec_claims.len() != book.assigned_slots.len()
+                || book.exec_claims.values().map(|(key, _)| *key).collect::<BTreeSet<_>>() != book.assigned_slots
+            {
+                return Err(CheckpointMismatch);
+            }
+            return Ok(book);
+        }
+        if Self::checkpoint_digest(b"misaka-palw/private/moe2/store/v1", native_root, bytes) != expected {
+            return Err(CheckpointMismatch);
+        }
+        let (models, admitted, settled, receipts, permanent_lp_models, permanent_lp_roots, last_settlement) =
+            borsh::from_slice(bytes).map_err(|_| CheckpointMismatch)?;
+        Ok(Self { models, admitted, settled, receipts, permanent_lp_models, permanent_lp_roots, last_settlement, ..Self::default() })
     }
 
     /// Apply new registrations and native repricing of existing pairs in one batch. The
@@ -504,6 +577,53 @@ impl Moe2SettlementBook {
         Ok(())
     }
 
+    /// Bind the block owner's authenticated new-profile claim to the one slot
+    /// reserved at EXEC close. No cash moves at claim admission.
+    pub fn admit_exec_slot(
+        &mut self,
+        claim: Hash64,
+        slot: &Moe2ExecSlot,
+        budget: &PalwBondBudgetStateV1,
+        resolve: impl FnOnce(Hash64, Hash64) -> Option<Moe2RegisteredModel>,
+    ) -> Result<(), Moe2SettlementError> {
+        use Moe2SettlementError::*;
+        let binding = slot.binding();
+        if self.assigned_slots.contains(&binding.0) {
+            return Err(AlreadyAdmitted);
+        }
+        let row = budget.claim_row(&binding.0).ok_or(ReservationMismatch)?;
+        if !(slot.quote.valid_from..=slot.quote.deadline).contains(&slot.close_daa)
+            || budget.header.policy_digest != slot.quote.policy
+            || row.accepted_daa != slot.close_daa
+            || row.origin != PalwBudgetOriginV1::Attempt
+            || !row.live
+            || !row.open
+            || row.model.map(|(model, _)| model) != Some(slot.quote.model)
+            || row.bond != slot.quote.funding_bond
+            || row.reserved.reward_sompi != slot.quote.limits.max_reward
+            || row.reserved.claims != 1
+            || row.consumed != crate::palw_bond_budget_v1::PalwBudgetVectorV1::ZERO
+        {
+            return Err(ReservationMismatch);
+        }
+        self.admit(slot.quote.for_claim(claim), resolve)?;
+        self.assigned_slots.insert(binding.0);
+        self.exec_claims.insert(claim, binding);
+        Ok(())
+    }
+
+    /// Disconnect the admission only after disconnecting its settlement.
+    pub fn revert_exec_admission(&mut self, claim: Hash64, slot: &Moe2ExecSlot) -> Result<(), Moe2SettlementError> {
+        let binding = slot.binding();
+        if self.exec_claims.get(&claim) != Some(&binding) || !self.admitted.contains_key(&claim) {
+            return Err(Moe2SettlementError::UndoMismatch);
+        }
+        self.admitted.remove(&claim);
+        self.exec_claims.remove(&claim);
+        self.assigned_slots.remove(&binding.0);
+        Ok(())
+    }
+
     /// Install a canonical accounting transition. Funding, the maturity decision and
     /// authentication of the admission terms and quote anchor precede this kernel.
     pub fn settle(
@@ -528,11 +648,29 @@ impl Moe2SettlementBook {
         budget: &mut PalwBondBudgetStateV1,
         journal: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.settle_from_reservation(claim, position, anchor, funding, budget, journal, None)
+    }
+
+    /// Use the original signed slot without creating a second reservation.
+    /// The ordinary claim-keyed route retains its original acceptance clock.
+    pub(crate) fn settle_from_reservation(
+        &mut self,
+        claim: Hash64,
+        position: Moe2Position,
+        anchor: Hash64,
+        funding: &Moe2SettlementFunding,
+        budget: &mut PalwBondBudgetStateV1,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+        slot: Option<&Moe2ExecSlot>,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
         use Moe2SettlementError::*;
         if self.settled.contains_key(&claim) {
             return Err(AlreadySettled);
         }
         let (terms, reference) = *self.admitted.get(&claim).ok_or(UnknownClaimContext)?;
+        if self.exec_claims.get(&claim).copied() != slot.map(Moe2ExecSlot::binding) {
+            return Err(ReservationMismatch);
+        }
         if funding.claim != claim || funding.position != position || funding.liability.now != position.point.daa_score {
             return Err(UnknownClaimContext);
         }
@@ -554,7 +692,7 @@ impl Moe2SettlementBook {
 
         // Only the original model-bound mining reservation can fund this move.
         // All fallible quote and liability checks precede the single journaled debit.
-        let key = terms.reservation_key();
+        let key = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
         let row = budget.claim_row(&key).ok_or(ReservationMismatch)?;
         let liability = &funding.liability;
         if terms.policy != budget.header.policy_digest
@@ -564,7 +702,15 @@ impl Moe2SettlementBook {
             || !row.open
             || !row.live
             || row.accepted_daa < model.registration_daa
-            || row.accepted_daa > terms.valid_from
+            || match slot {
+                None => row.accepted_daa > terms.valid_from,
+                Some(slot) => {
+                    slot.quote.for_claim(claim) != terms
+                        || slot.close_daa != row.accepted_daa
+                        || !(terms.valid_from..=position.point.daa_score).contains(&slot.close_daa)
+                        || row.reserved.reward_sompi != terms.limits.max_reward
+                }
+            }
             || liability.reserved_reward != Ok(row.reserved.reward_sompi)
             || liability.consumed_reward != Ok(row.consumed.reward_sompi)
             || liability.liability_sompi != Ok(row.liability_sompi)
@@ -582,11 +728,14 @@ impl Moe2SettlementBook {
             had_model_lp: self.permanent_lp_models.contains(&terms.model),
             had_root_lp: self.permanent_lp_roots.contains(&terms.artifact_root),
         };
-        budget
-            .consume(&key, PalwBudgetDimV1::Reward, liability.draw.into(), true, journal)
-            .ok_or(ReservationMismatch)?
-            .map_err(|_| ReservationMismatch)?;
-
+        if slot.is_some() {
+            budget.consume_exec_slot_reward(&key, liability.draw, journal).map_err(|_| ReservationMismatch)?;
+        } else {
+            budget
+                .consume(&key, PalwBudgetDimV1::Reward, liability.draw.into(), true, journal)
+                .ok_or(ReservationMismatch)?
+                .map_err(|_| ReservationMismatch)?;
+        }
         if let (Moe2ModelAllocation::Additional(before), Some(q)) = (model.allocation, allocation.market) {
             if q.split.liquidity > 0 {
                 let receipt = LockedLiquidityReceipt {
@@ -610,7 +759,7 @@ impl Moe2SettlementBook {
             model.allocation = Moe2ModelAllocation::Additional(q.after);
         }
         self.admitted.remove(&claim);
-        self.settled.insert(claim, (payment, undo.digest()));
+        self.settled.insert(claim, (payment, slot.map_or_else(|| undo.digest(), |slot| slot.undo_digest(&undo))));
         self.last_settlement = Some(position);
         Ok((payment, undo))
     }
@@ -624,10 +773,31 @@ impl Moe2SettlementBook {
         budget: &mut PalwBondBudgetStateV1,
         journal: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), Moe2SettlementError> {
+        self.revert_from_reservation(undo, budget, journal, None)
+    }
+
+    pub fn revert_exec_settlement(
+        &mut self,
+        slot: &Moe2ExecSlot,
+        undo: &Moe2SettlementUndo,
+        budget: &mut PalwBondBudgetStateV1,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), Moe2SettlementError> {
+        self.revert_from_reservation(undo, budget, journal, Some(slot))
+    }
+
+    fn revert_from_reservation(
+        &mut self,
+        undo: &Moe2SettlementUndo,
+        budget: &mut PalwBondBudgetStateV1,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+        slot: Option<&Moe2ExecSlot>,
+    ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let terms = undo.terms;
         let (reward, digest) = self.settled.get(&terms.claim).ok_or(UndoMismatch)?;
-        if self.last_settlement != Some(undo.position) || *digest != undo.digest() {
+        if self.last_settlement != Some(undo.position) || *digest != slot.map_or_else(|| undo.digest(), |slot| slot.undo_digest(undo))
+        {
             return Err(UndoMismatch);
         }
         let mut after_model = undo.before_model;
@@ -637,13 +807,16 @@ impl Moe2SettlementBook {
         if self.model(&terms.model) != Some(&after_model) {
             return Err(UndoMismatch);
         }
-        let key = terms.reservation_key();
+        let key = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
         let mut after_row = undo.before_budget;
+        if slot.is_some() {
+            after_row.consumed.claims = 1;
+        }
         after_row.consumed.reward_sompi = after_row.consumed.reward_sompi.checked_add(undo.draw).ok_or(UndoMismatch)?;
         if budget.claim_row(&key) != Some(&after_row) {
             return Err(ReservationMismatch);
         }
-        if undo.draw != 0 {
+        if undo.draw != 0 || slot.is_some() {
             let table = PALW_BUDGET_TABLE_CLAIMS_V1;
             let key = borsh::to_vec(&key).expect("budget key serializes");
             let old = Some(borsh::to_vec(&after_row).expect("budget row serializes"));
@@ -806,6 +979,110 @@ mod tests {
                 assert!(book.receipt(&claim).is_some() && book.entitlement(&claim).is_some());
             }
         }
+    }
+
+    #[test]
+    fn exec_slot_debits_once_and_reconnects_after_the_quote_anchor() {
+        let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        let mut budget = PalwBondBudgetStateV1::new(0, &policy);
+        let mut book = Moe2SettlementBook::default();
+        let model = Moe2RegisteredModel {
+            model: h(1),
+            artifact_root: h(90),
+            registration_daa: 1,
+            owner: None,
+            allocation: Moe2ModelAllocation::Additional(market()),
+        };
+        book.models.insert(model.model, model);
+        let slot = Moe2ExecSlot {
+            registration: [5; 64],
+            slot: 9,
+            close: h(3),
+            close_daa: 3,
+            quote: Moe2PreDrawQuote {
+                funding_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 1)),
+                model: model.model,
+                artifact_root: model.artifact_root,
+                policy: policy.digest(),
+                quote_anchor: h(2),
+                valid_from: 2,
+                deadline: 5,
+                limits: Moe2QuantityLimits { max_reward: 1000, ..LIMITS },
+                plan: Moe2WorkerPlan::MinerAndPanel20,
+                price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 10_000 },
+            },
+        };
+        let at = Moe2Position { point: PalwBlockContextV2 { block: h(4), blue_score: 10, daa_score: 4, subsidy: 1000 }, ordinal: 1 };
+        let claim = h(10);
+        let other = h(11);
+        let mut writes = Vec::new();
+        budget
+            .reserve_liable(
+                &policy,
+                3000,
+                slot.reservation_key(),
+                slot.quote.funding_bond,
+                Some((model.model, 0)),
+                3,
+                PalwBudgetVectorV1 { claims: 1, reward_sompi: 1000, ..Default::default() },
+                2000,
+                PalwBudgetOriginV1::Attempt,
+                true,
+                &mut writes,
+            )
+            .unwrap();
+        // The budget row itself enforces one use even for a zero or partial draw.
+        for draw in [0, 800] {
+            let mut replay = budget.clone();
+            let mut journal = Vec::new();
+            replay.consume_exec_slot_reward(&slot.reservation_key(), draw, &mut journal).unwrap();
+            assert_eq!(journal.len(), 1);
+            let after = replay.clone();
+            assert!(replay.consume_exec_slot_reward(&slot.reservation_key(), 1, &mut journal).is_err());
+            assert_eq!(replay, after);
+            assert_eq!(journal.len(), 1);
+        }
+        let before_admission = book.clone();
+        book.admit_exec_slot(claim, &slot, &budget, |_, _| Some(model)).unwrap();
+        assert_eq!(book.admit_exec_slot(other, &slot, &budget, |_, _| Some(model)), Err(Moe2SettlementError::AlreadyAdmitted));
+        book.revert_exec_admission(claim, &slot).unwrap();
+        assert_eq!(book, before_admission);
+        book.admit_exec_slot(claim, &slot, &budget, |_, _| Some(model)).unwrap();
+        book.admit(slot.quote.for_claim(other), |_, _| Some(model)).unwrap();
+        let parent = (book.clone(), budget.clone());
+        let pay = |id, pos| {
+            let mut f = funding(id, pos, 800);
+            f.liability.reserved_reward = Ok(1000);
+            f
+        };
+        let other_slot = Moe2ExecSlot { slot: 10, ..slot };
+        for source in [None, Some(&other_slot), Some(&Moe2ExecSlot { close_daa: 2, ..slot })] {
+            let count = writes.len();
+            assert_eq!(
+                book.settle_from_reservation(claim, at, h(2), &pay(claim, at), &mut budget, &mut writes, source),
+                Err(Moe2SettlementError::ReservationMismatch)
+            );
+            assert_eq!((&book, &budget, writes.len()), (&parent.0, &parent.1, count));
+        }
+        let (result, undo) =
+            book.settle_from_reservation(claim, at, h(2), &pay(claim, at), &mut budget, &mut writes, Some(&slot)).unwrap();
+        let receipt = book.receipt(&claim).unwrap();
+        assert_eq!((receipt.purchase, receipt.liquidity, result.miner_now + result.panel_now), (240, 160, 400));
+        let consumed = budget.claim_row(&slot.reservation_key()).unwrap().consumed;
+        assert_eq!((consumed.claims, consumed.reward_sompi), (1, 800));
+        let checkpoint = book.checkpoint(h(99));
+        book = Moe2SettlementBook::from_checkpoint(h(99), checkpoint.0, &checkpoint.1, checkpoint.1.len()).unwrap();
+        let child = (book.clone(), budget.clone());
+        let later = Moe2Position { ordinal: 2, ..at };
+        let count = writes.len();
+        assert!(book.settle_from_reservation(other, later, h(2), &pay(other, later), &mut budget, &mut writes, Some(&slot)).is_err());
+        assert!(book.revert_settlement(&undo, &mut budget, &mut writes).is_err());
+        assert!(book.revert_exec_settlement(&Moe2ExecSlot { close: h(42), ..slot }, &undo, &mut budget, &mut writes).is_err());
+        assert_eq!((&book, &budget, writes.len()), (&child.0, &child.1, count));
+        book.revert_exec_settlement(&slot, &undo, &mut budget, &mut writes).unwrap();
+        assert_eq!((&book, &budget), (&parent.0, &parent.1));
+        book.settle_from_reservation(claim, at, h(2), &pay(claim, at), &mut budget, &mut writes, Some(&slot)).unwrap();
+        assert_eq!((book, budget), child);
     }
 
     #[test]
