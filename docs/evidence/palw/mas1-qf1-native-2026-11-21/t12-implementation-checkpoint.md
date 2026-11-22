@@ -312,3 +312,11 @@ EXEC予約の消費を伴うnative差分では、市場変更がある場合、�
 この変更は既存の隔離決済差分とsnapshotの書式を維持する。通常ブロック処理で認証済みFOW1仕事キーを消費して決済を呼ぶ接続と、採掘資格を満たすFOW1入力による実ブロック試験は残る。
 
 `private_moe2_three_process_registration` は終了コード0（ビルド7分01秒、試験1.15秒）。市場の更新後残高を維持したまま買付Position数とLP履歴の同じ数を改変した差分を、適用・巻き戻しの両方向で拒否した。Miner即時支払を配分より1 sompi増やしたsnapshotは、期待rootの比較を指定しない状態整合性検査で拒否した。正しい候補 `a2bced207d4d3b20…` では、3プロセスの決済後root `5b253baaf6a3aa2b…`、決済台帳root `9fe82ed97dc689e88…`、購入4,800,000,000 sompi、永久LP 3,200,000,000 sompi、余剰Position 1単位burnが一致した。同じビルドのT12当選と3ピア受理（3.96秒）、落選（1.90秒）、V3/V4同一量子の二重消費拒否（1.14秒）はすべて終了コード0。
+
+### 隔離P200の短い進行試験
+
+DAA 7751の隔離作業DB3個にZFS snapshot `p200-before-bounded-forward` を残してから、検証者・手数料設定を読み込んだ3ピアで通常のalgo 8 heartbeatを正規PoW検証に通した。最初の子 `383f5622a2b160c7…` を全ピアが選択した時点ではvirtual DAAが7751のままであり、全heartbeatが即座にDAAを1進めるとした観測条件が終了コード1となった。その条件を修正して同じ作業コピーから進めた。
+
+後続試験は選択tipを `20834c6dc69efc9d…`、virtual DAAを7753まで進めた直後に履歴proofの照合で終了コード1。採取時のノードログでは、選択親の状態再構築に約17.0 GB必要なところ、約18.2 GBが予約済みで約20.6 GBの論理上限に達していた。発行を止めて再起動した3ピアの読戻しは終了コード0。同じ選択tip、ヘッダーの親状態root、親状態proofのpreimage、選択tipのpost-state root `ff74dfb10930acae…` が一致した。
+
+最後の短い試験の発行中は、全ピアの選択tipを揃えて現在のnative post-state rootを照合した。終了コード0。3ピアがalgo 8ブロック `c07eaca5b8b7a751…`、virtual DAA 7754、post-state root `125cdac1ab342017…` を返した。Panel承認済みの同じStudio claimは `receipt_licensed`、異議保留なし、Final期限10866、Gate Cはpending。新規Attempt、Final、当選Ticket、受賞権利消費は今回の試験では確認していない。作業コピーをこの位置で停止した。完全な識別子と終了コードは [P200実行記録](p200-studio-mining-path.json) に収録した。

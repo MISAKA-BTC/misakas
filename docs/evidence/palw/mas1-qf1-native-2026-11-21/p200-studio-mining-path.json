@@ -487,5 +487,43 @@
       "heartbeatPermits": 0,
       "exitCode": 4
     }
+  },
+  "boundedHeartbeatProgress": {
+    "nativeBinarySha256": "a5c384b3a9e554587b69502dd90c1314a54818c5cc45d08de9c0149649f2e4ea",
+    "initialVirtualDaa": 7751,
+    "initialSnapshot": "p200-before-bounded-forward",
+    "firstForwardExitCode": 1,
+    "historicalProofRunExitCode": 1,
+    "coldReadback": {
+      "virtualDaa": 7753,
+      "block": "20834c6dc69efc9d2ca7db525bd030d7cd9d49983a643484e00dec3947378088301441a853ead22216a5c5173d3569f7500ea685bd5bcf14b268ee68589cae2a",
+      "headerDaa": 7753,
+      "headerRoot": "772f6a5bb7fb644f89600dbb2e288029d9f2f7be4fb18e802aa2734e58940363492e2b50430c26bafe134bc8a329147884dd15fd3e2663530cac6323d8b99a8f",
+      "phase": "receipt_licensed",
+      "finalDeadline": 10866,
+      "claim": "1a4a84115e223ad247eadfc76492bc8612d4b0024974087f5f3c3704078870b72215280fe520a556a607fd6c55532f4170a4de0bba74710643c9f2de84fcc982",
+      "gateC": "pending",
+      "proofAvailable": true,
+      "proofError": "",
+      "proofPreimageSha": "639be344b0f76ff33e471eaa9127bf5a4597ca20a3396b9307eefa5ed977168f",
+      "tipStateRoot": "ff74dfb10930acae4e3ee2ec933fb756518d7374e083ed4dabd8fa46692a05a872d704f568347a53c70d367df9605ec66de01539048b78f9c1ada84093bdf0af",
+      "rewardStatus": true,
+      "rewardTip": 7753,
+      "peers": 3,
+      "exitCode": 0
+    },
+    "selectedTipReadback": {
+      "daa": 7754,
+      "block": "c07eaca5b8b7a7513794ed6fb2b86b31794fac629c18df34d024af75377199e4e5385c7b8668d075dc9a07ae8ac0a0ce87093752b490c2b8a14616aa7bb3b9c6",
+      "algo": 8,
+      "palwStateRoot": "ff74dfb10930acae4e3ee2ec933fb756518d7374e083ed4dabd8fa46692a05a872d704f568347a53c70d367df9605ec66de01539048b78f9c1ada84093bdf0af",
+      "tipStateRoot": "125cdac1ab342017d3d5e95fcb1f6768b02a0ebad75592ee8f154a99cec696c078300c0d53206fc242172bb8819806dccabef4d3ff694a631c6d1bc2639f9553",
+      "phase": "receipt_licensed",
+      "claim": "1a4a84115e223ad247eadfc76492bc8612d4b0024974087f5f3c3704078870b72215280fe520a556a607fd6c55532f4170a4de0bba74710643c9f2de84fcc982",
+      "certifications": "pending",
+      "finalDeadline": 10866,
+      "peers": 3,
+      "exitCode": 0
+    }
   }
 }
