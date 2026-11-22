@@ -655,6 +655,11 @@ pub(crate) fn scan_carriage_native_wire_v1<R: std::io::Read>(
                 sum = sum.merge(shape)?;
                 counts.push(("bond_budget", shape.outer_entries, shape.collection_entries));
             }
+            PALW_CARRIAGE_PRIVATE_MOE2_WORK_USES_TAIL => {
+                let shape = <BTreeMap<crate::Hash64, crate::Hash64> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                sum = sum.merge(shape)?;
+                counts.push(("private_moe2_work_uses", shape.outer_entries, shape.collection_entries));
+            }
             PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL => {
                 let shape=<BTreeMap<crate::Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;

@@ -7805,6 +7805,12 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwDeltaEntryV2 {
                 sum=sum.merge(<Box<crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            254 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum=sum.merge(<Box<crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

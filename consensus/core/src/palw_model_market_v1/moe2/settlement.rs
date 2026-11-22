@@ -470,6 +470,7 @@ pub enum Moe2SettlementError {
     UnknownClaimContext,
     AlreadyAdmitted,
     AlreadySettled,
+    WorkAlreadyConsumed,
     ReservationMismatch,
     WorkerOutputsMismatch,
     PositionOutOfOrder,

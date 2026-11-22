@@ -87,6 +87,10 @@ impl PalwChainStateV2 {
         self.private_moe2_exec_settlements.get(claim)
     }
 
+    pub fn private_moe2_work_claim(&self, work: &Hash64) -> Option<&Hash64> {
+        self.private_moe2_work_uses.get(work)
+    }
+
     /// Render the immediately payable worker section of the award coinbase.
     /// Construction and settlement compare use the same native payout payloads.
     pub fn private_moe2_exec_worker_outputs(
@@ -133,14 +137,10 @@ impl PalwChainStateV2 {
         position: Moe2Position,
         release: Moe2WorkerRelease,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
-        self.settle_private_moe2_funding(config, book, delta, claim, position, release, None)
+        self.settle_private_moe2_funding(config, book, delta, claim, position, release, None, None)
     }
 
-    /// Accounting entry point for the private block owner after validating the
-    /// new-profile claim, its unique EXEC slot and its award in this delta.
-    /// Verify the worker outputs against the coinbase committed by this
-    /// award block. Its owner validates the other outputs and authenticates
-    /// the placement and recipient plan.
+    /// Legacy private settlement for a claim without a canonical work identity.
     pub fn settle_private_moe2_exec_slot(
         &mut self,
         config: &Params,
@@ -150,6 +150,45 @@ impl PalwChainStateV2 {
         position: Moe2Position,
         release: Moe2WorkerRelease,
         slot: &Moe2ExecSlot,
+        payees: Moe2ExecWorkerPayees<'_>,
+        block: &Block,
+        worker_start: usize,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.settle_private_moe2_exec(config, book, delta, claim, position, release, slot, None, payees, block, worker_start)
+    }
+
+    /// Settle an independently authenticated award on a private MOE2 genesis.
+    /// The block owner derives `work` from the winning claim's authenticated
+    /// EXEC input and resolves equivalent profiles to the same canonical key.
+    /// It also validates the other coinbase outputs, the worker plan and its
+    /// placement before entering this accounting fold.
+    pub fn settle_private_moe2_exec_work(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: &Moe2ExecSlot,
+        work: Hash64,
+        payees: Moe2ExecWorkerPayees<'_>,
+        block: &Block,
+        worker_start: usize,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.settle_private_moe2_exec(config, book, delta, claim, position, release, slot, Some(work), payees, block, worker_start)
+    }
+
+    fn settle_private_moe2_exec(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: &Moe2ExecSlot,
+        work: Option<Hash64>,
         payees: Moe2ExecWorkerPayees<'_>,
         block: &Block,
         worker_start: usize,
@@ -171,7 +210,7 @@ impl PalwChainStateV2 {
         {
             return Err(WorkerOutputsMismatch);
         }
-        self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot))
+        self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot), work)
     }
 
     /// Remove an EXEC settlement from this block before disconnecting its
@@ -208,7 +247,22 @@ impl PalwChainStateV2 {
         if self.private_moe2_exec_settlement(&undo.claim()) != Some(&record) {
             return Err(UndoMismatch);
         }
-        suffix.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) });
+        let work = match delta.entries.last() {
+            Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, .. }) => {
+                if self.private_moe2_work_claim(work) != Some(&undo.claim()) {
+                    return Err(UndoMismatch);
+                }
+                suffix.push(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work: *work, record: Box::new(record) });
+                Some(*work)
+            }
+            _ => {
+                if self.private_moe2_work_uses.values().any(|claim| *claim == undo.claim()) {
+                    return Err(UndoMismatch);
+                }
+                suffix.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) });
+                None
+            }
+        };
         if !delta.entries.ends_with(&suffix) {
             return Err(UndoMismatch);
         }
@@ -217,6 +271,9 @@ impl PalwChainStateV2 {
         book.revert_exec_settlement(slot, undo, budget, &mut Vec::new())?;
         if let Some(market) = before {
             self.model_markets.insert(model, market);
+        }
+        if let Some(work) = work {
+            self.private_moe2_work_uses.remove(&work);
         }
         self.private_moe2_exec_settlements.remove(&undo.claim());
         delta.entries.truncate(delta.entries.len() - suffix.len());
@@ -232,6 +289,7 @@ impl PalwChainStateV2 {
         position: Moe2Position,
         release: Moe2WorkerRelease,
         slot: Option<&Moe2ExecSlot>,
+        work: Option<Hash64>,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
@@ -244,6 +302,9 @@ impl PalwChainStateV2 {
         }
         if book.entitlement(&claim).is_some() || (slot.is_some() && self.private_moe2_exec_settlement(&claim).is_some()) {
             return Err(AlreadySettled);
+        }
+        if work.is_some_and(|key| self.private_moe2_work_claim(&key).is_some()) {
+            return Err(WorkAlreadyConsumed);
         }
         let terms = *book.admitted_terms(&claim).ok_or(UnknownClaimContext)?;
         let model = *book.model(&terms.model).ok_or(UnknownRegistration)?;
@@ -316,7 +377,13 @@ impl PalwChainStateV2 {
         if let Some(slot) = slot {
             let record = Moe2NativeExecSettlement::from_settlement(slot, book, &undo, reward);
             self.private_moe2_exec_settlements.insert(claim, record.clone());
-            delta.entries.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) });
+            let entry = if let Some(work) = work {
+                self.private_moe2_work_uses.insert(work, claim);
+                PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record: Box::new(record) }
+            } else {
+                PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) }
+            };
+            delta.entries.push(entry);
         }
         Ok((reward, undo))
     }

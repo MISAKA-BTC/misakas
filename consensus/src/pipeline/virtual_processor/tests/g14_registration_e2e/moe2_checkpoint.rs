@@ -29,24 +29,37 @@ pub(super) fn check_exec_settlement_rewind(
     drop(store);
     let slot = Moe2ExecSlot { registration: [24; 64], slot: 1, close, close_daa: close_delta.point.daa_score, quote };
     let claim = Hash64::from_u64_word(642);
+    // This fixture injects the identity that the block owner's authenticated
+    // EXEC verifier would provide. It only exercises native accounting.
+    let work = Hash64::from_u64_word(650);
+    let other_work = Hash64::from_u64_word(651);
+    let alias_claim = Hash64::from_u64_word(652);
+    let alias_slot = Moe2ExecSlot {
+        registration: [25; 64],
+        slot: 2,
+        quote: Moe2PreDrawQuote { funding_bond: env.chain.bonds[0], ..quote },
+        ..slot
+    };
     let mut book = registered_book.clone();
     let unreserved = apply_delta_v2(registration, &close_delta, params).unwrap();
-    let (capital, ask) = quote.budget_ask_at(config, &unreserved, slot.close_daa).unwrap();
     let mut budget = unreserved.bond_budget().unwrap().clone();
     let mut writes = Vec::new();
-    budget
-        .reserve_claim_v1(
-            &params.bond_budget().unwrap().policy,
-            capital,
-            slot.reservation_key(),
-            quote.funding_bond,
-            Some(quote.model),
-            slot.close_daa,
-            ask,
-            PalwBudgetOriginV1::Attempt,
-            &mut writes,
-        )
-        .unwrap();
+    for slot in [&slot, &alias_slot] {
+        let (capital, ask) = slot.quote.budget_ask_at(config, &unreserved, slot.close_daa).unwrap();
+        budget
+            .reserve_claim_v1(
+                &params.bond_budget().unwrap().policy,
+                capital,
+                slot.reservation_key(),
+                slot.quote.funding_bond,
+                Some(slot.quote.model),
+                slot.close_daa,
+                ask,
+                PalwBudgetOriginV1::Attempt,
+                &mut writes,
+            )
+            .unwrap();
+    }
     close_delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
     let reserved = apply_delta_v2(registration, &close_delta, params).unwrap();
     let sibling = Moe2ExecSlot { close: Hash64::from_u64_word(647), ..slot };
@@ -69,6 +82,10 @@ pub(super) fn check_exec_settlement_rewind(
         assert_eq!(&book, registered_book);
     }
     book.admit_exec_slot(claim, &slot, reserved.bond_budget().unwrap(), |anchor, id| {
+        (anchor == quote.quote_anchor && id == quote.model).then(|| *registered_book.model(&id).unwrap())
+    })
+    .unwrap();
+    book.admit_exec_slot(alias_claim, &alias_slot, reserved.bond_budget().unwrap(), |anchor, id| {
         (anchor == quote.quote_anchor && id == quote.model).then(|| *registered_book.model(&id).unwrap())
     })
     .unwrap();
@@ -124,6 +141,33 @@ pub(super) fn check_exec_settlement_rewind(
     let (mut child, mut award_delta, position) = fold(&award_block);
     let original_delta = award_delta.clone();
     let before = child.state_root();
+    {
+        let mut old_state = child.clone();
+        let mut old_book = book.clone();
+        let mut old_delta = award_delta.clone();
+        old_state
+            .settle_private_moe2_exec_slot(
+                config,
+                &mut old_book,
+                &mut old_delta,
+                claim,
+                position,
+                release,
+                &slot,
+                payees,
+                &award_block,
+                worker_start,
+            )
+            .unwrap();
+        assert!(matches!(old_delta.entries.last(), Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { .. })));
+        let old_root = old_state.state_root();
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&old_state)).unwrap();
+        let old_carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        assert!(old_carriage.private_moe2_work_uses.is_empty());
+        assert_eq!(old_carriage.into_state(params, Some(old_root)).unwrap().state_root(), old_root);
+        assert_eq!(revert_delta_v2(&old_state, &old_delta, params).unwrap().state_root(), reserved.state_root());
+    }
+
     let duplicate = [panel[0], panel[0]];
     assert_eq!(
         child.private_moe2_exec_worker_outputs(
@@ -140,7 +184,7 @@ pub(super) fn check_exec_settlement_rewind(
         let (mut state, mut delta, at) = fold(&block);
         let original = (state.state_root(), delta.clone());
         assert_eq!(
-            state.settle_private_moe2_exec_slot(
+            state.settle_private_moe2_exec_work(
                 config,
                 &mut book,
                 &mut delta,
@@ -148,6 +192,7 @@ pub(super) fn check_exec_settlement_rewind(
                 at,
                 release,
                 &slot,
+                work,
                 payees,
                 &block,
                 worker_start
@@ -164,7 +209,7 @@ pub(super) fn check_exec_settlement_rewind(
         (&execution, worker_start, Moe2SettlementError::UnknownClaimContext),
     ] {
         assert_eq!(
-            child.settle_private_moe2_exec_slot(
+            child.settle_private_moe2_exec_work(
                 config,
                 &mut book,
                 &mut award_delta,
@@ -172,6 +217,7 @@ pub(super) fn check_exec_settlement_rewind(
                 position,
                 release,
                 &slot,
+                work,
                 payees,
                 block,
                 start,
@@ -186,7 +232,7 @@ pub(super) fn check_exec_settlement_rewind(
     swapped.push(execution.transactions[0].clone());
     let mismatched_body = Block::from_arcs(award_block.header.clone(), swapped);
     assert_eq!(
-        child.settle_private_moe2_exec_slot(
+        child.settle_private_moe2_exec_work(
             config,
             &mut book,
             &mut award_delta,
@@ -194,6 +240,7 @@ pub(super) fn check_exec_settlement_rewind(
             position,
             release,
             &slot,
+            work,
             payees,
             &mismatched_body,
             worker_start,
@@ -202,7 +249,7 @@ pub(super) fn check_exec_settlement_rewind(
     );
     assert_eq!((child.state_root(), &book, &award_delta), (before, &admitted, &original_delta));
     let (payment, undo) = child
-        .settle_private_moe2_exec_slot(
+        .settle_private_moe2_exec_work(
             config,
             &mut book,
             &mut award_delta,
@@ -210,17 +257,25 @@ pub(super) fn check_exec_settlement_rewind(
             position,
             release,
             &slot,
+            work,
             payees,
             &award_block,
             worker_start,
         )
         .unwrap();
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
+    let delta_bytes = borsh::to_vec(&award_delta).unwrap();
+    kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(
+        delta_bytes.as_slice(),
+        delta_bytes.len() as u64,
+    )
+    .unwrap();
+    award_delta = borsh::from_slice(&delta_bytes).unwrap();
     let after = child.state_root();
     assert_eq!(apply_delta_v2(&reserved, &award_delta, params).unwrap().state_root(), after);
 
     let mut false_purchase = award_delta.clone();
-    let Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }) = false_purchase.entries.last_mut() else {
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }) = false_purchase.entries.last_mut() else {
         panic!("missing EXEC settlement after the market write");
     };
     record.reward.allocation.market.as_mut().unwrap().purchased_units += 1;
@@ -232,7 +287,7 @@ pub(super) fn check_exec_settlement_rewind(
     assert!(revert_delta_v2(&child, &false_purchase, params).is_err());
 
     let mut substituted_slot = award_delta.clone();
-    let Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }) = substituted_slot.entries.last_mut() else {
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }) = substituted_slot.entries.last_mut() else {
         panic!("missing EXEC settlement after the market write");
     };
     record.signed_slot = Hash64::from_u64_word(648);
@@ -261,13 +316,39 @@ pub(super) fn check_exec_settlement_rewind(
         .unwrap();
     let reopened: PalwStateCarriageV2 = borsh::from_slice(&carried_bytes).unwrap();
     child = reopened.into_state(params, Some(after)).unwrap();
-    let receipt = child.private_moe2_exec_settlement(&claim).unwrap();
+    let receipt = child.private_moe2_exec_settlement(&claim).unwrap().clone();
     assert_eq!((receipt.reservation, receipt.reward, receipt.position), (slot.reservation_key(), payment, position));
     assert_eq!(receipt.permanent_liquidity.as_ref(), book.receipt(&claim));
+    assert_eq!(child.private_moe2_work_claim(&work), Some(&claim));
+    let mut conflicting_work = carried.clone();
+    conflicting_work.private_moe2_work_uses.insert(other_work, claim);
+    assert!(matches!(conflicting_work.into_state(params, None), Err(PalwStateV2Error::CarriageInconsistent(_))));
+
+    // Another signed slot has independent funds and a separate claim ID, but
+    // its canonical work identity is already consumed on this branch.
+    let mut conflict_delta = award_delta.clone();
+    let mut conflict_book = book.clone();
+    assert_eq!(
+        child.settle_private_moe2_exec_work(
+            config,
+            &mut conflict_book,
+            &mut conflict_delta,
+            alias_claim,
+            position,
+            release,
+            &alias_slot,
+            work,
+            payees,
+            &award_block,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::WorkAlreadyConsumed),
+    );
+    assert_eq!((child.state_root(), conflict_book, conflict_delta), (after, book.clone(), award_delta.clone()));
     // A receipt at a different block must not use the already consumed
     // reservation from the parent, even after restoring the native snapshot.
     let later = PalwBlockContextV2 { block: Hash64::from_u64_word(645), blue_score: position.point.blue_score + 1, ..position.point };
-    let mut duplicate = receipt.clone();
+    let mut duplicate = receipt;
     duplicate.claim = Hash64::from_u64_word(646);
     duplicate.position.point = later;
     if let Some(lp) = duplicate.permanent_liquidity.as_mut() {
@@ -286,12 +367,22 @@ pub(super) fn check_exec_settlement_rewind(
         Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit"))
     ));
     assert_eq!(child.state_root(), after);
+    let mut omitted_work = carried.clone();
+    omitted_work.private_moe2_work_uses.clear();
+    assert!(omitted_work.into_state(params, Some(after)).is_err());
     carried.private_moe2_exec_settlements.clear();
-    assert!(carried.into_state(params, Some(after)).is_err(), "omitting a settled worker and LP receipt changes the root");
-    assert!(
-        revert_delta_v2(&child, &award_delta, params).unwrap().private_moe2_exec_settlement(&claim).is_none(),
-        "the normal native journal also clears the row on a disconnect",
-    );
+    assert!(carried.into_state(params, None).is_err(), "work without its settlement cannot be restored");
+    let disconnected = revert_delta_v2(&child, &award_delta, params).unwrap();
+    assert_eq!(disconnected.state_root(), reserved.state_root());
+    assert!(disconnected.private_moe2_exec_settlement(&claim).is_none());
+    assert!(disconnected.private_moe2_work_claim(&work).is_none());
+    let mut unkeyed = award_delta.clone();
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }) = unkeyed.entries.pop() else {
+        panic!("missing numerical work settlement");
+    };
+    unkeyed.entries.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record });
+    assert!(revert_delta_v2(&child, &unkeyed, params).is_err());
+
     let (book_root, bytes) = book.checkpoint(after);
     book = Moe2SettlementBook::from_checkpoint(after, book_root, &bytes, bytes.len()).unwrap();
     let paid_book = book.clone();
@@ -314,11 +405,38 @@ pub(super) fn check_exec_settlement_rewind(
     );
     assert_eq!((child.state_root(), &book), (after, &paid_book));
     child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).unwrap();
+    assert!(child.private_moe2_work_claim(&work).is_none());
     assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &admitted, &original_delta.entries));
     assert_eq!(revert_delta_v2(&child, &award_delta, params).unwrap().state_root(), reserved.state_root());
     assert!(child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).is_err());
+    // Once the first settlement leaves the branch, the other independently
+    // funded slot may consume the same work identity.
+    let mut header = award_block.header.as_ref().clone();
+    header.nonce ^= 1;
+    header.finalize();
+    let sibling = Block::new(header, award_block.transactions.as_ref().to_vec()).with_evm_payload(award_block.evm_payload.clone());
+    let (mut replacement, mut replacement_delta, replacement_at) = fold(&sibling);
+    let mut replacement_book = book.clone();
+    replacement
+        .settle_private_moe2_exec_work(
+            config,
+            &mut replacement_book,
+            &mut replacement_delta,
+            alias_claim,
+            replacement_at,
+            release,
+            &alias_slot,
+            work,
+            payees,
+            &sibling,
+            worker_start,
+        )
+        .unwrap();
+    assert_eq!(replacement.private_moe2_work_claim(&work), Some(&alias_claim));
+    assert_eq!(apply_delta_v2(&reserved, &replacement_delta, params).unwrap().state_root(), replacement.state_root());
+
     let (repaid, _) = child
-        .settle_private_moe2_exec_slot(
+        .settle_private_moe2_exec_work(
             config,
             &mut book,
             &mut award_delta,
@@ -326,6 +444,7 @@ pub(super) fn check_exec_settlement_rewind(
             position,
             release,
             &slot,
+            work,
             payees,
             &award_block,
             worker_start,

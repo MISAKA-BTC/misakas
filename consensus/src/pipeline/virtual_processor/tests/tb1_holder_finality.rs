@@ -275,6 +275,34 @@ async fn private_tb1_certified_floor_history() {
     certified_floor_history(&mut node.chain, &mut floats[0].clone()).await;
 }
 
+#[test]
+#[ignore = "requires the QF1 parent and scale section and temporary space for the portable artifact"]
+fn private_qf1_work_key_matches_composite_and_portable_artifact() {
+    use misaka_palw_sdk::qf1_local::residual_tiles::Candidate;
+    use misaka_palw_tir_exec::node::TirArtifactV1;
+    use std::{fs::File, io::BufWriter};
+
+    let parent = std::env::var_os("MISAKA_PRIVATE_QF1_FULL").expect("QF1 parent artifact");
+    let section = std::env::var_os("MISAKA_PRIVATE_QF1_TILES").expect("QF1 registered scale section");
+    let parent = TirArtifactV1::open(Path::new(&parent)).unwrap();
+    let recipe = Candidate::over(&parent).unwrap();
+    let split_artifact = recipe.open(&parent, Path::new(&section)).unwrap();
+    let split = recipe.bind(&split_artifact).unwrap();
+
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let path = dir.path().join("portable.palwtir");
+    recipe.write_full(&split_artifact, BufWriter::new(File::create(&path).unwrap())).unwrap();
+    let full_artifact = TirArtifactV1::open(&path).unwrap();
+    let full = recipe.bind_full(&full_artifact).unwrap();
+    assert_ne!(split.identity().class, full.identity().class);
+
+    let prompt = [151644, 8948, 198, 1, 2, 3, 151645];
+    let work = split.computational_work_key(&prompt, 2).unwrap();
+    assert_eq!(full.computational_work_key(&prompt, 2).unwrap(), work);
+    assert_ne!(full.computational_work_key(&prompt, 3).unwrap(), work);
+    println!("QF1 composite and portable numerical work key {work}");
+}
+
 #[tokio::test]
 #[ignore = "requires the full registered QF1 artifact and tokenizer"]
 async fn private_registered_tb1_pending_freeze() {
