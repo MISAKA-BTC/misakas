@@ -45,6 +45,17 @@ def check_prefix(stream, tip, position, expected_parent):
     return dict(parent=tip, blue=blue, daa=daa, blocks=blue-position["submission_blue"], archive_sha256=archive_sha256)
 
 
+def check_assessment_schedule(published, qualification, prepared, panel_round):
+    [panel] = [r for r in qualification["rounds"] if r["purpose"] == "PANEL"]
+    require(prepared["close"] == qualification["close"] == published["close"]
+            and prepared["round"] == panel["round"] == panel_round
+            and prepared["qualification"] == panel["qualification"], "different prequalified evaluation PANEL")
+    position = published["assessment_position"]
+    require((position["panel_close_blue"], position["panel_release_from_daa"], position["panel_deadline_exclusive_daa"])
+            == (prepared["close_blue"], prepared["release_from"], prepared["deadline_exclusive"]),
+            "evaluation prefix bounds differ from the qualified PANEL schedule")
+
+
 def verify(prefix, log):
     published = json.loads((HERE / "qf1-arithmetic-publisher.json").read_bytes())
     text = log.read_text()
@@ -54,9 +65,8 @@ def verify(prefix, log):
     submission, parent, panel_round, blue, daa = row
     require(submission == published["submission"], "different evaluation submission")
     qualification = json.loads((HERE / "qf1-arithmetic-qualification.json").read_bytes())
-    [panel] = [r for r in qualification["rounds"] if r["purpose"] == "PANEL"]
-    require(qualification["close"] == published["close"] and panel_round == panel["round"],
-            "different prequalified evaluation PANEL")
+    prepared = json.loads((HERE / "qf1-arithmetic-panel-preparation.json").read_bytes())
+    check_assessment_schedule(published, qualification, prepared, panel_round)
     with prefix.open("rb") as stream:
         report = check_prefix(stream, submission, published["assessment_position"], parent)
     require((report["blue"], report["daa"]) == (int(blue), int(daa)), "native position differs from header")
