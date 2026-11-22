@@ -56,11 +56,16 @@ def check_assessment_schedule(published, qualification, prepared, panel_round):
             "evaluation prefix bounds differ from the qualified PANEL schedule")
 
 
-def check_native_submission(log_text, pid, published):
+def check_native_submission(log_text, pid, published, originals):
     observed = re.findall(r"^fresh arithmetic submission pid=(\d+) certificate=([a-f0-9]{128}) "
                           r"block=([a-f0-9]{128}) marker=([a-f0-9]{128})$", log_text, re.M)
     require(observed == [(pid, published["certificate"], published["submission"], published["marker"])],
             "native process did not replay the original evaluation submission")
+    evaluated = [json.loads(raw) for raw in re.findall(r"^fresh arithmetic evaluation (\{.*\})$", log_text, re.M)]
+    require(len(originals) == len(published["results"]), "evaluation case count differs from the published report")
+    expected = [dict(pid=int(pid), certificate=published["certificate"], evaluation=row, correct=score)
+                for row, score in zip(originals, published["results"])]
+    require(evaluated == expected, "native numerical replay differs from the archived evaluation cases")
 
 
 def verify(prefix, log):
@@ -71,7 +76,8 @@ def verify(prefix, log):
                        r"round=([a-f0-9]{128}) blue=(\d+) daa=(\d+)$", text, re.M)
     pid, submission, parent, panel_round, blue, daa = row
     require(submission == published["submission"], "different evaluation submission")
-    check_native_submission(log_text=text, pid=pid, published=published)
+    _, originals = read_submission_archive()
+    check_native_submission(text, pid, published, originals)
     qualification = json.loads((HERE / "qf1-arithmetic-qualification.json").read_bytes())
     prepared = json.loads((HERE / "qf1-arithmetic-panel-preparation.json").read_bytes())
     check_assessment_schedule(published, qualification, prepared, panel_round)
@@ -115,10 +121,15 @@ def identify_control_cards(snapshot, identities):
     return known
 
 
+def read_submission_archive():
+    archive = HERE / "qf1-arithmetic-publisher.tar.zst"
+    return json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.submission.json"]))
+
+
 def check_submission_state(row, submitted, seed):
     archive = HERE / "qf1-arithmetic-publisher.tar.zst"
     publication = json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.json"]))
-    block, _ = json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.submission.json"]))
+    block, _ = read_submission_archive()
     certificate = publication["certificate"]
     for raw, expected in ((certificate, seed["certificate"]), (block, submitted)):
         verify_block_transactions(raw)
