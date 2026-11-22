@@ -1,0 +1,136 @@
+{
+  "baseCommit": "b7f395112",
+  "network": "isolated protected P200",
+  "identity": {
+    "version": 1,
+    "genesisHash": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+    "consensusParamsId": "ab561ca8997430974c993004330a51cecc662f774b2b32acf74d989626c3112b"
+  },
+  "class": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+  "beforeAssignment": {
+    "sink": "aac39db04349d6377d67f513a98ff5251c1855a786dff652c58288370c6d7419385f2e3cbabc6a71b1855e6456ff801e90906db4bcb615985a88e9f66d9373cd",
+    "virtualDaa": 3507,
+    "modelRow": {
+      "availableSompi": 6619357510430,
+      "cPermille": 300,
+      "capitalSompi": "29333270",
+      "epoch": 4,
+      "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "reservedSompi": 0,
+      "tier": "registered",
+      "weight": "47660870950"
+    },
+    "epoch": {
+      "accruedSompi": 350172607187520,
+      "index": 4,
+      "startDaa": 2960,
+      "sumA": "2521321958376"
+    },
+    "assignment": {
+      "assigned": false,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": null,
+      "fence": {
+        "allocationEpoch": 4,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3507,
+      "pending": null,
+      "pendingSinceEpoch": null,
+      "sequence": null,
+      "version": 1
+    },
+    "queue": {
+      "id": "1a203547515fb64ff50",
+      "status": "refused",
+      "claim_id": null,
+      "error": "answered, not committed: the chain would refuse this commitment: BondBudgetExhausted { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb, index: 0 }), why: \"the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 \u00a78.5.5)\" } (class 7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625: free-prompt claims of an IR class open only with the TIR public frame (palw_tir_public_conviction_v1, RFC-0002 Phase H))"
+    }
+  },
+  "afterSeasoning": {
+    "virtualDaa": 7745,
+    "assignment": {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "fence": {
+        "allocationEpoch": 10,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 7746,
+      "pending": null,
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    },
+    "studioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
+    "queue": {
+      "id": "1a2035ebc537b001f60",
+      "status": "committed",
+      "fp_job_id": "2a0b7450d55979c384a25e5c462af98d13429101fa66ccb399f6b9c2a6ab7c2a3a7c0fbc4d05037c08906f59a1d5b8b3e93453495c64959e1c0af5e20c92f5ab",
+      "claim_id": "1a4a84115e223ad247eadfc76492bc8612d4b0024974087f5f3c3704078870b72215280fe520a556a607fd6c55532f4170a4de0bba74710643c9f2de84fcc982",
+      "prompt": "Continue the sequence: six, seven,",
+      "answer": "Continue",
+      "prompt_tokens": 17,
+      "completion_tokens": 1
+    },
+    "rail": {
+      "fp_claim_id": "1a4a84115e223ad247eadfc76492bc8612d4b0024974087f5f3c3704078870b72215280fe520a556a607fd6c55532f4170a4de0bba74710643c9f2de84fcc982",
+      "protected_execution_root": "2f651fda3b82e6763ea775b1b344e0517b3b8f8c20b3aa86775900dd7ea8da863ae8b4b7bd9c641b40120dfcad723019f70a3220de246bbcb55c4b52ab80d9d3",
+      "protected_funding_sompi": 193119700,
+      "fee_sompi": 112114725,
+      "submitted": "921715a5462f42781abb15a18a7de36d08232c81cab7e2126e20371ac2b5783fe4a05b6dd6326503102828d578533df2857bb325bf2de7e7cceace1fe26ae831",
+      "quanta": 21,
+      "pwu": 56924364,
+      "priced_by": "chain"
+    }
+  },
+  "oldDraw": {
+    "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+    "target": "2593558205736391250396941624356751",
+    "winningIndices": [],
+    "beaconDaa": 7730,
+    "remainingWindowBound": {
+      "lastEligibleDaa": 8330,
+      "maximumEffectiveTarget": "10374232822945565001587766497427006",
+      "possibleIndicesAtMaximum": []
+    }
+  },
+  "newSignedAssignment": {
+    "carrierId": "6d08a93cfc6be11187723d1ca5eeabd3ebdc95f24a0508937a45b2e9e465879ab3149c9f2c56a1cb8e8b50b84b4e57ef28743140f90202a5e9096b7686aa31a5",
+    "sourceBlock": "d7140a8ecd793fbce2d1deaf1b5a01ebb5711d9326787382698ccbe9d8f00d623bc37e343711c9e1e482f8c90402939618692faec62991068f00b24b220d7d43",
+    "readback": {
+      "assigned": true,
+      "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:0",
+      "effective": [],
+      "fence": {
+        "allocationEpoch": 4,
+        "allocationFromDaa": 80,
+        "fromDaa": 80,
+        "status": "active"
+      },
+      "kind": "palwCapitalAssignment",
+      "nowDaa": 3508,
+      "pending": [
+        {
+          "amountSompi": 10000000000,
+          "model": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625"
+        }
+      ],
+      "pendingSinceEpoch": 4,
+      "sequence": 1,
+      "version": 1
+    }
+  }
+}
