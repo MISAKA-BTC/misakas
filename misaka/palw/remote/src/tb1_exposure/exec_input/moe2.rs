@@ -127,6 +127,7 @@ impl ClosedMoe2Quote {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2BudgetPreview {
     pub consent: Hash64,
+    pub reservation_key: Hash64,
     pub reward_sompi: u64,
     pub collateral_sompi: u64,
     pub minimum_liability_sompi: u128,
@@ -270,12 +271,14 @@ impl ExecInputBatch<'_> {
             let (capital, ask) = quote.budget_ask_at(config, state, daa).map_err(|reason| {
                 io::Error::new(io::ErrorKind::InvalidData, format!("MOE2 slot cannot reserve under its signed terms: {reason:?}"))
             })?;
-            let consent = Hash64::from_bytes(consent_ref(reg_key(&entry.context), slot));
+            let registration = reg_key(&entry.context);
+            let consent = Hash64::from_bytes(consent_ref(registration, slot));
+            let reservation_key = Moe2ExecSlot { registration, slot, close, close_daa: daa, quote }.reservation_key();
             let grant = budget
                 .reserve_claim_v1(
                     policy,
                     capital,
-                    consent,
+                    reservation_key,
                     quote.funding_bond,
                     Some(quote.model),
                     daa,
@@ -288,7 +291,7 @@ impl ExecInputBatch<'_> {
                 return Err(invalid("native budget clipped a signed MOE2 reward ceiling"));
             }
             let (_, epoch) = budget
-                .claim_row(&consent)
+                .claim_row(&reservation_key)
                 .and_then(|r| r.model)
                 .filter(|(id, _)| *id == quote.model)
                 .ok_or_else(|| invalid("missing native model allocation"))?;
@@ -296,6 +299,7 @@ impl ExecInputBatch<'_> {
                 slot,
                 Moe2BudgetPreview {
                     consent,
+                    reservation_key,
                     reward_sompi: ask.reward_sompi,
                     collateral_sompi: capital,
                     minimum_liability_sompi: ask.liability_sompi,

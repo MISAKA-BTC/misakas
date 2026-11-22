@@ -124,7 +124,7 @@ pub(super) fn observe(
     let split = long.preview_for_selected_tip(api, config, original, &parent, reward).unwrap();
     assert_eq!(split, long.preview(config, original, reward).unwrap());
     let budget = parent.bond_budget().unwrap();
-    assert!(budget.claim_row(&long_source).is_none());
+    assert!(budget.claim_row(&long.exec_slot().reservation_key()).is_none());
     let recorded = budget.assignment_row(&terms.funding_bond).unwrap();
     assert_eq!(recorded.sequence, 1);
     assert!(api.is_chain_ancestor_of(assignment, parent.last_point().unwrap().block).unwrap());
@@ -190,7 +190,7 @@ pub(super) async fn season(
     assert_eq!(assignment.effective.as_slice(), &[(terms.model, amount)]);
     assert!(assignment.pending.is_none());
     assert_eq!(row.capital, u128::from(amount) / u128::from(average_epochs));
-    assert!(budget.claim_row(&offer.consent).is_none());
+    assert!(budget.claim_row(&offer.reservation_key).is_none());
     assert_eq!(row.reserved_sompi, 0);
     let split = long.preview_for_selected_tip(node.api().as_ref(), &node.config.params, original, &state, offer.reward_sompi).unwrap();
     assert_eq!(split, long.preview(&node.config.params, original, offer.reward_sompi).unwrap());
@@ -205,7 +205,7 @@ pub(super) async fn season(
         .reserve_claim_v1(
             &node.bundle.state.bond_budget().unwrap().policy,
             state.bond(&terms.funding_bond).unwrap().collateral,
-            offer.consent,
+            offer.reservation_key,
             terms.funding_bond,
             Some(terms.model),
             committed.header.daa_score,

@@ -264,3 +264,11 @@ Gate Cの検証義務を、選択sinkとvirtual DAAの組で管理する。コ�
 短い非報酬fixture `private_tb1_stable_panel` の最終実行は終了コード0（ビルド2分49秒、試験4.96秒）。3プロセスはEXEC公開前のDBとDAA 60の期限時点のDBをそれぞれ開き直し、Original `0b4e2217…` からPANEL close `c991e707…` と一致する集合を再構築した。承認はDAA 27に収録されていた。期限後の新規受付、slotの変更、別の収録ブロック、改変Ticketを拒否した。初回の期限後読戻しは終了コード0。EXEC観測の復元まで広げた試験の最初のビルドは、チェックポイントAPIを間違った型から呼び出してコンパイルに失敗した。runnerも終了コード取得用のシェル変数で停止し、終了コード1。双方を修正して上記の最終結果を取得した。
 
 同じビルドの `native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected` は終了コード0（2.26秒）。今回の検証は非報酬の短いroundで、Round 16の実close、P200の受賞、およびFOW1のGate C・MOE2決済は未実証。
+
+### MOE2予約とEXEC closeの結合
+
+資金提供者の署名参照は登録キーとslotから従来どおり計算する。native台帳の予約IDは、同じ登録・slotに加えてEXEC closeのブロックhash・DAA・元のquoteを含む完全なslotから別domainで導出する。選択鎖のclose読取り、予算予約、決済、取り消しは同じ予約IDを使う。割当台帳は引き続き署名参照で一回性を管理する。元の署名参照を共有していても、同一DAAの別closeまたは改変quoteは元の予約に一致しない。
+
+`private_moe2_three_process_registration` は終了コード0（試験1.12秒）。closeのhashだけが異なるslotとquoteだけが異なるslotは、同じ署名参照を持っていても元の予算行を使った入場を拒否し、決済台帳を変更しなかった。正常なslotでは予約を一度消費し、巻き戻し・再適用後のroot `9b7243789c22e137…` と決済台帳root `2f75e5d8a9d3d8aa…` が3プロセスで一致した。
+
+登録済みQF1の `private_registered_tb1_pending_freeze` は終了コード0（40.35秒）。3プロセスが同じclose `773a9f9815b67150…`、署名参照 `e0b0fd82bc813933…`、native予約ID `e8011878c6e43d97…` を得た。非報酬QF1での採掘予算予約は拒否され、通常ブロックの差分とrootが変わらないことを確認した。最終ビルドは終了コード0（2分49秒）。同じバイナリのT12当選・3ピア受理、落選、V3/V4同一量子の二重消費拒否も終了コード0。FOW1の適格な実当選と受賞ブロック決済は引き続き未確認。

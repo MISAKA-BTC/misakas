@@ -713,14 +713,18 @@ async fn run(stable: bool, registered: bool) {
                 && export(value.minimum_liability_sompi) >= value.reward_sompi
         );
         assert_eq!(value.collateral_sompi, close_parent_state.bond(&quote.funding_bond).unwrap().collateral);
-        assert!(close_parent_state.bond_budget().unwrap().claim_row(&value.consent).is_none());
+        assert_ne!(value.consent, value.reservation_key);
+        assert_eq!(value.reservation_key, closed_quote.exec_slot().reservation_key());
+        assert_eq!(full[&10].reservation_key, long.exec_slot().reservation_key());
+        assert!(close_parent_state.bond_budget().unwrap().claim_row(&value.reservation_key).is_none());
         assert!(quote.deadline < panel.release_from_daa);
         peer_log!(
-            "MOE2 budget preview pid={} close={} parent_root={} slot=9 consent={} collateral={} export_permille={} liability={} reward={} epoch={} panel_release={} bootstrap={} no_debit=true",
+            "MOE2 budget preview pid={} close={} parent_root={} slot=9 consent={} reservation={} collateral={} export_permille={} liability={} reward={} epoch={} panel_release={} bootstrap={} no_debit=true",
             std::process::id(),
             anchor,
             close_parent_state.state_root(),
             value.consent,
+            value.reservation_key,
             value.collateral_sompi,
             policy.export_cap_permille,
             value.minimum_liability_sompi,

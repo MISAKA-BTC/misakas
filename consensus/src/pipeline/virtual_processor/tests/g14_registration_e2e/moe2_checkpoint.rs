@@ -48,6 +48,25 @@ pub(super) fn check_exec_settlement_rewind(
         .unwrap();
     close_delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
     let reserved = apply_delta_v2(registration, &close_delta, params).unwrap();
+    let sibling = Moe2ExecSlot { close: Hash64::from_u64_word(647), ..slot };
+    let revised = Moe2ExecSlot {
+        quote: Moe2PreDrawQuote { price_limits: Moe2PriceLimits { max_output_slippage_bps: 1, ..quote.price_limits }, ..quote },
+        ..slot
+    };
+    for different in [sibling, revised] {
+        assert_eq!(
+            Moe2ExecSlot::consent_ref(slot.registration, slot.slot),
+            Moe2ExecSlot::consent_ref(different.registration, different.slot)
+        );
+        assert_ne!(slot.reservation_key(), different.reservation_key());
+        assert_eq!(
+            book.admit_exec_slot(claim, &different, reserved.bond_budget().unwrap(), |_, _| {
+                Some(*registered_book.model(&quote.model).unwrap())
+            }),
+            Err(Moe2SettlementError::ReservationMismatch)
+        );
+        assert_eq!(&book, registered_book);
+    }
     book.admit_exec_slot(claim, &slot, reserved.bond_budget().unwrap(), |anchor, id| {
         (anchor == quote.quote_anchor && id == quote.model).then(|| *registered_book.model(&id).unwrap())
     })

@@ -89,13 +89,19 @@ impl Moe2ExecSlot {
             .into()
     }
 
+    /// A native reservation belongs to this exact close and quote. The funder's
+    /// consent is still identified by the registration and slot before close.
     pub fn reservation_key(&self) -> Hash64 {
-        Hash64::from_bytes(Self::consent_ref(self.registration, self.slot))
+        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/native-exec-reservation/v1", self.slot_digest().as_byte_slice())
+    }
+
+    fn slot_digest(&self) -> Hash64 {
+        let encoded = borsh::to_vec(self).expect("fixed-size EXEC slot serializes");
+        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &encoded)
     }
 
     fn binding(&self) -> (Hash64, Hash64) {
-        let encoded = borsh::to_vec(self).expect("fixed-size EXEC slot serializes");
-        (self.reservation_key(), kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &encoded))
+        (Hash64::from_bytes(Self::consent_ref(self.registration, self.slot)), self.slot_digest())
     }
 
     fn undo_digest(&self, undo: &Moe2SettlementUndo) -> Hash64 {
@@ -392,14 +398,13 @@ impl Moe2NativeExecSettlement {
         undo: &Moe2SettlementUndo,
         reward: Moe2SettledReward,
     ) -> Self {
-        let (reservation, signed_slot) = slot.binding();
         Self {
             claim: undo.claim(),
             position: undo.position,
             model: slot.quote.model,
             artifact_root: slot.quote.artifact_root,
-            reservation,
-            signed_slot,
+            reservation: slot.reservation_key(),
+            signed_slot: slot.slot_digest(),
             reward,
             permanent_liquidity: book.receipt(&undo.claim()).copied(),
         }
@@ -754,7 +759,7 @@ impl Moe2SettlementBook {
         if self.assigned_slots.contains(&binding.0) {
             return Err(AlreadyAdmitted);
         }
-        let row = budget.claim_row(&binding.0).ok_or(ReservationMismatch)?;
+        let row = budget.claim_row(&slot.reservation_key()).ok_or(ReservationMismatch)?;
         if !(slot.quote.valid_from..=slot.quote.deadline).contains(&slot.close_daa)
             || budget.header.policy_digest != slot.quote.policy
             || row.accepted_daa != slot.close_daa
