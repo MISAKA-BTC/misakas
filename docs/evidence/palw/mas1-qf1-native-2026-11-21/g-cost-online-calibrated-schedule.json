@@ -1,0 +1,33 @@
+{
+  "method": "online-calibrated",
+  "binary_sha256": "1f37c047b19106f0c693e5b5aa0b3a4fdd44521d81f0e5a6ebbd860404d960c7",
+  "plan_sha256": "0a0dda2427717e37ef987495e02b4f4d4599e15c9600e7e9ad5c0c117752e62a",
+  "machine": "Mac13,1",
+  "cpu": "Apple M1 Max",
+  "rayon_threads": 3,
+  "calibration_ticket": "64eb136e34ed36bcd79ece3d38643d101bf5edc17de3cf293c0e93ad64fbdf18",
+  "targets": [
+    {
+      "ticket": "b4e9c2f02c6920f3c7130c2b695780fb7855c170100776b9275e2c963b0c0677",
+      "predict_first": true
+    },
+    {
+      "ticket": "020d500c8e381d6ec6c842c3b51aa09c26a2c0e8d3998ac948741217859d28ed",
+      "predict_first": false
+    },
+    {
+      "ticket": "7960c0f539950fd72caab71034a3a99bf3cfb98ff16e33dbe1db93d9747e58df",
+      "predict_first": true
+    },
+    {
+      "ticket": "ceb4bedb056b7d256d52bf42dfd37a9ed7a900a948011215f896a5615cad130f",
+      "predict_first": false
+    },
+    {
+      "ticket": "703f0b8a85bb84abfa4087bb29cbf4e7d79a63bf463ed55f2995a186a36eece3",
+      "predict_first": true
+    }
+  ],
+  "forced_miss_target": 0,
+  "g_cost": "UNKNOWN"
+}

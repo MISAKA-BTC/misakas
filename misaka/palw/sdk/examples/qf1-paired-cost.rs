@@ -58,13 +58,18 @@ struct Plan {
 fn measure_length_prediction(
     instance: &LocalInstance<'_>,
     trials: &[ArchivedOriginal],
+    online_reference: bool,
     limit: u32,
     cap: u64,
 ) -> Result<(), Box<dyn Error>> {
     let (first, targets) = trials.split_first().ok_or("missing calibration input")?;
     let start = Instant::now();
-    instance.verify_independent_original(first, limit, cap)?;
-    let predicted = u32::try_from(first.answer.len())?;
+    let predicted = if online_reference {
+        instance.verify_online_stop_length(first, limit, cap)?
+    } else {
+        instance.verify_independent_original(first, limit, cap)?;
+        u32::try_from(first.answer.len())?
+    };
     println!("{}", json!({"calibration_ticket":first.ticket,"predicted":predicted,"elapsed_us":start.elapsed().as_micros()}));
     for (index, original) in targets.iter().enumerate() {
         for predict in [index % 2 == 0, index % 2 != 0] {
@@ -72,7 +77,11 @@ fn measure_length_prediction(
             let retry_reason = if predict {
                 instance.verify_predicted_length(original, predicted, limit, cap)?
             } else {
-                instance.verify_independent_original(original, limit, cap)?;
+                if online_reference {
+                    instance.verify_online_stop(original, limit, cap)?;
+                } else {
+                    instance.verify_independent_original(original, limit, cap)?;
+                }
                 None
             };
             println!(
@@ -98,16 +107,20 @@ fn measure_length_prediction(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (args, predict, online) = match args.as_slice() {
-        [flag, rest @ ..] if flag == "--predict-length" => (rest, true, false),
-        [flag, rest @ ..] if flag == "--online-stop" => (rest, false, true),
-        rest => (rest, false, false),
+    let (args, method) = match args.as_slice() {
+        [flag, rest @ ..] if matches!(flag.as_str(), "--predict-length" | "--online-calibrated" | "--online-stop") => {
+            (rest, flag.as_str())
+        }
+        rest => (rest, ""),
     };
+    let predict = matches!(method, "--predict-length" | "--online-calibrated");
     let [parent, section, plan_path] = args else {
-        return Err("usage: qf1-paired-cost [--predict-length|--online-stop] <parent> <tile-section> <plan.json>".into());
+        return Err(
+            "usage: qf1-paired-cost [--predict-length|--online-calibrated|--online-stop] <parent> <tile-section> <plan.json>".into()
+        );
     };
     let plan: Plan = serde_json::from_slice(&fs::read(plan_path)?)?;
-    if plan.trials.len() < 2 || (!predict && !online && plan.trials.len() % 2 != 0) || (predict && plan.decode_limit < 2) {
+    if plan.trials.len() < 2 || (method.is_empty() && plan.trials.len() % 2 != 0) || (predict && plan.decode_limit < 2) {
         return Err("insufficient trials or decode budget for the selected comparison".into());
     }
     let trials: Vec<_> = plan.trials.into_iter().map(Record::original).collect::<Result<_, _>>()?;
@@ -120,7 +133,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if (id.class, id.inventory, id.descriptor) != (plan.class_id, plan.inventory, plan.descriptor) {
         return Err("model differs from archived instance".into());
     }
-    if online {
+    if method == "--online-stop" {
         println!(
             "{}",
             json!({"method":"online-stop","setup_ms":start.elapsed().as_millis(),"descriptor":id.descriptor,"trials":trials.len()})
@@ -144,11 +157,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     if predict {
         println!(
             "{}",
-            json!({"method":"predict-length","setup_ms":start.elapsed().as_millis(),"class_id":id.class,
+            json!({"method":&method[2..],"setup_ms":start.elapsed().as_millis(),"class_id":id.class,
                               "descriptor":id.descriptor,"inventory":id.inventory,"trials":trials.len(),
                               "decode_limit":plan.decode_limit,"max_leaves":plan.max_leaves})
         );
-        return measure_length_prediction(&instance, &trials, plan.decode_limit, plan.max_leaves);
+        return measure_length_prediction(&instance, &trials, method == "--online-calibrated", plan.decode_limit, plan.max_leaves);
     }
     println!(
         "{}",

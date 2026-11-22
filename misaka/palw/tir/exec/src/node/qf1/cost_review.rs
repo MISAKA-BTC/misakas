@@ -72,15 +72,15 @@ impl LocalInstance<'_> {
     /// Retain canonical records until the first numerical pass reaches Stop.
     /// The archived result is consulted only after the ticket is complete.
     pub fn verify_online_stop(&self, original: &ArchivedOriginal, limit: u32, cap: u64) -> Result<(), String> {
-        original.compare(self.produce_trace(
-            &original.prompt,
-            limit,
-            cap,
-            original.context,
-            original.attempt,
-            original.context,
-            None,
-        )?)
+        self.verify_online_stop_length(original, limit, cap).map(|_| ())
+    }
+
+    /// Return the length discovered in the verified online run for predictions on later inputs.
+    pub fn verify_online_stop_length(&self, original: &ArchivedOriginal, limit: u32, cap: u64) -> Result<u32, String> {
+        let trace = self.produce_trace(&original.prompt, limit, cap, original.context, original.attempt, original.context, None)?;
+        let length = u32::try_from(trace.answer.tokens.len()).map_err(|_| "QF1 answer length")?;
+        original.compare(trace)?;
+        Ok(length)
     }
 
     /// Measure a length prediction on an archived Original. The numerical run

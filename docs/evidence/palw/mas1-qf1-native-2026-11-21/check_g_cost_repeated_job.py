@@ -6,7 +6,7 @@ from pathlib import Path
 
 from tokenizers import Tokenizer
 
-from check_g_cost_predicted_length import verify as predicted_report
+from check_g_cost_predicted_length import check_runs, verify as predicted_report
 from check_g_cost_shared_prefix import frozen_plan
 from check_g_cost_varied_jobs import online_report, verify_sources
 from check_legacy_work import HERE, require
@@ -51,9 +51,33 @@ def compare(tokenizer_file, directory):
                 forced_miss_control=prediction["miss_control"], g_cost="UNKNOWN")
 
 
+def calibrated_comparison(tokenizer_file, raw):
+    schedule, plan, _ = scheduled_inputs(tokenizer_file)
+    mixed = json.loads((HERE / "g-cost-online-calibrated-schedule.json").read_bytes())
+    expected = [dict(ticket=row["ticket"], predict_first=i % 2 == 0) for i, row in enumerate(plan["trials"][1:])]
+    require(mixed["plan_sha256"] == schedule["plan_sha256"] and mixed["method"] == "online-calibrated"
+            and mixed["calibration_ticket"] == plan["trials"][0]["ticket"] and mixed["targets"] == expected
+            and mixed["forced_miss_target"] == 0, "changed online calibration plan")
+    header, calibration, pairs, control = check_runs(plan, raw, method=mixed["method"])
+    common = 1000 * header["setup_ms"] + calibration["elapsed_us"]
+    require(control["retry_reason"] is not None, "forced miss control did not retry")
+    totals = dict(online_us=common + sum(p["reference_us"] for p in pairs),
+                  mixed_us=common + sum(p["predicted_us"] for p in pairs))
+    targets = [dict(attempt=row["attempt"], ticket=trial["ticket"], online_us=row["reference_us"],
+                    mixed_us=row["predicted_us"], retry_reason=row.get("retry_reason"))
+               for row, trial in zip(pairs, plan["trials"][1:], strict=True)]
+    return dict(plan_sha256=schedule["plan_sha256"], descriptor=plan["descriptor"], job=schedule["job"],
+                first_ticket=plan["trials"][0]["ticket"], setup_ms=header["setup_ms"],
+                first_ticket_generation_us=calibration["elapsed_us"], observed_length=calibration["predicted"],
+                targets=targets, six_tickets_including_setup=totals, forced_miss_including_retry_us=control["elapsed_us"],
+                forced_miss_reason=control["retry_reason"], g_cost="UNKNOWN")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tokenizer", type=Path)
     parser.add_argument("directory", type=Path)
+    parser.add_argument("--online-calibrated", action="store_true", help="compare both paths with one shared online calibration")
     args = parser.parse_args()
-    print(json.dumps(compare(args.tokenizer, args.directory), indent=2))
+    result = calibrated_comparison(args.tokenizer, args.directory / "online-calibrated.jsonl") if args.online_calibrated else compare(args.tokenizer, args.directory)
+    print(json.dumps(result, indent=2))

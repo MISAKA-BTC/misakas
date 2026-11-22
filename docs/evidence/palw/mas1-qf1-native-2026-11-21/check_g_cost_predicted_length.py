@@ -17,10 +17,10 @@ def check_retry(guess, actual, reason):
                 "missing overlength trace diagnostic")
 
 
-def check_runs(plan, raw):
+def check_runs(plan, raw, *, method="predict-length"):
     first, *targets = plan["trials"]
     header, calibration, *runs, control = map(json.loads, raw.read_text().splitlines())
-    require(header["method"] == "predict-length" and header["trials"] == len(targets) + 1 and
+    require(header["method"] == method and header["trials"] == len(targets) + 1 and
             all(header[k] == plan[k] for k in ("class_id", "descriptor", "inventory", "decode_limit", "max_leaves")),
             "different model, budget, method or sample")
     timings = [row["elapsed_us"] for row in [calibration, *runs, control]]
