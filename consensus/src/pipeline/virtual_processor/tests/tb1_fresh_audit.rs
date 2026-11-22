@@ -410,12 +410,22 @@ pub(super) async fn replay_window(
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
             let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
-            assert_eq!(
-                frozen
-                    .read_arithmetic_submission(node.api().as_ref(), batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results)
-                    .unwrap(),
-                marker
-            );
+            let native = node.api();
+            let replayed = frozen.read_arithmetic_submission(native, batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results);
+            if let Err(error) = &replayed {
+                let ancestry = |a, b| native.is_chain_ancestor_of(a, b).map_err(|e| e.to_string());
+                peer_log!(
+                    "arithmetic assessment parent refusal {} {}",
+                    std::process::id(),
+                    serde_json::json!({"parent":parent, "audit_close":close, "publication_observed_tip":tip,
+                        "batch":batch, "certificate":certificate, "submission":block.hash(), "error":error.to_string(),
+                        "snapshot":native.get_native_settlement_snapshot().map_err(|e| e.to_string()),
+                        "audit_on_parent":ancestry(close,parent), "observation_precedes_batch":ancestry(tip,batch),
+                        "batch_precedes_certificate":ancestry(batch,certificate), "certificate_on_parent":ancestry(certificate,parent),
+                        "submission_on_parent":ancestry(block.hash(),parent)})
+                );
+            }
+            assert_eq!(replayed.unwrap(), marker);
             if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_BASE_OBSERVE").is_some() {
                 assert_eq!(node.chain.sink(), parent);
                 let observed = control_population_at(node, parent, class);

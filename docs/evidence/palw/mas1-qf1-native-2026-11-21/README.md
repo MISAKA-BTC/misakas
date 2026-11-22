@@ -1335,3 +1335,5 @@ python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writ
 並行再生ノードは元の certificate・seed・2件の入力を復元し、数値出力・4つの root・Ticket が元の提出と一致した。提出ヘッダーがコミットした直前の状態には、登録者カード2を除いたカード0、1、3、4、5、6、7に対応する7 bond・7 operator があった。この時点の母集団は提出時点の観測であり、Round 16 の close 直前の候補集合と抽選結果は別に検証する。[提出時点の照合記録](qf1-arithmetic-round16-at-submission.json)
 
 算術採点付き承認を含む remote 全試験は217件成功・1件ignoredだった。これとは別に、post-close work の読込経路を含む native ビルドで予定親までの再生と share 公開開始境界の2件が通過した。
+
+Round 16 の生成ノードは、元の評価提出から105,857ブロックを受理・保存し、予定 close の親である blue 181381・DAA 90688 に達した。別の照合器で全ブロックの親参照と取引コミットメントを検査した。親で元の監査証明書を再照合すると、native gate は TB1 publication outside stabilized selected history を返した。そこで生成ノードの試験を停止した。close 自体の生成・受理、Panel の share 公開と抽選は未確認。次の同条件の検査で、失敗時点の native settlement snapshot と元の公開ブロックの各祖先条件を記録する。[到達点と失敗](round16-writer-parent-refusal.json)・[生ログ](round16-writer-parent-refusal.log.zst)
