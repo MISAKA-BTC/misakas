@@ -1,0 +1,137 @@
+{
+  "diagnostic": {
+    "audit_close": "8f9e2d10d21141dd884336b4e63c9e1e7f3a3af80846d12bff1482bfd10807d031f9a29430fbf527cf6ab3fc1898a12df54669b00e88fc03e2da3cecf446e669",
+    "blue": 88121,
+    "close_selected": true,
+    "daa": 44058,
+    "readiness": {
+      "blocking": {
+        "block": "83cd72498abd4f472df5b3e05cd9f79cf3c006163c1e65912f6085e7da3066db910c1715ec3b4829be9c65566d884c1e063f5611af214303fbaade6840463f61",
+        "blue": 13200,
+        "daa": 6598,
+        "earliestReadyInDaa": null,
+        "evidence": {
+          "anchors": 0,
+          "maturedFacts": 0,
+          "pendingFacts": 0,
+          "pendingWork": "0",
+          "work": "0"
+        },
+        "inSafePrefix": false,
+        "openClaimsTotal": 0,
+        "openSessionsTotal": 0,
+        "waits": [
+          {
+            "effectBlue": 13200,
+            "frontierBlue": 12984,
+            "frontierOnBranch": true,
+            "kind": "frontierBehind"
+          },
+          {
+            "have": 0,
+            "kind": "insufficientDepth",
+            "need": 1
+          },
+          {
+            "have": "0",
+            "kind": "insufficientWork",
+            "need": "1"
+          }
+        ]
+      },
+      "executedEffects": 74922,
+      "finalized": {
+        "finalized": null,
+        "pruningBlue": 13200,
+        "pruningPoint": "83cd72498abd4f472df5b3e05cd9f79cf3c006163c1e65912f6085e7da3066db910c1715ec3b4829be9c65566d884c1e063f5611af214303fbaade6840463f61",
+        "wait": {
+          "kind": "noSafePrefix"
+        },
+        "withdrawnFrom": "73da634856c52c7bd71ba95d0025a700decb5750bdc82b4b51f1ed789a04a836e23f9a3aa00451d3abbd669286ba4c68e4b952373282413f3b03af529537c1bb"
+      },
+      "generation": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
+      "maturity": {
+        "claimRetirementDaa": 3000,
+        "quantumMaturityDaa": 120,
+        "rule": "v1"
+      },
+      "policy": {
+        "maxClassPermille": 1000,
+        "maxOperatorPermille": 1000,
+        "settledAnchorDepth": 1,
+        "uniqueMatureWork": "1"
+      },
+      "safe": null,
+      "safeLagBlue": null,
+      "safeLagDaa": null,
+      "sinkBlue": 88121,
+      "sinkDaa": 44058,
+      "skipped": {
+        "baseClass": 0,
+        "bondNotHeld": 0,
+        "missingReceipt": 0,
+        "openDa": 0,
+        "uncertified": 1,
+        "unpriced": 0,
+        "voided": 0
+      },
+      "stop": "frontierNotCovered",
+      "stoppedEarly": null,
+      "tip": {
+        "block": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
+        "blue": 88121,
+        "daa": 44058,
+        "earliestReadyInDaa": null,
+        "evidence": {
+          "anchors": 0,
+          "maturedFacts": 0,
+          "pendingFacts": 0,
+          "pendingWork": "0",
+          "work": "0"
+        },
+        "inSafePrefix": false,
+        "openClaimsTotal": 0,
+        "openSessionsTotal": 0,
+        "waits": [
+          {
+            "effectBlue": 88121,
+            "frontierBlue": 12984,
+            "frontierOnBranch": true,
+            "kind": "frontierBehind"
+          },
+          {
+            "have": 0,
+            "kind": "insufficientDepth",
+            "need": 1
+          },
+          {
+            "have": "0",
+            "kind": "insufficientWork",
+            "need": "1"
+          }
+        ]
+      },
+      "version": 1
+    },
+    "refusal": "TB1 publication outside stabilized selected history",
+    "sink": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
+    "snapshot": {
+      "depth": 0,
+      "finalized": null,
+      "frontier": "3f2aca471ce4afbb563c12834454a234642253787b58e99cc8fbe9a83fb5de277a4d86eced10a0dfc173dfa58b2ef1bbe753f0b146bd63776b6b12b7065ad67d",
+      "generation": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
+      "latest": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
+      "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+      "retirementDaa": 1,
+      "rulesetId": "8a18304ac83abf59f54be5d9177544e7c718b58e344a602c8e399487f09d2daf",
+      "safe": null,
+      "stop": "frontierNotCovered",
+      "uniqueWork": "0",
+      "version": 1
+    },
+    "submission": "050f2fd1b1d9fec94c03476e5301162207fd105daddd4ca84586279369f066e29185d77cd4d459cb0eb69a0a75faef6dab67173146911f97eeb17ecf71f4970b",
+    "submission_selected": true
+  },
+  "binary_sha256": "160855ce156ec72112b83c33df03016a12a2bce93d109bccbb51fe315855fcad",
+  "prefix_sha256": "fbb10f10b8585963c838f9c99b485165d5eb87cff3582e3ad527c9bf95db264e"
+}
