@@ -1333,3 +1333,5 @@ python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writ
 評価 PANEL 用の抽選処理では、close を作る前に MISAKA_PRIVATE_ARITHMETIC_CONTROL_SEATS で席数を固定し、親の native 状態から得た候補の重みとともにコミットする。隔離ノードは MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_WRITE で予定位置の close を保存し、独立ノードは MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_READ で同じブロックを再受理する。照合器の --close、--writer-log、--peer-log で親状態、close と同一ビルドを確認できる。この時点の試験は席数・候補集合・提出物の照合を対象とする。[Rust の試験ログ](arithmetic-panel-seed-draw-tests.log)
 
 並行再生ノードは元の certificate・seed・2件の入力を復元し、数値出力・4つの root・Ticket が元の提出と一致した。提出ヘッダーがコミットした直前の状態には、登録者カード2を除いたカード0、1、3、4、5、6、7に対応する7 bond・7 operator があった。この時点の母集団は提出時点の観測であり、Round 16 の close 直前の候補集合と抽選結果は別に検証する。[提出時点の照合記録](qf1-arithmetic-round16-at-submission.json)
+
+算術採点付き承認を含む remote 全試験は217件成功・1件ignoredだった。これとは別に、post-close work の読込経路を含む native ビルドで予定親までの再生と share 公開開始境界の2件が通過した。
