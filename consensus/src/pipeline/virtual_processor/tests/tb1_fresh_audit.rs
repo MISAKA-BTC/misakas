@@ -127,7 +127,7 @@ pub(super) async fn replay_window(
     cut: &PreparedAudit<'_>,
     close: Hash64,
     q: &Tb1Qualification<'_>,
-    round: Tb1MiningRound,
+    rounds: [Tb1MiningRound; 2],
     marker: [u8; 64],
     roots: [Hash64; 4],
     seals: [Hash64; 3],
@@ -140,6 +140,7 @@ pub(super) async fn replay_window(
         palw_native_settlement_v1::native_delta_evidence_v1,
     };
     use std::io::{BufRead, BufReader, ErrorKind};
+    let [round, panel] = rounds;
     let slot: usize = std::env::var("MISAKA_PRIVATE_FRESH_SLOT").unwrap().parse().unwrap();
     let dir = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_FRESH_HOLDER").unwrap()).join("audit");
     let id = round.id();
@@ -384,5 +385,119 @@ pub(super) async fn replay_window(
             block.hash(),
             Hash64::from_bytes(marker)
         );
+        let archive = match (
+            std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_WRITE"),
+            std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_READ"),
+        ) {
+            (None, None) => None,
+            (Some(path), None) => Some(PrefixArchive::create(Path::new(&path))),
+            (None, Some(path)) => {
+                let expected = std::env::var("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT").unwrap().parse().unwrap();
+                Some(PrefixArchive::open(Path::new(&path), expected))
+            }
+            _ => panic!("choose one PANEL prefix source"),
+        };
+        if let Some(archive) = archive {
+            let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.deadline_exclusive_daa, archive).await;
+            assert_eq!(
+                frozen
+                    .read_arithmetic_submission(node.api().as_ref(), batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results)
+                    .unwrap(),
+                marker
+            );
+            peer_log!(
+                "arithmetic PANEL prefix pid={} submission={} parent={} round={} blue={} daa={}",
+                std::process::id(),
+                block.hash(),
+                parent,
+                Hash64::from_bytes(panel.id()),
+                panel.close_blue_score - 1,
+                node.chain.daa_of(parent)
+            );
+        }
     }
+}
+
+enum PrefixArchive {
+    Write(std::io::BufWriter<File>),
+    Read(std::io::Lines<std::io::BufReader<File>>, Hash64),
+}
+
+impl PrefixArchive {
+    fn create(path: &Path) -> Self {
+        Self::Write(std::io::BufWriter::new(File::create_new(path).unwrap()))
+    }
+
+    fn open(path: &Path, parent: Hash64) -> Self {
+        use std::io::BufRead;
+        Self::Read(std::io::BufReader::new(File::open(path).unwrap()).lines(), parent)
+    }
+}
+
+/// Retain or validate ordinary accepted blocks up to the parent of the PANEL close.
+async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, deadline: u64, mut archive: PrefixArchive) -> Hash64 {
+    use std::io::Write;
+    assert_eq!(node.chain.sink(), submission);
+    let submitted = node.api().get_header(submission).unwrap();
+    let target = close_blue.checked_sub(1).unwrap();
+    assert!(submitted.blue_score <= target && submitted.daa_score < deadline);
+    let mut tip = submission;
+    let mut pruning_point = submitted.pruning_point;
+    let step = node.config.params.target_time_per_block();
+    for blue in submitted.blue_score + 1..=target {
+        let block = match &mut archive {
+            PrefixArchive::Write(_) => node.chain.heartbeat(step, vec![]).await,
+            PrefixArchive::Read(lines, _) => {
+                let raw: RpcRawBlock = serde_json::from_str(&lines.next().expect("truncated PANEL prefix").unwrap()).unwrap();
+                let block = Block::try_from(raw).unwrap();
+                assert_eq!(block.header.direct_parents(), &[tip]);
+                node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(block.header.timestamp);
+                stable_panel::arm(node);
+                let status = node.api().validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
+                assert!(status.has_block_body());
+                block
+            }
+        };
+        assert_eq!(block.header.direct_parents(), &[tip]);
+        assert_eq!(block.header.blue_score, blue);
+        assert!(block.header.daa_score < deadline);
+        assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID);
+        assert_eq!(block.transactions.len(), 1);
+        tip = block.hash();
+        assert_eq!(node.chain.sink(), tip);
+        if block.header.pruning_point != pruning_point {
+            pruning_point = block.header.pruning_point;
+            legacy_work::await_pruning_capture(node, pruning_point).await;
+        }
+        if let PrefixArchive::Write(writer) = &mut archive {
+            serde_json::to_writer(&mut *writer, &RpcRawBlock::from(&block)).unwrap();
+            writer.write_all(b"\n").unwrap();
+        }
+    }
+    match archive {
+        PrefixArchive::Write(mut writer) => {
+            writer.flush().unwrap();
+            writer.get_ref().sync_all().unwrap();
+        }
+        PrefixArchive::Read(mut lines, expected) => {
+            assert!(lines.next().is_none(), "extra PANEL prefix blocks");
+            assert_eq!(tip, expected);
+        }
+    }
+    tip
+}
+
+#[tokio::test]
+async fn replay_to_original_panel_parent() {
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let path = dir.path().join("prefix.jsonl");
+    let parts = parts(Some(FENCE));
+    let mut writer = Rig::new(&parts, 1);
+    let start = writer.chain.sink();
+    stable_panel::arm(&mut writer);
+    let parent = panel_prefix(&mut writer, start, 5, 50, PrefixArchive::create(&path)).await;
+    let mut reader = Rig::new(&parts, 2);
+    let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, parent)).await;
+    assert_eq!(reader.api().get_header(restored).unwrap().blue_score, 4);
+    assert_eq!(reader.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
 }

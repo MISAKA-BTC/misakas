@@ -415,7 +415,7 @@ async fn registered_audit_history(mode: AuditHistory) {
                 &cut,
                 close.hash(),
                 &aq,
-                audit,
+                [audit, panel],
                 marker,
                 roots[0],
                 seals[0],
