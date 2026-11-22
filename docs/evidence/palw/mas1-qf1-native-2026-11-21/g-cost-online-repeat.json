@@ -1,0 +1,73 @@
+{
+  "descriptor": "c1f12903e1ca7b611d2285fdba39bc45d0d6ff95c7b4ae83135540c21cff47155c461675545de13c5149ba13ccc3be021405b1a1cfc829de0168301c7914edb6",
+  "binary_sha256": "4b60b99b4ac9bab77fd6e2a43a8e5e750779ae4052064ae9fa9016b7764c5262",
+  "plan_sha256": "928d3fe85d82f4d5e2145d24adefeca1902b3a1792a043e0c1d183a741a31264",
+  "rayon_threads": 3,
+  "machine": "Mac13,1",
+  "cpu": "Apple M1 Max",
+  "os": "26.7.1",
+  "setup_ms": [
+    26755,
+    26002
+  ],
+  "process_peak_resident_bytes": [
+    18387058688,
+    18224070656
+  ],
+  "repeat_log_sha256": "b58f47b141b3162bb8f8e42b63e8dba58bb9c626980413151563cd57172ad811",
+  "trials": [
+    {
+      "job": "2 + 2?",
+      "ticket": "64eb136e34ed36bcd79ece3d38643d101bf5edc17de3cf293c0e93ad64fbdf18",
+      "answer_length": 9,
+      "online_us": [
+        41785527,
+        41333228
+      ],
+      "reference_us": [
+        79177175,
+        79176275
+      ]
+    },
+    {
+      "job": "\u65e5\u672c\u306e\u9996\u90fd\u3092\u90fd\u5e02\u540d\u3060\u3051\u3067\u7b54\u3048\u3066\u304f\u3060\u3055\u3044\u3002",
+      "ticket": "471c584bb1587658f3fc8e2df90e9e90297b9d88ab691406c26689a4ab89a5d4",
+      "answer_length": 2,
+      "online_us": [
+        40433043,
+        40485625
+      ],
+      "reference_us": [
+        77493555,
+        77475237
+      ]
+    },
+    {
+      "job": "Answer with only one digit: what is three minus two?",
+      "ticket": "0de7d8bbbf0f54ba06a380d1d0ff2e6128df0da71ae2f424afee63c671dda069",
+      "answer_length": 2,
+      "online_us": [
+        41154811,
+        41214013
+      ],
+      "reference_us": [
+        78923528,
+        78941028
+      ]
+    },
+    {
+      "job": "Write one sentence explaining why leaves look green.",
+      "ticket": "2788bffb35be5f79a980f284cb981c320d4807848aa2f04d2aa799e2d45c10eb",
+      "answer_length": 16,
+      "online_us": [
+        46378447,
+        47021757
+      ],
+      "reference_us": [
+        87881217,
+        88038520
+      ]
+    }
+  ],
+  "g_cost": "UNKNOWN"
+}

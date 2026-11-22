@@ -1192,3 +1192,9 @@ python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" -
 tar -xf "$p/qf1-arithmetic-8k-certificate-writer.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --writer-only --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-8k-certificate-writer.json"
 ```
+
+Qwen3-8Bで同じ4問の実行順と各問の経路順を反転して再測定した。正規Ticketを再現する1回推論は初回169.752秒、再測定170.055秒。2回推論はそれぞれ323.475秒、323.631秒だった。モデル準備は別途26.755秒と26.002秒。実行順を変えても4問すべてで同じTicketを得た。後続の費用比較で2回推論だけを基準にすると、この機材では1回推論で実際に生成できる費用を過大評価する。今回の比較は同一機材・同じ4入力・各経路2測定で、採択済み費用閾値の判定はなく、G-COSTはUNKNOWN。順序指定の変更、欠測、Ticketの1ビット変更、経路の入れ替えを個別に拒否した。[2回の問別比較](g-cost-online-repeat.json)・[再測定ログ](g-cost-online-repeat-run.jsonl)・[資源使用記録](g-cost-online-repeat-resources.log)
+
+```sh
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --online-repeat | cmp - "$p/g-cost-online-repeat.json"
+```

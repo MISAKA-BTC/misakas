@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from tokenizers import Tokenizer
@@ -76,6 +77,7 @@ def online_report(plan, jobs, log):
     header, *runs = [json.loads(line) for line in log.read_text().splitlines()]
     originals = plan["trials"]
     require(header["method"] == "online-stop" and header["descriptor"] == plan["descriptor"]
+            and type(header["setup_ms"]) is int and header["setup_ms"] >= 0
             and header["trials"] == len(originals) and len(runs) == 2 * len(originals), "wrong online-stop schedule")
     trials = []
     for index, (job, original) in enumerate(zip(jobs, originals, strict=True)):
@@ -90,6 +92,38 @@ def online_report(plan, jobs, log):
     return dict(descriptor=plan["descriptor"], setup_ms=header["setup_ms"], trials=trials, g_cost="UNKNOWN")
 
 
+def repeated_online_report(plan, jobs, data):
+    schedule = json.loads((data / "g-cost-online-repeat-schedule.json").read_bytes())
+    environment = json.loads((data / "g-cost-online-stop-environment.json").read_bytes())
+    workloads = ["2 + 2?", *jobs]
+    reverse = dict(plan, trials=plan["trials"][::-1])
+    for trial_plan, recorded in [(plan, environment), (reverse, schedule)]:
+        encoded = (json.dumps(trial_plan, indent=2) + "\n").encode()
+        require(hashlib.sha256(encoded).hexdigest() == recorded["plan_sha256"], "different measurement plan")
+    order = [dict(ticket=row["ticket"], online_first=(i % 2 == 0)) for i, row in enumerate(reverse["trials"])]
+    require(schedule["method"] == "online-stop" and schedule["trials"] == order and
+            schedule["repetitions_per_job_per_route"] == 1 and schedule["reference"] == "g-cost-online-stop-run.jsonl" and
+            schedule["rayon_threads"] == environment["rayon_threads"] and schedule["binary_sha256"] == environment["binary_sha256"],
+            "changed repeat order, build or route schedule")
+    first = online_report(plan, workloads, data / schedule["reference"])
+    repeat_path = data / "g-cost-online-repeat-run.jsonl"
+    second = online_report(reverse, workloads[::-1], repeat_path)
+    pairs = []
+    for a, b in zip(first["trials"], reversed(second["trials"]), strict=True):
+        identity = {key: a[key] for key in ("job", "ticket", "answer_length")}
+        require(all(b[k] == v for k, v in identity.items()), "different numerical work across repetitions")
+        pairs.append(dict(**identity, online_us=[a["online_us"], b["online_us"]],
+                          reference_us=[a["reference_us"], b["reference_us"]]))
+    resources = (data / "g-cost-online-repeat-resources.log").read_text()
+    peaks = re.findall(r"^\s*(\d+)\s+maximum resident set size\s*$", resources, re.M)
+    require(len(peaks) == 1 and int(peaks[0]) > 0, "missing repeated-run peak memory")
+    return dict(descriptor=plan["descriptor"], binary_sha256=schedule["binary_sha256"], plan_sha256=schedule["plan_sha256"],
+                rayon_threads=schedule["rayon_threads"], machine=environment["machine"], cpu=environment["cpu"], os=environment["os"],
+                setup_ms=[first["setup_ms"], second["setup_ms"]],
+                process_peak_resident_bytes=[environment["process_peak_resident_bytes"], int(peaks[0])],
+                repeat_log_sha256=hashlib.sha256(repeat_path.read_bytes()).hexdigest(), trials=pairs, g_cost="UNKNOWN")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tokenizer", type=Path)
@@ -97,10 +131,15 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--log", type=Path)
     mode.add_argument("--online-log", type=Path)
+    mode.add_argument("--online-repeat", action="store_true", help="check both online-stop runs against the frozen schedule")
     parser.add_argument("--reverse-online", action="store_true", help="repeat the online-stop comparison in reverse job and route order")
     args = parser.parse_args()
     plan, jobs = read_plan(args.tokenizer, args.data)
-    if args.log:
+    if args.online_repeat:
+        if args.reverse_online:
+            parser.error("--online-repeat checks both orders")
+        result = repeated_online_report(plan, jobs, args.data)
+    elif args.log:
         if args.reverse_online:
             parser.error("--reverse-online applies only to online-stop")
         result = report(plan, jobs, args.log)
