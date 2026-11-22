@@ -250,46 +250,12 @@ pub(super) async fn replay_window(
     let read = std::env::var_os("MISAKA_PRIVATE_FRESH_PUBLICATION_READ");
     let submission_source = read.as_ref().map(|path| Path::new(path).with_extension("submission.json"));
     let submission_output = write.as_ref().map(|path| Path::new(path).with_extension("submission.json"));
-    let publication = match (write, read) {
-        (None, None) => return,
-        (Some(path), None) => {
-            let directory = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_FRESH_SIGNED_ROWS").expect("three released audit rows"));
-            let records: Vec<ReleaseRecord> = (0..3)
-                .map(|i| {
-                    let record: ReleaseRecord =
-                        serde_json::from_reader(File::open(directory.join(format!("released-{i}.json"))).unwrap()).unwrap();
-                    assert_eq!(record.holder, i);
-                    record
-                })
-                .collect();
-            let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
-            let rows = views(&decoded, context);
-            let gate = gate.as_ref().expect("current close must be finalized").publication_gate();
-            let batch =
-                local_carrier(node, &mut None, &mut [], 0, batch_commitment(&rows, LIMITS).unwrap(), "funded audit release batch")
-                    .await;
-            let marker = gate.propose(node.api().as_ref(), batch.hash(), &rows, q, LIMITS).unwrap();
-            let certificate = local_carrier(node, &mut None, &mut [], 0, marker, "funded audit seed certificate").await;
-            let result = Publication { batch: RpcRawBlock::from(&batch), certificate: RpcRawBlock::from(&certificate), rows: records };
-            let file = File::create_new(path).unwrap();
-            serde_json::to_writer(&file, &result).unwrap();
-            file.sync_all().unwrap();
-            result
-        }
-        (None, Some(path)) => {
-            let result: Publication = serde_json::from_reader(File::open(path).unwrap()).unwrap();
-            for raw in [&result.batch, &result.certificate] {
-                let block = Block::try_from(raw.clone()).unwrap();
-                let hash = block.hash();
-                assert_eq!(block.header.direct_parents(), &[node.chain.sink()]);
-                stable_panel::arrive(node, block, "archived audit seed publication").await;
-                assert_eq!(node.chain.sink(), hash);
-            }
-            result
-        }
-        _ => panic!("choose one audit publication input or output"),
-    };
-    let frozen = gate.unwrap();
+    if write.is_none() && read.is_none() {
+        return;
+    }
+    let frozen = gate.expect("current audit close must be finalized");
+    let publication =
+        seed_publication(node, write, read, "MISAKA_PRIVATE_FRESH_SIGNED_ROWS", frozen.publication_gate(), q, context).await;
     let batch = Block::try_from(publication.batch).unwrap().hash();
     let certificate = Block::try_from(publication.certificate).unwrap().hash();
     let decoded: Vec<_> = publication.rows.iter().map(ReleaseRecord::decode).collect();
@@ -422,6 +388,14 @@ pub(super) async fn replay_window(
         let work_path = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_WORK_READ");
         let release_output = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_SHARE_WRITE");
         assert!(release_output.is_none() || work_path.is_some(), "PANEL shares require independently replayed post-close work");
+        let panel_write = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_PUBLICATION_WRITE");
+        let panel_read = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_PUBLICATION_READ");
+        assert!(panel_write.is_none() || panel_read.is_none(), "choose one PANEL seed publication input or output");
+        assert!(
+            work_path.is_some() || (panel_write.is_none() && panel_read.is_none()),
+            "PANEL seed requires independently replayed post-close work"
+        );
+
         assert!(work_path.is_none() || close_path.is_some(), "replaying PANEL work requires a pinned assessment close");
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
@@ -496,19 +470,19 @@ pub(super) async fn replay_window(
                 if let Some(path) = work_path {
                     let gate =
                         replay_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, Path::new(&path)).await;
+                    let id = panel.id();
+                    let context = Tb1ReleaseContext {
+                        round_ref: &id,
+                        qual_root: panel_qualification.root(),
+                        freeze_id: assessment.commitment(),
+                    };
                     if let Some(output) = release_output {
                         let dir = holder.join("panel");
-                        let id = panel.id();
                         let bytes = fs::read(dir.join(format!("panel-dealer-input-{slot}.json"))).unwrap();
                         assert_eq!(seal(&id, slot, &bytes), seals[1][slot]);
                         let provision: stable_panel::Provision = serde_json::from_slice(&bytes).unwrap();
                         assert_eq!(provision.roots, roots[1]);
                         let shares = provision.holder_shares();
-                        let context = Tb1ReleaseContext {
-                            round_ref: &id,
-                            qual_root: panel_qualification.root(),
-                            freeze_id: assessment.commitment(),
-                        };
                         let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
                         let mut journal = Tb1ExposureJournal::resume(&dir, &id, &key.verification_key, slot as u32).unwrap();
                         let message = journal
@@ -525,9 +499,90 @@ pub(super) async fn replay_window(
                         file.sync_all().unwrap();
                         peer_log!("arithmetic PANEL signed holder={slot} tip={} close={}", node.chain.sink(), close.hash());
                     }
+                    if panel_write.is_some() || panel_read.is_some() {
+                        let published = seed_publication(
+                            node,
+                            panel_write,
+                            panel_read,
+                            "MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_SIGNED_ROWS",
+                            &gate,
+                            panel_qualification,
+                            context,
+                        )
+                        .await;
+                        let batch = Block::try_from(published.batch).unwrap().hash();
+                        let certificate = Block::try_from(published.certificate).unwrap().hash();
+                        let decoded: Vec<_> = published.rows.iter().map(ReleaseRecord::decode).collect();
+                        let releases = views(&decoded, context);
+                        let draw = assessment
+                            .assessment_draw(
+                                node.api().as_ref(),
+                                close.hash(),
+                                &gate,
+                                batch,
+                                certificate,
+                                &releases,
+                                panel_qualification,
+                                LIMITS,
+                            )
+                            .unwrap();
+                        peer_log!(
+                            "arithmetic PANEL draw {} {}",
+                            std::process::id(),
+                            serde_json::json!({"close":close.hash(), "batch":batch, "certificate":certificate,
+                                "submission":block.hash(), "selected":draw.selected()})
+                        );
+                    }
                 }
             }
         }
+    }
+}
+
+async fn seed_publication(
+    node: &mut Rig,
+    write: Option<std::ffi::OsString>,
+    read: Option<std::ffi::OsString>,
+    signed_rows_env: &str,
+    gate: &misaka_palw_remote::tb1_exposure::publication::NativePublicationGate,
+    q: &Tb1Qualification<'_>,
+    context: Tb1ReleaseContext<'_>,
+) -> Publication {
+    match (write, read) {
+        (Some(path), None) => {
+            let directory = PathBuf::from(std::env::var_os(signed_rows_env).expect("three signed release rows"));
+            let records: Vec<ReleaseRecord> = (0..3)
+                .map(|i| {
+                    let record: ReleaseRecord =
+                        serde_json::from_reader(File::open(directory.join(format!("released-{i}.json"))).unwrap()).unwrap();
+                    assert_eq!(record.holder, i);
+                    record
+                })
+                .collect();
+            let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
+            let rows = views(&decoded, context);
+            let batch =
+                local_carrier(node, &mut None, &mut [], 0, batch_commitment(&rows, LIMITS).unwrap(), "TB1 release batch").await;
+            let marker = gate.propose(node.api().as_ref(), batch.hash(), &rows, q, LIMITS).unwrap();
+            let certificate = local_carrier(node, &mut None, &mut [], 0, marker, "TB1 seed certificate").await;
+            let result = Publication { batch: RpcRawBlock::from(&batch), certificate: RpcRawBlock::from(&certificate), rows: records };
+            let file = File::create_new(path).unwrap();
+            serde_json::to_writer(&file, &result).unwrap();
+            file.sync_all().unwrap();
+            result
+        }
+        (None, Some(path)) => {
+            let result: Publication = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            for raw in [&result.batch, &result.certificate] {
+                let block = Block::try_from(raw.clone()).unwrap();
+                let hash = block.hash();
+                assert_eq!(block.header.direct_parents(), &[node.chain.sink()]);
+                stable_panel::arrive(node, block, "archived TB1 seed publication").await;
+                assert_eq!(node.chain.sink(), hash);
+            }
+            result
+        }
+        _ => panic!("choose one TB1 publication input or output"),
     }
 }
 
