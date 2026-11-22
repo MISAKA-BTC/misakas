@@ -1198,3 +1198,12 @@ Qwen3-8Bで同じ4問の実行順と各問の経路順を反転して再測定�
 ```sh
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_varied_jobs.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$p" --online-repeat | cmp - "$p/g-cost-online-repeat.json"
 ```
+
+8K認証の生成ノードを終了した後、同じ実行ファイルを使う別プロセス（PID 38620）が元のブロック列を再読込した。認証DAA 11673、75枠の賛成、再実行結果、先端 `0225310e…` が生成側と一致し、frontier は元の受付ブロック `3f2aca47…`（blue score 12984）を指した。認証時の監査seed公開は保留で、readinessには未成熟の仕事1件と最早成熟DAA 17931が記録された。frontierの高さ、readinessが返す先端のblue scoreを個別に変更した記録は拒否された。[1台目の再読込結果](qf1-arithmetic-8k-certification-reader-0.json)・[完走ログ](qf1-arithmetic-8k-certification-reader-0.tar.zst)
+
+生成側の認証まで展開したディレクトリで再現できる。
+
+```sh
+tar -xf "$p/qf1-arithmetic-8k-certification-reader-0.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --first-reader --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-8k-certification-reader-0.json"
+```

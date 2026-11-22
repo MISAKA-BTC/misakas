@@ -69,7 +69,7 @@ def funded_draw(root, final, writer):
                 positions=int(positions), deadline=int(deadline), blocks=len(headers), writer=pid)
 
 
-def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, writer_only=False):
+def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, writer_only=False, first_reader=False):
     if arithmetic_work:
         fresh = verify_audit(root, arithmetic_work=True)
         replay = fresh["native_replay"]
@@ -91,21 +91,26 @@ def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, 
     require(cert["writer"] == pid and cert["binary_sha256"] == final["binary_sha256"], "different writer build")
     if writer_only:
         return dict(panel=final, funding=funding, certificate=cert)
-    peers = [root / f"read-cert-{i}.log" for i in (0, 2)]
-    cold = verify_readers(original, peers, 2)
+    peers = [root / f"read-cert-{i}.log" for i in ((0,) if first_reader else (0, 2))]
+    cold = verify_readers(original, peers, len(peers))
     require(cold["binary_sha256"] == cert["binary_sha256"] and pid not in cold["processes"], "independent certificate readback")
+    end = json.loads((root / "funded/certification.json").read_bytes())["blocks"][-1]["header"]
     observations = []
     for reader, path in zip(cold["processes"], peers):
         [(claim_pid, row)] = records(path.read_text(), "legacy genesis certification")
         [(audit_pid, audit)] = records(path.read_text(), "signed audit after nonfloor")
         require(reader == claim_pid == audit_pid and row["claim"] == claim and row["accepted"] == original["block"]
+                and row["frontier"] == [original["blue_score"], original["block"]]
                 and row["class"] == original["class_id"] and row["final_daa"] == final["daa"]
                 and row["tip"] == audit["tip"] == cert["tip"] and row["state"] == audit["state"]
                 and row["certified_daa"] == audit["daa"] == cert["certified_daa"] and row["approvals"] == row["drawn"] == 75
                 and row["replay"] == cert["transcript"] and audit["deadline"] == fresh["audit"]["audit_deadline"]
                 and audit["close"] == final["audit_close"], "native reader disagrees with signed state")
         readiness = audit["readiness"]
-        require(readiness["generation"] == audit["tip"] and audit["publication"] == "held"
+        require(readiness["generation"] == readiness["tip"]["block"] == audit["tip"]
+                and readiness["tip"]["blue"] == readiness["sinkBlue"] == end["blueScore"]
+                and readiness["tip"]["daa"] == readiness["sinkDaa"] == end["daaScore"]
+                and audit["publication"] == "held"
                 and readiness["safe"] is None and readiness["finalized"]["finalized"] is None, "unexpected audit state")
         blocking = readiness["blocking"]
         [wait] = [w for w in blocking["waits"] if w["kind"] == "waitingMaturity"]
@@ -115,6 +120,8 @@ def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, 
                 and audit["daa"] < wait["readyDaa"] == retention["retentionDaa"] < audit["deadline"]
                 and audit["daa"] + wait["waitDaa"] == wait["readyDaa"], "different pending work or signed release window")
         observations.append((row, audit))
+    if first_reader:
+        return dict(reader=cold["processes"][0], binary_sha256=cert["binary_sha256"], native=observations[0][0], audit=observations[0][1])
     require(observations[0] == observations[1], "readers disagree about remaining work")
     return dict(panel=final, funding=funding,
                 certificate=cert, readers=cold["processes"], native=observations[0][0], audit=observations[0][1],
@@ -128,7 +135,8 @@ if __name__ == "__main__":
     parser.add_argument("--arithmetic-work", action="store_true")
     stage = parser.add_mutually_exclusive_group()
     stage.add_argument("--writer-only", action="store_true", help="verify the certificate before cold replica checks")
+    stage.add_argument("--first-reader", action="store_true", help="check the first completed cold replica against the archived certification")
     stage.add_argument("--draw-only", action="store_true", help="verify only through the first funded Gate C draw")
     parser.add_argument("--openssl", help="verify the isolated Panel and Gate C card signatures")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only, args.openssl, args.writer_only), indent=2))
+    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only, args.openssl, args.writer_only, args.first_reader), indent=2))
