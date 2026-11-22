@@ -283,5 +283,38 @@
     },
     "replayExitCode": 0,
     "retryExitCode": 0
+  },
+  "isolatedPanel": {
+    "readbackSha256": "1df9270c4fd9f222ae117fa32a8e3746dd0da7b831161f144c2892cc83e6f07d",
+    "boundDaa": 7747,
+    "seats": [
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3"
+    ],
+    "acceptingBlock": "227c0a2458f959421c2523caa6f10b52c0a706b50ea35664d1c010b3a0365b227e507bf9e27cdc7824cfe6ac09dda12ca45a9bfb2eaf1d4900e4eaa129109d99",
+    "executionRoot": "2f651fda3b82e6763ea775b1b344e0517b3b8f8c20b3aa86775900dd7ea8da863ae8b4b7bd9c641b40120dfcad723019f70a3220de246bbcb55c4b52ab80d9d3",
+    "replayMatched": true,
+    "verifiedLeaves": 85938,
+    "approvalCarrier": {
+      "block": "4822df4fa4b77dc60454eb00ef44d9c8246c99cc9d69861906e91b00e128cf9655490c69a79891bbbdbf96f69e1ab28efb1e51c88dde263db7575d3c2b54e5f8",
+      "transactionId": "71f26f34d082a5e0fcd4c55aee931c369e162dc8bbaab7936d2030765e1ec73e69b1d401b21e735d0c2c9b125ecd09d6e6ff7512137eeca05c98e04e0949e73d",
+      "palwStateRoot": "4092472e8bb15dbe4c909520c7199eefdad52b82132ca4813661b7cf24ccab6f3223af526add54ca95741a77956b2196a7dea37e1cea9a2717d76f693c1eca5c"
+    },
+    "peerSinks": [
+      "535cf1e1d5a339ee7fcfe351e0e9e3d337794c70eab6244523b3464cdf24c29e053aa5880520f3eaf090fb5935307bf37fd67fc79c8a2eedf3c7882f9b86acdf",
+      "4822df4fa4b77dc60454eb00ef44d9c8246c99cc9d69861906e91b00e128cf9655490c69a79891bbbdbf96f69e1ab28efb1e51c88dde263db7575d3c2b54e5f8",
+      "4822df4fa4b77dc60454eb00ef44d9c8246c99cc9d69861906e91b00e128cf9655490c69a79891bbbdbf96f69e1ab28efb1e51c88dde263db7575d3c2b54e5f8"
+    ],
+    "approvalRecorded": [
+      false,
+      false,
+      false
+    ],
+    "boundedDriverExitCode": 1,
+    "driverRefusal": "isInIBD",
+    "peer0LogicalRam": {
+      "outstanding": 618957564,
+      "requested": 17018986132,
+      "limit": 17603217408
+    }
   }
 }
