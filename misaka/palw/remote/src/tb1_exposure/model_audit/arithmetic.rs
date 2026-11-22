@@ -3,7 +3,10 @@
 use super::*;
 use crate::tb1_exposure::exec_input::LocalOriginalBody;
 use crate::tb1_exposure::qf1::Qf1Prompt;
-use kaspa_consensus_core::palw_qf1::{Stop, is_eos};
+use kaspa_consensus_core::{
+    palw_panel_v2::PALW_DRAW_WEIGHT_MAX_MSK_V1,
+    palw_qf1::{Stop, is_eos},
+};
 use misaka_palw_tir_exec::node::qf1::{LocalInstance, TraceRequest};
 
 pub const CASES: u32 = 2;
@@ -115,6 +118,30 @@ pub fn exact_digit_score(expected: u32, output: &[u32]) -> bool {
     matches!(output, [digit, eos] if *digit == expected && is_eos(*eos))
 }
 
+/// Commit the sorted, weighted operators resolved by the control policy
+/// against the selected parent's post-state.
+fn arithmetic_control_roster(state: Hash64, operators: &[(Hash64, u64)]) -> io::Result<[u8; 64]> {
+    if state == Hash64::default()
+        || operators.is_empty()
+        || operators
+            .iter()
+            .any(|(operator, weight)| *operator == Hash64::default() || !(1..=PALW_DRAW_WEIGHT_MAX_MSK_V1).contains(weight))
+        || operators.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err(invalid("invalid arithmetic PANEL control roster"));
+    }
+    let count = u32::try_from(operators.len()).map_err(|_| invalid("oversized arithmetic PANEL control roster"))?;
+    let mut h = Sha3_512::new()
+        .chain_update(b"MISAKA/private/MAS1/arithmetic-panel-roster/v1")
+        .chain_update(state.as_bytes())
+        .chain_update(count.to_be_bytes());
+    for (operator, weight) in operators {
+        h.update(operator.as_bytes());
+        h.update(weight.to_be_bytes());
+    }
+    Ok(h.finalize().into())
+}
+
 /// Private assessment close prepared against a single selected parent. The
 /// enclosing control policy resolves eligible operators and their draw weights.
 pub struct ArithmeticPanelCut {
@@ -207,7 +234,8 @@ impl FrozenAudit<'_> {
         originals: &[ArithmeticEvaluation; CASES as usize],
         panel_q: &Tb1Qualification<'_>,
         parent: Hash64,
-        control_population: Hash64,
+        control_state: Hash64,
+        control_operators: &[(Hash64, u64)],
         draw_policy: Hash64,
     ) -> io::Result<ArithmeticPanelCut> {
         let round = self.cut.assessment_panel(panel_q)?;
@@ -217,11 +245,11 @@ impl FrozenAudit<'_> {
         let h = native.get_header(parent).map_err(io::Error::other)?;
         if h.blue_score.checked_add(1) != Some(round.close_blue_score)
             || h.daa_score >= round.release_from_daa
-            || control_population == Hash64::default()
             || draw_policy == Hash64::default()
         {
             return Err(invalid("invalid arithmetic PANEL parent or control policy"));
         }
+        let control_roster = arithmetic_control_roster(control_state, control_operators)?;
         let marker =
             self.read_arithmetic_submission(native, batch, certificate, releases, audit_q, limits, candidate, submission, originals)?;
         if native.get_sink() != parent {
@@ -234,7 +262,7 @@ impl FrozenAudit<'_> {
             .chain_update(candidate.to_be_bytes())
             .chain_update(submission.as_bytes())
             .chain_update(marker)
-            .chain_update(control_population.as_bytes())
+            .chain_update(control_roster)
             .finalize()
             .into();
         let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: draw_policy.as_bytes() };
@@ -363,6 +391,21 @@ mod tests {
         rows[1].original.roots[2] = Hash64::default();
         rows[1].output[0] += 1;
         assert_ne!(submission_marker(certificate, &rows).unwrap(), original);
+    }
+
+    #[test]
+    fn assessment_roster_binds_parent_state_and_exact_operator_weights() {
+        let state = Hash64::from_u64_word(1);
+        let a = Hash64::from_u64_word(2);
+        let b = Hash64::from_u64_word(3);
+        let roster = arithmetic_control_roster(state, &[(a, 10), (b, 20)]).unwrap();
+        assert_ne!(arithmetic_control_roster(b, &[(a, 10), (b, 20)]).unwrap(), roster);
+        assert_ne!(arithmetic_control_roster(state, &[(a, 10), (b, 21)]).unwrap(), roster);
+        for invalid in
+            [vec![], vec![(a, 0)], vec![(a, PALW_DRAW_WEIGHT_MAX_MSK_V1 + 1)], vec![(a, 10), (a, 20)], vec![(b, 20), (a, 10)]]
+        {
+            assert!(arithmetic_control_roster(state, &invalid).is_err());
+        }
     }
 
     #[test]
