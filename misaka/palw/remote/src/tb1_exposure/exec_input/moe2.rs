@@ -7,12 +7,8 @@ use kaspa_consensus_core::palw_state_proof_v1::{
     PALW_PROOF_LABEL_BONDS, PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1,
 };
 use kaspa_consensus_core::{
-    config::params::Params,
-    palw_attempt_v2::palw_network_domain_v2_for,
-    palw_bond_budget_v1::{PalwBudgetAskV1, PalwBudgetOriginV1, palw_bond_budget_export_cap_v1},
-    palw_mode_v2::PalwConsensusMode,
-    palw_model_tier_v1::palw_model_tier_of_v1,
-    palw_state_v2::{PalwChainStateV2, palw_bond_may_take_work_v2},
+    config::params::Params, palw_attempt_v2::palw_network_domain_v2_for, palw_bond_budget_v1::PalwBudgetOriginV1,
+    palw_mode_v2::PalwConsensusMode, palw_state_v2::PalwChainStateV2,
 };
 use libcrux_ml_dsa::ml_dsa_87::{self, MLDSA87VerificationKey};
 
@@ -198,42 +194,22 @@ impl ExecInputBatch<'_> {
             .filter(|_| bundle.state.bond_budget_active_at(daa))
             .ok_or_else(|| invalid("inactive MOE2 budget at close"))?
             .policy;
-        let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or_else(|| invalid("missing MOE2 catalog"))?;
+        bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or_else(|| invalid("missing MOE2 catalog"))?;
         let mut budget = state.bond_budget().ok_or_else(|| invalid("missing native MOE2 budget"))?.clone();
         if budget.header.policy_digest != policy.digest() {
             return Err(invalid("native budget policy differs from MOE2 configuration"));
         }
-        // The engine quotes export per 1,000 sompi held, including its protocol ceiling.
-        let rate = u128::from(palw_bond_budget_export_cap_v1(policy, 1000));
         let mut result = BTreeMap::new();
         for (&slot, entry) in &self.entries {
             let Some(quote) = entry.terms.moe2_quote else { continue };
-            let class = state.class(&quote.model).ok_or_else(|| invalid("missing MOE2 model at close"))?;
-            let core = palw_model_tier_of_v1(Some(catalog), &quote.model, &quote.artifact_root, class.registrant_bond.is_none(), daa)
-                .is_approved();
-            if quote.policy != budget.header.policy_digest
-                || class.artifact_root != quote.artifact_root
-                || core == state.model_market(&quote.model).is_some()
-                || (!core && class.registered_daa < from)
-            {
-                return Err(invalid("MOE2 slot differs from close policy or model cohort"));
-            }
-            let bond = state
-                .bond(&quote.funding_bond)
-                .filter(|b| palw_bond_may_take_work_v2(b, bundle.state.min_collateral_sompi()))
-                .ok_or_else(|| invalid("MOE2 funding bond unavailable at close"))?;
-            let reward = quote.limits.max_reward;
-            let liability = match (reward, rate) {
-                (0, _) => 0,
-                (_, 0) => return Err(invalid("MOE2 budget cannot export the signed reward")),
-                _ => (u128::from(reward) * 1000).div_ceil(rate),
-            };
+            let (capital, ask) = quote.budget_ask_at(config, state, daa).map_err(|reason| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("MOE2 slot cannot reserve under its signed terms: {reason:?}"))
+            })?;
             let consent = Hash64::from_bytes(consent_ref(reg_key(&entry.context), slot));
-            let ask = PalwBudgetAskV1 { block_units: 0, final_weight: 0, reward_sompi: reward, liability_sompi: liability };
             let grant = budget
                 .reserve_claim_v1(
                     policy,
-                    bond.collateral,
+                    capital,
                     consent,
                     quote.funding_bond,
                     Some(quote.model),
@@ -243,7 +219,7 @@ impl ExecInputBatch<'_> {
                     &mut Vec::new(),
                 )
                 .map_err(|err| io::Error::other(err.to_string()))?;
-            if grant.reward_sompi != reward {
+            if grant.reward_sompi != ask.reward_sompi {
                 return Err(invalid("native budget clipped a signed MOE2 reward ceiling"));
             }
             let (_, epoch) = budget
@@ -255,9 +231,9 @@ impl ExecInputBatch<'_> {
                 slot,
                 Moe2BudgetPreview {
                     consent,
-                    reward_sompi: reward,
-                    collateral_sompi: bond.collateral,
-                    minimum_liability_sompi: liability,
+                    reward_sompi: ask.reward_sompi,
+                    collateral_sompi: capital,
+                    minimum_liability_sompi: ask.liability_sompi,
                     allocation_epoch: epoch,
                 },
             );

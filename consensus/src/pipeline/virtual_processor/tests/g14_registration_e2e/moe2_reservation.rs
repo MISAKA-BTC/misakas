@@ -89,6 +89,15 @@ pub(super) async fn exercise(
         Err(Moe2SettlementError::UnknownClaimContext),
         "even a registered genesis model cannot start MOE2 terms before activation"
     );
+    assert!(matches!(
+        before_profile.budget_ask_at(&env.config.params, state, point.daa_score),
+        Err(Moe2SettlementError::UnknownClaimContext)
+    ));
+    let (funding_capital, ask) = core.budget_ask_at(&env.config.params, state, point.daa_score).unwrap();
+    assert_eq!((funding_capital, ask.reward_sompi), (capital, reward));
+    assert!(palw_bond_budget_export_cap_v1(&policy, ask.liability_sompi - 1) < reward);
+    assert!(palw_bond_budget_export_cap_v1(&policy, ask.liability_sompi) >= reward);
+    assert!(matches!(core.budget_ask_at(&env.config.params, state, core.deadline + 1), Err(Moe2SettlementError::OutsideWindow)));
     let terms = registration_quote(state, model, bond, policy.digest()).for_claim(Hash64::from_u64_word(641));
     let source = terms.reservation_key();
     let shared_undo = remote.as_ref().map(|r| r.undo.as_slice().to_vec());

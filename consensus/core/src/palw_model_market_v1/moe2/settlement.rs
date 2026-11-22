@@ -117,6 +117,39 @@ impl Moe2PreDrawQuote {
         Ok(split)
     }
 
+    /// Size the funded slot at its selected EXEC close, before any draw. The
+    /// caller reserves against the native budget in frozen slot order.
+    pub fn budget_ask_at(
+        &self,
+        config: &crate::config::params::Params,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        daa: u64,
+    ) -> Result<(u64, crate::palw_bond_budget_v1::PalwBudgetAskV1), Moe2SettlementError> {
+        use crate::palw_bond_budget_v1::{PalwBudgetAskV1, palw_bond_budget_export_cap_v1};
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::palw_bond_may_take_work_v2;
+        use Moe2SettlementError::*;
+        if self.deadline == u64::MAX || !(self.valid_from..=self.deadline).contains(&daa) {
+            return Err(OutsideWindow);
+        }
+        self.allocation_at(config, state, daa)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
+        let policy = &bundle.state.bond_budget().ok_or(ReservationMismatch)?.policy;
+        let capital = state
+            .bond(&self.funding_bond)
+            .filter(|bond| palw_bond_may_take_work_v2(bond, bundle.state.min_collateral_sompi()))
+            .ok_or(ReservationMismatch)?
+            .collateral;
+        let reward_sompi = self.limits.max_reward;
+        let rate = u128::from(palw_bond_budget_export_cap_v1(policy, 1000));
+        let liability_sompi = match (reward_sompi, rate) {
+            (0, _) => 0,
+            (_, 0) => return Err(ReservationMismatch),
+            _ => (u128::from(reward_sompi) * 1000).div_ceil(rate),
+        };
+        Ok((capital, PalwBudgetAskV1 { block_units: 0, final_weight: 0, reward_sompi, liability_sompi }))
+    }
+
     fn allocation_at(
         &self,
         config: &crate::config::params::Params,
