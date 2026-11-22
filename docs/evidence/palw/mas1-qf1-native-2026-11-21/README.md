@@ -1308,3 +1308,7 @@ python3 -B "$p/check_arithmetic_control_population.py" "$out" --openssl "$(brew 
 ```
 
 Round 16 の close は share 公開開始（DAA 90741）より前のブロックに置く。親がすでにそのDAAに達していれば予定どおりのcloseは作れない。隔離ノードで短いブロック列を生成し、別ノードで公開開始前の親まで再生できることと、同じ親のDAAを公開開始に設定すると拒否することを検査した。対象テストは2件とも成功した。親の条件を満たした場合も、採用する子自身の時刻・位置・commitmentはholderが別途照合する。[native境界試験](qf1-panel-parent-release-bound.log)
+
+### 短日程での新規 Original と Panel・Court の再検査
+
+同じ実行ファイルの隔離3ピアで、新しい EXEC seed から Qwen3-8B の Original を生成した。選出された2席が完全再実行し、3ピアで承認集合と Stop・End の裁定が一致した。生成側は179.60秒で完了した。Panel の finality には隔離用の成熟済み仕事と pruning の試験入力を使用した。追加モデルの登録から自然に成立する finality、合意上の Final、新規受賞ブロックによる決済は別途検証が必要。[照合結果](qf1-compact-panel-court.json)・[実行ファイルのハッシュを含む生ログ](qf1-compact-panel-court.txt.zst)
