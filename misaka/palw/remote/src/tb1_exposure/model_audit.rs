@@ -15,6 +15,7 @@ use kaspa_consensus_core::{
     palw_tb1::{
         freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
         qualification::Tb1Qualification,
+        releases::Tb1BeaconSeed,
     },
 };
 use sha3::{Digest, Sha3_256, Sha3_512};
@@ -204,13 +205,17 @@ impl FrozenAudit<'_> {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "MAS1 evaluation view moved"));
         }
-        Ok(Sha3_256::new()
+        Ok(self.case_challenge(&seed, candidate, case))
+    }
+
+    fn case_challenge(&self, seed: &Tb1BeaconSeed, candidate: u32, case: u32) -> [u8; 32] {
+        Sha3_256::new()
             .chain_update(b"MISAKA/private/MAS1/evaluation-challenge/v1")
             .chain_update(self.cut.closure.consumer_set_root)
             .chain_update(seed.as_bytes())
             .chain_update(candidate.to_be_bytes())
             .chain_update(case.to_be_bytes())
             .finalize()
-            .into())
+            .into()
     }
 }

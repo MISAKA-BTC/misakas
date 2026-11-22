@@ -32,7 +32,7 @@ pub fn suite_id() -> Hash64 {
 
 /// Public input for later independent replay. The suite determines the expected
 /// digit from the challenge; evaluators derive the score from the output tokens.
-#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, borsh::BorshSerialize)]
 pub struct ArithmeticEvaluation {
     pub case: u32,
     pub challenge: [u8; 32],
@@ -128,8 +128,42 @@ impl FrozenAudit<'_> {
         Ok(())
     }
 
-    /// Read the exact ordered preimages from the native submission commitment.
+    /// Authenticate the recorded cases for this candidate from the original release
+    /// certificate. The submission block determines timeliness even on a later tip.
+    #[allow(clippy::too_many_arguments)]
     pub fn read_arithmetic_submission(
+        &self,
+        native: &dyn ConsensusApi,
+        batch: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        candidate: u32,
+        submission: Hash64,
+        originals: &[ArithmeticEvaluation; CASES as usize],
+    ) -> io::Result<[u8; 64]> {
+        if self.cut.plan.suite != suite_id()
+            || self.cut.plan.tests_per_candidate != CASES
+            || candidate as usize >= self.cut.candidates.len()
+        {
+            return Err(invalid("submission outside the frozen arithmetic suite"));
+        }
+        let tip = native.get_sink();
+        let seed = self.gate.read_seed(native, batch, certificate, releases, q, limits)?;
+        for (index, row) in originals.iter().enumerate() {
+            if row.challenge != self.case_challenge(&seed, candidate, index as u32) {
+                return Err(invalid("submission differs from the certified arithmetic draw"));
+            }
+        }
+        let marker = self.read_arithmetic_marker(native, certificate, submission, originals)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(marker)
+    }
+
+    fn read_arithmetic_marker(
         &self,
         native: &dyn ConsensusApi,
         certificate: Hash64,
@@ -172,7 +206,7 @@ impl FrozenAudit<'_> {
         tokenizer: &[u8],
     ) -> io::Result<()> {
         self.check_arithmetic_model(candidate, model)?;
-        let check_receipt = || self.read_arithmetic_submission(native, certificate, submission, originals);
+        let check_receipt = || self.read_arithmetic_marker(native, certificate, submission, originals);
         for row in originals {
             check_receipt()?;
             let challenge = || self.challenge(native, batch, certificate, releases, q, limits, candidate, row.case);

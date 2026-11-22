@@ -341,7 +341,24 @@ pub(super) async fn replay_window(
             let block = local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic evaluation submission").await;
             (block, results)
         };
-        let marker = frozen.read_arithmetic_submission(node.api().as_ref(), certificate, block.hash(), &results).unwrap();
+        let read_submission = |candidate, cases: &[ArithmeticEvaluation; CASES as usize]| {
+            frozen.read_arithmetic_submission(
+                node.api().as_ref(),
+                batch,
+                certificate,
+                &rows,
+                q,
+                LIMITS,
+                candidate,
+                block.hash(),
+                cases,
+            )
+        };
+        let marker = read_submission(0, &results).unwrap();
+        assert!(read_submission(1, &results).is_err());
+        let mut different_draw = results.clone();
+        different_draw[0].challenge[0] ^= 1;
+        assert!(read_submission(0, &different_draw).unwrap_err().to_string().contains("certified arithmetic draw"));
         for (index, row) in results.iter().enumerate() {
             assert_eq!(row.challenge, cases[index]);
             peer_log!(
