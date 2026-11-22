@@ -390,6 +390,16 @@ pub(super) async fn replay_window(
         assert!(release_output.is_none() || work_path.is_some(), "PANEL shares require independently replayed post-close work");
         let panel_write = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_PUBLICATION_WRITE");
         let panel_read = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_PUBLICATION_READ");
+        let reply_output = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_REPLY_WRITE");
+        let approval_write = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_APPROVAL_WRITE");
+        let approval_read = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_APPROVAL_READ");
+        assert!(approval_write.is_none() || approval_read.is_none(), "choose one PANEL approval carrier source");
+        assert!(
+            panel_write.is_some()
+                || panel_read.is_some()
+                || (reply_output.is_none() && approval_write.is_none() && approval_read.is_none()),
+            "PANEL replies require a validated PANEL seed publication"
+        );
         assert!(panel_write.is_none() || panel_read.is_none(), "choose one PANEL seed publication input or output");
         assert!(
             work_path.is_some() || (panel_write.is_none() && panel_read.is_none()),
@@ -510,8 +520,8 @@ pub(super) async fn replay_window(
                             context,
                         )
                         .await;
-                        let batch = Block::try_from(published.batch).unwrap().hash();
-                        let certificate = Block::try_from(published.certificate).unwrap().hash();
+                        let panel_batch = Block::try_from(published.batch).unwrap().hash();
+                        let panel_certificate = Block::try_from(published.certificate).unwrap().hash();
                         let decoded: Vec<_> = published.rows.iter().map(ReleaseRecord::decode).collect();
                         let releases = views(&decoded, context);
                         let draw = assessment
@@ -519,8 +529,8 @@ pub(super) async fn replay_window(
                                 node.api().as_ref(),
                                 close.hash(),
                                 &gate,
-                                batch,
-                                certificate,
+                                panel_batch,
+                                panel_certificate,
                                 &releases,
                                 panel_qualification,
                                 LIMITS,
@@ -529,14 +539,129 @@ pub(super) async fn replay_window(
                         peer_log!(
                             "arithmetic PANEL draw {} {}",
                             std::process::id(),
-                            serde_json::json!({"close":close.hash(), "batch":batch, "certificate":certificate,
+                            serde_json::json!({"close":close.hash(), "batch":panel_batch, "certificate":panel_certificate,
                                 "submission":block.hash(), "selected":draw.selected()})
                         );
+
+                        if let Some(output) = reply_output {
+                            use crate::consensus::test_consensus::TestConsensus;
+                            use libcrux_ml_dsa::ml_dsa_87;
+                            use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::ASSESSMENT_REPLAY_SIGNATURE_DOMAIN;
+                            let card: usize =
+                                std::env::var("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_REPLY_CARD").unwrap().parse().unwrap();
+                            let bond = state.bond(&node.chain.bonds[card]).expect("selected card bond in the close parent");
+                            let key = TestConsensus::palw_v2_registry_keypair(card as u64);
+                            let verifying = key.verification_key.as_slice();
+                            assert_eq!(verifying, bond.pubkey.as_slice());
+                            let operator = bond.operator_id;
+                            let message = frozen
+                                .replay_arithmetic_panel_message(
+                                    node.api().as_ref(),
+                                    &draw,
+                                    operator,
+                                    verifying,
+                                    batch,
+                                    certificate,
+                                    &rows,
+                                    q,
+                                    LIMITS,
+                                    0,
+                                    &results,
+                                    model,
+                                    &tokenizer,
+                                )
+                                .unwrap();
+                            let signature =
+                                ml_dsa_87::sign(&key.signing_key, &message, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN, rand::random())
+                                    .unwrap();
+                            let reply =
+                                ArithmeticPanelReply { operator, key: verifying.to_vec(), signature: signature.as_slice().to_vec() };
+                            let file = File::create_new(output).unwrap();
+                            serde_json::to_writer(&file, &reply).unwrap();
+                            file.sync_all().unwrap();
+                            peer_log!(
+                                "arithmetic PANEL replay signed pid={} operator={} submission={}",
+                                std::process::id(),
+                                operator,
+                                block.hash()
+                            );
+                        }
+                        if approval_write.is_some() || approval_read.is_some() {
+                            let (block, score) = assessment_approval(node, &draw, approval_write, approval_read).await;
+                            peer_log!(
+                                "arithmetic PANEL approval {} {}",
+                                std::process::id(),
+                                serde_json::json!({"block":block, "close":close.hash(), "certificate":panel_certificate,
+                                    "correct":score.correct, "cases":score.cases})
+                            );
+                        }
                     }
                 }
             }
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct ArithmeticPanelReply {
+    operator: Hash64,
+    key: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ArithmeticPanelApproval {
+    carrier: RpcRawBlock,
+    replies: Vec<ArithmeticPanelReply>,
+}
+
+async fn assessment_approval(
+    node: &mut Rig,
+    draw: &misaka_palw_remote::tb1_exposure::model_audit::arithmetic::ArithmeticPanelDraw,
+    write: Option<std::ffi::OsString>,
+    read: Option<std::ffi::OsString>,
+) -> (Hash64, misaka_palw_remote::tb1_exposure::model_audit::arithmetic::ArithmeticAssessmentScore) {
+    fn views(replies: &[ArithmeticPanelReply]) -> Vec<(&[u8], &[u8])> {
+        replies.iter().map(|reply| (reply.key.as_slice(), reply.signature.as_slice())).collect()
+    }
+    let (block, replies, output) = match (write, read) {
+        (Some(path), None) => {
+            let dir =
+                PathBuf::from(std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_REPLY_DIR").expect("selected PANEL replies"));
+            let replies: Vec<ArithmeticPanelReply> = draw
+                .selected()
+                .iter()
+                .map(|operator| {
+                    let reply: ArithmeticPanelReply =
+                        serde_json::from_reader(File::open(dir.join(format!("reply-{operator}.json"))).unwrap()).unwrap();
+                    assert_eq!(reply.operator, *operator);
+                    reply
+                })
+                .collect();
+            let marker = draw.reply_commitment(node.api().as_ref(), &views(&replies)).unwrap();
+            let block = local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic assessment PANEL approvals").await;
+            (block, replies, Some(path))
+        }
+        (None, Some(path)) => {
+            let archive: ArithmeticPanelApproval = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            assert!(archive.replies.iter().map(|reply| reply.operator).eq(draw.selected().iter().copied()));
+            let block = Block::try_from(archive.carrier).unwrap();
+            assert_eq!(block.header.direct_parents(), &[node.chain.sink()]);
+            stable_panel::arrive(node, block.clone(), "archived arithmetic assessment PANEL approvals").await;
+            (block, archive.replies, None)
+        }
+        _ => panic!("choose one arithmetic PANEL approval carrier source"),
+    };
+    let hash = block.hash();
+    assert_eq!(node.chain.sink(), hash);
+    let score = draw.read_replies(node.api().as_ref(), hash, &views(&replies)).unwrap();
+    if let Some(path) = output {
+        let file = File::create_new(path).unwrap();
+        let archive = ArithmeticPanelApproval { carrier: RpcRawBlock::from(&block), replies };
+        serde_json::to_writer(&file, &archive).unwrap();
+        file.sync_all().unwrap();
+    }
+    (hash, score)
 }
 
 async fn seed_publication(
