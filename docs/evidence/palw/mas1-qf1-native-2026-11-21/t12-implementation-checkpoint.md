@@ -236,3 +236,11 @@ Gate Cの検証義務を、選択sinkとvirtual DAAの組で管理する。コ�
 `palw_cert_duty` は7件すべて終了コード0（試験0.14秒、ビルド5分13秒）。同一DAAで検証義務が置き換わった場合の旧判定・送信予定の破棄と、実バックエンドによる正しい根の一致・偽根の反証を検査した。初回ビルドは指定sinkをコンセンサスAPIで照合する修正を加えるため中断し、終了コード130。
 
 隔離P200の実Studio claimはDAA 7746で受理済み。DAA 7751の3ピア共通状態ではPanel承認済みで、Finalの期限はDAA 10866。保存した旧台帳の再生およびP200の追加発行は実行していない。P200のFinal、独立したGate Cの75枠中41枠の認証、その認証後のbeaconとTicket、受賞ブロックの実消費・受理は未確認。MOE2は別profileの適格なFOW1入力と実ブロックへの決済接続を要する。
+
+### 隔離P200の通常Attemptと、二つの乱数源
+
+`palw_security_certification_fold_v1.rs` の `commit_at_final_v1` はFinal時点のseed spanを固定する。同ファイルの `sweep_security_certification_v1` は後続spanのseed anchorを要求し、`palw_state_v2.rs` の通常foldは受理されたAttemptの実行キーからこれを記録する。Gate C後のTicketは `palw_beacon_fact_of_candidate` が成熟slot以降の選択鎖のAttemptを読んで確定する。heartbeatの追加だけでは、いずれの条件も満たせない。
+
+コミット `8ab8db36b` のLinux ARM64ノードを `private-integration-clock` 付きでビルドした。終了コード0、5分04秒。SHA-256は `a5c384b3a9e554587b69502dd90c1314a54818c5cc45d08de9c0149649f2e4ea`。DAA 7751の作業コピーから3ピアを起動し、同一の選択tipとPanel承認済みclaimを確認した。直近600ブロックのlane内訳はAttempt 12、heartbeat 588。独立した検証者選出や成熟後のbeaconは、この履歴からまだ確定していない。
+
+短い試験では通常の `--palw-produce` で既存のBASE-0を使用した。bondは登録済みで通常の受付前判定に拒否理由なし、予算の使用は20/1,000。接続後に64回の通常drawを実行し、新規Attemptは0。85秒の観測期限で終了コード4。ログの1回のclass ticket確率は0.003582で、64回すべてが外れる確率は独立一様を仮定すると約79.5%。この抽選はStudio claimの受賞Ticketと別の規則であり、今回のStudio claimのTicket判定は未実施。試験用heartbeatの発行許可を与えず、DAAは7751のまま終了した。今回の新規Attempt受理、Gate Cの抽選、PALW受賞ブロックは未確認。
