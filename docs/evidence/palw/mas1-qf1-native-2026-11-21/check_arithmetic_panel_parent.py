@@ -12,7 +12,7 @@ from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
 
 
-def check_prefix(stream, tip, position, expected_parent):
+def walk_prefix(stream, tip, position):
     blue = position["submission_blue"]
     daa = position["submission_daa"]
     target = position["panel_close_blue"] - 1
@@ -31,8 +31,17 @@ def check_prefix(stream, tip, position, expected_parent):
         verify_block_transactions(block)
         tip = header_hash(h, bytes(h["palwCommitment"]), False).hex()
         blue, daa = h["blueScore"], h["daaScore"]
-    require(blue == target and tip == expected_parent, "missing or different PANEL parent")
-    require(daa < release_from, "parent already at or beyond the first permissible share release")
+        require(daa < release_from, "parent already at or beyond the first permissible share release")
+        yield tip, blue, daa, digest
+
+
+def check_prefix(stream, tip, position, expected_parent):
+    blue, daa = position["submission_blue"], position["submission_daa"]
+    digest = hashlib.sha256()
+    for tip, blue, daa, digest in walk_prefix(stream, tip, position):
+        pass
+    require(blue == position["panel_close_blue"] - 1 and tip == expected_parent, "missing or different PANEL parent")
+    require(daa < position["panel_release_from_daa"], "parent already at or beyond the first permissible share release")
     return dict(parent=tip, blue=blue, daa=daa, blocks=blue-position["submission_blue"], archive_sha256=digest.hexdigest())
 
 
