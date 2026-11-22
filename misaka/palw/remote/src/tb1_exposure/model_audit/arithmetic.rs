@@ -3,8 +3,10 @@
 use super::*;
 use crate::tb1_exposure::exec_input::LocalOriginalBody;
 use crate::tb1_exposure::qf1::Qf1Prompt;
+use crate::tb1_exposure::{AnchorState, anchor_state};
 use kaspa_consensus_core::{
     config::params::Params,
+    mldsa87_primitives::{MLDSA87_PUBKEY_LEN, mldsa87_key_id},
     palw_execution_lane_v1::palw_execution_span_v1,
     palw_mode_v2::PalwConsensusMode,
     palw_model_registry_v1::PalwModelRegistryFoldV1,
@@ -16,8 +18,10 @@ use kaspa_consensus_core::{
     palw_state_v2::{PalwChainStateV2, palw_base_population_v1},
 };
 use misaka_palw_tir_exec::node::qf1::{LocalInstance, TraceRequest};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const CASES: u32 = 2;
+pub const ASSESSMENT_REPLAY_SIGNATURE_DOMAIN: &[u8] = b"MISAKA/private/MAS1/arithmetic-panel/replay/v1";
 const LIMIT: u32 = 16;
 const LEAVES: u64 = 32_000_000;
 const PREFIX: &str = "Answer with only one digit: what is ";
@@ -158,8 +162,13 @@ pub struct ArithmeticControlView<'a> {
     pub registry: &'a PalwModelRegistryFoldV1,
 }
 
+struct ArithmeticControlRoster {
+    operators: Vec<(Hash64, u64)>,
+    keys: BTreeMap<Hash64, BTreeSet<Hash64>>,
+}
+
 impl ArithmeticControlView<'_> {
-    fn roster(&self, class: Hash64, daa: u64) -> io::Result<Vec<(Hash64, u64)>> {
+    fn roster(&self, class: Hash64, daa: u64) -> io::Result<ArithmeticControlRoster> {
         let PalwConsensusMode::ConsensusV2(bundle) = &self.config.palw_consensus_mode else {
             return Err(invalid("arithmetic PANEL needs a native control registry"));
         };
@@ -171,8 +180,17 @@ impl ArithmeticControlView<'_> {
             .map(|key| self.state.bond(&key).ok_or_else(|| invalid("arithmetic registrant bond absent at PANEL parent")))
             .transpose()?;
         let eligible = palw_base_population_v1(self.state, &bundle.state, self.registry, &class, daa, span, activation_pool);
-        let bonds = eligible.into_iter().map(|(_, bond)| bond).filter(|bond| owner.is_none_or(|owner| owner.pubkey != bond.pubkey));
-        Ok(palw_panel_stake_operator_weights_v1(bonds, &PalwPanelStakeDrawV1::V1).into_iter().collect())
+        let bonds: Vec<_> = eligible
+            .into_iter()
+            .map(|(_, bond)| bond)
+            .filter(|bond| bond.pubkey.len() == MLDSA87_PUBKEY_LEN && owner.is_none_or(|owner| owner.pubkey != bond.pubkey))
+            .collect();
+        let mut keys = BTreeMap::<_, BTreeSet<_>>::new();
+        for bond in &bonds {
+            keys.entry(bond.operator_id).or_default().insert(mldsa87_key_id(&bond.pubkey));
+        }
+        let operators = palw_panel_stake_operator_weights_v1(bonds, &PalwPanelStakeDrawV1::V1).into_iter().collect();
+        Ok(ArithmeticControlRoster { operators, keys })
     }
 }
 
@@ -205,8 +223,10 @@ impl ArithmeticPanelPolicy {
 pub struct ArithmeticPanelCut {
     parent: Hash64,
     control_state: Hash64,
-    operators: Vec<(Hash64, u64)>,
+    roster: ArithmeticControlRoster,
     policy: ArithmeticPanelPolicy,
+    submission: Hash64,
+    deadline: u64,
     submission_marker: Hash64,
     closure: Tb1MiningClosure,
 }
@@ -244,9 +264,9 @@ impl ArithmeticPanelCut {
     }
 
     /// Draw only after the original PANEL release certificate is accepted on
-    /// the finalized selected branch. Return operators in draw order.
+    /// the finalized selected branch.
     #[allow(clippy::too_many_arguments)]
-    pub fn selected_operators(
+    pub fn assessment_draw(
         &self,
         native: &dyn ConsensusApi,
         close: Hash64,
@@ -256,7 +276,7 @@ impl ArithmeticPanelCut {
         releases: &[PublishedRelease<'_>],
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
-    ) -> io::Result<Vec<Hash64>> {
+    ) -> io::Result<ArithmeticPanelDraw> {
         let tip = native.get_sink();
         let freeze = self.holder_freeze(native, close, q)?;
         let published = gate.holder_freeze();
@@ -273,6 +293,7 @@ impl ArithmeticPanelCut {
                 .into(),
         );
         let mut ranked: Vec<_> = self
+            .roster
             .operators
             .iter()
             .map(|(id, weight)| {
@@ -284,7 +305,104 @@ impl ArithmeticPanelCut {
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        Ok(ranked.into_iter().take(self.policy.seats as usize).map(|(_, _, id)| id).collect())
+        let selected: Vec<_> = ranked.into_iter().take(self.policy.seats as usize).map(|(_, _, id)| id).collect();
+        let keys = selected.iter().map(|id| (*id, self.roster.keys[id].clone())).collect();
+        Ok(ArithmeticPanelDraw {
+            close,
+            certificate,
+            submission: self.submission,
+            marker: self.submission_marker,
+            deadline: self.deadline,
+            selected,
+            keys,
+        })
+    }
+}
+
+pub struct ArithmeticPanelDraw {
+    close: Hash64,
+    certificate: Hash64,
+    submission: Hash64,
+    marker: Hash64,
+    deadline: u64,
+    selected: Vec<Hash64>,
+    keys: BTreeMap<Hash64, BTreeSet<Hash64>>,
+}
+
+impl ArithmeticPanelDraw {
+    pub fn selected(&self) -> &[Hash64] {
+        &self.selected
+    }
+
+    fn reply_message(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8]) -> io::Result<[u8; 64]> {
+        if key.len() != MLDSA87_PUBKEY_LEN {
+            return Err(invalid("invalid arithmetic PANEL verification key length"));
+        }
+        let key_id = mldsa87_key_id(key);
+        if !self.keys.get(&operator).is_some_and(|keys| keys.contains(&key_id)) {
+            return Err(invalid("key is not registered to a selected arithmetic PANEL operator"));
+        }
+        let (state, daa, tip) = anchor_state(native, self.close)?;
+        if !matches!(state, AnchorState::Finalized) || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)? {
+            return Err(invalid("arithmetic PANEL draw no longer on the finalized selected branch"));
+        }
+        if daa >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(Sha3_512::new()
+            .chain_update(ASSESSMENT_REPLAY_SIGNATURE_DOMAIN)
+            .chain_update(self.close.as_bytes())
+            .chain_update(self.certificate.as_bytes())
+            .chain_update(self.submission.as_bytes())
+            .chain_update(self.marker.as_bytes())
+            .chain_update(self.deadline.to_be_bytes())
+            .chain_update(operator.as_bytes())
+            .chain_update(key_id.as_bytes())
+            .finalize()
+            .into())
+    }
+
+    pub fn verify_reply(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8], signature: &[u8]) -> io::Result<()> {
+        let message = self.reply_message(native, operator, key)?;
+        if !matches!(
+            kaspa_txscript::verify_mldsa87_with_context(key, &message, signature, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN),
+            Ok(true)
+        ) {
+            return Err(invalid("invalid arithmetic PANEL replay signature"));
+        }
+        self.reply_message(native, operator, key).map(|_| ())
+    }
+
+    /// Close the private approval set only when each seat signed in draw order
+    /// and each reply uses a distinct registered verification key.
+    pub fn reply_commitment(&self, native: &dyn ConsensusApi, replies: &[(&[u8], &[u8])]) -> io::Result<[u8; 64]> {
+        if replies.len() != self.selected.len() {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete arithmetic PANEL replies"));
+        }
+        let tip = native.get_sink();
+        let mut keys = BTreeSet::new();
+        let mut h = Sha3_512::new()
+            .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/reply-set/v1")
+            .chain_update(self.close.as_bytes())
+            .chain_update(self.certificate.as_bytes())
+            .chain_update(self.marker.as_bytes());
+        for (&operator, &(key, signature)) in self.selected.iter().zip(replies) {
+            self.verify_reply(native, operator, key, signature)?;
+            let key = mldsa87_key_id(key);
+            if !keys.insert(key) {
+                return Err(invalid("duplicate key among arithmetic PANEL replies"));
+            }
+            h.update(operator.as_bytes());
+            h.update(key.as_bytes());
+            h.update(signature);
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(h.finalize().into())
     }
 }
 
@@ -365,12 +483,12 @@ impl FrozenAudit<'_> {
             return Err(invalid("invalid arithmetic PANEL parent or control policy"));
         }
         let admitted = self.cut.candidates.get(candidate as usize).ok_or_else(|| invalid("unknown audit candidate"))?;
-        let operators = control.roster(admitted.class, h.daa_score)?;
-        if operators.len() < policy.seats as usize {
+        let roster = control.roster(admitted.class, h.daa_score)?;
+        if roster.operators.len() < policy.seats as usize {
             return Err(invalid("insufficient arithmetic PANEL operators"));
         }
         let control_state = control.state.state_root();
-        let control_roster = arithmetic_control_roster(control_state, &operators)?;
+        let control_roster = arithmetic_control_roster(control_state, &roster.operators)?;
         let marker =
             self.read_arithmetic_submission(native, batch, certificate, releases, audit_q, limits, candidate, submission, originals)?;
         if native.get_sink() != parent {
@@ -387,7 +505,16 @@ impl FrozenAudit<'_> {
             .finalize()
             .into();
         let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: policy.id().as_bytes() };
-        Ok(ArithmeticPanelCut { parent, control_state, operators, policy, submission_marker: Hash64::from_bytes(marker), closure })
+        Ok(ArithmeticPanelCut {
+            parent,
+            control_state,
+            roster,
+            policy,
+            submission,
+            deadline: self.cut.plan.case_deadline_exclusive_daa,
+            submission_marker: Hash64::from_bytes(marker),
+            closure,
+        })
     }
 
     fn read_arithmetic_marker(
@@ -448,6 +575,48 @@ impl FrozenAudit<'_> {
             }
         }
         check_receipt().map(|_| ())
+    }
+
+    /// Build an approval message only after the selected operator and registered
+    /// key have been checked and both original cases have been fully replayed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replay_arithmetic_panel_message(
+        &self,
+        native: &dyn ConsensusApi,
+        draw: &ArithmeticPanelDraw,
+        operator: Hash64,
+        key: &[u8],
+        batch: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        candidate: u32,
+        originals: &[ArithmeticEvaluation; CASES as usize],
+        model: &LocalInstance<'_>,
+        tokenizer: &[u8],
+    ) -> io::Result<[u8; 64]> {
+        let message = draw.reply_message(native, operator, key)?;
+        if submission_marker(certificate, originals)? != draw.marker.as_bytes() {
+            return Err(invalid("arithmetic PANEL replay differs from the selected submission"));
+        }
+        self.replay_arithmetic_submission(
+            native,
+            batch,
+            certificate,
+            releases,
+            q,
+            limits,
+            candidate,
+            draw.submission,
+            originals,
+            model,
+            tokenizer,
+        )?;
+        if draw.reply_message(native, operator, key)? != message {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(message)
     }
 
     /// Recheck the selected branch, certificate, candidate and original deadline
@@ -512,6 +681,26 @@ mod tests {
         rows[1].original.roots[2] = Hash64::default();
         rows[1].output[0] += 1;
         assert_ne!(submission_marker(certificate, &rows).unwrap(), original);
+    }
+
+    #[test]
+    fn arithmetic_panel_refuses_an_unselected_operator_and_an_incomplete_reply_set() {
+        struct NoChain;
+        impl ConsensusApi for NoChain {}
+        let operator = Hash64::from_u64_word(8);
+        let key = [3; MLDSA87_PUBKEY_LEN];
+        let draw = ArithmeticPanelDraw {
+            close: Hash64::default(),
+            certificate: Hash64::default(),
+            submission: Hash64::default(),
+            marker: Hash64::default(),
+            deadline: 11,
+            selected: vec![operator],
+            keys: BTreeMap::from([(operator, BTreeSet::from([mldsa87_key_id(&key)]))]),
+        };
+        assert!(draw.reply_message(&NoChain, Hash64::from_u64_word(9), &key).is_err());
+        assert!(draw.reply_message(&NoChain, operator, &[2; MLDSA87_PUBKEY_LEN]).is_err());
+        assert_eq!(draw.reply_commitment(&NoChain, &[]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
     }
 
     #[test]
