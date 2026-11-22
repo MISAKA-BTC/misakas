@@ -21,7 +21,7 @@ from protected_claim_observation import (
 )
 from protected_historical_clock import HEARTBEAT_INTERVAL_MS, ProtectedHistoricalClock
 from protected_inventory_acceptance import AcceptancePending, observe_transaction
-from protected_registration_workflow import ContextMoved, RegistrationWorkflow, chain_identity, registration_status, write_new
+from protected_registration_workflow import ContextMoved, RegistrationWorkflow, chain_identity, completed_registration_on_peers, write_new
 
 
 # The protected receipt spend horizon is at most DISPUTE_WINDOW_DAA in
@@ -618,18 +618,6 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                     block = block_read(client, hash64(terminal['block']))
                     require(block['verboseData']['isChainBlock'] is True and block['header']['daaScore'] == terminal['daa'],
                             'checkpoint registration Finish is no longer selected')
-            else:
-                def read_registration():
-                    try:
-                        views = [registration_status(client, expected, prior['openId'], row['openBodyHex'], prior)
-                                 for client in clients]
-                    except ContextMoved:
-                        return None
-                    require(all(view['registration'] == row for view in views),
-                            'peers did not recover the completed tokenizer registration')
-                    return views
-                readback = wait_until(time.monotonic() + step_timeout, read_registration)
-                write_new(output / 'tokenizer-registration-three-peer-readback.json', readback)
         else:
             workflow = RegistrationWorkflow(registration, output / 'registration', clients[registrant], progress=step)
             def relay_control(txid, slot):
@@ -654,6 +642,10 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
             result = workflow.execute(resume_inventory / 'registration' if resume_inventory else None,
                                       tkr_checkpoint=resume_tokenizer / 'registration' if resume_tokenizer else None,
                                       relay_control=relay_control)
+        if resume_claim is None:
+            readback = wait_until(time.monotonic() + step_timeout,
+                                  partial(completed_registration_on_peers, clients, expected, result['registration']))
+            write_new(output / 'tokenizer-registration-three-peer-readback.json', readback)
         write_new(output / 'registration-result.json', result)
         if after_registration is not None:
             # The next stage must use these very peers and this clock owner.
