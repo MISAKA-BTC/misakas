@@ -1242,3 +1242,5 @@ G-COSTのローカル判定では、元の計測IDと、現在のcase履歴か�
 holder 1も別プロセスで元の枝を再読込し、同じ仕事IDがDAA 17,931で成熟した後、DAA 37,758の同じ確定位置で自身のshareに署名した。holder 0と照合すると、先端・close・finalized・再生ブロック数は一致し、slot・登録時のseal・署名メッセージ・署名値は個別だった。署名を登録済みのholder 1の公開鍵で検証した。[holder 1の照合結果](qf1-arithmetic-holder-1.json)・[署名済みreleaseと完走ログ](qf1-arithmetic-holder-1.tar.zst)
 
 holder 0の再現用ディレクトリにholder 1のアーカイブを展開し、同じコマンドの `--holder` を `1` にすると照合できる。
+
+公開済みの2台のreleaseを使い、holder 1の署名だけをholder 0の署名に交換するとML-DSA-65署名検査で拒否された。holder 1の行でslotだけを0にした場合と、3つのshareだけをholder 0の値に交換した場合は、どちらも登録時のseal照合で拒否された。交換前の両方のreleaseは同じ検査を通過した。
