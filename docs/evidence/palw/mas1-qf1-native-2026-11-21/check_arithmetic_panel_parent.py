@@ -14,7 +14,8 @@ def check_prefix(stream, tip, position, expected_parent):
     blue = position["submission_blue"]
     daa = position["submission_daa"]
     target = position["panel_close_blue"] - 1
-    deadline = position["panel_deadline_exclusive_daa"]
+    release_from = position["panel_release_from_daa"]
+    require(release_from < position["panel_deadline_exclusive_daa"], "empty PANEL release window")
     digest = hashlib.sha256()
     for line in stream:
         digest.update(line)
@@ -22,13 +23,14 @@ def check_prefix(stream, tip, position, expected_parent):
         h = block["header"]
         require(h["parentsByLevel"][0] == [tip] and h["blueScore"] == blue + 1 <= target,
                 "disconnected or excess PANEL prefix")
-        require(daa <= h["daaScore"] < deadline and h["powAlgoId"] == 8 and h["version"] == 2
+        require(daa <= h["daaScore"] and h["powAlgoId"] == 8 and h["version"] == 2
                 and len(block["transactions"]) == 1 and block["transactions"][0]["subnetworkId"] == "01" + "00"*19,
                 "unexpected PANEL heartbeat")
         verify_block_transactions(block)
         tip = header_hash(h, bytes(h["palwCommitment"]), False).hex()
         blue, daa = h["blueScore"], h["daaScore"]
     require(blue == target and tip == expected_parent, "missing or different PANEL parent")
+    require(daa < release_from, "parent already at or beyond the first permissible share release")
     return dict(parent=tip, blue=blue, daa=daa, blocks=blue-position["submission_blue"], archive_sha256=digest.hexdigest())
 
 
