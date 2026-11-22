@@ -1,4 +1,4 @@
-"""Verify the arithmetic audit preimages, native submission and three cold numerical observations."""
+"""Verify the arithmetic audit preimages, native submission and the publisher and cold numerical replays."""
 import argparse
 import hashlib
 import json
@@ -58,8 +58,8 @@ def verify_case(tokenizer, challenge, case, row, plan):
     return len(output) == 2 and output[0] == expected and output[1] in qf1.EOS
 
 
-def verify(directory, tokenizer_path, openssl):
-    seed = arithmetic_seed(directory, openssl)
+def verify(directory, tokenizer_path, openssl, *, publisher_only=False):
+    seed = arithmetic_seed(directory, openssl, publisher_only=publisher_only)
     plan = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())
     raw = tokenizer_path.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == TOKENIZER, "wrong registered tokenizer")
@@ -76,8 +76,17 @@ def verify(directory, tokenizer_path, openssl):
     require(set(seed["cases"]) == {bytes(row["challenge"]).hex() for row in rows} and len(set(seed["cases"])) == 2,
             "missing or duplicate drawn case")
     scores = [verify_case(tokenizer, challenge, i, rows[i], plan) for i, challenge in enumerate(seed["cases"])]
-    for name, pid in zip(["holder-2", "replay-0", "replay-1"], seed["publication_readers"], strict=True):
+    material = {name: hashlib.sha256((directory / name).read_bytes()).hexdigest()
+                for name in ("publication.json", "publication.submission.json")}
+    cold_copies = {}
+    observed_logs = ["holder-2"] if publisher_only else ["holder-2", "replay-0", "replay-1"]
+    for name, pid in zip(observed_logs, seed["publication_readers"], strict=True):
         log = (directory / f"{name}.log").read_text()
+        copies = re.findall(r"^cold arithmetic material slot=(\d+) name=([\w.]+) sha256=([0-9a-f]{64})$", log, re.M)
+        if name.startswith("replay-"):
+            require(copies == [(name[-1], filename, digest) for filename, digest in material.items()],
+                    "missing or different cold replay input")
+            cold_copies[name] = material
         observations = [json.loads(line) for line in re.findall(r"^fresh arithmetic evaluation (\{.*\})$", log, re.M)]
         require(observations == [dict(pid=pid, certificate=seed["certificate"], evaluation=row, correct=score)
                                 for row, score in zip(rows, scores)], "peer numerical results differ")
@@ -85,13 +94,17 @@ def verify(directory, tokenizer_path, openssl):
                 "peer submission differs")
     return dict(close=seed["close"], certificate=seed["certificate"], submission=submitted, marker=marker.hex(),
                 processes=seed["publication_readers"], binary_sha256=seed["binary_sha256"], correct=sum(scores),
-                required_correct=plan["required_correct"], results=scores, selected_panel_assessment="pending")
+                required_correct=plan["required_correct"], results=scores, selected_panel_assessment="pending", cold_material=cold_copies,
+                cases=[dict(job=row["job"], expected=tokenizer.decode([row["expected"]]), output_ids=row["output"],
+                            decoded=tokenizer.decode(row["output"], skip_special_tokens=False),
+                            stopped_at_eos=row["stopped_at_eos"], correct=score) for row, score in zip(rows, scores)])
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("tokenizer", type=Path)
+    parser.add_argument("--publisher-only", action="store_true", help="check the submitted results before the two cold numerical replays")
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
-    print(json.dumps(verify(args.directory, args.tokenizer, args.openssl), indent=2))
+    print(json.dumps(verify(args.directory, args.tokenizer, args.openssl, publisher_only=args.publisher_only), indent=2))

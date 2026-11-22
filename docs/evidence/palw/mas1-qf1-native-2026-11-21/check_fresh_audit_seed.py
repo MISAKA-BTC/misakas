@@ -46,7 +46,7 @@ def reconstruct(audit, pub, openssl, *, suite=None, origin=None):
     return dict(close=audit["close"], batch=batch, certificate=block_hash(pub["certificate"]), seed=seed.hex(), cases=cases)
 
 
-def arithmetic_seed(root, openssl):
+def arithmetic_seed(root, openssl, *, publisher_only=False):
     """Read the three enrolled holders' publication and their original live native observations."""
     record = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())
     audit = record["audit"]
@@ -59,16 +59,17 @@ def arithmetic_seed(root, openssl):
     window = json.loads((HERE / "qf1-arithmetic-release-window.json").read_bytes())
     parent = publication_parent(root, window)
     require(parent["close"] == audit["close"], "different arithmetic release window")
-    return publication_readback(root, audit, pub, expected, parent, window)
+    return publication_readback(root, audit, pub, expected, parent, window, publisher_only)
 
 
-def publication_readback(root, audit, pub, expected, parent, window):
+def publication_readback(root, audit, pub, expected, parent, window, publisher_only):
     require(pub["rows"] == [json.loads((root / f"released-{slot}.json").read_bytes()) for slot in range(3)],
             "publication differs from the three releases")
     batch, cert = (pub[k]["header"] for k in ("batch", "certificate"))
     holders, readers, binaries, states, finalized = [], [], set(), set(), set()
     slots = [(i, f"holder-{i}", True) for i in range(3)]
-    slots.extend((i, f"replay-{i}", False) for i in range(2))
+    if not publisher_only:
+        slots.extend((i, f"replay-{i}", False) for i in range(2))
     for slot, name, signing in slots:
         log = (root / f"{name}.log").read_text()
         first = log.partition("\n")[0]
@@ -98,9 +99,10 @@ def publication_readback(root, audit, pub, expected, parent, window):
                     and all(observed[k] == v for k, v in expected.items()), "reader differs from reconstructed publication")
             readers.append(pid)
             states.add(observed["state"])
-    require(len(set(holders + readers)) == 5 and len(set(holders)) == len(set(readers)) == 3
-            and set(holders) & set(readers) == {holders[2]} and len(states) == len(binaries) == len(finalized) == 1,
-            "expected one publisher, two independent cold readers and identical builds and states")
+    expected_build = json.loads((HERE / "qf1-arithmetic-stream-moe2-book.json").read_bytes())["binary_sha256"]
+    require(len(set(holders)) == 3 and len(set(readers)) == (1 if publisher_only else 3)
+            and set(holders) & set(readers) == {holders[2]} and len(states) == 1 and binaries == {expected_build}
+            and finalized == {window["observations"][-1]["finalized"]}, "different publishers, readers, build or finality")
     return dict(**expected, state=states.pop(), holders=holders, publication_readers=readers, binary_sha256=binaries.pop())
 
 
@@ -152,13 +154,12 @@ def verify(root, window, openssl, publisher_only=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--publisher-only", action="store_true")
-    mode.add_argument("--arithmetic", action="store_true")
+    parser.add_argument("--publisher-only", action="store_true")
+    parser.add_argument("--arithmetic", action="store_true")
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
     if args.arithmetic:
-        result = arithmetic_seed(args.root, args.openssl)
+        result = arithmetic_seed(args.root, args.openssl, publisher_only=args.publisher_only)
     else:
         verify_qualification(args.openssl)
         window = json.loads((HERE / "fresh-pruning-transition.json").read_bytes())

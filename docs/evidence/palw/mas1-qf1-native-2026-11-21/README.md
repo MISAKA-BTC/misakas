@@ -1244,3 +1244,14 @@ holder 1も別プロセスで元の枝を再読込し、同じ仕事IDがDAA 17,
 holder 0の再現用ディレクトリにholder 1のアーカイブを展開し、同じコマンドの `--holder` を `1` にすると照合できる。
 
 公開済みの2台のreleaseを使い、holder 1の署名だけをholder 0の署名に交換するとML-DSA-65署名検査で拒否された。holder 1の行でslotだけを0にした場合と、3つのshareだけをholder 0の値に交換した場合は、どちらも登録時のseal照合で拒否された。交換前の両方のreleaseは同じ検査を通過した。
+
+3台目のholderもDAA 37,758で元のshareに署名した。公開した3行について、各slotの登録時のsealとML-DSA-65署名を照合し、3つのdealerの多項式を復元して登録時のcommitmentと照合した。元の監査closeから得たseedは `5bc8ab05262ae3fa1780c6e41c90ab4faca1690355f30846e8a165e14f25a04b`。3台目の署名・share・certificateのcoinbaseを各1ビット変えた対照は、それぞれの照合で拒否された。[3台目の署名](qf1-arithmetic-holder-2.json)・[seedと2件のchallenge](qf1-arithmetic-publisher-seed.json)
+
+Round 15で抽選した2問に対し、登録済みQwen3-8Bは「1 + 3」に `4`、「2 - 1」に `1` を返し、いずれも次のトークンでEOSとなった。提出ブロック `050f2fd1…` はcertificate `21ed83ef…` の直接の子。公開資料から問題・期待token・入力列・回答・ReadoutのRoot・Ticket・提出ブロックのcommitmentを照合し、提出側では事前条件の2問中2問正答を確認した。問題文、期待token、Ticket、Readoutを個別に変更すると、各検査と提出commitmentの一致が失われた。選出されたRound 16のPanelによる評価、新規採掘資格、受賞は未確認。[出題・回答・採点結果](qf1-arithmetic-publisher.json)・[公開済みrelease・提出ブロック・実行ログ](qf1-arithmetic-publisher.tar.zst)
+
+holder 0・1の再現に使用したディレクトリで、以下の手順により提出時点までを照合できる。
+
+```sh
+tar -xf "$p/qf1-arithmetic-publisher.tar.zst" -C "$out"
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_arithmetic_submission.py" "$out" "$MISAKA_PRIVATE_QF1_TOKENIZER" --openssl "$(brew --prefix openssl@3)/bin/openssl" --publisher-only | cmp - "$p/qf1-arithmetic-publisher.json"
+```
