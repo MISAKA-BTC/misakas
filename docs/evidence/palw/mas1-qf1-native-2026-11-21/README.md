@@ -1312,3 +1312,7 @@ Round 16 の close は share 公開開始（DAA 90741）より前のブロック
 ### 短日程での新規 Original と Panel・Court の再検査
 
 同じ実行ファイルの隔離3ピアで、新しい EXEC seed から Qwen3-8B の Original を生成した。選出された2席が完全再実行し、3ピアで承認集合と Stop・End の裁定が一致した。生成側は179.60秒で完了した。Panel の finality には隔離用の成熟済み仕事と pruning の試験入力を使用した。追加モデルの登録から自然に成立する finality、合意上の Final、新規受賞ブロックによる決済は別途検証が必要。[照合結果](qf1-compact-panel-court.json)・[実行ファイルのハッシュを含む生ログ](qf1-compact-panel-court.txt.zst)
+
+### share 公開開始境界の修正後の回帰検査
+
+実行ファイル 5a294da8ad8c7afe2e770cf277caf7c3243e73ea53bf492d8f3bf3f53b90a541 で、予定 close より前の履歴の再読込、share 公開開始に達した親の拒否、元の登録履歴を3プロセスで再読込した際の状態一致を確認した。同じビルドで、finality 撤回時の holder 停止と、Studio モデルを使った隔離3プロセスの MOE2 市場登録・再編成も通過した。各試験は固有の隔離台帳で実行した。[実行ログと照合結果](native-release-boundary-regressions.tar.zst)
