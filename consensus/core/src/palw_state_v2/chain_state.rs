@@ -3931,7 +3931,7 @@ impl PalwChainStateV2 {
                         || self.last_point.is_none_or(|tip| {
                             row.position.point.blue_score > tip.blue_score || row.position.point.daa_score > tip.daa_score
                         })
-                        || !row.has_consistent_liquidity()
+                        || !row.has_consistent_reward()
                 }))
         {
             return Err(PalwStateV2Error::CarriageInconsistent("inconsistent private MOE2 EXEC settlement".into()));

@@ -24818,7 +24818,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
         PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } => {
             if state.last_point != Some(record.position.point)
-                || !record.has_consistent_liquidity()
+                || !record.has_consistent_reward()
                 || state.model_market(&record.model) != record.reward.allocation.market.map(|quote| quote.after).as_ref()
             {
                 return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement has the wrong block or market state"));

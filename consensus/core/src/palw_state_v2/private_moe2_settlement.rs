@@ -6,7 +6,7 @@ use crate::config::params::Params;
 use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
-    Moe2ModelAllocation, Moe2RewardSplit,
+    Moe2ModelAllocation, Moe2QuantityLimits, Moe2RewardSplit, quote_additional_reward,
     settlement::{
         Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError,
         Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
@@ -34,15 +34,35 @@ pub(super) fn check_exec_settlement_debit_v1(
     if record.position.point != point {
         return Err(mismatch());
     }
-    let debit = match prefix.split_last() {
-        Some((PalwDeltaEntryV2::ModelMarket { key, new, .. }, preceding)) if *key == record.model => {
-            if record.reward.allocation.market.map(|quote| quote.after).as_ref() != new.as_ref() {
+    let allocation = &record.reward.allocation;
+    let total = record.total_reward().ok_or_else(mismatch)?;
+    let (debit, before_market) = match allocation.market {
+        Some(quote) if quote.split.purchase != 0 || quote.split.liquidity != 0 => {
+            let Some((PalwDeltaEntryV2::ModelMarket { key, old: Some(old), new: Some(new) }, preceding)) = prefix.split_last() else {
+                return Err(mismatch());
+            };
+            if *key != record.model || *new != quote.after {
                 return Err(mismatch());
             }
-            preceding.last()
+            (preceding.last(), Some(*old))
         }
-        _ => prefix.last(),
+        market => (prefix.last(), market.map(|quote| quote.after)),
     };
+    if let Some((market, quote)) = before_market.zip(allocation.market) {
+        let bounds = Moe2QuantityLimits {
+            max_reward: total,
+            max_purchase_sompi: quote.split.purchase,
+            min_out: quote.purchased_units,
+            max_purchase_units: quote.purchased_units,
+            max_lp_sompi: quote.split.liquidity,
+            max_lp_units: quote.liquidity_units,
+        };
+        if quote_additional_reward(&market, total, bounds) != Ok(quote)
+            || record.permanent_liquidity.is_some_and(|lp| lp.before != market)
+        {
+            return Err(mismatch());
+        }
+    }
     let Some(PalwDeltaEntryV2::BondBudgetRow { table: PALW_BUDGET_TABLE_CLAIMS_V1, key, old: Some(old), new: Some(new) }) = debit
     else {
         return Err(mismatch());
@@ -52,7 +72,7 @@ pub(super) fn check_exec_settlement_debit_v1(
     }
     let before = borsh::from_slice::<PalwBudgetClaimRowV1>(old).map_err(|_| mismatch())?;
     let after = borsh::from_slice::<PalwBudgetClaimRowV1>(new).map_err(|_| mismatch())?;
-    let expected = record.total_reward().and_then(|reward| before.after_exec_slot_reward(reward).ok());
+    let expected = before.after_exec_slot_reward(total).ok();
     if before.model.map(|(model, _)| model) != Some(record.model) || expected != Some(after) {
         return Err(mismatch());
     }

@@ -3,7 +3,7 @@
 //! operating a versioned native store owns the transaction and fork boundary.
 use super::{
     BASIS_POINTS, Moe2ModelAllocation, Moe2PriceLimits, Moe2QuantityLimits, Moe2QuoteRefusal, Moe2RegisteredModel,
-    Moe2RewardAllocation, Moe2WorkerPlan, PurchaseCurve,
+    Moe2RewardAllocation, Moe2RewardSplit, Moe2WorkerPlan, PurchaseCurve,
 };
 use crate::Hash64;
 use crate::palw_bond_budget_v1::{
@@ -378,7 +378,19 @@ impl Moe2NativeExecSettlement {
         allocation.miner.checked_add(allocation.panel_pool)?.checked_add(market)
     }
 
-    pub(crate) fn has_consistent_liquidity(&self) -> bool {
+    pub(crate) fn has_consistent_reward(&self) -> bool {
+        let Moe2RewardAllocation { miner, panel_pool, market } = self.reward.allocation;
+        let Some(workers) = miner.checked_add(panel_pool) else { return false };
+        if self.reward.miner_now > miner
+            || self.reward.panel_now > panel_pool
+            || ((self.reward.miner_now, self.reward.panel_now) != (miner, panel_pool) && self.reward.vest_until.is_none())
+            || (panel_pool != 0 && (market.is_none() || panel_pool != workers / 5))
+            || market.is_some_and(|q| {
+                q.split.workers != workers || self.total_reward().is_none_or(|total| q.split != Moe2RewardSplit::additional(total))
+            })
+        {
+            return false;
+        }
         match (self.reward.allocation.market, self.permanent_liquidity) {
             (Some(q), Some(lp)) => {
                 q.split.liquidity > 0

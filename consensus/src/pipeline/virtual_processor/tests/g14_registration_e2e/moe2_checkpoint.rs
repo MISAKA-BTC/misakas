@@ -218,7 +218,23 @@ pub(super) fn check_exec_settlement_rewind(
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let after = child.state_root();
     assert_eq!(apply_delta_v2(&reserved, &award_delta, params).unwrap().state_root(), after);
+
+    let mut false_purchase = award_delta.clone();
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }) = false_purchase.entries.last_mut() else {
+        panic!("missing EXEC settlement after the market write");
+    };
+    record.reward.allocation.market.as_mut().unwrap().purchased_units += 1;
+    record.permanent_liquidity.as_mut().unwrap().purchased_units += 1;
+    assert!(matches!(
+        apply_delta_v2(&reserved, &false_purchase, params),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit"))
+    ));
+    assert!(revert_delta_v2(&child, &false_purchase, params).is_err());
+
     let mut carried = PalwStateCarriageV2::from_state(&child);
+    let mut false_release = carried.clone();
+    false_release.private_moe2_exec_settlements.get_mut(&claim).unwrap().reward.miner_now += 1;
+    assert!(matches!(false_release.into_state(params, None), Err(PalwStateV2Error::CarriageInconsistent(_))));
     let carried_bytes = borsh::to_vec(&carried).unwrap();
     kaspa_consensus_core::palw_native_resource_v1::preflight_native_carriage_v1(carried_bytes.as_slice(), carried_bytes.len() as u64)
         .unwrap();
