@@ -603,6 +603,9 @@ pub fn native_delta_replay_requests_v1(
             E::ImprovementRow { table, key, old, new } => s::scan_improvement_delta_row_v1(state, *table, key, old, new),
             E::ExecV2Row { table, key, old, new } => s::scan_exec_delta_row_v1(state, *table, key, old, new),
             E::BondBudgetRow { table, key, old, new } => s::scan_budget_delta_row_v1(*table, key, old, new),
+            E::PrivateMoe2ExecSettlement { .. } | E::PrivateMoe2ExecWorkSettlement { .. } => {
+                Ok(NativeWireShapeV1 { collection_entries: 1, ..Default::default() })
+            }
             E::KernelRouteRow { table, key, old, new } => {
                 let mut shape = NativeWireShapeV1::default();
                 for bytes in [old, new].into_iter().flatten() {

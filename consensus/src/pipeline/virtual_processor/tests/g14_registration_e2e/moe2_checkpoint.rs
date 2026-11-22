@@ -762,10 +762,37 @@ pub(super) fn check_exec_settlement_rewind(
             &award_block,
             native_award(alias_claim, &slot, other_work, position),
         ),
-        Err(Moe2SettlementError::ReservationMismatch)
+        Err(Moe2SettlementError::AlreadySettled)
     );
     assert_eq!((native.state_root(), &native_delta), (before_duplicate.0, &before_duplicate.1));
     assert_eq!(revert_delta_v2(&native, &native_delta, params).unwrap().state_root(), restored.state_root());
+    // A parent can hold both an old receipt and an apparently live budget row
+    // for its reservation. A new claim/work pair must not pay that slot again.
+    let mut carried = PalwStateCarriageV2::from_state(&restored);
+    let mut historical = child.private_moe2_exec_settlement(&claim).unwrap().clone();
+    historical.claim = alias_claim;
+    historical.position.point = *restored.last_point().unwrap();
+    if let Some(lp) = &mut historical.permanent_liquidity {
+        lp.claim = alias_claim;
+        lp.position = historical.position;
+    }
+    carried.private_moe2_exec_settlements.insert(alias_claim, historical.clone());
+    let competing = carried.clone().into_state(params, None).unwrap();
+    let competing_root = competing.state_root();
+    assert!(matches!(
+        apply_delta_v2(&competing, &award_delta, params),
+        Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 EXEC reservation"))
+    ));
+    assert_eq!(competing.state_root(), competing_root);
+    historical.claim = claim;
+    if let Some(lp) = &mut historical.permanent_liquidity {
+        lp.claim = claim;
+    }
+    carried.private_moe2_exec_settlements.insert(claim, historical);
+    assert!(matches!(
+        carried.into_state(params, None),
+        Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason == "duplicate private MOE2 EXEC reservation"
+    ));
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let delta_bytes = borsh::to_vec(&award_delta).unwrap();
     kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(
@@ -812,7 +839,7 @@ pub(super) fn check_exec_settlement_rewind(
     duplicate_slot.private_moe2_exec_settlements.insert(duplicate.claim, duplicate);
     assert!(matches!(
         duplicate_slot.into_state(params, None),
-        Err(PalwStateV2Error::CarriageInconsistent(ref why)) if why == "inconsistent private MOE2 EXEC settlement"
+        Err(PalwStateV2Error::CarriageInconsistent(ref why)) if why == "duplicate private MOE2 EXEC reservation"
     ));
     let carried_bytes = borsh::to_vec(&carried).unwrap();
     kaspa_consensus_core::palw_native_resource_v1::preflight_native_carriage_v1(carried_bytes.as_slice(), carried_bytes.len() as u64)

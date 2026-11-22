@@ -180,6 +180,7 @@ const RESTORE_INDEX_FIELDS_V1: &[&str] = &[
     ".improvement_licence_expiries",
     ".improvement_eval_claims",
     ".aggregate_live_claims_by_bond",
+    ".private_moe2_settled_reservations",
     ".deadlines",
     ".deadlines_by_claim",
     ".unresolved",

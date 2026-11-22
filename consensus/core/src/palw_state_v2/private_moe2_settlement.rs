@@ -161,6 +161,7 @@ pub(super) fn fold_exec_award_v1(
             .ok_or(PalwStateV2Error::DeltaMismatch("MOE2 EXEC transaction Merkle length overflow"))?;
         let mut q = NativeWriteQuoteV1::new("private MOE2 EXEC award");
         q.member::<Hash64, Moe2NativeExecSettlement>(1)?
+            .member::<Hash64, ()>(1)?
             .member::<Hash64, Hash64>(1)?
             .member::<PalwBondKeyV2, ()>(payees as u64)?
             .exact::<Moe2NativeExecSettlement>(1)?
@@ -535,6 +536,10 @@ impl PalwChainStateV2 {
         if self.private_moe2_work_claim(&work).is_some() {
             return Err(WorkAlreadyConsumed);
         }
+        let key = slot.reservation_key();
+        if self.private_moe2_settled_reservations.contains(&key) {
+            return Err(AlreadySettled);
+        }
         let historical = project_award_model(config, quote_anchor, &slot.quote, anchor_point.daa_score)?;
         if book.model(&slot.quote.model).ok_or(UnknownRegistration)?.allocation == Moe2ModelAllocation::Core
             && historical.allocation != Moe2ModelAllocation::Core
@@ -542,7 +547,6 @@ impl PalwChainStateV2 {
             return Err(UnknownRegistration);
         }
         let budget = parent.bond_budget().ok_or(ReservationMismatch)?;
-        let key = slot.reservation_key();
         let original = budget.claim_row(&key).ok_or(ReservationMismatch)?;
         let current = self.bond_budget().and_then(|budget| budget.claim_row(&key)).ok_or(ReservationMismatch)?;
         if !same_exec_reservation(original, current) {
@@ -646,7 +650,9 @@ impl PalwChainStateV2 {
             suffix.push(PalwDeltaEntryV2::ModelMarket { key: model, old: before, new: after });
         }
         let record = Moe2NativeExecSettlement::from_settlement(slot, book, undo, reward);
-        if self.private_moe2_exec_settlement(&undo.claim()) != Some(&record) {
+        if self.private_moe2_exec_settlement(&undo.claim()) != Some(&record)
+            || !self.private_moe2_settled_reservations.contains(&record.reservation)
+        {
             return Err(UndoMismatch);
         }
         let work = match delta.entries.last() {
@@ -678,6 +684,7 @@ impl PalwChainStateV2 {
             self.private_moe2_work_uses.remove(&work);
         }
         self.private_moe2_exec_settlements.remove(&undo.claim());
+        self.private_moe2_settled_reservations.remove(&slot.reservation_key());
         delta.entries.truncate(delta.entries.len() - suffix.len());
         Ok(())
     }
@@ -754,6 +761,9 @@ impl PalwChainStateV2 {
             return Err(ReservationMismatch);
         }
         let reservation = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
+        if slot.is_some() && self.private_moe2_settled_reservations.contains(&reservation) {
+            return Err(AlreadySettled);
+        }
         let row = budget.claim_row(&reservation).ok_or(ReservationMismatch)?;
         if work.is_some() && !exec_reservation_from_parent(prefix, reservation, row) {
             return Err(ReservationMismatch);
@@ -810,6 +820,7 @@ impl PalwChainStateV2 {
         }
         if let Some(slot) = slot {
             let record = Moe2NativeExecSettlement::from_settlement(slot, book, undo, reward);
+            self.private_moe2_settled_reservations.insert(record.reservation);
             self.private_moe2_exec_settlements.insert(claim, record.clone());
             let entry = if let Some(work) = work {
                 self.private_moe2_work_uses.insert(work, claim);

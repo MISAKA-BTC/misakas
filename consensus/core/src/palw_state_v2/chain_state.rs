@@ -75,6 +75,7 @@ impl PalwChainStateV2 {
             receipt_epoch_counters: BTreeMap::new(),
             model_markets: BTreeMap::new(),
             private_moe2_exec_settlements: BTreeMap::new(),
+            private_moe2_settled_reservations: BTreeSet::new(),
             private_moe2_work_uses: BTreeMap::new(),
             model_positions: BTreeMap::new(),
             model_lines: BTreeMap::new(),
@@ -3933,13 +3934,15 @@ impl PalwChainStateV2 {
         self.assert_verifier_watch_consistency_v1(params)?;
         self.assert_verifier_watch_draw_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
+        if self.private_moe2_settled_reservations.len() != self.private_moe2_exec_settlements.len() {
+            return Err(PalwStateV2Error::CarriageInconsistent("duplicate private MOE2 EXEC reservation".into()));
+        }
         if !self.private_moe2_exec_settlements.is_empty() {
-            let mut reservations = BTreeSet::new();
             if self.bond_budget.is_none()
                 || self.private_moe2_exec_settlements.iter().any(|(claim, row)| {
                     *claim != row.claim
                         || !row.has_matching_reservation_key()
-                        || !reservations.insert(row.reservation)
+                        || !self.private_moe2_settled_reservations.contains(&row.reservation)
                         || self.last_point.is_none_or(|tip| {
                             row.position.point.blue_score > tip.blue_score || row.position.point.daa_score > tip.daa_score
                         })
@@ -3950,9 +3953,11 @@ impl PalwChainStateV2 {
             }
         }
         let mut work_claims = BTreeSet::new();
-        if self.private_moe2_work_uses.values().any(|claim| {
-            !self.private_moe2_exec_settlements.contains_key(claim) || !work_claims.insert(*claim)
-        }) {
+        if self
+            .private_moe2_work_uses
+            .values()
+            .any(|claim| !self.private_moe2_exec_settlements.contains_key(claim) || !work_claims.insert(*claim))
+        {
             return Err(PalwStateV2Error::CarriageInconsistent("private MOE2 work lacks a unique settlement".into()));
         }
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within

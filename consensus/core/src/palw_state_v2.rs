@@ -11322,6 +11322,8 @@ pub struct PalwChainStateV2 {
     /// dormant commits byte-identical roots to a build without the field (M7).
     model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
     private_moe2_exec_settlements: BTreeMap<Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
+    // Derived from the permanent receipts, including after budget-row expiry.
+    private_moe2_settled_reservations: BTreeSet<Hash64>,
     private_moe2_work_uses: BTreeMap<Hash64, Hash64>,
     /// ADR-0087 Decision 1: units held, by `(line, holder)`; a row is removed at zero. (ADR-0088
     /// Decision 9: the key is a LINE id; a class's founding line has the class id.)
@@ -24851,7 +24853,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its consumed reservation"));
             }
             if revert {
-                if state.private_moe2_exec_settlements.get(&record.claim) != Some(record.as_ref()) {
+                if state.private_moe2_exec_settlements.get(&record.claim) != Some(record.as_ref())
+                    || !state.private_moe2_settled_reservations.contains(&record.reservation)
+                {
                     return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement differs from its journal"));
                 }
                 if let Some(work) = work {
@@ -24863,9 +24867,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                     return Err(PalwStateV2Error::DeltaMismatch("private MOE2 work missing from its journal"));
                 }
                 state.private_moe2_exec_settlements.remove(&record.claim);
+                state.private_moe2_settled_reservations.remove(&record.reservation);
             } else {
                 if state.private_moe2_exec_settlements.contains_key(&record.claim) {
                     return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 EXEC settlement"));
+                }
+                if state.private_moe2_settled_reservations.contains(&record.reservation) {
+                    return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 EXEC reservation"));
                 }
                 if let Some(work) = work {
                     if state.private_moe2_work_uses.contains_key(work) {
@@ -24874,6 +24882,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                     state.private_moe2_work_uses.insert(*work, record.claim);
                 }
                 state.private_moe2_exec_settlements.insert(record.claim, record.as_ref().clone());
+                state.private_moe2_settled_reservations.insert(record.reservation);
             }
         }
         PalwDeltaEntryV2::ModelPosition { key, old, new } => swap_write!(state.model_positions, key, old, new),
@@ -27181,6 +27190,7 @@ impl PalwStateCarriageV2 {
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         let claims_by_job =
             self.claims.iter().filter_map(|(id, row)| (row.job_identity != ZERO_HASH64).then_some((row.job_identity, *id))).collect();
+        let private_moe2_settled_reservations = self.private_moe2_exec_settlements.values().map(|row| row.reservation).collect();
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -27208,6 +27218,7 @@ impl PalwStateCarriageV2 {
             receipt_epoch_counters: self.receipt_epoch_counters,
             model_markets: self.model_markets,
             private_moe2_exec_settlements: self.private_moe2_exec_settlements,
+            private_moe2_settled_reservations,
             private_moe2_work_uses: self.private_moe2_work_uses,
             model_positions: self.model_positions,
             model_lines: self.model_lines,
