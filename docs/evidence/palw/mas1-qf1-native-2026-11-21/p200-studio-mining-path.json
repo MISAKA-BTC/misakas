@@ -47,7 +47,7 @@
       "id": "1a203547515fb64ff50",
       "status": "refused",
       "claim_id": null,
-      "error": "answered, not committed: the chain would refuse this commitment: BondBudgetExhausted { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb, index: 0 }), why: \"the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 \u00a78.5.5)\" } (class 7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625: free-prompt claims of an IR class open only with the TIR public frame (palw_tir_public_conviction_v1, RFC-0002 Phase H))"
+      "error": "answered, not committed: the chain would refuse this commitment: BondBudgetExhausted { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb, index: 0 }), why: \"the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5)\" } (class 7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625: free-prompt claims of an IR class open only with the TIR public frame (palw_tir_public_conviction_v1, RFC-0002 Phase H))"
     }
   },
   "afterSeasoning": {
@@ -198,5 +198,31 @@
       "requestRamBytes": 30076294708,
       "limitRamBytes": 17603214538
     }
+  },
+  "newClaimLocalReexecution": {
+    "claim": "1a4a84115e223ad247eadfc76492bc8612d4b0024974087f5f3c3704078870b72215280fe520a556a607fd6c55532f4170a4de0bba74710643c9f2de84fcc982",
+    "job": "2a0b7450d55979c384a25e5c462af98d13429101fa66ccb399f6b9c2a6ab7c2a3a7c0fbc4d05037c08906f59a1d5b8b3e93453495c64959e1c0af5e20c92f5ab",
+    "executionRoot": "2f651fda3b82e6763ea775b1b344e0517b3b8f8c20b3aa86775900dd7ea8da863ae8b4b7bd9c641b40120dfcad723019f70a3220de246bbcb55c4b52ab80d9d3",
+    "requestSha256": "d726382ea75abba1bc8fe8f1797e04fbd056b2a1a3ee36958b1dc57ca200fcf6",
+    "workerSha256": "b62722f03ff5b45fb5c76a3045847fee2f465eb9ea2057068a411e28a07b88d3",
+    "traceFileSha256": {
+      "material.bin": "2e1806ee84dd901e8025b27d2dba45c4bb872f1de37cdfdcc1786e1e7e790181",
+      "tir-public-binding.hex": "1c77dface351e80a3bb45b965b6ee51537831d79348f4fd4f38f1c35297ad8cd",
+      "manifest.json": "62b2ab544cc043d788d6edc2cd18280f08fc6e6a016e5b6d905e36eb0ec3a50e"
+    },
+    "deterministicResultBytes": 3661,
+    "modelLoadMs": 882,
+    "executeMs": 3784,
+    "workerExitCode": 0,
+    "matchingPeerOrigins": 3,
+    "selectedSeatApproval": false,
+    "mode": "Fresh v3-job process reading the admitted job request and registered model into a new trace directory",
+    "prefillTokens": 17,
+    "decodeTokens": 1,
+    "leaves": 85938,
+    "excludedResultFields": [
+      "model_load_ms",
+      "execute_ms"
+    ]
   }
 }
