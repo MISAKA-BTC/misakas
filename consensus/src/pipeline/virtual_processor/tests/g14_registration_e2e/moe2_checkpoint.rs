@@ -43,6 +43,35 @@ pub(super) fn check_exec_settlement_rewind(
     let mut book = registered_book.clone();
     let unreserved = apply_delta_v2(registration, &close_delta, params).unwrap();
     let mut budget = unreserved.bond_budget().unwrap().clone();
+    let policy = &params.bond_budget().unwrap().policy;
+    let release_window_at = slot.close_daa + policy.window_daa;
+    for expires_at in [release_window_at, release_window_at + 1] {
+        let mut sample = budget.clone();
+        let (capital, ask) = slot.quote.budget_ask_at(config, &unreserved, slot.close_daa).unwrap();
+        let key = slot.reservation_key();
+        let mut changes = Vec::new();
+        sample
+            .reserve_claim_v1(
+                policy,
+                capital,
+                key,
+                slot.quote.funding_bond,
+                Some(slot.quote.model),
+                slot.close_daa,
+                ask,
+                PalwBudgetOriginV1::Moe2Exec { expires_at },
+                &mut changes,
+            )
+            .unwrap();
+        sample.release_due(release_window_at, &mut changes);
+        if release_window_at < expires_at {
+            assert!(sample.claim_row(&key).is_some_and(|row| row.open && row.live && !row.in_window));
+            sample.check_consistency().unwrap();
+            sample.release_due(expires_at, &mut changes);
+        }
+        assert!(sample.claim_row(&key).is_none());
+        sample.check_consistency().unwrap();
+    }
     let mut writes = Vec::new();
     for slot in [&slot, &alias_slot] {
         let (capital, ask) = slot.quote.budget_ask_at(config, &unreserved, slot.close_daa).unwrap();
@@ -55,7 +84,7 @@ pub(super) fn check_exec_settlement_rewind(
                 Some(slot.quote.model),
                 slot.close_daa,
                 ask,
-                PalwBudgetOriginV1::Attempt,
+                slot.budget_origin().unwrap(),
                 &mut writes,
             )
             .unwrap();
@@ -400,6 +429,25 @@ pub(super) fn check_exec_settlement_rewind(
         Err(Moe2SettlementError::Quote(_))
     ));
     assert_eq!((child.state_root(), &book, &award_delta), (before, &before_award, &original_delta));
+    assert_eq!(
+        child.settle_private_moe2_exec_award(
+            config,
+            &mut book,
+            &mut award_delta,
+            &reserved,
+            registration,
+            claim,
+            position,
+            Moe2WorkerRelease { signed_hard_deadline: quote.deadline + 1, ..release },
+            &slot,
+            work,
+            payees,
+            &award_block,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::ReservationMismatch)
+    );
+    assert_eq!((child.state_root(), &book, &award_delta), (before, &before_award, &original_delta));
     let (payment, undo) = child
         .settle_private_moe2_exec_award(
             config,
@@ -611,6 +659,42 @@ pub(super) fn check_exec_settlement_rewind(
         )
         .unwrap();
     assert_eq!((repaid, child.state_root(), book), (payment, after, paid_book));
+    let parent = child.last_point().unwrap();
+    let at_deadline = PalwBlockContextV2 {
+        block: Hash64::from_u64_word(655),
+        daa_score: quote.deadline,
+        blue_score: parent.blue_score + 1,
+        ..*parent
+    };
+    let (at_deadline_state, _) = apply_palw_transition_v2(&child, params, &at_deadline, &[], None).unwrap();
+    let live_budget = at_deadline_state.bond_budget().unwrap();
+    for slot in [&slot, &alias_slot] {
+        assert!(live_budget.claim_row(&slot.reservation_key()).is_some_and(|row| row.open && row.live));
+    }
+    let next = PalwBlockContextV2 {
+        block: Hash64::from_u64_word(656),
+        daa_score: quote.deadline + 1,
+        blue_score: at_deadline.blue_score + 1,
+        ..at_deadline
+    };
+    let (expired, expire_delta) = apply_palw_transition_v2(&at_deadline_state, params, &next, &[], None).unwrap();
+    for slot in [&slot, &alias_slot] {
+        let key = slot.reservation_key();
+        let before = live_budget.claim_row(&key).unwrap();
+        let after = expired.bond_budget().unwrap().claim_row(&key);
+        if before.reuse_not_before <= next.daa_score {
+            assert!(after.is_none());
+        } else {
+            assert!(after.is_some_and(|row| !row.open && !row.live && row.in_window && row.consumed == before.consumed));
+        }
+    }
+    assert_eq!(expired.private_moe2_work_claim(&work), Some(&claim));
+    assert_eq!(expired.private_moe2_exec_settlement(&claim), child.private_moe2_exec_settlement(&claim));
+    let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&expired)).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(params, Some(expired.state_root())).unwrap();
+    assert_eq!(revert_delta_v2(&restored, &expire_delta, params).unwrap().state_root(), at_deadline_state.state_root());
+    assert_eq!(apply_delta_v2(&at_deadline_state, &expire_delta, params).unwrap().state_root(), expired.state_root());
     let market = payment.allocation.market.unwrap();
     println!(
         "MOE2 EXEC rollback pid={} block={} before={before} settled={after} book={book_root} purchase={} lp={} burned={} miner={} panel={}",

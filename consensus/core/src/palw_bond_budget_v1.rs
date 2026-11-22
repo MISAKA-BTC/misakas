@@ -267,6 +267,10 @@ pub enum PalwBudgetOriginV1 {
     /// view** until its liability ends (terminal + `H_L`, at least the court/DA/retention span) — open, never live, zero reservation;
     /// the concurrent-collateral check counts it.
     HoldLiability = 15,
+    /// Private MOE2 EXEC slot with a finite, separately scheduled liability.
+    Moe2Exec {
+        expires_at: u64,
+    } = 16,
 }
 
 /// **RFC-0016 P4 (user decision 2026-10-15): is this origin's reward user-paid escrow rather than a coinbase-derived leg?** A
@@ -313,6 +317,7 @@ pub enum PalwBudgetRefusalV1 {
     /// **RFC-0016 P4 (user decision 2026-10-15):** a user-paid (escrow-funded) claim whose full escrow reward cannot be reserved — the
     /// policy's per-claim ceiling is below it. Decided BEFORE acceptance; an escrow reward is never clipped after.
     EscrowNotReservable,
+    ExecDeadline,
 }
 
 impl std::fmt::Display for PalwBudgetRefusalV1 {
@@ -339,6 +344,7 @@ impl std::fmt::Display for PalwBudgetRefusalV1 {
             Self::EscrowNotReservable => {
                 write!(f, "the user-paid escrow reward exceeds one claim's reservation; refused, never clipped (RFC-0016 P4)")
             }
+            Self::ExecDeadline => write!(f, "the MOE2 EXEC deadline must follow reservation"),
         }
     }
 }
@@ -1429,7 +1435,7 @@ pub struct PalwBudgetClaimRowV1 {
 
 impl PalwBudgetClaimRowV1 {
     pub(crate) fn after_exec_slot_reward(mut self, reward: u64) -> Result<Self, PalwBudgetRefusalV1> {
-        if self.origin != PalwBudgetOriginV1::Attempt || !self.open || !self.live {
+        if !matches!(self.origin, PalwBudgetOriginV1::Attempt | PalwBudgetOriginV1::Moe2Exec { .. }) || !self.open || !self.live {
             return Err(PalwBudgetRefusalV1::NotOpen);
         }
         if self.consumed != PalwBudgetVectorV1::ZERO || self.reserved.claims != 1 {
@@ -2146,10 +2152,18 @@ impl PalwBondBudgetStateV1 {
     /// **The clock (design §2.4)**: release every reservation with `reuse_not_before ≤ now` from its bond's window — the ONLY place a
     /// window shrinks. A released claim that is also closed leaves the table.
     pub fn release_due(&mut self, now: u64, j: &mut Vec<PalwBudgetWriteV1>) {
-        let due: Vec<(u64, Hash64)> = self.releases.range(..(now.saturating_add(1), Hash64::default())).copied().collect();
+        let due: Vec<(u64, Hash64)> = self.releases.iter().take_while(|(at, _)| *at <= now).copied().collect();
         for (at, claim_id) in due {
-            if at > now {
-                break;
+            if let Some(claim) = self.claims.get(&claim_id).copied()
+                && claim.origin == (PalwBudgetOriginV1::Moe2Exec { expires_at: at })
+                && claim.live
+            {
+                self.forget(&claim_id, j);
+                // The same entry can mark both clocks. Retiring the liability
+                // alone leaves the issuance window and its release intact.
+                if !claim.in_window || claim.reuse_not_before != at {
+                    continue;
+                }
             }
             // A source promise is an unpaid liability, even if a sparse chain
             // jumps beyond H + W. Payment extends its window from the actual
@@ -2261,6 +2275,9 @@ impl PalwBondBudgetStateV1 {
         mode: PalwHoldModeV1,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
+        if matches!(origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= accepted_daa) {
+            return Err(PalwBudgetRefusalV1::ExecDeadline);
+        }
         if self.claims.contains_key(&claim_id) {
             return Err(PalwBudgetRefusalV1::Duplicate);
         }
@@ -2298,6 +2315,9 @@ impl PalwBondBudgetStateV1 {
             j,
         );
         self.put_release((reuse_not_before, claim_id), true, j);
+        if let PalwBudgetOriginV1::Moe2Exec { expires_at } = origin {
+            self.put_release((expires_at, claim_id), true, j);
+        }
         self.write_hold_shadows_v1(policy, &claim_id, &bond, accepted_daa, &reservation, origin, j)?;
         Ok(())
     }
@@ -3045,6 +3065,9 @@ impl PalwBondBudgetStateV1 {
         mode: PalwHoldModeV1,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
+        if matches!(origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= accepted_daa) {
+            return Err(PalwBudgetRefusalV1::ExecDeadline);
+        }
         if self.claims.contains_key(&claim_id) {
             return Err(PalwBudgetRefusalV1::Duplicate);
         }
@@ -3384,6 +3407,11 @@ impl PalwBondBudgetStateV1 {
         }
         self.close(claim_id, j);
         let Some(mut claim) = self.claims.get(claim_id).copied().filter(|c| c.live) else { return };
+        if let PalwBudgetOriginV1::Moe2Exec { expires_at } = claim.origin
+            && (!claim.in_window || expires_at != claim.reuse_not_before)
+        {
+            self.put_release((expires_at, *claim_id), false, j);
+        }
         claim.live = false;
         self.put_claim(claim_id, claim.in_window.then_some(claim), j);
     }
@@ -3453,7 +3481,21 @@ impl PalwBondBudgetStateV1 {
             if !claim.consumed.fits_within(&claim.reserved) {
                 return Err("a claim consumed beyond its reservation");
             }
-            if claim.in_window != self.releases.contains(&(claim.reuse_not_before, *id)) {
+            let expires_at = match claim.origin {
+                PalwBudgetOriginV1::Moe2Exec { expires_at } => Some(expires_at),
+                _ => None,
+            };
+            if let Some(expires_at) = expires_at {
+                if expires_at <= claim.accepted_daa
+                    || (claim.live || (claim.in_window && expires_at == claim.reuse_not_before))
+                        != self.releases.contains(&(expires_at, *id))
+                {
+                    return Err("MOE2 EXEC reservation disagrees with its original expiry entry");
+                }
+            }
+            if (claim.in_window || (claim.live && expires_at == Some(claim.reuse_not_before)))
+                != self.releases.contains(&(claim.reuse_not_before, *id))
+            {
                 return Err("an in-window row without its release, or a release of a row out of the window");
             }
             let row = windows.entry(claim.bond).or_default();
@@ -3470,7 +3512,12 @@ impl PalwBondBudgetStateV1 {
         if deferred != self.deferred_by_bond || awards != self.deferred_awards {
             return Err("the deferred reporter withdrawal index disagrees with its rooted debt");
         }
-        if self.releases.iter().any(|(_, id)| !self.claims.contains_key(id)) {
+        if self.releases.iter().any(|(at, id)| {
+            self.claims.get(id).is_none_or(|claim| {
+                matches!(claim.origin, PalwBudgetOriginV1::Moe2Exec { expires_at }
+                    if !(claim.live && *at == expires_at || claim.in_window && *at == claim.reuse_not_before))
+            })
+        }) {
             return Err("a release names no row");
         }
         // PESG §6: every liability hold has exactly one release entry, and every entry is its bond's current hold.

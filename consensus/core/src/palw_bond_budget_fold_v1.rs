@@ -1629,7 +1629,7 @@ impl TransitionBuilder<'_> {
             let mut hash = keyed(b"misaka-palw/bond-budget/income/v1");
             hash.update(ctx.block.as_byte_slice());
             hash.update(&borsh::to_vec(&bond).expect("a bond serializes"));
-            hash.update(&[origin as u8]);
+            hash.update(&borsh::to_vec(&origin).expect("a budget origin serializes"));
             hash.update(&(self.entries.len() as u64).to_le_bytes());
             let id = finish(hash);
             self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
@@ -2364,7 +2364,8 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     })?;
     let due_rows = builder.state.bond_budget.as_ref().map_or(0, |b| {
         b.releases
-            .range(..(now.saturating_add(1), Hash64::default()))
+            .iter()
+            .take_while(|(at, _)| *at <= now)
             .count()
             .saturating_add(b.liability_releases.iter().take_while(|(at, _)| *at <= now).count())
     });

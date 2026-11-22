@@ -9,7 +9,6 @@ use kaspa_consensus_core::palw_state_proof_v1::{
 use kaspa_consensus_core::{
     config::params::Params,
     palw_attempt_v2::palw_network_domain_v2_for,
-    palw_bond_budget_v1::PalwBudgetOriginV1,
     palw_mode_v2::PalwConsensusMode,
     palw_state_v2::{PalwChainStateV2, PalwStateDeltaV2, apply_delta_v2},
 };
@@ -322,7 +321,9 @@ impl ExecInputBatch<'_> {
             })?;
             let registration = reg_key(&entry.context);
             let consent = Hash64::from_bytes(consent_ref(registration, slot));
-            let reservation_key = Moe2ExecSlot { registration, slot, close, close_daa: daa, quote }.reservation_key();
+            let exec_slot = Moe2ExecSlot { registration, slot, close, close_daa: daa, quote };
+            let reservation_key = exec_slot.reservation_key();
+            let origin = exec_slot.budget_origin().map_err(|_| invalid("invalid signed MOE2 deadline"))?;
             let grant = budget
                 .reserve_claim_v1(
                     policy,
@@ -332,7 +333,7 @@ impl ExecInputBatch<'_> {
                     Some(quote.model),
                     daa,
                     ask,
-                    PalwBudgetOriginV1::Attempt,
+                    origin,
                     &mut writes,
                 )
                 .map_err(|err| io::Error::other(err.to_string()))?;

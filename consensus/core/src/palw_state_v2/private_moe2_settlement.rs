@@ -3,7 +3,9 @@
 use super::*;
 use crate::block::Block;
 use crate::config::params::Params;
-use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
+use crate::palw_bond_budget_v1::{
+    PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, PalwBudgetOriginV1, palw_bond_budget_export_cap_v1,
+};
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit, quote_additional_reward,
@@ -101,7 +103,10 @@ pub(super) fn check_exec_settlement_debit_v1(
     let before = borsh::from_slice::<PalwBudgetClaimRowV1>(old).map_err(|_| mismatch())?;
     let after = borsh::from_slice::<PalwBudgetClaimRowV1>(new).map_err(|_| mismatch())?;
     let expected = before.after_exec_slot_reward(total).ok();
-    if before.model.map(|(model, _)| model) != Some(record.model) || expected != Some(after) {
+    if before.model.map(|(model, _)| model) != Some(record.model)
+        || matches!(before.origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= point.daa_score)
+        || expected != Some(after)
+    {
         return Err(mismatch());
     }
     if keyed && !exec_reservation_from_parent(before_debit, record.reservation, &before) {

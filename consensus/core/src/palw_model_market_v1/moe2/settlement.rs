@@ -79,6 +79,12 @@ pub struct Moe2ExecSlot {
 impl Moe2ExecSlot {
     pub const CONSENT_DOMAIN: &'static [u8] = b"MISAKA/private/FOW1/MOE2/quote-consent/v1";
 
+    /// The signed deadline is inclusive. The first later block retires the slot.
+    pub fn budget_origin(&self) -> Result<PalwBudgetOriginV1, Moe2SettlementError> {
+        let expires_at = self.quote.deadline.checked_add(1).ok_or(Moe2SettlementError::OutsideWindow)?;
+        Ok(PalwBudgetOriginV1::Moe2Exec { expires_at })
+    }
+
     pub fn consent_ref(registration: [u8; 64], slot: u64) -> [u8; 64] {
         use sha3::{Digest, Sha3_512};
         Sha3_512::new()
@@ -784,7 +790,7 @@ impl Moe2SettlementBook {
         if !(slot.quote.valid_from..=slot.quote.deadline).contains(&slot.close_daa)
             || budget.header.policy_digest != slot.quote.policy
             || row.accepted_daa != slot.close_daa
-            || row.origin != PalwBudgetOriginV1::Attempt
+            || (row.origin != PalwBudgetOriginV1::Attempt && row.origin != slot.budget_origin()?)
             || !row.live
             || !row.open
             || row.model.map(|(model, _)| model) != Some(slot.quote.model)
@@ -889,19 +895,20 @@ impl Moe2SettlementBook {
         let row = budget.claim_row(&key).ok_or(ReservationMismatch)?;
         let liability = &funding.liability;
         if terms.policy != budget.header.policy_digest
-            || row.origin != PalwBudgetOriginV1::Attempt
             || row.bond != terms.funding_bond
             || row.model.map(|(id, _)| id) != Some(terms.model)
             || !row.open
             || !row.live
             || row.accepted_daa < model.registration_daa
             || match slot {
-                None => row.accepted_daa > terms.valid_from,
+                None => row.origin != PalwBudgetOriginV1::Attempt || row.accepted_daa > terms.valid_from,
                 Some(slot) => {
                     slot.quote.for_claim(claim) != terms
                         || slot.close_daa != row.accepted_daa
                         || !(terms.valid_from..=position.point.daa_score).contains(&slot.close_daa)
                         || row.reserved.reward_sompi != terms.limits.max_reward
+                        || (row.origin != PalwBudgetOriginV1::Attempt
+                            && (row.origin != slot.budget_origin()? || liability.signed_hard_deadline != Ok(terms.deadline)))
                 }
             }
             || liability.reserved_reward != Ok(row.reserved.reward_sompi)
