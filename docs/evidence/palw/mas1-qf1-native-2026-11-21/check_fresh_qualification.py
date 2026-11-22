@@ -28,6 +28,10 @@ def h512(*fields):
     return hashlib.sha3_512(b"".join(fields)).digest()
 
 
+def panel_close_blue(audit):
+    return 2 * audit["audit_deadline"] + 100
+
+
 def public_keys():
     raw = (HERE / "fresh-holder-public-keys.bin").read_bytes()
     require(len(raw) == 4 * 1952, "incomplete original ML-DSA-65 roster")
@@ -96,7 +100,7 @@ def verify(openssl, arithmetic=False):
         directory = Path(tmp)
         for i, purpose in enumerate((b"MODEL_AUDIT", b"PANEL")):
             session = bytes([41+i]) * 64
-            close_blue = (by_hash[audit["close"]]["header"]["blueScore"] if i == 0 else 2*audit["audit_deadline"]+100)
+            close_blue = (by_hash[audit["close"]]["header"]["blueScore"] if i == 0 else panel_close_blue(audit))
             label = ("audit", "panel")[i]
             rid = h512(b"MISAKA/private/TB1/BGW-PQ/round/v1", chain, roster, u64(1), bytes([len(purpose)]), purpose,
                        u64(number+i), bytes([number])*64, u64(close_blue), u64(audit[label+"_from"]), u64(audit[label+"_deadline"]))

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from tokenizers import Tokenizer
 
+from check_fresh_qualification import panel_close_blue
 from check_fresh_audit import coinbase_extra
 from check_fresh_audit_seed import arithmetic_seed
 from check_genesis_draw import header_hash
@@ -58,6 +59,17 @@ def verify_case(tokenizer, challenge, case, row, plan):
     return len(output) == 2 and output[0] == expected and output[1] in qf1.EOS
 
 
+def assessment_position(header, certificate, audit):
+    close_blue = panel_close_blue(audit)
+    deadline = audit["panel_deadline"] + 1
+    require(certificate["blueScore"] + 1 == header["blueScore"] < close_blue
+            and certificate["daaScore"] <= header["daaScore"] < deadline,
+            "submission outside the prepared assessment cut")
+    return dict(submission_daa=header["daaScore"], submission_blue=header["blueScore"],
+                panel_close_blue=close_blue, panel_release_from_daa=audit["panel_from"],
+                panel_deadline_exclusive_daa=audit["panel_deadline"], case_deadline_exclusive_daa=deadline)
+
+
 def verify(directory, tokenizer_path, openssl, *, publisher_only=False):
     seed = arithmetic_seed(directory, openssl, publisher_only=publisher_only)
     plan = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())
@@ -67,8 +79,9 @@ def verify(directory, tokenizer_path, openssl, *, publisher_only=False):
     block, rows = json.loads((directory / "publication.submission.json").read_bytes())
     h = block["header"]
     require(len(rows) == plan["cases"] == 2 and h["parentsByLevel"][0] == [seed["certificate"]]
-            and h["palwStateRoot"] == seed["state"] and h["daaScore"] < plan["audit"]["panel_deadline"] + 1
-            and h["blueScore"] < 2 * plan["audit"]["audit_deadline"] + 100, "submission outside the prepared assessment cut")
+            and h["palwStateRoot"] == seed["state"], "submission does not extend the certified state")
+    certificate = json.loads((directory / "publication.json").read_bytes())["certificate"]["header"]
+    position = assessment_position(h, certificate, plan["audit"])
     verify_block_transactions(block)
     submitted = header_hash(h, bytes(h["palwCommitment"]), False).hex()
     marker = submission_marker(plan["suite"], seed["certificate"], rows)
@@ -92,7 +105,7 @@ def verify(directory, tokenizer_path, openssl, *, publisher_only=False):
                                 for row, score in zip(rows, scores)], "peer numerical results differ")
         require(log.count(f"fresh arithmetic submission pid={pid} certificate={seed['certificate']} block={submitted} marker={marker.hex()}") == 1,
                 "peer submission differs")
-    return dict(close=seed["close"], certificate=seed["certificate"], submission=submitted, marker=marker.hex(),
+    return dict(close=seed["close"], certificate=seed["certificate"], submission=submitted, marker=marker.hex(), assessment_position=position,
                 processes=seed["publication_readers"], binary_sha256=seed["binary_sha256"], correct=sum(scores),
                 required_correct=plan["required_correct"], results=scores, selected_panel_assessment="pending", cold_material=cold_copies,
                 cases=[dict(job=row["job"], expected=tokenizer.decode([row["expected"]]), output_ids=row["output"],
