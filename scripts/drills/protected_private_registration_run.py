@@ -1176,15 +1176,23 @@ def resume_admitted_studio(config, output, checkpoint, registration, clients, st
     return observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond)
 
 
-def write_receipt_checkpoint(path, result):
-    # Publish only a complete checkpoint. A restart can retry from the admitted claim
-    # if the process stops before the link is installed.
-    with tempfile.NamedTemporaryFile(mode='w', dir=path.parent) as scratch:
-        json.dump(result, scratch, indent=2)
-        scratch.write('\n')
-        scratch.flush()
-        os.fsync(scratch.fileno())
-        os.link(scratch.name, path)
+def write_receipt_checkpoint(path, result, *, replace=False):
+    # The receipt audit is immutable. The payout can move to a new accepting
+    # block and is replaced only after all peers have observed the new output.
+    scratch = tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False)
+    name = Path(scratch.name)
+    try:
+        with scratch:
+            json.dump(result, scratch, indent=2)
+            scratch.write('\n')
+            scratch.flush()
+            os.fsync(scratch.fileno())
+        if replace:
+            os.replace(name, path)
+        else:
+            os.link(name, path)
+    finally:
+        name.unlink(missing_ok=True)
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)
@@ -1195,8 +1203,9 @@ def write_receipt_checkpoint(path, result):
 def receipt_payout(rpc, receipt, *, dag=None, previously_seen=None):
     """Locate the source worker output on the selected chain of this private run."""
     block = block_read(rpc, receipt, transactions=True)
-    require(block['header']['powAlgoId'] == 7 and block['verboseData']['isChainBlock'],
-            'audited receipt is no longer a selected PFS3 block')
+    require(block['header']['powAlgoId'] == 7, 'audited receipt is not a PFS3 block')
+    if not block['verboseData']['isChainBlock']:
+        return None
     page = chain_read(rpc, receipt, PROTECTED_LIFECYCLE_SCAN_BLOCKS, include_transactions=False)
     if not page['addedChainBlockHashes']:
         return None
@@ -1249,7 +1258,7 @@ def receipt_payout(rpc, receipt, *, dag=None, previously_seen=None):
                 receiptSubsidy=int.from_bytes(payload[8:16], 'little'))
 
 
-def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on_paid=None):
+def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on_paid=None, confirm_spend=None):
     """Read the worker UTXO and its own accepting DAA under one stable generation per peer."""
     payouts, rows, stamps = [], [], []
     for i, rpc in enumerate(clients):
@@ -1273,6 +1282,8 @@ def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on
             if any(chain_identity(rpc, expected)[1] != stamp for rpc, stamp in zip(clients, stamps)):
                 raise ContextMoved('a peer moved while comparing worker payouts')
             raise ValueError(f'worker payout differs at sink {stamps[0][0]}: peer 0 {payouts[0]!r}, peer {index} {payout!r}')
+    if confirm_spend is not None and not confirm_spend():
+        return None
     if on_paid is not None:
         if any(chain_identity(rpc, expected)[1] != stamp for rpc, stamp in zip(clients, stamps)):
             raise ContextMoved('a peer moved before the payout checkpoint')
@@ -1323,8 +1334,21 @@ def follow_receipt_settlement(previous, data, clients, until, *, restarted=False
             'completed receipt observation differs from the native audit')
 
     def consumed():
-        details = [observe_claim_progress(client, expected, observed) for client in clients]
-        for detail in details:
+        details, stamps = [], []
+        for client in clients:
+            _, stamp = chain_identity(client, expected)
+            if stamps and stamp[0] != stamps[0][0]:
+                raise ContextMoved('receipt peers do not share a selected sink')
+            if not block_read(client, receipt)['verboseData']['isChainBlock']:
+                return None
+            try:
+                detail = observe_claim_progress(client, expected, observed)
+            except ValueError:
+                if chain_identity(client, expected)[1] != stamp:
+                    raise ContextMoved('receipt branch moved during claim read')
+                raise
+            if chain_identity(client, expected)[1] != stamp:
+                raise ContextMoved('receipt branch moved during claim read')
             quanta = detail['receiptQuanta']
             require(detail['claim']['phase'] == 'final' and require_gate_c_status(detail)
                     and quanta['spentIndicesComplete'] and quantum in quanta['spentIndices']
@@ -1332,6 +1356,10 @@ def follow_receipt_settlement(previous, data, clients, until, *, restarted=False
                     and len(set(quanta['spentIndices'])) == quanta['spentCount'] == len(quanta['spentIndices'])
                     and detail['claim']['quantaSpent'] == quanta['spentCount'],
                     'peer lost the certified receipt spend')
+            details.append(detail)
+            stamps.append(stamp)
+        if any(chain_identity(client, expected)[1] != stamp for client, stamp in zip(clients, stamps)):
+            raise ContextMoved('a peer moved during receipt spend readback')
         return details
 
     details = until('certified same-claim spend before settlement', consumed, admitted=True)
@@ -1341,12 +1369,13 @@ def follow_receipt_settlement(previous, data, clients, until, *, restarted=False
     require(not seen or len(seen) == len(clients), 'payout checkpoint peer count differs')
 
     def keep_payouts(payouts):
-        if not (data / 'receipt-payout.json').exists():
-            write_receipt_checkpoint(data / 'receipt-payout.json', payouts)
+        if seen != payouts or not (data / 'receipt-payout.json').exists():
+            write_receipt_checkpoint(data / 'receipt-payout.json', payouts, replace=True)
         seen[:] = payouts
 
     rows = until('native settlement through worker payout',
-                 partial(receipt_settlement_view, clients, expected, receipt, seen_payouts=seen, on_paid=keep_payouts),
+                 partial(receipt_settlement_view, clients, expected, receipt, seen_payouts=seen,
+                         on_paid=keep_payouts, confirm_spend=consumed),
                  admitted=True)
     payouts = [row['payout'] for row in rows]
     settled = [dict(sink=row['sink'], settlement=row['settlement'], payout=row['payout']) for row in rows]

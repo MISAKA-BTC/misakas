@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from protected_private_registration_run import (
-    ContextMoved, observe_admitted_studio, receipt_checkpoint, receipt_payout,
+    ContextMoved, follow_receipt_settlement, observe_admitted_studio, receipt_checkpoint, receipt_payout,
     receipt_settlement_view, resume_receipt_settlement,
 )
 
@@ -47,6 +47,13 @@ class ReceiptPayoutTest(unittest.TestCase):
         self.entry['amount'] = 6
         with self.assertRaisesRegex(ValueError, 'differs'):
             self.read()
+
+    def test_detached_receipt_waits_even_with_a_previous_payout(self):
+        previous = self.read()
+        self.block['verboseData']['isChainBlock'] = False
+        self.assertIsNone(self.read(previous))
+        self.block['verboseData']['isChainBlock'] = True
+        self.assertEqual(self.read(previous), previous)
 
     def test_wait_for_accepted_utxo(self):
         self.entry = None
@@ -119,7 +126,7 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
                                                               nativeReceiptEnvelopeValidated=True))
         mock('receipt_peer_view', return_value=observed)
         self.payment = mock('receipt_payout', return_value=self.payout)
-        mock('block_read', return_value=dict(header=dict(daaScore=199)))
+        self.block_read = mock('block_read', return_value=dict(header=dict(daaScore=199), verboseData=dict(isChainBlock=True)))
         self.expectation = mock('expectation_from_studio', return_value=self.expected)
 
     def run_lifecycle(self):
@@ -169,6 +176,44 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
         self.assertEqual(self.payment.call_args.kwargs['previously_seen'], self.payout)
         self.assertTrue((out / 'studio/restarted-claim.json').is_file())
         self.assertTrue((out / 'studio/receipt-checkpoint.json').is_file())
+
+    def test_detached_receipt_waits_and_replaced_payout_survives_restart(self):
+        self.clients[-1].call.return_value = dict(self.settled, settled=False)
+        with self.assertRaises(TimeoutError):
+            self.run_lifecycle()
+        previous = receipt_checkpoint(self.root)
+        checkpoint = self.data / 'receipt-payout.json'
+        old = json.loads(checkpoint.read_text())
+        new = dict(self.payout, child='09' * 64, acceptingBlock='0a' * 64)
+        self.clients[-1].call.return_value = self.settled
+        self.payment.return_value = new
+        selected = self.block_read.return_value
+        detached = dict(selected, verboseData=dict(isChainBlock=False))
+        reads = []
+        def until(stage, read, *, admitted):
+            self.assertTrue(admitted)
+            if not reads:
+                self.block_read.return_value = detached
+                self.assertIsNone(read())
+                self.assertEqual(json.loads(checkpoint.read_text()), old)
+                self.block_read.return_value = selected
+            reads.append(stage)
+            return read()
+        result = follow_receipt_settlement(previous, self.data, self.clients, until, restarted=True, seen_payouts=old)
+        self.assertEqual(result['status'], 'receipt-settled')
+        self.assertEqual(result['payout'], new)
+        self.assertEqual(json.loads(checkpoint.read_text()), [new] * 3)
+        self.assertEqual(receipt_checkpoint(self.root), previous)
+
+    def test_unconfirmed_spend_cannot_replace_the_payout_checkpoint(self):
+        confirm = Mock(return_value=None)
+        checkpoint = Mock()
+        self.assertIsNone(receipt_settlement_view(self.clients, self.expected, self.receipt,
+                                                   on_paid=checkpoint, confirm_spend=confirm))
+        confirm.assert_called_once_with()
+        checkpoint.assert_not_called()
+        for rpc in self.clients:
+            rpc.call.assert_not_called()
 
     def test_different_acceptance_daa_or_last_peer_reorg_cannot_report_settlement(self):
         self.clients[1].call.return_value = dict(self.settled, daaScore=190)
