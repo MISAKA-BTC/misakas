@@ -358,6 +358,31 @@ pub(super) async fn replay_window(
             return; // This diagnostic never reaches the assessment close or signs a PANEL reply.
         }
         let tokenizer = tokenizer.unwrap();
+        if let Some(path) = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_PLAN") {
+            #[derive(Deserialize)]
+            struct RecoveryWorkPlan {
+                prefix: PathBuf,
+                parent: Hash64,
+                parent_blue: u64,
+                funding: TransactionOutpoint,
+                output: PathBuf,
+            }
+            let plan: RecoveryWorkPlan = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+            assert!(plan.parent_blue < panel.close_blue_score - 1);
+            assert!(plan.parent_blue >= node.api().get_header(block.hash()).unwrap().blue_score);
+            let archive = PrefixArchive::open(&plan.prefix, PrefixParent::Known(plan.parent));
+            panel_prefix(node, block.hash(), plan.parent_blue + 1, panel.release_from_daa, archive).await;
+            let artifact = std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").expect("the original 8K work class");
+            legacy_work::genesis_claim::extend_with_certified_work(
+                node,
+                Path::new(&artifact),
+                plan.funding,
+                panel.close_blue_score,
+                &plan.output,
+            )
+            .await;
+            return;
+        }
         assert!(read_submission(1, &results).is_err());
         let mut different_draw = results.clone();
         different_draw[0].challenge[0] ^= 1;

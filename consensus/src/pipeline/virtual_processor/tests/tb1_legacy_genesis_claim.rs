@@ -32,6 +32,60 @@ struct CertifiedBranch {
     blocks: Vec<RpcRawBlock>,
 }
 
+fn load_backend(node: &Rig, held: &Path, id: Hash64, root: Hash64, daa: u64) -> Qwen25A16Backend {
+    let artifact = std::sync::Arc::new(decode_artifact_file_mapped_v1(std::sync::Arc::new(ReadOnlyMap::open(held).unwrap())).unwrap());
+    let class = canonical_classes_v1(&node.bundle.court).into_iter().find(|c| c.class_id() == id).unwrap();
+    assert_eq!(a16_inventory_root_and_count_v1(&artifact, &class.profile).unwrap().0, root);
+    let form = palw_prompt_ids_form_of_class_v1(node.config.params.palw_prompt_ids_form_at(daa), &class.profile);
+    Qwen25A16Backend::new(artifact, node.config.params.net.to_string().into_bytes(), class.profile, class.canonical_job)
+        .expect("held genesis class must be locally executable")
+        .with_step_ladder_cap(node.bundle.court.max_step_leaf_count())
+        .with_prompt_ids_form(form)
+}
+
+pub(in super::super) async fn extend_with_certified_work(
+    node: &mut Rig,
+    held: &Path,
+    funding: TransactionOutpoint,
+    close_blue: u64,
+    output: &Path,
+) {
+    let base = node.chain.sink();
+    let mut funds = node
+        .api()
+        .get_virtual_utxos(None, 1_000_000, false)
+        .into_iter()
+        .find(|(outpoint, _)| *outpoint == funding)
+        .expect("recovery work requires an unspent lifecycle funding output");
+    genesis_seats::renew(node, held, &mut funds).await;
+
+    let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
+    let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
+    let facts = node.api().palw_producer_facts_v2(id, Some(node.chain.bonds[1].0)).unwrap();
+    assert!(!facts.is_base_class && facts.artifact_root == root);
+    facts
+        .ready_to_produce_v3(
+            TestConsensus::palw_v2_registry_keypair(1).verification_key.as_ref(),
+            node.bundle.state.rcore_plus_active_at(facts.daa_score),
+        )
+        .unwrap();
+    let backend = load_backend(node, held, id, root, facts.daa_score);
+    let step = node.config.params.target_time_per_block();
+    let result = node.chain.real_attempt_with_backend(1, step, id, &backend).await;
+    let digest = result.replay_with_backend(&node.chain, &backend).expect("verify the new work on its own selected branch");
+    review_executed_claim(&mut node.chain, &mut funds, &result, &backend, digest, AfterPanelFinal::Executed).await;
+    let cert = executed_certification(&node.chain, result.claim);
+    let tip = node.chain.sink();
+    assert!(node.api().get_header(tip).unwrap().blue_score < close_blue, "additional work ran past the original assessment close");
+    assert!(node.chain.tip_state().1.safe_frontier().0 >= result.block.header.blue_score);
+    funded_anchor::save(node, result.claim, base, output);
+    peer_log!(
+        "arithmetic PANEL recovery work {}",
+        serde_json::json!({"base":base,"claim":result.claim,"accepted":result.block.hash(),"tip":tip,
+            "certified_daa":cert.outcome.unwrap().1,"approvals":cert.positive_positions()})
+    );
+}
+
 pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, renewed: Hash64) {
     let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
     let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
@@ -46,14 +100,7 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
         .unwrap();
     assert!(!facts.is_base_class && facts.class_target > 0);
     assert!(state.bond_budget().unwrap().model_blocks_available_v1(&id, facts.daa_score) > 0);
-    let artifact = std::sync::Arc::new(decode_artifact_file_mapped_v1(std::sync::Arc::new(ReadOnlyMap::open(held).unwrap())).unwrap());
-    let class = canonical_classes_v1(&node.bundle.court).into_iter().find(|c| c.class_id() == id).unwrap();
-    assert_eq!(a16_inventory_root_and_count_v1(&artifact, &class.profile).unwrap().0, root);
-    let form = palw_prompt_ids_form_of_class_v1(node.config.params.palw_prompt_ids_form_at(facts.daa_score), &class.profile);
-    let backend = Qwen25A16Backend::new(artifact, node.config.params.net.to_string().into_bytes(), class.profile, class.canonical_job)
-        .expect("held genesis class must be locally executable")
-        .with_step_ladder_cap(node.bundle.court.max_step_leaf_count())
-        .with_prompt_ids_form(form);
+    let backend = load_backend(node, held, id, root, facts.daa_score);
     let record = dir.join("winning.json");
     let capture = dir.join("capture.bin");
     let result = if produce {

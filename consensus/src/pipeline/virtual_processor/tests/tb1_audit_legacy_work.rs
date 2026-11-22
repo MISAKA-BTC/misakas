@@ -13,7 +13,7 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 #[path = "tb1_legacy_genesis_capital.rs"]
 mod genesis_capital;
 #[path = "tb1_legacy_genesis_claim.rs"]
-mod genesis_claim;
+pub(super) mod genesis_claim;
 #[path = "tb1_legacy_genesis_seats.rs"]
 mod genesis_seats;
 
