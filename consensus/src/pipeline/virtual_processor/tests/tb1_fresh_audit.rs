@@ -1005,6 +1005,71 @@ impl PrefixArchive {
     }
 }
 
+/// Position a recovery reader just after the materialized DB tip. A stopped
+/// writer can have read ahead, so its input cursor is not a durable checkpoint.
+fn recovery_suffix(path: &Path, tip: &Block, parent: Hash64) -> PrefixArchive {
+    use std::io::BufRead;
+    let mut lines = std::io::BufReader::new(File::open(path).unwrap()).lines();
+    for line in lines.by_ref() {
+        let raw: RpcRawBlock = serde_json::from_str(&line.unwrap()).unwrap();
+        if raw.header.blue_score == tip.header.blue_score {
+            assert_eq!(Block::try_from(raw).unwrap().hash(), tip.hash(), "different recovery branch");
+            return PrefixArchive::Read(lines, PrefixParent::Known(parent));
+        }
+        assert!(raw.header.blue_score < tip.header.blue_score, "archive skipped the recovery tip");
+    }
+    panic!("archive ended before the recovery tip");
+}
+
+#[tokio::test]
+#[ignore = "continues the preserved Round 16 prefix on a private copy of its database"]
+async fn resume_round16_recovery_work() {
+    use crate::pipeline::virtual_processor::tests::{
+        g14_registration_e2e::private_moe2::arm_private_registration, t12_round_lane_e2e::t12_reopened_chain,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let source = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap());
+    let plan: RecoveryWorkPlan =
+        serde_json::from_reader(File::open(std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_PLAN").unwrap()).unwrap())
+            .unwrap();
+    let held = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").unwrap());
+    let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/evidence/palw/mas1-qf1-native-2026-11-21");
+    let saved: serde_json::Value =
+        serde_json::from_reader(File::open(evidence.join("round16-preservation-and-short-regressions.json")).unwrap()).unwrap();
+    let schedule: serde_json::Value =
+        serde_json::from_reader(File::open(evidence.join("round16-recovery-inputs.json")).unwrap()).unwrap();
+    assert_eq!(schedule["branch_parent"]["block"], serde_json::json!(plan.parent));
+    assert_eq!(schedule["branch_parent"]["blue"], plan.parent_blue);
+    assert_eq!(schedule["funding_outpoint"], serde_json::to_value(&plan.funding).unwrap());
+    let close_blue = schedule["assessment_position"]["panel_close_blue"].as_u64().unwrap();
+    let release = schedule["assessment_position"]["panel_release_from_daa"].as_u64().unwrap();
+    assert!(plan.parent_blue < close_blue - 1 && !plan.output.exists());
+
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let copy = dir.path().join("db");
+    fs::create_dir(&copy).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        assert!(entry.file_type().unwrap().is_file());
+        fs::copy(entry.path(), copy.join(entry.file_name())).unwrap();
+    }
+    let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    let parts = (config.clone(), bundle.clone(), premine, floats);
+    let consensus = stable_panel::reopen_checkpoint(&config, &copy);
+    let tip = consensus.get_block(consensus.get_sink()).unwrap();
+    let expected = &saved["read_only_reopen"];
+    assert_eq!(serde_json::json!(tip.hash()), expected["materialized_tip"]);
+    let archive = recovery_suffix(&plan.prefix, &tip, plan.parent);
+    let chain = t12_reopened_chain(consensus, &config, bundle, tip.header.timestamp, tip.header.nonce);
+    assert_eq!(serde_json::json!(chain.tip_state().1.state_root()), expected["palw_state_root"]);
+    let mut node = Rig::resumed(chain, &parts, Default::default(), tip.header.nonce);
+    stable_panel::arm(&mut node);
+    panel_prefix(&mut node, tip.hash(), plan.parent_blue + 1, release, archive).await;
+    legacy_work::genesis_claim::extend_with_certified_work(&mut node, &held, plan.funding, close_blue, &plan.output).await;
+}
+
 /// Retain or validate ordinary accepted blocks up to the parent of the PANEL close.
 async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, release_from: u64, mut archive: PrefixArchive) -> Hash64 {
     use std::io::Write;
@@ -1089,6 +1154,33 @@ async fn replay_to_original_panel_parent() {
     let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, PrefixParent::VerifiedReport(report))).await;
     assert_eq!(reader.api().get_header(restored).unwrap().blue_score, 4);
     assert_eq!(reader.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
+    // Resume at an interior committed block from the same full archive.
+    let mut midway = Rig::new(&parts, 3);
+    let interior = reader.api().get_block(reader.api().get_ghostdag_data(parent).unwrap().selected_parent).unwrap();
+    for line in std::io::BufRead::lines(std::io::BufReader::new(File::open(&path).unwrap())) {
+        let raw: RpcRawBlock = serde_json::from_str(&line.unwrap()).unwrap();
+        stable_panel::arm(&mut midway);
+        stable_panel::arrive(&mut midway, Block::try_from(raw).unwrap(), "committed prefix").await;
+        if midway.chain.sink() == interior.hash() {
+            break;
+        }
+    }
+    let checkpoint = dir.path().join("interior");
+    midway.api().checkpoint_database(&checkpoint);
+    drop(midway);
+    let db = stable_panel::reopen_checkpoint(&parts.0, &checkpoint);
+    let chain = crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::t12_reopened_chain(
+        db,
+        &parts.0,
+        &parts.1,
+        interior.header.timestamp,
+        interior.header.nonce,
+    );
+    let mut resumed = Rig::resumed(chain, &parts, Default::default(), interior.header.nonce);
+    stable_panel::arm(&mut resumed);
+    let suffix = recovery_suffix(&path, &interior, parent);
+    panel_prefix(&mut resumed, interior.hash(), 5, 50, suffix).await;
+    assert_eq!(resumed.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
     let class = writer.bundle.state.base_class_id();
     let observed = control_population(&writer, parent, class);
     assert_eq!(control_population(&reader, restored, class), observed);

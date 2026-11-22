@@ -199,7 +199,7 @@ fn replay_from_store(
     replay(&instance)
 }
 
-fn reopen_checkpoint(config: &Config, path: &Path) -> TestConsensus {
+pub(super) fn reopen_checkpoint(config: &Config, path: &Path) -> TestConsensus {
     use kaspa_database::prelude::ConnBuilder;
     let db =
         ConnBuilder::default().with_files_limit(20).with_db_path(path.to_path_buf()).with_create_if_missing(false).build().unwrap();
