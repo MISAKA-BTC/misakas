@@ -56,14 +56,22 @@ def check_assessment_schedule(published, qualification, prepared, panel_round):
             "evaluation prefix bounds differ from the qualified PANEL schedule")
 
 
+def check_native_submission(log_text, pid, published):
+    observed = re.findall(r"^fresh arithmetic submission pid=(\d+) certificate=([a-f0-9]{128}) "
+                          r"block=([a-f0-9]{128}) marker=([a-f0-9]{128})$", log_text, re.M)
+    require(observed == [(pid, published["certificate"], published["submission"], published["marker"])],
+            "native process did not replay the original evaluation submission")
+
+
 def verify(prefix, log):
     published = json.loads((HERE / "qf1-arithmetic-publisher.json").read_bytes())
     text = log.read_text()
     require("test result: ok. 1 passed; 0 failed" in text, "incomplete native prefix run")
-    [row] = re.findall(r"^arithmetic PANEL prefix pid=\d+ submission=([a-f0-9]{128}) parent=([a-f0-9]{128}) "
+    [row] = re.findall(r"^arithmetic PANEL prefix pid=(\d+) submission=([a-f0-9]{128}) parent=([a-f0-9]{128}) "
                        r"round=([a-f0-9]{128}) blue=(\d+) daa=(\d+)$", text, re.M)
-    submission, parent, panel_round, blue, daa = row
+    pid, submission, parent, panel_round, blue, daa = row
     require(submission == published["submission"], "different evaluation submission")
+    check_native_submission(log_text=text, pid=pid, published=published)
     qualification = json.loads((HERE / "qf1-arithmetic-qualification.json").read_bytes())
     prepared = json.loads((HERE / "qf1-arithmetic-panel-preparation.json").read_bytes())
     check_assessment_schedule(published, qualification, prepared, panel_round)
