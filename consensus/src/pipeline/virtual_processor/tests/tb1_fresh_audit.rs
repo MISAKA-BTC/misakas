@@ -278,7 +278,14 @@ pub(super) async fn replay_window(
         use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{
             ArithmeticControlView, ArithmeticEvaluation, ArithmeticPanelPolicy, CASES, exact_digit_score, submission_marker,
         };
-        let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
+        let diagnostic_blue = std::env::var("MISAKA_PRIVATE_ARITHMETIC_FINALITY_DIAGNOSTIC_BLUE").ok().map(|blue| {
+            let blue = blue.parse::<u64>().unwrap();
+            assert!(blue < panel.close_blue_score - 1, "diagnostic must stop before the scheduled PANEL parent");
+            assert!(submission_source.is_some(), "diagnostic requires the original submission");
+            blue
+        });
+        let tokenizer =
+            diagnostic_blue.is_none().then(|| fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap());
         assert_eq!(node.chain.sink(), certificate);
         let (block, results) = if let Some(path) = submission_source {
             let (raw, originals): (RpcRawBlock, [ArithmeticEvaluation; CASES as usize]) =
@@ -286,25 +293,28 @@ pub(super) async fn replay_window(
             let block = Block::try_from(raw).unwrap();
             assert_eq!(block.header.direct_parents(), &[certificate]);
             stable_panel::arrive(node, block.clone(), "archived arithmetic submission").await;
-            frozen
-                .replay_arithmetic_submission(
-                    node.api().as_ref(),
-                    batch,
-                    certificate,
-                    &rows,
-                    q,
-                    LIMITS,
-                    0,
-                    block.hash(),
-                    &originals,
-                    model,
-                    &tokenizer,
-                )
-                .unwrap();
+            if diagnostic_blue.is_none() {
+                frozen
+                    .replay_arithmetic_submission(
+                        node.api().as_ref(),
+                        batch,
+                        certificate,
+                        &rows,
+                        q,
+                        LIMITS,
+                        0,
+                        block.hash(),
+                        &originals,
+                        model,
+                        tokenizer.as_deref().unwrap(),
+                    )
+                    .unwrap();
+            }
             (block, originals)
         } else {
+            let tokenizer = tokenizer.as_deref().unwrap();
             let results = std::array::from_fn(|index| {
-                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, index as u32, model, &tokenizer).unwrap()
+                frozen.evaluate_arithmetic(api, batch, certificate, &rows, q, LIMITS, 0, index as u32, model, tokenizer).unwrap()
             });
             let marker = submission_marker(certificate, &results).unwrap();
             let block = local_carrier(node, &mut None, &mut [], 0, marker, "arithmetic evaluation submission").await;
@@ -324,6 +334,30 @@ pub(super) async fn replay_window(
             )
         };
         let marker = read_submission(0, &results).unwrap();
+        if let Some(blue) = diagnostic_blue {
+            let prefix = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_READ").expect("archived diagnostic prefix");
+            let expected: Hash64 = std::env::var("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT").unwrap().parse().unwrap();
+            let archive = PrefixArchive::open(Path::new(&prefix), PrefixParent::Known(expected));
+            let sink = panel_prefix(node, block.hash(), blue + 1, panel.release_from_daa, archive).await;
+            let native = node.api().as_ref();
+            let snapshot = native.get_native_settlement_snapshot().unwrap().expect("native settlement at diagnostic sink");
+            let readiness = readiness_of(node);
+            let close_selected = native.is_chain_ancestor_of(close, sink).unwrap();
+            let submission_selected = native.is_chain_ancestor_of(block.hash(), sink).unwrap();
+            let read = frozen.read_arithmetic_submission(native, batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results);
+            peer_log!(
+                "arithmetic finality diagnostic {}",
+                serde_json::json!({"sink":sink,"blue":blue,"daa":node.chain.daa_of(sink),"audit_close":close,
+                    "submission":block.hash(),"close_selected":close_selected,"submission_selected":submission_selected,
+                    "snapshot":snapshot,"readiness":readiness,"refusal":read.as_ref().err().map(ToString::to_string)})
+            );
+            assert!(close_selected && submission_selected);
+            assert!(snapshot.finalized.is_none());
+            assert_eq!(snapshot.stop, Some(kaspa_consensus_core::palw_native_settlement_v1::SettlementStopV1::FrontierNotCovered));
+            assert!(read.is_err());
+            return; // This diagnostic never reaches the assessment close or signs a PANEL reply.
+        }
+        let tokenizer = tokenizer.unwrap();
         assert!(read_submission(1, &results).is_err());
         let mut different_draw = results.clone();
         different_draw[0].challenge[0] ^= 1;
@@ -410,7 +444,7 @@ pub(super) async fn replay_window(
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
             let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
-            let native = node.api();
+            let native = node.api().as_ref();
             let replayed = frozen.read_arithmetic_submission(native, batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results);
             if let Err(error) = &replayed {
                 let ancestry = |a, b| native.is_chain_ancestor_of(a, b).map_err(|e| e.to_string());
