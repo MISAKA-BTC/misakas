@@ -200,6 +200,20 @@ def agree_on_parent(prefix, writer_log, reader_log):
     return dict(**report, writer=writer, reader=reader)
 
 
+def agree_on_close(prefix, raw_close, logs):
+    runs = [prefix_run(log) for log in logs]
+    require(len({run["pid"] for run in runs}) == len(logs), "duplicate native process in close evidence")
+    require(len({run["binary_sha256"] for run in runs}) == 1, "assessment close was not replayed by the same build")
+    agreed = None
+    for log in logs:
+        report = check_close(control_observations(verify(prefix, log), log), log, raw_close)
+        del report["process"]
+        if agreed is None:
+            agreed = report
+        require(report == agreed, "peers accepted different assessment close or control state")
+    return dict(**agreed, close_processes=[run["pid"] for run in runs], close_binary_sha256=runs[0]["binary_sha256"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prefix", type=Path)
@@ -207,11 +221,18 @@ if __name__ == "__main__":
     parser.add_argument("--control-population", action="store_true", help="also verify the cold reader’s live parent population observation")
     parser.add_argument("--writer-log", type=Path, help="also require agreement with a separate native writer")
     parser.add_argument("--close", type=Path, help="verify the archived child and its pinned control state")
+    parser.add_argument("--peer-log", type=Path, action="append", default=[], help="additional native reader of the same close")
     args = parser.parse_args()
+    if args.peer_log and not args.close:
+        parser.error("--peer-log requires --close")
+    if args.close:
+        logs = [args.native_log, *args.peer_log]
+        if args.writer_log:
+            logs.insert(0, args.writer_log)
+        print(json.dumps(agree_on_close(args.prefix, args.close, logs), indent=2))
+        raise SystemExit(0)
     result = (agree_on_parent(args.prefix, args.writer_log, args.native_log) if args.writer_log
               else verify(args.prefix, args.native_log))
-    if args.control_population or args.close:
+    if args.control_population:
         result = control_observations(result, args.native_log)
-    if args.close:
-        result = check_close(result, args.native_log, args.close)
     print(json.dumps(result, indent=2))
