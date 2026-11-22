@@ -80,6 +80,15 @@ pub(super) async fn exercise(
     let policy = env.bundle.state.bond_budget().unwrap().policy.clone();
     let mut budget = state.bond_budget().unwrap().clone();
     let reward = 160 * SOMPI_PER_KASPA;
+    let core = registration_quote(state, env.bundle.state.base_class_id(), bond, policy.digest());
+    let allocation = core.preview_at_anchor(&env.config.params, state, reward).unwrap();
+    assert_eq!((allocation.miner, allocation.panel_pool, allocation.market), (reward, 0, None));
+    let before_profile = Moe2PreDrawQuote { valid_from: 0, ..core };
+    assert_eq!(
+        before_profile.preview_at_anchor(&env.config.params, state, reward),
+        Err(Moe2SettlementError::UnknownClaimContext),
+        "even a registered genesis model cannot start MOE2 terms before activation"
+    );
     let terms = registration_quote(state, model, bond, policy.digest()).for_claim(Hash64::from_u64_word(641));
     let source = terms.reservation_key();
     let shared_undo = remote.as_ref().map(|r| r.undo.as_slice().to_vec());

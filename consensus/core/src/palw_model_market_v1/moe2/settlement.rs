@@ -130,7 +130,8 @@ impl Moe2PreDrawQuote {
         let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
         let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or(UnknownRegistration)?;
         let class = state.class(&self.model).ok_or(UnknownRegistration)?;
-        if class.artifact_root != self.artifact_root
+        if self.valid_from < from
+            || class.artifact_root != self.artifact_root
             || self.valid_from < class.registered_daa
             || bundle.state.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
             || state.bond_budget().is_none_or(|b| b.header.policy_digest != self.policy)
