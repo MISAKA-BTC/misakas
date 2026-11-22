@@ -116,3 +116,18 @@ nativeテストビルドの終了コードは0。3プロセスの `private_moe2_
 上記の予約差分は、QF1の評価用LocalInferenceで署名したslotを入力にしていた。価格・担保の試算には使えるが、評価用途の署名では採掘資金を拘束できない。private予約APIは、差分への書き込み前に見積もり付き全slotの用途を検査する。LocalInferenceと採掘profileのないTIR入力を拒否し、QF1 NewMiningには既存の採掘適格性判定を適用する。
 
 nativeビルドは終了コード0。独立3プロセスの private_registered_tb1_pending_freeze は25.81秒で終了コード0。各ピアで署名済み2件の試算が成立し、予約要求は拒否された。拒否前後のclose差分は全バイト一致し、正規のpost-state rootが保存され、どちらの予約行も存在しなかった。private_moe2_three_process_registration（27.43秒）、private_tb1_stable_panel（4.58秒）、小規模な再起動・prefix再生の replay_to_original_panel_parent（0.21秒）も終了コード0。実採掘の予算予約、受賞、決済およびRound 16の実closeは、この結果からは確認できない。
+## 隔離 P200 での採掘入口
+
+保存 Round 16 の DAA 51258 台帳と、正規 TFO3 を DAA 200 で有効にした P200 は別 genesis。P200 では登録済み SmolLM2 の protected original を使える。通常 FP の `fpCertified=false` 単独から protected TFO3 の不適格を判定していた説明を訂正する。`palw_state_v2/objects.rs` は受理済み funded pairing の種別を読み、`palw_accept.rs` は original fence を検査する。
+
+同じ登録・bond・プロンプトを持つ二つのチェックポイントで比較した。DAA 3507 は割当なし、epoch 4 のモデルの持分は 47,660,870,950 / 2,521,321,958,376、累積 10,358,913 block units。Studio の worker は 85,938 leaves を実行したが、native の P_m 予算判定で queue は refused となった。独立 funding UTXO から署名した初回割当を同期した別 DB のノードで処理し、DAA 3508 で sequence 1、10,000,000,000 sompi が pending に入った。
+
+同じ系統で旧割当が成熟済みの DAA 7745 をコピーから復元した。新規に投入した実プロンプトは17入力・1出力。8K クラスの実行であり、入力長は17トークン。新しい job と claim を生成し、通常の quote が21 quanta、protected funding 193,119,700 sompi を返した。署名済み carrier を独立したテスト用 UTXO から送信し、再起動後も同じ署名済み bytes と同じ取引 ID を使用した。DAA 3508 の新割当をここで効力発生済みと扱っていない。
+
+古い claim の Final にあった spentCount=0,total=21 は消費状態。Gate C 後の beacon で全21 Ticket のハッシュを再計算すると winningIndices は空で、最小値も期限内最大 target を超えた。1 claim に割り当てた21量子であり、21件の claim 受付を表す数ではない。元の target と独立一様の仮定で21枚とも落選する確率は99.9840%。
+
+署名用 example のビルド、別 genesis と予約済み Panel float の拒否、2ピアでの割当 readback、成熟済み checkpoint の新規 Studio queue、publisher、full-node rail は終了コード0。単独ノードでの包含試験と、2ピアで子ブロックの確定前に打ち切った試験は終了コード1。24 GiB への拡張前の成熟済み3ピアでは、子の native 準備に既予約7,706,971,063 bytes と新規6,983,593,776 bytes を要し、上限13,172,799,892 bytes を超えた。採掘済みの子を再検証するため発行を止めた。成熟済み復元ノードは過去の Linux バイナリ、Studio、worker、gateway、rail の今回の入力・出力は [P200 記録](p200-studio-mining-path.json) に対応する。
+
+新規 claim の当落には Panel の完全再実行、Final、Gate C、成熟後の beacon が要る。旧規則の claim に MOE2 は適用されない。新 profile は `private_moe2_settlement.rs` の予約・決済を受賞ブロック本体の fold に結合する必要がある。
+
+24 GiB の VM で保持済みの子を通常の submitBlock に再提出し、独立3 DB が DAA 7746 で同一の新規 claim、carrier 取引、original、execution root を返した。全ピアで provisional、認証 pending、Panel 承認未記録。受付ブロックは 2 対 1 に分かれた。共通の子を生成・再提出しても、26 tip を保持した peer 1 では 723,108,006 bytes 予約中に 30,076,294,708 bytes を要求し、上限 17,603,214,538 bytes を超えて virtual 更新を保留した。他2ピアは子を選択した。3ピア一致、Panel、Final、Gate C、当選、受賞および決済は未実証。分岐前の各 DB に適用する実ブロック3個を取り出した。作業ボリュームが ENOSPC になり、隔離 VM を停止した。

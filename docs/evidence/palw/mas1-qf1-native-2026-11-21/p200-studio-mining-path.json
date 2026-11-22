@@ -94,6 +94,11 @@
       "quanta": 21,
       "pwu": 56924364,
       "priced_by": "chain"
+    },
+    "workerRequest": {
+      "anchorDaa": 7745,
+      "nonce": "9a969eedb1dfab14b140bcfd54ab64e0fa99c2cfd95550e68d96512d7e911fbf",
+      "requestSha256": "d726382ea75abba1bc8fe8f1797e04fbd056b2a1a3ee36958b1dc57ca200fcf6"
     }
   },
   "oldDraw": {
@@ -105,6 +110,11 @@
       "lastEligibleDaa": 8330,
       "maximumEffectiveTarget": "10374232822945565001587766497427006",
       "possibleIndicesAtMaximum": []
+    },
+    "workerRequest": {
+      "anchorDaa": 3616,
+      "nonce": "751655bed6e6d1bc4773cdfdc77020c2cd42afd06b45105b02b2baf6a7c5f6f9",
+      "requestSha256": "51f053e48b92650ab9d3f29831e22bd54bd1eceb026ea1240a70e51c8e45099b"
     }
   },
   "newSignedAssignment": {
@@ -131,6 +141,62 @@
       "pendingSinceEpoch": 4,
       "sequence": 1,
       "version": 1
+    }
+  },
+  "nativeAdmission": {
+    "linuxNodeSha256": "d02c85cb009bb4739e5f024fc9781185c00239e9a378914692ec2a4909e06b3a",
+    "readbacks": [
+      {
+        "peer": 0,
+        "sink": "c1dd439fd6e585c8d449843436e8121fa64d1d27abb55c8fe3334564fc42d9cfecb8671057e6152c580e841e11cab7cdf06113a4517d8d9979700bfcb6465b98",
+        "tipDaa": 7746,
+        "carrierBlock": "d4f206b39b679de6289ac0ad6b6a01bf7f8d03aecc372a8f2bc87195cc9c204cc2e1c83a4c3fc191418f9e410c7da2e9c77225898bf88ff893e015b8693da2be",
+        "acceptingBlock": "227c0a2458f959421c2523caa6f10b52c0a706b50ea35664d1c010b3a0365b227e507bf9e27cdc7824cfe6ac09dda12ca45a9bfb2eaf1d4900e4eaa129109d99",
+        "acceptedDaa": 7746,
+        "original": "ee5f572d07c116202b7bf17b6eb59300b1156bfefbdc6a29d091422ee379d791d55ad4aa4df00770fc2827f4185a5d317848e6ceda21345e429894d353540512",
+        "phase": "provisional",
+        "phaseDeadlineDaa": 7766,
+        "fullReplayApprovalRecorded": false,
+        "certification": "pending"
+      },
+      {
+        "peer": 1,
+        "sink": "fe6edc11dfe2b2d02af026a87848ead121f044630ed0d1765842967be9389bed55d845c19faf442ba08f84b4a50b4bd1ae04c96aefe0d4f55a2b6deaa4de376f",
+        "tipDaa": 7746,
+        "carrierBlock": "d4f206b39b679de6289ac0ad6b6a01bf7f8d03aecc372a8f2bc87195cc9c204cc2e1c83a4c3fc191418f9e410c7da2e9c77225898bf88ff893e015b8693da2be",
+        "acceptingBlock": "fe6edc11dfe2b2d02af026a87848ead121f044630ed0d1765842967be9389bed55d845c19faf442ba08f84b4a50b4bd1ae04c96aefe0d4f55a2b6deaa4de376f",
+        "acceptedDaa": 7746,
+        "original": "ee5f572d07c116202b7bf17b6eb59300b1156bfefbdc6a29d091422ee379d791d55ad4aa4df00770fc2827f4185a5d317848e6ceda21345e429894d353540512",
+        "phase": "provisional",
+        "phaseDeadlineDaa": 7766,
+        "fullReplayApprovalRecorded": false,
+        "certification": "pending"
+      },
+      {
+        "peer": 2,
+        "sink": "c1dd439fd6e585c8d449843436e8121fa64d1d27abb55c8fe3334564fc42d9cfecb8671057e6152c580e841e11cab7cdf06113a4517d8d9979700bfcb6465b98",
+        "tipDaa": 7746,
+        "carrierBlock": "d4f206b39b679de6289ac0ad6b6a01bf7f8d03aecc372a8f2bc87195cc9c204cc2e1c83a4c3fc191418f9e410c7da2e9c77225898bf88ff893e015b8693da2be",
+        "acceptingBlock": "227c0a2458f959421c2523caa6f10b52c0a706b50ea35664d1c010b3a0365b227e507bf9e27cdc7824cfe6ac09dda12ca45a9bfb2eaf1d4900e4eaa129109d99",
+        "acceptedDaa": 7746,
+        "original": "ee5f572d07c116202b7bf17b6eb59300b1156bfefbdc6a29d091422ee379d791d55ad4aa4df00770fc2827f4185a5d317848e6ceda21345e429894d353540512",
+        "phase": "provisional",
+        "phaseDeadlineDaa": 7766,
+        "fullReplayApprovalRecorded": false,
+        "certification": "pending"
+      }
+    ],
+    "sameClaimCarrierExecutionRoot": true,
+    "commonSink": false,
+    "capturedBlocks": [
+      "d4f206b39b679de6289ac0ad6b6a01bf7f8d03aecc372a8f2bc87195cc9c204cc2e1c83a4c3fc191418f9e410c7da2e9c77225898bf88ff893e015b8693da2be",
+      "227c0a2458f959421c2523caa6f10b52c0a706b50ea35664d1c010b3a0365b227e507bf9e27cdc7824cfe6ac09dda12ca45a9bfb2eaf1d4900e4eaa129109d99",
+      "c1dd439fd6e585c8d449843436e8121fa64d1d27abb55c8fe3334564fc42d9cfecb8671057e6152c580e841e11cab7cdf06113a4517d8d9979700bfcb6465b98"
+    ],
+    "peer1ChildPreparation": {
+      "outstandingRamBytes": 723108006,
+      "requestRamBytes": 30076294708,
+      "limitRamBytes": 17603214538
     }
   }
 }
