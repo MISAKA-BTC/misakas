@@ -130,8 +130,8 @@ pub(super) async fn replay_window(
     round: Tb1MiningRound,
     panel_qualification: &Tb1Qualification<'_>,
     marker: [u8; 64],
-    roots: [Hash64; 4],
-    seals: [Hash64; 3],
+    roots: [[Hash64; 4]; 2],
+    seals: [[Hash64; 3]; 2],
     keys: &[ml_dsa_65::MLDSA65KeyPair],
     path: &Path,
 ) {
@@ -143,13 +143,14 @@ pub(super) async fn replay_window(
     use std::io::{BufRead, BufReader, ErrorKind};
     let panel = cut.assessment_panel(panel_qualification).unwrap();
     let slot: usize = std::env::var("MISAKA_PRIVATE_FRESH_SLOT").unwrap().parse().unwrap();
-    let dir = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_FRESH_HOLDER").unwrap()).join("audit");
+    let holder = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_FRESH_HOLDER").unwrap());
+    let dir = holder.join("audit");
     let id = round.id();
     let key = &keys[slot];
     let bytes = fs::read(dir.join(format!("panel-dealer-input-{slot}.json"))).unwrap();
-    assert_eq!(seal(&id, slot, &bytes), seals[slot]);
+    assert_eq!(seal(&id, slot, &bytes), seals[0][slot]);
     let local: stable_panel::Provision = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(local.roots, roots);
+    assert_eq!(local.roots, roots[0]);
     let shares = local.holder_shares();
     let context = Tb1ReleaseContext { round_ref: &id, qual_root: q.root(), freeze_id: marker };
     let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
@@ -419,6 +420,8 @@ pub(super) async fn replay_window(
             _ => panic!("choose one arithmetic assessment close source"),
         };
         let work_path = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_WORK_READ");
+        let release_output = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_SHARE_WRITE");
+        assert!(release_output.is_none() || work_path.is_some(), "PANEL shares require independently replayed post-close work");
         assert!(work_path.is_none() || close_path.is_some(), "replaying PANEL work requires a pinned assessment close");
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
@@ -491,7 +494,37 @@ pub(super) async fn replay_window(
                         "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy.id()})
                 );
                 if let Some(path) = work_path {
-                    replay_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, Path::new(&path)).await;
+                    let gate =
+                        replay_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, Path::new(&path)).await;
+                    if let Some(output) = release_output {
+                        let dir = holder.join("panel");
+                        let id = panel.id();
+                        let bytes = fs::read(dir.join(format!("panel-dealer-input-{slot}.json"))).unwrap();
+                        assert_eq!(seal(&id, slot, &bytes), seals[1][slot]);
+                        let provision: stable_panel::Provision = serde_json::from_slice(&bytes).unwrap();
+                        assert_eq!(provision.roots, roots[1]);
+                        let shares = provision.holder_shares();
+                        let context = Tb1ReleaseContext {
+                            round_ref: &id,
+                            qual_root: panel_qualification.root(),
+                            freeze_id: assessment.commitment(),
+                        };
+                        let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
+                        let mut journal = Tb1ExposureJournal::resume(&dir, &id, &key.verification_key, slot as u32).unwrap();
+                        let message = journal
+                            .reserve_signing_message(node.api().as_ref(), gate.holder_freeze(), panel_qualification, &row, 2048)
+                            .unwrap();
+                        let signature = ml_dsa_65::sign(&key.signing_key, &message, RELEASE_CONTEXT, rand::random()).unwrap();
+                        let record = ReleaseRecord {
+                            holder: slot,
+                            shares: shares.iter().map(|(dealer, value)| (*dealer, value.to_bytes().to_vec())).collect(),
+                            signature: signature.as_slice().to_vec(),
+                        };
+                        let file = File::create_new(output).unwrap();
+                        serde_json::to_writer(&file, &record).unwrap();
+                        file.sync_all().unwrap();
+                        peer_log!("arithmetic PANEL signed holder={slot} tip={} close={}", node.chain.sink(), close.hash());
+                    }
                 }
             }
         }
@@ -507,7 +540,7 @@ async fn replay_assessment_work(
     round: Tb1MiningRound,
     q: &Tb1Qualification<'_>,
     path: &Path,
-) {
+) -> misaka_palw_remote::tb1_exposure::publication::NativePublicationGate {
     use std::io::{BufRead, BufReader, ErrorKind};
 
     let mut archive = BufReader::new(File::open(path).unwrap()).lines();
@@ -518,13 +551,13 @@ async fn replay_assessment_work(
         assert!(daa < round.deadline_exclusive_daa, "arithmetic PANEL work exhausted the signed release window");
         if daa >= round.release_from_daa {
             match assessment.observe_publication(node.api().as_ref(), close, q) {
-                Ok(_) => {
+                Ok(gate) => {
                     peer_log!(
                         "arithmetic PANEL release ready {} {}",
                         std::process::id(),
                         serde_json::json!({"close":close, "tip":tip, "daa":daa, "state":node.chain.tip_state().1.state_root()})
                     );
-                    return;
+                    return gate;
                 }
                 Err(e) if e.kind() == ErrorKind::WouldBlock => {}
                 Err(e) => panic!("arithmetic PANEL release observation failed: {e}"),

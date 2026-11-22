@@ -449,8 +449,8 @@ async fn registered_audit_history(mode: AuditHistory) {
                 audit,
                 &pq,
                 marker,
-                roots[0],
-                seals[0],
+                roots,
+                seals,
                 &keys,
                 Path::new(&path),
             )
