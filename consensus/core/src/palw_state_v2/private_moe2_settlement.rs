@@ -85,6 +85,106 @@ pub struct Moe2ExecAwardV1<'a> {
     pub worker_start: usize,
 }
 
+/// Branch-owned evidence and the authenticated price-anchor state for the
+/// ordinary retaining fold. It borrows the validated candidate body directly.
+pub struct Moe2ExecAwardInputV1<'a> {
+    pub config: &'a Params,
+    pub quote_anchor: &'a PalwChainStateV2,
+    pub block: &'a Block,
+    pub award: Moe2ExecAwardV1<'a>,
+}
+
+pub(super) fn fold_exec_award_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    point: &PalwBlockContextV2,
+    input: Moe2ExecAwardInputV1<'_>,
+) -> Result<(), PalwStateV2Error> {
+    use super::{native_writers::NativeWriteQuoteV1, palw_bond_budget_fold_v1::PalwBudgetGrowthV1};
+    let Moe2ExecAwardInputV1 { config, quote_anchor, block, award } = input;
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else {
+        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award has no consensus configuration"));
+    };
+    if !builder.extras.private_moe2_registration || &bundle.state != builder.params || award.position.point != *point {
+        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from candidate context"));
+    }
+    let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC award: {why:?}"));
+    if builder.native_writers_tracking_v1() {
+        let payees = award.payees.panel.len().saturating_add(1);
+        if payees > PALW_V2_MAX_PAYOUTS_PER_BLOCK.saturating_add(1) {
+            return Err(refuse(Moe2SettlementError::WorkerOutputsMismatch));
+        }
+        let leaves = block.transactions.len() as u64;
+        let nodes = leaves
+            .checked_next_power_of_two()
+            .and_then(|width| width.checked_mul(2))
+            .ok_or(PalwStateV2Error::DeltaMismatch("MOE2 EXEC transaction Merkle length overflow"))?;
+        let mut q = NativeWriteQuoteV1::new("private MOE2 EXEC award");
+        q.member::<Hash64, Moe2NativeExecSettlement>(1)?
+            .member::<Hash64, Hash64>(1)?
+            .member::<PalwBondKeyV2, ()>(payees as u64)?
+            .exact::<Moe2NativeExecSettlement>(1)?
+            .exact::<TransactionOutput>(payees as u64)?
+            .exact::<u8>((2 * 69 * payees) as u64)?
+            .exact::<Hash64>(leaves)?
+            .exact::<Option<Hash64>>(nodes)?;
+        builder.admit_native_write_v1(q)?;
+        builder
+            .native_reservation
+            .grow_v1(Moe2SettlementBook::native_award_scratch_bytes().map_err(PalwStateV2Error::NativeResource)?)
+            .map_err(PalwStateV2Error::NativeResource)?;
+    }
+    let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
+    let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;
+    let mut book = Moe2SettlementBook::for_native_award(model, prior_exec_settlement(&builder.entries));
+    let slot = award.slot;
+    let claim = award.claim;
+    let work = award.work;
+    builder
+        .state
+        .admit_private_moe2_exec_award(
+            config,
+            &mut book,
+            *point,
+            &builder.entries,
+            parent,
+            parent_root,
+            quote_anchor,
+            claim,
+            slot,
+            work,
+            block,
+        )
+        .map_err(refuse)?;
+    builder
+        .state
+        .check_moe2_award_coinbase(config, *point, award.position, award.release, award.payees, block, award.worker_start)
+        .map_err(refuse)?;
+    let (before, funding) = builder
+        .state
+        .private_moe2_funding(config, &book, *point, &builder.entries, claim, award.position, award.release, Some(slot), Some(work))
+        .map_err(refuse)?;
+    let anchor = slot.quote.quote_anchor;
+    let (reward, undo) = builder
+        .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, writes| {
+            book.settle_from_reservation(claim, award.position, anchor, &funding, budget, writes, Some(slot))
+        })?
+        .ok_or_else(|| refuse(Moe2SettlementError::ReservationMismatch))?
+        .map_err(refuse)?;
+    builder.reserve_final_journal_v1(2)?;
+    builder.state.write_private_moe2_settlement(&mut builder.entries, before, &book, &undo, reward, Some(slot), Some(work));
+    Ok(())
+}
+
+fn prior_exec_settlement(prefix: &[PalwDeltaEntryV2]) -> Option<Moe2Position> {
+    prefix.iter().rev().find_map(|entry| match entry {
+        PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => {
+            Some(record.position)
+        }
+        _ => None,
+    })
+}
+
 fn project_award_model(
     config: &Params,
     state: &PalwChainStateV2,
@@ -301,12 +401,7 @@ impl PalwChainStateV2 {
         award: Moe2ExecAwardV1<'_>,
     ) -> Result<Moe2SettledReward, Moe2SettlementError> {
         let model = project_award_model(config, self, &award.slot.quote, award.position.point.daa_score)?;
-        let prior = delta.entries.iter().rev().find_map(|entry| match entry {
-            PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }
-            | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => Some(record.position),
-            _ => None,
-        });
-        let mut book = Moe2SettlementBook::for_native_award(model, prior);
+        let mut book = Moe2SettlementBook::for_native_award(model, prior_exec_settlement(&delta.entries));
         self.settle_private_moe2_exec_award(
             config,
             &mut book,
@@ -345,6 +440,41 @@ impl PalwChainStateV2 {
         block: &Block,
         worker_start: usize,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.admit_private_moe2_exec_award(
+            config,
+            book,
+            delta.point,
+            &delta.entries,
+            parent,
+            parent.state_root(),
+            quote_anchor,
+            claim,
+            slot,
+            work,
+            block,
+        )?;
+        let result =
+            self.settle_private_moe2_exec_work(config, book, delta, claim, position, release, slot, work, payees, block, worker_start);
+        if result.is_err() {
+            book.revert_exec_admission(claim, slot).expect("failed settlement leaves the new admission intact");
+        }
+        result
+    }
+
+    fn admit_private_moe2_exec_award(
+        &self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        point: PalwBlockContextV2,
+        prefix: &[PalwDeltaEntryV2],
+        parent: &PalwChainStateV2,
+        parent_root: Hash64,
+        quote_anchor: &PalwChainStateV2,
+        claim: Hash64,
+        slot: &Moe2ExecSlot,
+        work: Hash64,
+        block: &Block,
+    ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let parent_point = parent.last_point().ok_or(UnknownClaimContext)?;
         let anchor_point = quote_anchor.last_point().ok_or(UnknownClaimContext)?;
@@ -352,13 +482,13 @@ impl PalwChainStateV2 {
             || anchor_point.blue_score > parent_point.blue_score
             || !(anchor_point.daa_score..=parent_point.daa_score).contains(&slot.close_daa)
             || !(slot.quote.valid_from..=slot.quote.deadline).contains(&anchor_point.daa_score)
-            || !delta.entries.iter().any(|entry| {
+            || !prefix.iter().any(|entry| {
                 matches!(entry, PalwDeltaEntryV2::LastPoint { old: Some(old), new: Some(new) }
-                    if old == parent_point && *new == delta.point)
+                    if old == parent_point && *new == point)
             })
-            || crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&block.header, delta.point.block)
+            || crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&block.header, point.block)
                 .map_err(|_| UnknownClaimContext)?
-                != parent.state_root()
+                != parent_root
         {
             return Err(UnknownClaimContext);
         }
@@ -378,13 +508,7 @@ impl PalwChainStateV2 {
         if !same_exec_reservation(original, current) {
             return Err(ReservationMismatch);
         }
-        book.admit_exec_slot(claim, slot, budget, |_, _| Some(historical))?;
-        let result =
-            self.settle_private_moe2_exec_work(config, book, delta, claim, position, release, slot, work, payees, block, worker_start);
-        if result.is_err() {
-            book.revert_exec_admission(claim, slot).expect("failed settlement leaves the new admission intact");
-        }
-        result
+        book.admit_exec_slot(claim, slot, budget, |_, _| Some(historical))
     }
 
     /// Disconnect a settlement whose admission was created in the award block.
@@ -418,11 +542,24 @@ impl PalwChainStateV2 {
         block: &Block,
         worker_start: usize,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        self.check_moe2_award_coinbase(config, delta.point, position, release, payees, block, worker_start)?;
+        self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot), work)
+    }
+
+    fn check_moe2_award_coinbase(
+        &self,
+        config: &Params,
+        point: PalwBlockContextV2,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        payees: Moe2ExecWorkerPayees<'_>,
+        block: &Block,
+        worker_start: usize,
+    ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::{UnknownClaimContext, WorkerOutputsMismatch};
-        if position.point != delta.point
-            || self.last_point() != Some(&delta.point)
-            || (block.hash(), block.header.daa_score, block.header.blue_score)
-                != (delta.point.block, delta.point.daa_score, delta.point.blue_score)
+        if position.point != point
+            || self.last_point() != Some(&point)
+            || (block.hash(), block.header.daa_score, block.header.blue_score) != (point.block, point.daa_score, point.blue_score)
             || crate::hashing::header::hash(&block.header) != block.hash()
         {
             return Err(UnknownClaimContext);
@@ -435,7 +572,7 @@ impl PalwChainStateV2 {
         {
             return Err(WorkerOutputsMismatch);
         }
-        self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot), work)
+        Ok(())
     }
 
     /// Remove an EXEC settlement from this block before disconnecting its
@@ -516,13 +653,33 @@ impl PalwChainStateV2 {
         slot: Option<&Moe2ExecSlot>,
         work: Option<Hash64>,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        let (before, funding) =
+            self.private_moe2_funding(config, book, delta.point, &delta.entries, claim, position, release, slot, work)?;
+        let mut writes = Vec::new();
+        let budget = self.bond_budget.as_mut().ok_or(Moe2SettlementError::ReservationMismatch)?;
+        let anchor = book.admitted_terms(&claim).ok_or(Moe2SettlementError::UnknownClaimContext)?.quote_anchor;
+        let (reward, undo) = book.settle_from_reservation(claim, position, anchor, &funding, budget, &mut writes, slot)?;
+        delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
+        self.write_private_moe2_settlement(&mut delta.entries, before, book, &undo, reward, slot, work);
+        Ok((reward, undo))
+    }
+
+    fn private_moe2_funding(
+        &self,
+        config: &Params,
+        book: &Moe2SettlementBook,
+        point: PalwBlockContextV2,
+        prefix: &[PalwDeltaEntryV2],
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: Option<&Moe2ExecSlot>,
+        work: Option<Hash64>,
+    ) -> Result<(Option<crate::palw_model_market_v1::PalwModelMarketV1>, Moe2SettlementFunding), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
         let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
-        if position.point != delta.point
-            || self.last_point() != Some(&delta.point)
-            || !bundle.state.bond_budget_active_at(delta.point.daa_score)
-        {
+        if position.point != point || self.last_point() != Some(&point) || !bundle.state.bond_budget_active_at(point.daa_score) {
             return Err(UnknownClaimContext);
         }
         if book.entitlement(&claim).is_some() || (slot.is_some() && self.private_moe2_exec_settlement(&claim).is_some()) {
@@ -558,7 +715,7 @@ impl PalwChainStateV2 {
         }
         let reservation = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
         let row = budget.claim_row(&reservation).ok_or(ReservationMismatch)?;
-        if work.is_some() && !exec_reservation_from_parent(&delta.entries, reservation, row) {
+        if work.is_some() && !exec_reservation_from_parent(prefix, reservation, row) {
             return Err(ReservationMismatch);
         }
         let (bond_collateral, other_live_liability, bond_locked_until) =
@@ -585,24 +742,34 @@ impl PalwChainStateV2 {
                 material_ttl_until: Ok(release.material_ttl_until),
                 vest_until: release.vest_until,
                 retire_not_before: Ok(release.retire_not_before),
-                now: delta.point.daa_score,
+                now: point.daa_score,
             },
             miner_now: release.miner_now,
             panel_now: release.panel_now,
         };
-        let mut writes = Vec::new();
-        let budget = self.bond_budget.as_mut().ok_or(ReservationMismatch)?;
-        let (reward, undo) =
-            book.settle_from_reservation(claim, funding.position, terms.quote_anchor, &funding, budget, &mut writes, slot)?;
-        delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
+        Ok((before, funding))
+    }
+
+    fn write_private_moe2_settlement(
+        &mut self,
+        entries: &mut Vec<PalwDeltaEntryV2>,
+        before: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
+        book: &Moe2SettlementBook,
+        undo: &Moe2SettlementUndo,
+        reward: Moe2SettledReward,
+        slot: Option<&Moe2ExecSlot>,
+        work: Option<Hash64>,
+    ) {
+        let claim = undo.claim();
+        let model = undo.model();
         if let Some(q) = reward.allocation.market {
             if before != Some(q.after) {
-                self.model_markets.insert(terms.model, q.after);
-                delta.entries.push(PalwDeltaEntryV2::ModelMarket { key: terms.model, old: before, new: Some(q.after) });
+                self.model_markets.insert(model, q.after);
+                entries.push(PalwDeltaEntryV2::ModelMarket { key: model, old: before, new: Some(q.after) });
             }
         }
         if let Some(slot) = slot {
-            let record = Moe2NativeExecSettlement::from_settlement(slot, book, &undo, reward);
+            let record = Moe2NativeExecSettlement::from_settlement(slot, book, undo, reward);
             self.private_moe2_exec_settlements.insert(claim, record.clone());
             let entry = if let Some(work) = work {
                 self.private_moe2_work_uses.insert(work, claim);
@@ -610,8 +777,7 @@ impl PalwChainStateV2 {
             } else {
                 PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) }
             };
-            delta.entries.push(entry);
+            entries.push(entry);
         }
-        Ok((reward, undo))
     }
 }

@@ -11994,7 +11994,7 @@ pub struct PalwChainStateV2 {
 
 mod chain_state;
 pub(crate) mod private_moe2_settlement;
-pub use private_moe2_settlement::{Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees};
+pub use private_moe2_settlement::{Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees};
 mod evm_replay_settlements_owned_v2;
 mod evm_view_owned_v2;
 pub mod included_replay;
@@ -16007,6 +16007,7 @@ pub fn apply_palw_transition_retained_v7(
             da_court,
             extras,
             None,
+            None,
         )
     })?;
     if !materials.is_empty() {
@@ -16046,6 +16047,7 @@ pub fn apply_palw_transition_retained_v8(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
     positive_replays: PositiveCaseReplayInputV2<'_>,
+    private_moe2_award: Option<Moe2ExecAwardInputV1<'_>>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -16071,6 +16073,7 @@ pub fn apply_palw_transition_retained_v8(
             da_court,
             extras,
             Some(positive_replays),
+            private_moe2_award,
         )
     })
 }
@@ -16096,6 +16099,7 @@ fn apply_palw_transition_v7_inner(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
     positive_replays: Option<PositiveCaseReplayInputV2<'_>>,
+    private_moe2_award: Option<Moe2ExecAwardInputV1<'_>>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -16770,6 +16774,9 @@ fn apply_palw_transition_v7_inner(
     }
     if let Some(close) = &extras.private_moe2_exec_close {
         private_moe2_settlement::fold_exec_close_v1(&mut builder, parent, ctx, close)?;
+    }
+    if let Some(award) = private_moe2_award {
+        private_moe2_settlement::fold_exec_award_v1(&mut builder, parent, ctx, award)?;
     }
     palw_claim_local_execution_cohort_census_v15::finish_compact_observations_v15(&mut builder);
 

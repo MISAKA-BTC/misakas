@@ -5,8 +5,9 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2,
-    PalwStateDeltaV2, PalwStateV2Error, PalwTransitionExtrasV1, apply_delta_v2, apply_palw_transition_v2_with_extras, revert_delta_v2,
+    Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwBlockWorkV3,
+    PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateV2Error, PalwTransitionExtrasV1, PositiveCaseReplayInputV2,
+    apply_delta_v2, apply_palw_transition_retained_v8, apply_palw_transition_v2_with_extras, revert_delta_v2,
 };
 use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
@@ -28,6 +29,11 @@ pub(super) fn check_exec_settlement_rewind(
     let (_, close_delta) = store.delta_of(close).unwrap();
     drop(store);
     let slot = Moe2ExecSlot { registration: [24; 64], slot: 1, close, close_daa: close_delta.point.daa_score, quote };
+    let wire_digest = kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &borsh::to_vec(&slot).unwrap());
+    assert_eq!(
+        slot.reservation_key(),
+        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/native-exec-reservation/v1", wire_digest.as_byte_slice())
+    );
     let claim = Hash64::from_u64_word(642);
     // This fixture injects the identity that the block owner's authenticated
     // EXEC verifier would provide. It only exercises native accounting.
@@ -484,6 +490,35 @@ pub(super) fn check_exec_settlement_rewind(
     let restored = carriage.into_state(params, Some(reserved.state_root())).unwrap();
     let (mut native, mut native_delta) = apply_palw_transition_v2(&restored, params, &position.point, &[], None).unwrap();
     let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
+    let retained = |parent: &PalwChainStateV2, block: &Block, input: Moe2ExecAwardV1<'_>, enabled| {
+        let point = input.position.point;
+        apply_palw_transition_retained_v8(
+            parent,
+            params,
+            None,
+            &point,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1 { private_moe2_registration: enabled, ..Default::default() },
+            PositiveCaseReplayInputV2 {
+                selected_parent: parent.last_point().unwrap().block,
+                live_case_cap: 0,
+                load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
+            },
+            Some(Moe2ExecAwardInputV1 { config, quote_anchor: registration, block, award: input }),
+        )
+    };
+    let input = || native_award(claim, &slot, work, position);
+    assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
+    let (retained_child, retained_delta, _, _) = retained(&restored, &award_block, input(), true).unwrap();
+    assert_eq!((retained_child.state_root(), &*retained_delta), (child.state_root(), &award_delta));
+    assert_eq!(revert_delta_v2(&retained_child, &retained_delta, params).unwrap().state_root(), restored.state_root());
     let folded = native
         .fold_private_moe2_exec_award(
             config,

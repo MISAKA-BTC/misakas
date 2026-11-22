@@ -902,6 +902,7 @@ impl VirtualStateProcessor {
                         live_case_cap,
                         load: &mut load_positive_case,
                     },
+                    None,
                 )
             })
         };

@@ -17,6 +17,19 @@ use crate::palw_settlement_liability_v1::{
 use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2};
 use std::collections::{BTreeMap, BTreeSet};
 
+struct SettlementHashWriter<'a>(&'a mut blake2b_simd::State);
+
+impl borsh::io::Write for SettlementHashWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> borsh::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> borsh::io::Result<()> {
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2Position {
     pub point: PalwBlockContextV2,
@@ -146,8 +159,9 @@ impl Moe2ExecSlot {
     }
 
     fn slot_digest(&self) -> Hash64 {
-        let encoded = borsh::to_vec(self).expect("fixed-size EXEC slot serializes");
-        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &encoded)
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/exec-admission/v1").to_state();
+        borsh::BorshSerialize::serialize(self, &mut SettlementHashWriter(&mut h)).expect("fixed-size EXEC slot serializes");
+        Hash64::from_bytes(*h.finalize().as_array())
     }
 
     fn binding(&self) -> (Hash64, Hash64) {
@@ -156,7 +170,7 @@ impl Moe2ExecSlot {
 
     fn undo_digest(&self, undo: &Moe2SettlementUndo) -> Hash64 {
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/exec-undo/v1").to_state();
-        h.update(&borsh::to_vec(self).expect("fixed-size EXEC slot serializes"));
+        borsh::BorshSerialize::serialize(self, &mut SettlementHashWriter(&mut h)).expect("fixed-size EXEC slot serializes");
         h.update(undo.digest().as_byte_slice());
         Hash64::from_bytes(*h.finalize().as_array())
     }
@@ -357,6 +371,10 @@ impl Moe2SettlementUndo {
         self.terms.claim
     }
 
+    pub(crate) fn model(&self) -> Hash64 {
+        self.terms.model
+    }
+
     pub(crate) fn market_before(&self) -> Option<PalwModelMarketV1> {
         match self.before_model.allocation {
             Moe2ModelAllocation::Core => None,
@@ -389,7 +407,7 @@ impl Moe2SettlementUndo {
 
     fn digest(&self) -> Hash64 {
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/settlement-undo/v1").to_state();
-        h.update(&borsh::to_vec(self).expect("fixed-size settlement undo serializes"));
+        borsh::BorshSerialize::serialize(self, &mut SettlementHashWriter(&mut h)).expect("fixed-size settlement undo serializes");
         Hash64::from_bytes(*h.finalize().as_array())
     }
 }
@@ -575,6 +593,18 @@ pub struct Moe2MarketBlockUndo {
 }
 
 impl Moe2SettlementBook {
+    pub(crate) fn native_award_scratch_bytes() -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, typed::BTreeNodeEnvelopeV1 as Node};
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<Node<Hash64, Moe2RegisteredModel>>(1)?;
+        q.exact_v1::<Node<Hash64, (Moe2SettlementTerms, Option<PurchaseCurve>)>>(1)?;
+        q.exact_v1::<Node<Hash64, (Moe2SettledReward, Hash64)>>(1)?;
+        q.exact_v1::<Node<Hash64, LockedLiquidityReceipt>>(1)?;
+        q.exact_v1::<Node<Hash64, ()>>(3)?;
+        q.exact_v1::<Node<Hash64, (Hash64, Hash64)>>(1)?;
+        Ok(q.bytes_v1())
+    }
+
     /// Scratch projection for one award in the native fold. The native
     /// reservation, settlement and work-use rows own its durable history.
     pub(crate) fn for_native_award(model: Moe2RegisteredModel, prior_in_block: Option<Moe2Position>) -> Self {
