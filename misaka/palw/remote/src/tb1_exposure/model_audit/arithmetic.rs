@@ -704,6 +704,89 @@ mod tests {
     }
 
     #[test]
+    fn arithmetic_reply_requires_distinct_selected_keys_and_live_finality() {
+        use kaspa_consensus_core::{
+            config::genesis::SIMNET_GENESIS, errors::consensus::ConsensusResult, header::Header,
+            palw_native_settlement_v1::NativeSettlementSnapshotV1,
+        };
+        use libcrux_ml_dsa::ml_dsa_87;
+        use std::sync::Arc;
+
+        struct Chain {
+            finalized: Hash64,
+            daa: u64,
+        }
+        impl ConsensusApi for Chain {
+            fn get_header(&self, hash: Hash64) -> ConsensusResult<Arc<Header>> {
+                let mut h = Header::from(&SIMNET_GENESIS);
+                h.hash = hash;
+                h.daa_score = self.daa;
+                Ok(Arc::new(h))
+            }
+            fn get_sink(&self) -> Hash64 {
+                Hash64::from_u64_word(5)
+            }
+            fn is_chain_ancestor_of(&self, lower: Hash64, higher: Hash64) -> ConsensusResult<bool> {
+                Ok(lower <= higher)
+            }
+            fn get_native_settlement_snapshot(&self) -> ConsensusResult<Option<NativeSettlementSnapshotV1>> {
+                let tip = self.get_sink();
+                Ok(Some(NativeSettlementSnapshotV1 {
+                    version: 1,
+                    ruleset_id: Default::default(),
+                    policy_id: Hash64::default(),
+                    retirement_daa: 0,
+                    generation: tip,
+                    frontier: Some(tip),
+                    latest: Some(tip),
+                    safe: Some(self.finalized),
+                    finalized: Some(self.finalized),
+                    depth: 1,
+                    unique_work: "1".into(),
+                    stop: None,
+                }))
+            }
+        }
+        let a = Hash64::from_u64_word(7);
+        let b = Hash64::from_u64_word(8);
+        let one = ml_dsa_87::generate_key_pair([21; 32]);
+        let two = ml_dsa_87::generate_key_pair([22; 32]);
+        let ak = one.verification_key.as_slice();
+        let bk = two.verification_key.as_slice();
+        let mut draw = ArithmeticPanelDraw {
+            close: Hash64::from_u64_word(3),
+            certificate: Hash64::from_u64_word(4),
+            submission: Hash64::from_u64_word(2),
+            marker: Hash64::from_u64_word(6),
+            deadline: 11,
+            selected: vec![a, b],
+            keys: BTreeMap::from([(a, BTreeSet::from([mldsa87_key_id(ak)])), (b, BTreeSet::from([mldsa87_key_id(bk)]))]),
+        };
+        let native = Chain { finalized: draw.close, daa: 10 };
+        let sign = |key: &ml_dsa_87::MLDSA87KeyPair, node: &ArithmeticPanelDraw, operator| {
+            let msg = node.reply_message(&native, operator, key.verification_key.as_slice()).unwrap();
+            ml_dsa_87::sign(&key.signing_key, &msg, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN, [23; 32]).unwrap()
+        };
+        let asig = sign(&one, &draw, a);
+        let bsig = sign(&two, &draw, b);
+        let replies = [(ak, asig.as_slice()), (bk, bsig.as_slice())];
+        assert!(draw.reply_commitment(&native, &replies).is_ok());
+        assert!(draw.reply_commitment(&native, &[replies[1], replies[0]]).is_err());
+        assert!(draw.reply_commitment(&Chain { finalized: draw.submission, daa: 10 }, &replies).is_err());
+        assert_eq!(
+            draw.reply_commitment(&Chain { finalized: draw.close, daa: 11 }, &replies).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        draw.marker = Hash64::from_u64_word(9);
+        assert!(draw.reply_commitment(&native, &replies).is_err());
+        draw.keys.get_mut(&b).unwrap().insert(mldsa87_key_id(ak));
+        let for_a = sign(&one, &draw, a);
+        let for_b = sign(&one, &draw, b);
+        let err = draw.reply_commitment(&native, &[(ak, for_a.as_slice()), (ak, for_b.as_slice())]).unwrap_err();
+        assert!(err.to_string().contains("duplicate key"));
+    }
+
+    #[test]
     fn assessment_policy_binds_seats_before_the_draw() {
         assert!(ArithmeticPanelPolicy::new(0).is_err());
         assert_ne!(ArithmeticPanelPolicy::new(2).unwrap().id(), ArithmeticPanelPolicy::new(3).unwrap().id());
