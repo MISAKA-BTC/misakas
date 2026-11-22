@@ -1329,3 +1329,5 @@ python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writ
 ```
 
 並行再生用のビルドでは、照合済み親の報告を使う native 再生と share 公開開始の境界拒否が通過した。FIFO では、生成継続中にも完全な行が届くこと、途中の行が保留されること、最終報告が EOF より先に作られることを確認した。[境界試験ログ](round16-stream-regressions.tar.zst)
+
+評価 PANEL 用の抽選処理では、close を作る前に MISAKA_PRIVATE_ARITHMETIC_CONTROL_SEATS で席数を固定し、親の native 状態から得た候補の重みとともにコミットする。隔離ノードは MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_WRITE で予定位置の close を保存し、独立ノードは MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_READ で同じブロックを再受理する。照合器の --close、--writer-log、--peer-log で親状態、close と同一ビルドを確認できる。この時点の試験は席数・候補集合・提出物の照合を対象とする。[Rust の試験ログ](arithmetic-panel-seed-draw-tests.log)
