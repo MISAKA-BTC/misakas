@@ -1276,3 +1276,13 @@ python3 -B check_arithmetic_control_population.py "$out" --openssl "$(brew --pre
 tar -xf "$p/qf1-arithmetic-replicas.tar.zst" -C "$out"
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_arithmetic_submission.py" "$out" "$MISAKA_PRIVATE_QF1_TOKENIZER" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-replicas.json"
 ```
+
+### 同じ仕事の停止長予測を1回推論と照合
+
+事前に固定した「2 + 2?」の6件すべてで、同じ登録モデルから各試行固有の正規Ticketを生成した。Apple M1 Max・3スレッドで、1回推論と停止長予測を順に別プロセスで走らせた。最初の1枚は準備込みで65.052秒と102.921秒、残る5枚は206.982秒と206.217秒。合計は272.034秒と309.138秒だった。長さを意図的に外した対照は再試行込み120.352秒で正しいTicketに戻った。対照は6枚の合計から分けた。混合経路、測定順の影響、他の機材は未検査。費用閾値と誤差幅は未採択で、判定はUNKNOWN。[事前計画](g-cost-repeated-job-one-pass-schedule.json)・[比較結果](g-cost-repeated-job-one-pass.json)・[計時・資源ログ](g-cost-repeated-job-one-pass.tar.zst)
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/g-cost-repeated-job-one-pass.tar.zst" -C "$out"
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_repeated_job.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$out" | cmp - "$p/g-cost-repeated-job-one-pass.json"
+```
