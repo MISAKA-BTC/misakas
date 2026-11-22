@@ -55,10 +55,14 @@ def arithmetic_seed(root, openssl):
     origin = enrolled_origin(HERE / "qf1-arithmetic-audit-close-public.tar.zst")
     pub = json.loads((root / "publication.json").read_bytes())
     expected = reconstruct(audit, pub, openssl, suite=bytes.fromhex(record["suite"]), origin=origin)
-    return publication_readback(root, audit, pub, expected, "holder", "replay")
+    from check_arithmetic_release_window import publication_parent
+    window = json.loads((HERE / "qf1-arithmetic-release-window.json").read_bytes())
+    parent = publication_parent(root, window)
+    require(parent["close"] == audit["close"], "different arithmetic release window")
+    return publication_readback(root, audit, pub, expected, "holder", "replay", parent)
 
 
-def publication_readback(root, audit, pub, expected, holder_prefix, reader_prefix):
+def publication_readback(root, audit, pub, expected, holder_prefix, reader_prefix, parent=None):
     require(pub["rows"] == [json.loads((root / f"released-{slot}.json").read_bytes()) for slot in range(3)],
             "publication differs from the three releases")
     batch, cert = (pub[k]["header"] for k in ("batch", "certificate"))
@@ -71,6 +75,8 @@ def publication_readback(root, audit, pub, expected, holder_prefix, reader_prefi
         require(first.startswith("test_binary_sha256=") and "test result: ok. 1 passed; 0 failed" in log, "incomplete native reader")
         binaries.add(first.split("=", 1)[1])
         [(pid, end)] = records(log, "fresh audit window end")
+        if parent is not None:
+            require(all(end[k] == v for k, v in parent.items()), "native holder did not replay the certified branch")
         snapshot = end["committed_snapshot"]["Ok"]
         finalized.add(snapshot["finalized"])
         require(end["slot"] == slot and end["publication"] == "ready" and end["close"] == audit["close"]

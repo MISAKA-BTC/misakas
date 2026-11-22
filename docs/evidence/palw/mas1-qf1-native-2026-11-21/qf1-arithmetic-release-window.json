@@ -1,0 +1,37 @@
+{
+  "close": "8f9e2d10d21141dd884336b4e63c9e1e7f3a3af80846d12bff1482bfd10807d031f9a29430fbf527cf6ab3fc1898a12df54669b00e88fc03e2da3cecf446e669",
+  "close_blue": 5,
+  "certificate": "0225310e292164a365e49fcc781d23a3061ee487ac02ccfc5716106a8ca3499ae62cf17660566d7fbc6c19fdfeb13dce5804e408d5b11312acedc4a258aea067",
+  "deadline": 90641,
+  "blocks": 52171,
+  "window_sha256": "7c9bb4dc1a5b46081d0be16c5b2a304a919c218c7013ee87951f353dc69af1f8",
+  "observations": [
+    {
+      "blocks": 0,
+      "tip": "0225310e292164a365e49fcc781d23a3061ee487ac02ccfc5716106a8ca3499ae62cf17660566d7fbc6c19fdfeb13dce5804e408d5b11312acedc4a258aea067",
+      "daa": 11673,
+      "blue": 23350,
+      "pruning": "20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69",
+      "finalized": null,
+      "publication": "held"
+    },
+    {
+      "blocks": 52170,
+      "tip": "a994b1b953aa0ef479758caa2edb1ad93d275100ffe5beab3bc2ed1337c13719235774781bb4655d66413c0e6176b15e81417b2a8879fb194e73e0518d26127a",
+      "daa": 37758,
+      "blue": 75520,
+      "pruning": "bf4d6fc196516cac3592b1f87f27cb35b08bea492a7db86bd551a4f5a038ec1876d490028495cc7238fa64f19f1d6dd475543df2e7c8c3ef8476afb84b66ca31",
+      "finalized": null,
+      "publication": "held"
+    },
+    {
+      "blocks": 52171,
+      "tip": "f1b37b1fbeeeb2a04335c18387c46f9a142f81c340fe50380495f6b9d3ed6e97090c1da5aa9712220f29e749fb675d799c37d645da928e7ba289cbc74a68ea9c",
+      "daa": 37758,
+      "blue": 75521,
+      "pruning": "bf4d6fc196516cac3592b1f87f27cb35b08bea492a7db86bd551a4f5a038ec1876d490028495cc7238fa64f19f1d6dd475543df2e7c8c3ef8476afb84b66ca31",
+      "finalized": "bf4d6fc196516cac3592b1f87f27cb35b08bea492a7db86bd551a4f5a038ec1876d490028495cc7238fa64f19f1d6dd475543df2e7c8c3ef8476afb84b66ca31",
+      "publication": "ready"
+    }
+  ]
+}

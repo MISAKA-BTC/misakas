@@ -1216,3 +1216,14 @@ python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" -
 tar -xf "$p/qf1-arithmetic-8k-certified-parent.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --openssl "$(brew --prefix openssl@3)/bin/openssl" --certified-successor "$out/first-child.json" | cmp - "$p/qf1-arithmetic-8k-certified-parent.json"
 ```
+
+算術監査のclose `8f9e2d10…`（blue score 5）は、認証先端から52,171ブロック後のDAA 37,758で、holderが署名できる確定範囲に入った。52,170ブロック目（blue score 75,520）ではpruning pointがcloseを覆っていても、確定状態は空で公開は保留だった。次のブロック（blue score 75,521）で決済snapshotのfinalizedが `bf4d6fc1…` となり、ノードがreadyを返した。元期限はDAA 90,641。genesisから認証先端までの23,350ブロックと後続52,171ブロックの親・取引Rootを再計算し、finalizedが元closeの子孫であることを確認した。この記録は公開条件の成立までを扱う。実際のseed・算術結果はholderの署名と再実行から別に確認する。[公開条件の遷移](qf1-arithmetic-release-window.json)・[認証後の全ブロック](qf1-arithmetic-release-window-blocks.jsonl.zst)・[独立2台の認証照合](qf1-arithmetic-8k-certification-readers.json)・[完走ログ](qf1-arithmetic-8k-certification-readers.tar.zst)
+
+生成ノードの認証まで展開したディレクトリで、独立2台の結果と公開条件を照合する。
+
+```sh
+tar -xf "$p/qf1-arithmetic-8k-certification-readers.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-8k-certification-readers.json"
+zstd -dc "$p/qf1-arithmetic-release-window-blocks.jsonl.zst" > "$out/after-cert.jsonl"
+python3 -B "$p/check_arithmetic_release_window.py" "$out" "$out/after-cert.jsonl" "$out/read-cert-2.log" | cmp - "$p/qf1-arithmetic-release-window.json"
+```
