@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from check_fresh_audit import audit_binding, coinbase_extra
+from check_fresh_audit import arithmetic_suite, audit_binding, coinbase_extra
 from check_genesis_draw import header_hash
 from check_transaction_root import verify_block_transactions
 from check_legacy_work import HERE, require
@@ -68,6 +68,8 @@ def verify(openssl, arithmetic=False):
                   *(x.to_bytes(66, "big") + key for x, key in enumerate(keys, 1)))
     name = "qf1-arithmetic-audit-close" if arithmetic else "fresh-retained-audit"
     record = json.loads((HERE / f"{name}.json").read_bytes())
+    if arithmetic:
+        require(all(record[k] == v for k, v in arithmetic_suite().items()), "arithmetic scoring or limits differ from the frozen suite")
     audit = record["audit"]
     number = 15 if arithmetic else 13
     archive = HERE / f"{name}-public.tar.zst"

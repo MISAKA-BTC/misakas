@@ -15,6 +15,13 @@ def records(log, prefix):
     return [(int(pid), json.loads(row)) for pid, row in re.findall(pattern, log, re.M)]
 
 
+def arithmetic_suite():
+    spec = (b"MISAKA/private/MAS1/arithmetic/v1\0HEX64\0a=c[0]%5,b=c[1]%5\0add(a,b),sub(a+b,b)\0"
+            b"Answer with only one digit: what is \0 + \0 - \0?\0canonical-digit-token,one-QF1-EOS\0required-correct=2\0")
+    suite = hashlib.sha3_512(spec + struct.pack(">IIQ", 2, 16, 32_000_000)).digest()
+    return dict(suite=suite.hex(), required_correct=2, cases=2, decode_limit=16, max_leaves=32_000_000)
+
+
 def audit_binding(audit, suite=None):
     """Encode the fixed fixture plan at its original close, before either draw."""
     audit_id, panel_id = map(bytes.fromhex, audit["rounds"])
@@ -108,9 +115,8 @@ def verify(root, arithmetic_close=False, arithmetic_work=False):
             len(checkpoints) == 4, "audit prefix not fully covered")
     suite = None
     if arithmetic_close:
-        spec = (b"MISAKA/private/MAS1/arithmetic/v1\0HEX64\0a=c[0]%5,b=c[1]%5\0add(a,b),sub(a+b,b)\0"
-                b"Answer with only one digit: what is \0 + \0 - \0?\0canonical-digit-token,one-QF1-EOS\0required-correct=2\0")
-        suite = hashlib.sha3_512(spec + struct.pack(">IIQ", 2, 16, 32_000_000)).digest()
+        arithmetic = arithmetic_suite()
+        suite = bytes.fromhex(arithmetic["suite"])
         legacy = json.loads((HERE / "fresh-retained-audit.json").read_bytes())["audit"]
         require(set(legacy["rounds"]).isdisjoint(common["rounds"]), "reused legacy audit or panel round")
     paired, _, freeze = audit_binding(common, suite)
@@ -120,7 +126,7 @@ def verify(root, arithmetic_close=False, arithmetic_work=False):
             coinbase_extra(close) == freeze, "different close commitment")
 
     if arithmetic_close:
-        arithmetic = dict(audit=common, suite=suite.hex(), required_correct=2, cases=2, decode_limit=16, max_leaves=32_000_000,
+        arithmetic = dict(audit=common, **arithmetic,
                     holder_processes=pids, binary_sha256=binaries.pop(), public_prefix_blocks=archive["count"],
                     archive_sha256=hashlib.sha256((root/"public.jsonl").read_bytes()).hexdigest())
         if not arithmetic_work:
