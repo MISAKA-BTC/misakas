@@ -1,7 +1,8 @@
 //! RFC-0066 logical QF1 encodings. A digest identifies the supplied material.
 //! Verifying its origin and execution remains the responsibility of the caller.
-use crate::palw_tb1::releases::Tb1BeaconSeed;
+use crate::{Hash64, palw_tb1::releases::Tb1BeaconSeed, palw_tir_step_v1::PalwTirStepSpaceV1};
 use blake2b_simd::{Params, State};
+use misaka_palw_tir::{Block, DType, Dim, Prim, Ref, TensorType};
 
 pub mod readout_chunks;
 use readout_chunks::{ChunkStream, HashChunk};
@@ -16,6 +17,126 @@ fn hash(size: usize, domain: &[u8]) -> State {
     let mut h = Params::new().hash_length(size).to_state();
     h.update(domain);
     h
+}
+
+/// Committed producers in prediction-position order, and the token decision
+/// producer. This is derived from the validated TIR program and layout.
+pub struct ReadoutBinding {
+    producers: [(u8, u16); ROLES],
+    argmax: (u8, u16),
+}
+
+impl ReadoutBinding {
+    pub fn from_step_space(space: &PalwTirStepSpaceV1, final_norm: u16) -> Result<Self, &'static str> {
+        let p = &space.program;
+        let layout = &space.layout;
+        if p.token_bound != VOCAB || layout.max_context != CONTEXT || p.schedule.layers.len() != ROLES - 1 {
+            return Err("QF1 vocabulary, positions or depth differ");
+        }
+        if layout.commit_tiles.iter().any(|&lanes| lanes != 64) {
+            return Err("QF1 producer replay requires the registered 64-lane commit layout");
+        }
+        let vector = TensorType::new(DType::I16, vec![Dim::Fixed(WIDTH as u32)]);
+        let mut producers = [(0, 0); ROLES];
+        for (role, &b) in p.schedule.layers.iter().enumerate() {
+            let block = &p.blocks[usize::from(b)];
+            let [out] = block.carry_out[..] else { return Err("QF1 requires a single residual carry") };
+            let node = &block.nodes[usize::from(out)];
+            if !node.commit || node.out != vector || !depends(block, out, Ref::CarryIn(0), None) {
+                return Err("QF1 layer residual is not the committed A16 carry");
+            }
+            producers[role] = (b, out);
+        }
+        let post = &p.blocks[usize::from(p.schedule.post)];
+        let logits = &post.nodes[usize::from(p.logits)];
+        if !post.nodes.get(usize::from(final_norm)).is_some_and(|n| n.commit && n.out == vector)
+            || logits.out != TensorType::new(DType::I32, vec![Dim::Fixed(VOCAB)])
+            || !depends(post, final_norm, Ref::CarryIn(0), None)
+            || !depends(post, p.logits, Ref::Node(final_norm), None)
+            || depends(post, p.logits, Ref::CarryIn(0), Some(final_norm))
+        {
+            return Err("QF1 final norm must carry the last residual into the committed i32 head");
+        }
+        let mut projections =
+            post.nodes.iter().enumerate().filter(|(_, node)| {
+                node.commit && node.prim == (Prim::TopK { axis: 0, k: 1 }) && node.inputs == [Ref::Node(p.logits)]
+            });
+        let (Some((argmax, _)), None) = (projections.next(), projections.next()) else {
+            return Err("QF1 requires one committed TopK(1) on the full logits");
+        };
+        producers[ROLES - 1] = (p.schedule.post, final_norm);
+        Ok(Self { producers, argmax: (p.schedule.post, argmax as u16) })
+    }
+
+    pub fn producers(&self) -> &[(u8, u16); ROLES] {
+        &self.producers
+    }
+
+    pub fn argmax(&self) -> (u8, u16) {
+        self.argmax
+    }
+
+    pub fn instance_descriptor(&self, manifest: Hash64, class: Hash64, scales: &[Hash64; ROLES]) -> Hash64 {
+        let mut h = hash(64, b"MISAKA/private/QF1/local-instance/v1\0");
+        h.update(manifest.as_byte_slice()).update(class.as_byte_slice());
+        for (role, (&(block, node), scale)) in self.producers.iter().zip(scales).enumerate() {
+            h.update(&[role as u8, block]).update(&node.to_le_bytes()).update(scale.as_byte_slice());
+        }
+        Hash64::from_bytes(*h.finalize().as_array())
+    }
+
+    /// The caller authenticates these roots and this Readout against the same
+    /// immutable registration and program. For a split artifact, supply the
+    /// authenticated ordinary inventory of the same weights.
+    pub fn work_model(&self, graph: Hash64, ordinary_inventory: Hash64) -> WorkModel {
+        let mut h = hash(64, b"MISAKA/private/QF1/work-model/v1\0");
+        h.update(graph.as_byte_slice()).update(ordinary_inventory.as_byte_slice());
+        for &(block, node) in &self.producers {
+            h.update(&[block]).update(&node.to_le_bytes());
+        }
+        WorkModel(Hash64::from_bytes(*h.finalize().as_array()))
+    }
+}
+
+/// Check dataflow in the validated SSA block, optionally cutting a producer.
+fn depends(block: &Block, output: u16, source: Ref, cut: Option<u16>) -> bool {
+    let mut reachable = Vec::with_capacity(usize::from(output) + 1);
+    for (idx, node) in block.nodes.iter().enumerate().take(usize::from(output) + 1) {
+        let found = Some(idx as u16) != cut
+            && node.inputs.iter().any(|r| *r == source || matches!(r, Ref::Node(n) if reachable[usize::from(*n)]));
+        reachable.push(found);
+    }
+    reachable[usize::from(output)]
+}
+
+/// Identity of the model's numerical program, weights and Readout.
+pub struct WorkModel(Hash64);
+
+impl WorkModel {
+    pub fn work_key(&self, input: WorkInput) -> Hash64 {
+        let mut h = hash(64, b"MISAKA/private/QF1/computational-work/v1\0");
+        h.update(self.0.as_byte_slice()).update(input.token_root.as_byte_slice()).update(&input.limit.to_le_bytes());
+        Hash64::from_bytes(*h.finalize().as_array())
+    }
+}
+
+/// The actual ordered input token IDs and the fixed generation limit. The
+/// caller authenticates these against the EXEC registration and beacon.
+pub struct WorkInput {
+    token_root: Hash64,
+    limit: u32,
+}
+
+impl WorkInput {
+    pub fn new(prompt: &[u32], limit: u32) -> Result<Self, String> {
+        let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
+        check_capacity(len, limit)?;
+        if prompt.iter().any(|&id| id >= VOCAB) {
+            return Err("QF1 input ID out of range".into());
+        }
+        let token_root = crate::palw_prompt_ids_v1::prompt_token_ids_root_v1(prompt).map_err(|e| e.to_string())?;
+        Ok(Self { token_root, limit })
+    }
 }
 
 pub fn attempt(context: &[u8], seed: &Tb1BeaconSeed) -> Result<[u8; 32], &'static str> {

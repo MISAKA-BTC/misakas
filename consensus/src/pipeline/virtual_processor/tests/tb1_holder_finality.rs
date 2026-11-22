@@ -389,6 +389,28 @@ async fn run(stable: bool, registered: bool) {
             (native.graph_ir_root, native.layout_digest, native.tokenizer_id),
             (class.graph_ir_root(), class.layout_digest(), class.tokenizer_id)
         );
+        // Derive numerical identity from accepted registration metadata without
+        // using artifact weights. This is a fixed input, before TB1 release.
+        {
+            use kaspa_consensus_core::{
+                palw_qf1::{ReadoutBinding, WorkInput},
+                palw_tir_step_v1::PalwTirStepSpaceV1,
+            };
+            let mut preimage = class;
+            preimage.program = native.program.as_ref().clone();
+            assert_eq!(preimage.class_id(&registered.artifact_root), class_id);
+            let space = PalwTirStepSpaceV1::new(&preimage).unwrap();
+            let norm = exercise.as_ref().unwrap().1;
+            let readout = ReadoutBinding::from_step_space(&space, norm).unwrap();
+            assert!(ReadoutBinding::from_step_space(&space, u16::MAX).is_err());
+            let prompt = [151644, 8948, 198, 1, 2, 3, 151645];
+            let input = || WorkInput::new(&prompt, 2).unwrap();
+            let model = readout.work_model(native.graph_ir_root, registered.artifact_root);
+            let work = model.work_key(input());
+            assert_eq!(instance.as_ref().unwrap().computational_work_key(&prompt, 2).unwrap(), work);
+            assert_ne!(readout.work_model(native.graph_ir_root, Hash64::default()).work_key(input()), work);
+            peer_log!("QF1 key from registered metadata pid={} key={work}", std::process::id());
+        }
         peer_log!(
             "QF1 registered pid={} block={} class={} artifact={} state={} daa={} blue={}",
             std::process::id(),

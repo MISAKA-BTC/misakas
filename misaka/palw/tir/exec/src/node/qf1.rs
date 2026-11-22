@@ -7,11 +7,10 @@ use super::{TirArtifactV1, memory, positive_court::greedy_index};
 use crate::{NoSink, NodeValue, Slice, StepSink, TirExecutor};
 use kaspa_consensus_core::{
     Hash64,
-    palw_qf1::{self, ROLES, Readout, Stop, VOCAB, WIDTH},
+    palw_qf1::{self, ROLES, Readout, ReadoutBinding, Stop, VOCAB, WIDTH, WorkInput, WorkModel},
     palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_job_context_v1},
     palw_tir_step_v1::PalwTirStepSpaceV1,
 };
-use misaka_palw_tir::{Block, DType, Dim, Prim, Ref, TensorType};
 use std::sync::OnceLock;
 use trace::Trace;
 pub use trace::{LocalTrace, TraceOpening, TraceRequest};
@@ -21,10 +20,9 @@ pub use trace::{LocalTrace, TraceOpening, TraceRequest};
 pub struct LocalInstance<'a> {
     artifact: &'a TirArtifactV1,
     space: PalwTirStepSpaceV1,
-    producers: [(u8, u16); ROLES],
+    readout: ReadoutBinding,
     identity: Identity,
-    work_model: OnceLock<Result<Hash64, String>>,
-    argmax: (u8, u16),
+    work_model: OnceLock<Result<WorkModel, String>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -42,27 +40,7 @@ pub struct LocalAnswer {
     pub z: [u8; 64],
 }
 
-/// Check dataflow in the validated SSA block, optionally cutting a producer.
-fn depends(block: &Block, output: u16, source: Ref, cut: Option<u16>) -> bool {
-    let mut reachable = Vec::with_capacity(usize::from(output) + 1);
-    for (idx, node) in block.nodes.iter().enumerate().take(usize::from(output) + 1) {
-        let found = Some(idx as u16) != cut
-            && node.inputs.iter().any(|r| *r == source || matches!(r, Ref::Node(n) if reachable[usize::from(*n)]));
-        reachable.push(found);
-    }
-    reachable[usize::from(output)]
-}
-
 impl<'a> LocalInstance<'a> {
-    fn work_model_id(graph: Hash64, inventory: Hash64, producers: &[(u8, u16); ROLES]) -> Hash64 {
-        let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
-        hash.update(b"MISAKA/private/QF1/work-model/v1\0").update(graph.as_byte_slice()).update(inventory.as_byte_slice());
-        for &(block, node) in producers {
-            hash.update(&[block]).update(&node.to_le_bytes());
-        }
-        Hash64::from_bytes(*hash.finalize().as_array())
-    }
-
     pub fn bind(artifact: &'a TirArtifactV1, manifest: Hash64, final_norm: u16, scales: &[Hash64; ROLES]) -> Result<Self, String> {
         Self::bind_inventory(artifact, manifest, final_norm, scales, false)
     }
@@ -89,67 +67,25 @@ impl<'a> LocalInstance<'a> {
     ) -> Result<Self, String> {
         let class = artifact.class()?;
         let space = PalwTirStepSpaceV1::new(&class).map_err(|e| e.to_string())?;
-        let p = &space.program;
-        if p.token_bound != VOCAB || class.layout.max_context != palw_qf1::CONTEXT || p.schedule.layers.len() != ROLES - 1 {
-            return Err("QF1 vocabulary, positions or depth differ".into());
-        }
-        if class.layout.commit_tiles.iter().any(|&lanes| lanes != 64) {
-            return Err("QF1 producer replay requires the registered 64-lane commit layout".into());
-        }
-        let vector = TensorType::new(DType::I16, vec![Dim::Fixed(WIDTH as u32)]);
-        let mut producers = [(0, 0); ROLES];
-        for (role, &b) in p.schedule.layers.iter().enumerate() {
-            let block = &p.blocks[usize::from(b)];
-            let [out] = block.carry_out[..] else { return Err("QF1 requires a single residual carry".into()) };
-            let node = &block.nodes[usize::from(out)];
-            if !node.commit || node.out != vector || !depends(block, out, Ref::CarryIn(0), None) {
-                return Err("QF1 layer residual is not the committed A16 carry".into());
-            }
-            producers[role] = (b, out);
-        }
-        let post = &p.blocks[usize::from(p.schedule.post)];
-        let logits = &post.nodes[usize::from(p.logits)];
-        if !post.nodes.get(usize::from(final_norm)).is_some_and(|n| n.commit && n.out == vector)
-            || logits.out != TensorType::new(DType::I32, vec![Dim::Fixed(VOCAB)])
-            || !depends(post, final_norm, Ref::CarryIn(0), None)
-            || !depends(post, p.logits, Ref::Node(final_norm), None)
-            || depends(post, p.logits, Ref::CarryIn(0), Some(final_norm))
-        {
-            return Err("QF1 final norm must carry the last residual into the committed i32 head".into());
-        }
-        let mut projections =
-            post.nodes.iter().enumerate().filter(|(_, node)| {
-                node.commit && node.prim == (Prim::TopK { axis: 0, k: 1 }) && node.inputs == [Ref::Node(p.logits)]
-            });
-        let (Some((argmax, _)), None) = (projections.next(), projections.next()) else {
-            return Err("QF1 requires one committed TopK(1) on the full logits".into());
-        };
-        producers[ROLES - 1] = (p.schedule.post, final_norm);
+        let readout = ReadoutBinding::from_step_space(&space, final_norm)?;
         artifact.check_weights_unmodified()?;
         let (inventory, _) = if full_weights && artifact.composite_ref().is_some() {
-            kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1(p, artifact).map_err(|e| e.to_string())?
+            kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1(&space.program, artifact)
+                .map_err(|e| e.to_string())?
         } else {
             artifact.inventory_root()?
         };
         artifact.check_weights_unmodified()?;
         let class_id = class.class_id(&inventory);
-        let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
-        hash.update(b"MISAKA/private/QF1/local-instance/v1\0").update(manifest.as_byte_slice()).update(class_id.as_byte_slice());
-        // Class ID includes layout, program, weights and tokenizer. Role 0..35
-        // implies the scheduled layer; 36 identifies the post occurrence.
-        for (role, (&(block, node), scale)) in producers.iter().zip(scales).enumerate() {
-            hash.update(&[role as u8, block]).update(&node.to_le_bytes()).update(scale.as_byte_slice());
-        }
-        let descriptor = Hash64::from_bytes(*hash.finalize().as_array());
+        let descriptor = readout.instance_descriptor(manifest, class_id, scales);
         let work_model = OnceLock::new();
         if full_weights || artifact.composite_ref().is_none() {
-            work_model.get_or_init(|| Ok(Self::work_model_id(class.graph_ir_root(), inventory, &producers)));
+            work_model.get_or_init(|| Ok(readout.work_model(class.graph_ir_root(), inventory)));
         }
         Ok(Self {
             artifact,
-            argmax: (p.schedule.post, argmax as u16),
             space,
-            producers,
+            readout,
             identity: Identity { descriptor, inventory, class: class_id, tokenizer: class.tokenizer_id },
             work_model,
         })
@@ -163,11 +99,7 @@ impl<'a> LocalInstance<'a> {
     /// decode limit. Trace metadata, packaging and registration identity do
     /// not enter this digest. Callers authenticate the input before using it.
     pub fn computational_work_key(&self, prompt: &[u32], limit: u32) -> Result<Hash64, String> {
-        let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
-        palw_qf1::check_capacity(len, limit)?;
-        if prompt.iter().any(|&id| id >= VOCAB) {
-            return Err("QF1 input ID out of range".into());
-        }
+        let input = WorkInput::new(prompt, limit)?;
         self.artifact.check_weights_unmodified()?;
         let model = self.work_model.get_or_init(|| {
             // Composite registrations commit section roots. This computation
@@ -175,17 +107,11 @@ impl<'a> LocalInstance<'a> {
             let (inventory, _) =
                 kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1(&self.space.program, self.artifact)
                     .map_err(|e| e.to_string())?;
-            Ok(Self::work_model_id(self.artifact.class()?.graph_ir_root(), inventory, &self.producers))
+            Ok(self.readout.work_model(self.artifact.class()?.graph_ir_root(), inventory))
         });
         self.artifact.check_weights_unmodified()?;
         let model = model.as_ref().map_err(Clone::clone)?;
-        let ids = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_root_v1(prompt).map_err(|e| e.to_string())?;
-        let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
-        hash.update(b"MISAKA/private/QF1/computational-work/v1\0")
-            .update(model.as_byte_slice())
-            .update(ids.as_byte_slice())
-            .update(&limit.to_le_bytes());
-        Ok(Hash64::from_bytes(*hash.finalize().as_array()))
+        Ok(model.work_key(input))
     }
 
     /// Non-paying replay from an empty KV history. The context supplies the
@@ -282,9 +208,9 @@ impl<'a> LocalInstance<'a> {
             trace::step(&mut exec, id, &mut NoSink, false, trace.as_deref_mut())?;
         }
         let mut sink = Prediction {
-            argmax: self.argmax,
+            argmax: self.readout.argmax(),
             selected: None,
-            producers: &self.producers,
+            producers: self.readout.producers(),
             next: 0,
             rows: std::array::from_fn(|_| Vec::with_capacity(WIDTH)),
         };
@@ -314,7 +240,7 @@ impl<'a> LocalInstance<'a> {
             }
             if let Some(trace) = trace.as_mut() {
                 let max = i32::try_from(data.get(token as usize)).map_err(|_| "QF1 winning logit outside i32")?;
-                trace.decision(tokens.len() as u32, exec.pos() - 1, token, max, self.argmax.1)?;
+                trace.decision(tokens.len() as u32, exec.pos() - 1, token, max, self.readout.argmax().1)?;
             }
             tokens.push(token);
             if palw_qf1::is_eos(token) || tokens.len() == limit as usize {
