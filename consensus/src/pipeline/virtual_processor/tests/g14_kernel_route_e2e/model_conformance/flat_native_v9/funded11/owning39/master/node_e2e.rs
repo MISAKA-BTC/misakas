@@ -341,6 +341,9 @@ struct Delivered {
 }
 
 async fn through_credit_delivery(net: &mut Net, producer: usize, began: std::time::Instant) -> Delivered {
+    // Every variant of this isolated campaign advances its own calendar through
+    // the admission and settlement windows. Validate against that same clock.
+    net.chain.ctx.consensus.set_validation_time_for_test(net.chain.ctx.simulated_time);
     let params = net.config.params.clone();
     eprintln!(
         "[n39] network {} genesis {} ttpb {} coinbase spend maturity {} finality depth {}",
@@ -890,11 +893,6 @@ pub(super) async fn run_native39_node_e2e_on_net_v3(
     began: std::time::Instant,
 ) -> Net {
     let formal_native_settlement = evm_settlement || claim_local_stage2;
-    if formal_native_settlement {
-        // Long deterministic settlement/pruning advances use the instance-local
-        // test clock, just like the EVM t12 harness. Production caps stay intact.
-        net.chain.ctx.consensus.set_validation_time_for_test(net.chain.ctx.simulated_time);
-    }
     let params = net.config.params.clone();
     let (producer, outsider) = (0usize, 1usize);
     let d = through_credit_delivery(&mut net, producer, began).await;
@@ -1262,14 +1260,13 @@ pub(super) async fn run_native39_node_e2e_on_net_v3(
     // delivery (not a matured spend: that would be a reorg below finality); the matured UTXO spend is made on the winning branch (7).
     let a_work = net.chain.ctx.consensus.get_header(net.chain.sink()).unwrap().blue_work;
     let mut b = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
-    if formal_native_settlement {
-        b.ctx.consensus.set_validation_time_for_test(sim_at_fork);
-    }
     for blk in past_in_order(&net.chain, fork) {
+        b.ctx.consensus.set_validation_time_for_test(blk.header.timestamp);
         arrive(&b, blk, "B's replay up to the fork").await;
     }
     assert_eq!(b.sink(), fork);
     b.ctx.simulated_time = sim_at_fork;
+    b.ctx.consensus.set_validation_time_for_test(sim_at_fork);
     let mut branch = Vec::new();
     let mut b_mergers = Vec::new();
     for (q, nonce) in [(0u32, 0xB0u64), (1, 0xB1)] {
@@ -1288,6 +1285,8 @@ pub(super) async fn run_native39_node_e2e_on_net_v3(
     let b_spent = receipt_record(&b.tip_state().1, &receipt).unwrap();
     assert!(b_spent.is_spent(0) && b_spent.is_spent(1), "B folds both PNR9 spends");
     for blk in &branch {
+        net.chain.ctx.simulated_time = net.chain.ctx.simulated_time.max(blk.header.timestamp);
+        net.chain.ctx.consensus.set_validation_time_for_test(net.chain.ctx.simulated_time);
         arrive(&net.chain, blk.clone(), "B's branch block").await;
     }
     assert_eq!(net.chain.sink(), b.sink(), "A reorgs onto B's branch ({} blocks)", branch.len());
@@ -1545,6 +1544,7 @@ pub(super) async fn run_native39_node_e2e_on_net_v3(
     if !evm_settlement {
         let replay = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
         for blk in past_in_order(&net.chain, net.chain.sink()) {
+            replay.ctx.consensus.set_validation_time_for_test(blk.header.timestamp);
             arrive(&replay, blk, "the replaying node's block").await;
         }
         net.assert_same(&replay, "native39 node E2E after reorg and restart");

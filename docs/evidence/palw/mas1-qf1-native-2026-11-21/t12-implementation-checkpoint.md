@@ -220,3 +220,11 @@ TB1のclose解決に、読み取り開始時の選択tipへの祖先関係と、
 Round 16の固定値（close blue 181382、公開開始DAA 90741、期限DAA 256802）を使った短いfixtureで、正しいclose、誤ったblue・親commitment、公開開始と同じDAA、選択鎖から外れたclose、読取り中のtip移動と同一tipでのfinality撤回を検査した。remoteのTB1試験14件は終了コード0（4.59秒）。nativeテストビルドは終了コード0（2分59秒）。
 
 短いRound 3の `private_tb1_stable_panel` は終了コード0（4.62秒）。3プロセスが同じclose `42f421c5…`、公開batch `2a39a1f2…`、certificate `dbc73387…` から同じseed `6e2a68b2…` を復元し、選出2席が再実行した。native finality撤回時のholder停止（2.32秒）とclose直前のprefix再開（0.24秒）も終了コード0。保存台帳のRound 16実close・実share公開・Panel最終承認は未実証。
+
+### native39の完走
+
+native39の隔離fixtureで、生成とヘッダー検証を同じノード内模擬時計に揃えた。分岐側と独立再生側にも受理するブロックの時刻を適用し、同じDBへの再起動では既存の時計引き継ぎを使用した。
+
+`rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_reorg_restart` は終了コード0（試験555.21秒、ビルド2分50秒）。DAA 7626でjob・MasterのFinal、DAA 12669で7検証者のGate C認証と、4量子を持つreceiptの発行を確認。PNR9 `4082af34…` が受理され、coinbaseに812,500,001 sompiを計上した。Bの4ブロックの分岐へのreorgで、Aの報酬出力が消え、B側の報酬出力と元のjob creditのUTXO消費をブロック `1add9799…` が受理した。同じDBからの再起動でtip・state root・台帳行・UTXOを復元し、独立ノードの再生で選択tip・state root・台帳行と選択鎖の各delta rootが一致した。
+
+`rfc0012_native39_fixture_clock_survives_same_db_restart` も終了コード0（0.16秒）。前回のSIGTERMによる中断は完走結果に含めない。今回の完走はnative39 fixtureの結果で、隔離P200の新規Studio受賞、Round 16の実close、新profileのMOE2同一ブロック決済とは別の試験。
