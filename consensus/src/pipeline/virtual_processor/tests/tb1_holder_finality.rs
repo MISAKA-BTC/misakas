@@ -865,6 +865,27 @@ async fn run(stable: bool, registered: bool) {
             let params = &node.bundle.state;
             let (published, mut delta) = node.vp().palw_state_v2_store.read().delta_of(anchor).unwrap();
             let original_delta = borsh::to_vec(&delta).unwrap();
+            use misaka_palw_remote::tb1_exposure::exec_input::moe2::read_moe2_exec_close_at_parent;
+            let read = |preparation_state, rounds, max_records, max_tokens| {
+                read_moe2_exec_close_at_parent(
+                    &history,
+                    &node.config.params,
+                    &delta.point,
+                    rounds,
+                    &q,
+                    &close_parent_state,
+                    preparation_state,
+                    max_records,
+                    max_tokens,
+                )
+            };
+            let body_close = read(original_state, &rounds, 4, 16).unwrap();
+            assert_eq!(body_close.quoted_slots(), &[*closed_quote.exec_slot(), *long.exec_slot()]);
+            assert!(read(&close_parent_state, &rounds, 4, 16).err().unwrap().to_string().contains("preparation state"));
+            assert!(read(original_state, &other_rounds, 4, 16).err().unwrap().to_string().contains("differs from its preparation"));
+            assert!(read(original_state, &rounds, 2, 16).err().unwrap().to_string().contains("Limit"));
+            assert!(read(original_state, &rounds, 4, 0).err().unwrap().to_string().contains("registration history or policy"));
+            assert!(body_close.into_mining_reservation().unwrap_err().to_string().contains("local QF1 inference"));
             let reserve = |state, delta: &mut kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2| {
                 candidate_batch.reserve_closed_moe2_budget(&history, &node.config.params, &closure, &q, state, original_state, delta)
             };

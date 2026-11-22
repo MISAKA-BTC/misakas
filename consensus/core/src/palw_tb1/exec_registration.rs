@@ -24,6 +24,7 @@ pub enum ExecRegistrationProfile {
 /// Immutable fields authenticated by the EXEC owner. The caller still
 /// establishes the provenance of hashes, positions and registered model data.
 pub struct ExecRegistration<'a> {
+    pub key: [u8; 64],
     pub profile: ExecRegistrationProfile,
     pub preparation: Hash64,
     pub qualified_rounds: Hash64,
@@ -71,7 +72,7 @@ fn take<'a, const N: usize>(bytes: &mut &'a [u8]) -> Result<&'a [u8; N], ExecReg
 }
 
 impl<'a> ExecRegistration<'a> {
-    fn decode(mut bytes: &'a [u8]) -> Result<Self, ExecRegistrationError> {
+    fn decode(mut bytes: &'a [u8], key: [u8; 64]) -> Result<Self, ExecRegistrationError> {
         use ExecRegistrationError::{Encoding, Terms};
         let profile = if let Some(rest) = bytes.strip_prefix(QF1_LOCAL_CONTEXT_DOMAIN) {
             bytes = rest;
@@ -148,6 +149,7 @@ impl<'a> ExecRegistration<'a> {
             _ => {}
         }
         Ok(Self {
+            key,
             profile,
             preparation,
             qualified_rounds,
@@ -178,8 +180,8 @@ impl<'a> ExecRegistration<'a> {
     /// Read exactly one preimage and authenticate it. Neither of the existing
     /// private context domains supplies authority for a mining reservation.
     pub fn verify(bytes: &'a [u8], signature: &MLDSA65Signature) -> Result<(Self, [u8; 64]), ExecRegistrationError> {
-        let row = Self::decode(bytes)?;
         let key = registration_key(bytes);
+        let row = Self::decode(bytes, key)?;
         ml_dsa_65::verify(&MLDSA65VerificationKey::new(*row.owner), &key, REGISTRATION_DOMAIN, signature)
             .map_err(|_| ExecRegistrationError::OwnerSignature)?;
         Ok((row, key))

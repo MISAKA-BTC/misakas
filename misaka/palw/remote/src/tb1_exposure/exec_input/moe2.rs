@@ -7,7 +7,7 @@ use kaspa_consensus_core::palw_state_proof_v1::{
     PALW_PROOF_LABEL_BONDS, PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1,
 };
 use kaspa_consensus_core::palw_tb1::exec_close_carrier::ExecCloseCarrier;
-use kaspa_consensus_core::palw_tb1::exec_registration::verify_quote_consent;
+use kaspa_consensus_core::palw_tb1::exec_registration::{ExecRegistrationProfile, verify_quote_consent};
 use kaspa_consensus_core::{
     config::params::Params,
     palw_attempt_v2::palw_network_domain_v2_for,
@@ -55,12 +55,10 @@ impl<'a> QuotePreparation<'a> {
         consent: &MLDSA87Signature,
     ) -> io::Result<()> {
         let authorization = consent_ref(key, row.slot);
-        if authorization != row.funding_ref || self.parent != quote.quote_anchor {
+        if authorization != row.funding_ref {
             return Err(invalid("MOE2 quote differs from signed slot or preparation parent"));
         }
-        if !(quote.valid_from..=quote.deadline).contains(&self.daa) {
-            return Err(invalid("MOE2 quote outside original window at preparation"));
-        }
+        self.check_quote_window(quote)?;
         let verify_funder = |pubkey: &[u8]| {
             use kaspa_consensus_core::palw_tb1::exec_registration::ExecRegistrationError;
             verify_quote_consent(key, row.slot, row.funding_ref, pubkey, consent).map_err(|why| match why {
@@ -81,6 +79,20 @@ impl<'a> QuotePreparation<'a> {
             let class = verify_class_v1(&classes, self.root, &quote.model).map_err(io::Error::other)?;
             (class.artifact_root, class.registered_daa)
         };
+        Self::check_registered_quote(quote, artifact, registered_daa)
+    }
+
+    fn check_quote_window(&self, quote: &Moe2PreDrawQuote) -> io::Result<()> {
+        if self.parent != quote.quote_anchor {
+            return Err(invalid("MOE2 quote differs from signed slot or preparation parent"));
+        }
+        if !(quote.valid_from..=quote.deadline).contains(&self.daa) {
+            return Err(invalid("MOE2 quote outside original window at preparation"));
+        }
+        Ok(())
+    }
+
+    fn check_registered_quote(quote: &Moe2PreDrawQuote, artifact: Hash64, registered_daa: u64) -> io::Result<()> {
         if artifact != quote.artifact_root || quote.valid_from < registered_daa {
             return Err(invalid("MOE2 quote differs from registered model at preparation"));
         }
@@ -169,6 +181,137 @@ pub struct Moe2BudgetPreview {
     pub allocation_epoch: u64,
 }
 
+/// Authenticated monetary inputs from an exact branch body. Eligibility is a
+/// separate step before this can become a native reservation.
+pub struct AuthenticatedMoe2ExecClose {
+    close: Moe2ExecCloseV1,
+    first_quoted_profile: Option<ExecRegistrationProfile>,
+    freeze_id: [u8; 64],
+}
+
+impl AuthenticatedMoe2ExecClose {
+    pub fn quoted_slots(&self) -> &[Moe2ExecSlot] {
+        &self.close.slots
+    }
+
+    pub fn into_mining_reservation(self) -> io::Result<Moe2ExecCloseV1> {
+        if let Some(profile) = self.first_quoted_profile {
+            return Err(match profile {
+                ExecRegistrationProfile::Qf1Local { .. } => invalid("local QF1 inference cannot reserve a mining reward"),
+                ExecRegistrationProfile::TirByte3 => invalid("TIR input has no admitted FOW1 mining profile"),
+            });
+        }
+        Ok(self.close)
+    }
+}
+
+/// The preparation owner supplies the two verified qualifications and their
+/// schedules, and the two states committed by the respective headers.
+/// Registrations, owner keys, and quotes are read from the candidate itself.
+#[allow(clippy::too_many_arguments)]
+pub fn read_moe2_exec_close_at_parent(
+    native: &dyn ConsensusApi,
+    config: &Params,
+    point: &PalwBlockContextV2,
+    rounds: &QualifiedExecPanel,
+    exec_q: &Tb1Qualification<'_>,
+    parent: &PalwChainStateV2,
+    preparation_state: &PalwChainStateV2,
+    max_records: usize,
+    max_job_tokens: usize,
+) -> io::Result<AuthenticatedMoe2ExecClose> {
+    let close = point.block;
+    let block = native.get_block(close).map_err(io::Error::other)?;
+    if block.hash() != close || (block.header.daa_score, block.header.blue_score) != (point.daa_score, point.blue_score) {
+        return Err(invalid("MOE2 reservation differs from close position"));
+    }
+    let selected_parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
+    let private_from = check_close_parent(config, &block.header, close, selected_parent, parent, rounds)?;
+    let byte_cap = usize::try_from(config.max_block_mass).map_err(|_| invalid("EXEC carrier budget overflow"))?;
+    let evidence_error = |why| io::Error::new(io::ErrorKind::InvalidData, format!("invalid EXEC close carrier: {why:?}"));
+    let carrier = ExecCloseCarrier::from_block(&block, max_records, byte_cap).map_err(evidence_error)?;
+    let closure = &carrier.closure;
+    if carrier.qualified_rounds.as_bytes() != rounds.commitment()
+        || closure.round.id() != rounds.exec.id()
+        || closure.qual_root != rounds.exec_qual
+    {
+        return Err(invalid("EXEC close carrier differs from its preparation"));
+    }
+    let freeze = Tb1HolderFreeze::resolve_in_branch(native, close, closure, exec_q)?;
+    let preparation = native.get_header(carrier.preparation).map_err(io::Error::other)?;
+    if preparation.blue_score >= closure.round.close_blue_score
+        || preparation.daa_score >= closure.round.release_from_daa
+        || !native.is_chain_ancestor_of(carrier.preparation, selected_parent).map_err(io::Error::other)?
+        || !native
+            .palw_coinbase_commits_to(closure.round.chain_id, carrier.preparation, &rounds.commitment())
+            .map_err(io::Error::other)?
+    {
+        return Err(invalid("missing joint qualification before EXEC close"));
+    }
+    let preparation = QuotePreparation::resolve(native, &preparation, carrier.preparation, Some(preparation_state))?;
+    let rows = carrier
+        .verify(selected_parent, point.blue_score, point.daa_score, freeze.freeze_id, |quote| {
+            preparation_state.bond(&quote.funding_bond).map(|bond| bond.pubkey.as_slice())
+        })
+        .map_err(evidence_error)?;
+
+    let mut slots = Vec::new();
+    let mut first_quoted_profile = None;
+    for (slot, row) in rows {
+        if row.policy.as_bytes() != closure.policy_root
+            || !(row.open_daa..row.deadline_exclusive_daa).contains(&point.daa_score)
+            || rounds.panel.release_from_daa >= row.deadline_exclusive_daa
+            || row.job_tokens as usize > max_job_tokens
+            || !native.is_chain_ancestor_of(carrier.preparation, row.registration_anchor).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(row.registration_anchor, selected_parent).map_err(io::Error::other)?
+        {
+            return Err(invalid("EXEC input outside its registration history or policy"));
+        }
+        let Some(quote) = row.quote else { continue };
+        if !(quote.valid_from..=quote.deadline).contains(&point.daa_score) {
+            return Err(invalid("MOE2 quote outside original window at EXEC close"));
+        }
+        preparation.check_quote_window(&quote)?;
+        let class = preparation_state.class(&quote.model).ok_or_else(|| invalid("missing MOE2 registered class"))?;
+        QuotePreparation::check_registered_quote(&quote, class.artifact_root, class.registered_daa)?;
+        slots.push(Moe2ExecSlot { registration: row.key, slot, close, close_daa: point.daa_score, quote });
+        first_quoted_profile.get_or_insert(row.profile);
+    }
+    Ok(AuthenticatedMoe2ExecClose {
+        close: Moe2ExecCloseV1 {
+            selected_parent,
+            parent_state_root: parent.state_root(),
+            block: close,
+            blue_score: point.blue_score,
+            daa_score: point.daa_score,
+            private_from,
+            slots,
+        },
+        first_quoted_profile,
+        freeze_id: freeze.freeze_id,
+    })
+}
+
+fn check_close_parent(
+    config: &Params,
+    header: &Header,
+    close: Hash64,
+    selected_parent: Hash64,
+    state: &PalwChainStateV2,
+    rounds: &QualifiedExecPanel,
+) -> io::Result<u64> {
+    let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
+    let from = config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
+    if network.as_bytes() != rounds.exec.chain_id
+        || header.daa_score < from
+        || state.last_point().map(|p| p.block) != Some(selected_parent)
+        || state.state_root() != state_root_of_pinned_header_v1(header, close).map_err(io::Error::other)?
+    {
+        return Err(invalid("MOE2 capacity requires the original network and close parent state"));
+    }
+    Ok(from)
+}
+
 impl ExecInputBatch<'_> {
     /// Recover the dual-signed terms from the exact selected EXEC close. This
     /// historical read does not release a seed, debit a bond, or grant mining credit.
@@ -224,7 +367,7 @@ impl ExecInputBatch<'_> {
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
         let tip = native.get_sink();
         let (header, parent) = self.check_quote_close(native, close, closure, q, tip)?;
-        self.check_close_parent(config, &header, close, parent, state)?;
+        check_close_parent(config, &header, close, parent, state, &self.rounds)?;
         let preview = self.close_budget(config, close, header.daa_score, state, None)?;
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC budget view moved"));
@@ -264,86 +407,23 @@ impl ExecInputBatch<'_> {
         parent: &PalwChainStateV2,
         preparation_state: &PalwChainStateV2,
     ) -> io::Result<Moe2ExecCloseV1> {
-        let close = point.block;
-        let (header, selected_parent) = self.check_close(native, close, closure)?;
-        Tb1HolderFreeze::resolve_in_branch(native, close, closure, q)?;
-        self.check_close_parent(config, &header, close, selected_parent, parent)?;
-        if (point.daa_score, point.blue_score) != (header.daa_score, header.blue_score) {
-            return Err(invalid("MOE2 reservation differs from close position"));
+        self.check_close(native, point.block, closure)?;
+        let expected_freeze = Tb1HolderFreeze::resolve_in_branch(native, point.block, closure, q)?;
+        let resolved = read_moe2_exec_close_at_parent(
+            native,
+            config,
+            point,
+            &self.rounds,
+            q,
+            parent,
+            preparation_state,
+            self.entries.len(),
+            usize::MAX,
+        )?;
+        if resolved.freeze_id != expected_freeze.freeze_id {
+            return Err(invalid("EXEC carried set differs from authenticated input"));
         }
-        let preparation = native.get_header(self.preparation).map_err(io::Error::other)?;
-        QuotePreparation::resolve(native, &preparation, self.preparation, Some(preparation_state))?;
-        let block = native.get_block(close).map_err(io::Error::other)?;
-        if block.hash() != close {
-            return Err(invalid("EXEC close body differs from candidate"));
-        }
-        let byte_cap = usize::try_from(config.max_block_mass).map_err(|_| invalid("EXEC carrier budget overflow"))?;
-        let evidence_error = |why| io::Error::new(io::ErrorKind::InvalidData, format!("invalid EXEC close carrier: {why:?}"));
-        let carrier = ExecCloseCarrier::from_block(&block, self.entries.len(), byte_cap).map_err(evidence_error)?;
-        if carrier.preparation != self.preparation || carrier.qualified_rounds.as_bytes() != self.rounds.commitment() {
-            return Err(invalid("EXEC close carrier differs from its preparation"));
-        }
-        let rows = carrier
-            .verify(selected_parent, point.blue_score, point.daa_score, closure.commitment(selected_parent), |quote| {
-                preparation_state.bond(&quote.funding_bond).map(|bond| bond.pubkey.as_slice())
-            })
-            .map_err(evidence_error)?;
-
-        // The signed quote authorizes the price and funder. The signed EXEC
-        // context must independently authorize a mining job before locking funds.
-        let mut slots = Vec::new();
-        for (&slot, entry) in &self.entries {
-            let Some(quote) = entry.terms.moe2_quote else { continue };
-            match entry.terms.qf1 {
-                Some(mode @ super::super::qf1::Qf1Use::NewMining(_)) => {
-                    mode.admitted()?;
-                }
-                Some(super::super::qf1::Qf1Use::LocalInference(_)) => {
-                    return Err(invalid("local QF1 inference cannot reserve a mining reward"));
-                }
-                None => return Err(invalid("TIR input has no admitted FOW1 mining profile")),
-            }
-            let carried_quote = rows.get(&slot).and_then(|row| row.quote).ok_or_else(|| invalid("EXEC carrier lacks signed quote"))?;
-            if quote != carried_quote {
-                return Err(invalid("EXEC carried quote differs from authenticated input"));
-            }
-            slots.push(Moe2ExecSlot {
-                registration: reg_key(&entry.context),
-                slot,
-                close,
-                close_daa: header.daa_score,
-                quote: carried_quote,
-            });
-        }
-        Ok(Moe2ExecCloseV1 {
-            selected_parent,
-            parent_state_root: state_root_of_pinned_header_v1(&header, close).map_err(io::Error::other)?,
-            block: close,
-            blue_score: header.blue_score,
-            daa_score: header.daa_score,
-            private_from: config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?,
-            slots,
-        })
-    }
-
-    fn check_close_parent(
-        &self,
-        config: &Params,
-        header: &Header,
-        close: Hash64,
-        selected_parent: Hash64,
-        state: &PalwChainStateV2,
-    ) -> io::Result<()> {
-        let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
-        let from = config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
-        if network.as_bytes() != self.rounds.exec.chain_id
-            || header.daa_score < from
-            || state.last_point().map(|p| p.block) != Some(selected_parent)
-            || state.state_root() != state_root_of_pinned_header_v1(header, close).map_err(io::Error::other)?
-        {
-            return Err(invalid("MOE2 capacity requires the original network and close parent state"));
-        }
-        Ok(())
+        resolved.into_mining_reservation()
     }
 
     fn close_budget(
