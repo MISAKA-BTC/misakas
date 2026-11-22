@@ -96,3 +96,17 @@ DAA 51258・blue 102520のDBを読み取り専用で開き、保存ブロック�
 | 資料遮断（261.39秒） | Qwen3-8Bで1席の登録済みscale sectionを遮断。1署名だけで期限に達し、3ピアが未検証終了 `e220caac5af4f711b4b3b0c2f7d9e898e83b9344513bc2e757d2524fb44a38c8751242ac4c7a85b88579095144b565035410259e72f5fded9c487d3a4e1f3815` をDB再開後も確認。 | 0 |
 
 Round 16の実close、当選権利の消費、MOE2決済は上記の試験範囲外。
+
+## EXEC予約から一回決済までの検証
+
+| commit | 変更ファイル | 動作 |
+|---|---|---|
+| `4c176a3a6` | `consensus/core/src/palw_bond_budget_v1.rs` | 同じ予算行にclaim 1件と実際のdrawを記録する。drawがゼロでも一部でも、そのslotの2回目の消費を拒否する。 |
+| `64b6c8d8c` | `consensus/core/src/palw_model_market_v1/moe2/settlement.rs`、`consensus/core/src/palw_state_v2/private_moe2_settlement.rs` | 元のRegKey・slot・close・見積もりにclaimを結び付ける。登録と決済を逆順に戻せる。新形式のcheckpointは割当を復元し、旧形式も読み取る。 |
+| `1a5c727a1` | `misaka/palw/remote/src/tb1_exposure/exec_input/moe2.rs`、`consensus/src/pipeline/virtual_processor/tests/tb1_holder_finality.rs` | 所有者と資金提供者が署名したEXEC closeから得た2件のslotを、各ピアが再計算した予算行と照合する。 |
+
+coreの市場28件（決済4件を含む）、予算91件、MAS1 4件、QF1 2件はいずれも終了コード0。決済fixtureは1000の予約から800を使い、購入240・永久LP160・残余400を記録した。別slot、異なるcloseでのundo、残余を使う二重消費を拒否し、再起動と巻き戻し後の再適用で経済状態が一致した。
+
+nativeテストビルドの終了コードは0。3プロセスの `private_moe2_three_process_registration`（28.27秒）、`private_registered_tb1_pending_freeze`（26.69秒）、`private_tb1_stable_panel`（4.67秒）はすべて終了コード0。pending-freezeの3プロセスが読んだcloseは `96a083bd031d519f49dc15d2a3e079baafeb8e81704b295f81fd4bf01b0a0c0a7067f346dc232b5356db9a53ae57f0ee09a36921967ae5cb3fac3090e882f087`。2件の予約を書き加えたdeltaのrootは全ピアで `2801cb936f648718a888783fdd31ce2fb6d2ad521c3f45e44e1868f3b89fead0489b10a3a22e451c6f9326b7d7e20079efcaf55573b981dd3cb91f0870c02530`。このrootはfixture内で計算した値で、選択鎖の受賞ブロックに記録された決済rootは未取得。
+
+新profileでは、採掘適格なOriginalのTicket、完全再実行したPanelの承認、Gate C、同一実ブロックでの仕事キー消費と決済の呼び出しが残る。保存Studio claimは旧規則で0/21。新しいTFO3用に元の受付設定とSmolLM2の登録資料を別ディレクトリへ用意した。新規claimの登録・当選、Round 16固定close、native39本試験の完走はこの試験の対象外。
