@@ -21,7 +21,7 @@ use misaka_palw_tir_exec::node::qf1::{LocalInstance, TraceRequest};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const CASES: u32 = 2;
-pub const ASSESSMENT_REPLAY_SIGNATURE_DOMAIN: &[u8] = b"MISAKA/private/MAS1/arithmetic-panel/replay/v1";
+pub const ASSESSMENT_REPLAY_SIGNATURE_DOMAIN: &[u8] = b"MISAKA/private/MAS1/arithmetic-panel/scored-replay/v1";
 const LIMIT: u32 = 16;
 const LEAVES: u64 = 32_000_000;
 const PREFIX: &str = "Answer with only one digit: what is ";
@@ -228,6 +228,7 @@ pub struct ArithmeticPanelCut {
     submission: Hash64,
     deadline: u64,
     submission_marker: Hash64,
+    correct: u32,
     closure: Tb1MiningClosure,
 }
 
@@ -313,11 +314,19 @@ impl ArithmeticPanelCut {
             certificate,
             submission: self.submission,
             marker: self.submission_marker,
+            correct: self.correct,
             deadline: self.deadline,
             selected,
             keys,
         })
     }
+}
+
+/// The score of the fixed arithmetic suite from an accepted private reply set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ArithmeticAssessmentScore {
+    pub correct: u32,
+    pub cases: u32,
 }
 
 pub struct ArithmeticPanelDraw {
@@ -326,6 +335,7 @@ pub struct ArithmeticPanelDraw {
     certificate: Hash64,
     submission: Hash64,
     marker: Hash64,
+    correct: u32,
     deadline: u64,
     selected: Vec<Hash64>,
     keys: BTreeMap<Hash64, BTreeSet<Hash64>>,
@@ -350,6 +360,7 @@ impl ArithmeticPanelDraw {
             .chain_update(self.certificate.as_bytes())
             .chain_update(self.submission.as_bytes())
             .chain_update(self.marker.as_bytes())
+            .chain_update(self.correct.to_be_bytes())
             .chain_update(self.deadline.to_be_bytes())
             .chain_update(operator.as_bytes())
             .chain_update(key_id.as_bytes())
@@ -400,10 +411,11 @@ impl ArithmeticPanelDraw {
         }
         let mut keys = BTreeSet::new();
         let mut h = Sha3_512::new()
-            .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/reply-set/v1")
+            .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/scored-reply-set/v1")
             .chain_update(self.close.as_bytes())
             .chain_update(self.certificate.as_bytes())
-            .chain_update(self.marker.as_bytes());
+            .chain_update(self.marker.as_bytes())
+            .chain_update(self.correct.to_be_bytes());
         for (&operator, &(key, signature)) in self.selected.iter().zip(replies) {
             self.verify_signature(operator, key, signature)?;
             let key = mldsa87_key_id(key);
@@ -432,7 +444,12 @@ impl ArithmeticPanelDraw {
 
     /// Validate a selected carrier at its original DAA, including after the
     /// live case window expires. A late carrier never establishes approval.
-    pub fn read_replies(&self, native: &dyn ConsensusApi, block: Hash64, replies: &[(&[u8], &[u8])]) -> io::Result<()> {
+    pub fn read_replies(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        replies: &[(&[u8], &[u8])],
+    ) -> io::Result<ArithmeticAssessmentScore> {
         let (_, tip) = self.branch(native)?;
         if native.get_header(block).map_err(io::Error::other)?.daa_score >= self.deadline {
             return Err(io::ErrorKind::TimedOut.into());
@@ -448,7 +465,7 @@ impl ArithmeticPanelDraw {
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        Ok(())
+        Ok(ArithmeticAssessmentScore { correct: self.correct, cases: CASES })
     }
 }
 
@@ -559,6 +576,7 @@ impl FrozenAudit<'_> {
             submission,
             deadline: self.cut.plan.case_deadline_exclusive_daa,
             submission_marker: Hash64::from_bytes(marker),
+            correct: originals.iter().filter(|row| exact_digit_score(row.expected, &row.output)).count() as u32,
             closure,
         })
     }
@@ -741,6 +759,7 @@ mod tests {
             certificate: Hash64::default(),
             submission: Hash64::default(),
             marker: Hash64::default(),
+            correct: 0,
             deadline: 11,
             selected: vec![operator],
             keys: BTreeMap::from([(operator, BTreeSet::from([mldsa87_key_id(&key)]))]),
@@ -823,6 +842,7 @@ mod tests {
             certificate: Hash64::from_u64_word(4),
             submission: Hash64::from_u64_word(2),
             marker: Hash64::from_u64_word(6),
+            correct: 1,
             deadline: 11,
             selected: vec![a, b],
             keys: BTreeMap::from([(a, BTreeSet::from([mldsa87_key_id(ak)])), (b, BTreeSet::from([mldsa87_key_id(bk)]))]),
@@ -838,7 +858,10 @@ mod tests {
         let commitment = draw.reply_commitment(&native, &replies).unwrap();
         let carrier = Hash64::from_u64_word(5);
         let after = Chain { daa: 12, committed: Some(commitment), ..native };
-        assert!(draw.read_replies(&after, carrier, &replies).is_ok());
+        assert_eq!(draw.read_replies(&after, carrier, &replies).unwrap(), ArithmeticAssessmentScore { correct: 1, cases: CASES });
+        draw.correct = 2;
+        assert!(draw.read_replies(&after, carrier, &replies).is_err());
+        draw.correct = 1;
         assert_eq!(
             draw.read_replies(&Chain { carrier_daa: 11, ..after }, carrier, &replies).unwrap_err().kind(),
             io::ErrorKind::TimedOut,
