@@ -84,6 +84,23 @@ class ObservationTests(unittest.TestCase):
         clients[1].call.assert_called_once_with('submitBlock', dict(block=block, allowNonDAABlocks=False))
         clients[2].call.assert_not_called()
 
+    def test_fresh_peers_relay_only_the_missing_selected_direct_child(self):
+        from unittest.mock import Mock
+        from protected_private_registration_run import retry_retained_sink
+        source, lagging = Mock(), Mock()
+        child = dict(header=dict(hash=h(8)), verboseData=dict(hash=h(8), selectedParentHash=h(7),
+                                                              isChainBlock=True, isHeaderOnly=False))
+        source.call.return_value = dict(block=child)
+        lagging.call.return_value = dict(report=dict(type='success'))
+        views = [dict(sink=h(8), virtualDaaScore=9, tipHashes=[h(8)]),
+                 dict(sink=h(7), virtualDaaScore=8, tipHashes=[h(7)])]
+        retry_retained_sink([source, lagging], views, relay_missing=True)
+        lagging.call.assert_called_once_with('submitBlock', dict(block=child, allowNonDAABlocks=False))
+        lagging.reset_mock()
+        child['verboseData']['selectedParentHash'] = h(6)
+        retry_retained_sink([source, lagging], views, relay_missing=True)
+        lagging.call.assert_not_called()
+
     def test_retry_a_peer_at_the_same_daa_only_for_its_retained_direct_child(self):
         from unittest.mock import Mock
         from protected_private_registration_run import retry_retained_sink

@@ -60,8 +60,8 @@ def wait_until(deadline, read):
     raise TimeoutError('isolated peer readiness or DAA progression timed out')
 
 
-def retry_retained_sink(clients, views):
-    """Retry native resolution when a resumed peer already has the selected block body."""
+def retry_retained_sink(clients, views, *, relay_missing=False):
+    """Retry retained blocks and optionally relay a missing direct child to an owned peer."""
     tips = sorted(views[0]['tipHashes'])
     sinks = {view['sink'] for view in views}
     if len(tips) == 2 and sinks == set(tips) and all(
@@ -79,7 +79,8 @@ def retry_retained_sink(clients, views):
         best = views[source]
         sink = best['sink']
         targets = [(client, view) for client, view in zip(clients, views)
-                   if view['sink'] != sink and view['virtualDaaScore'] <= best['virtualDaaScore'] and sink in view['tipHashes']]
+                   if view['sink'] != sink and view['virtualDaaScore'] <= best['virtualDaaScore']
+                   and (sink in view['tipHashes'] or relay_missing and view['tipHashes'] == [view['sink']])]
         if not targets:
             continue
         block = block_read(clients[source], sink, transactions=True)
@@ -87,7 +88,8 @@ def retry_retained_sink(clients, views):
             continue
         for client, view in targets:
             # Adjacent DAG blocks can share a DAA score. Only retry a direct child at a tie.
-            if view['virtualDaaScore'] == best['virtualDaaScore'] and block['verboseData']['selectedParentHash'] != view['sink']:
+            direct_only = sink not in view['tipHashes'] or view['virtualDaaScore'] == best['virtualDaaScore']
+            if direct_only and block['verboseData']['selectedParentHash'] != view['sink']:
                 continue
             reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
             require(reply['report']['type'] == 'success', f'native retry refused the retained block: {reply}')
@@ -367,7 +369,7 @@ def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer
 
 
 def run(config, output, after_registration=None, resume_warmup=None, *, resume_inventory=None,
-        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None, resume_claim=None, resume_settlement=None):
+        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None, resume_claim=None, resume_settlement=None, prepare_funding=False):
     require(sum(path is not None for path in (resume_warmup, resume_inventory, resume_tokenizer, resume_studio, resume_claim, resume_settlement)) <= 1, 'choose one checkpoint')
     require(tokenizer_clock_checkpoint is None or resume_tokenizer is not None,
             'a separate clock checkpoint requires a tokenizer resume')
@@ -376,6 +378,8 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
     require(resume_claim is None or ('studio' in config and after_registration is not None),
             'claim resume requires the Studio lifecycle')
     checkpoint = resume_claim or resume_studio or resume_tokenizer or resume_inventory or resume_warmup
+    require(not prepare_funding or (checkpoint is None and after_registration is None),
+            'funding preparation requires a fresh run')
     registration = config['registration']
     bootstrap = json.loads(Path(registration['bootstrap']).read_text())
     profile = bootstrap['profile']
@@ -525,8 +529,8 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                     next_retained_retry = time.monotonic() + 2
                     return None
                 return views[0]
-            if checkpoint is not None and time.monotonic() >= next_retained_retry:
-                retry_retained_sink(clients, views)
+            if time.monotonic() >= next_retained_retry:
+                retry_retained_sink(clients, views, relay_missing=True)
                 next_retained_retry = time.monotonic() + 2
             return None
 
@@ -588,7 +592,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
             'maximumCarrierBatchFeeSompi', 'maximumInventoryPrepaidSompi',
             'maximumTkrFeeSompi', 'maximumRegistrationChargeSompi'))
         recipients = [('registration', registrant, registration_bond, registration_budget)]
-        if after_registration is not None:
+        if producer is not None:
             studio_bond = bootstrap['seats'][peers[producer]['seat']]['bond']
             recipients.append(('studio', producer, studio_bond, 0))
         if fund_from_genesis and checkpoint is None:
@@ -598,10 +602,13 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
             funding = {label: require_independent_funding(clients[owner], bond, minimum, require_reservation=False)
                        for label, owner, bond, minimum in recipients}
             write_new(output / 'carrier-funding.json', funding)
+            if prepare_funding:
+                return dict(status='registration-carriers-funded', sink=view['sink'], daa=view['virtualDaaScore'],
+                            signers=list(funding), registrationSubmitted=False)
             while view['virtualDaaScore'] < activation:
                 view = step()
             require_independent_funding(clients[registrant], registration_bond, registration_budget)
-            if after_registration is not None:
+            if producer is not None:
                 require_independent_funding(clients[producer], studio_bond, 0)
         if resume_studio is not None or resume_claim is not None:
             require(after_registration is not None, 'Studio resume requires its lifecycle callback')
@@ -1392,6 +1399,8 @@ def main():
     parser.add_argument('--resume-settlement', type=Path, help='resume an audited receipt from a settlement checkpoint or a legacy receipt result')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
     queue = parser.add_mutually_exclusive_group()
+    queue.add_argument('--prepare-funding', action='store_true',
+                       help='confirm signer funding on fresh owned peers and stop before registration; continue with --resume-warmup')
     queue.add_argument('--studio-main-job', nargs='+', metavar='ARG',
                        help='QUEUE_ID OUTBOX [SCAN_FROM_BLOCK]: follow the local Studio queue and signed rail record')
     queue.add_argument('--studio-queue-submission', type=Path,
@@ -1404,7 +1413,7 @@ def main():
     if queue_requested and ('studio' not in config or args.resume_claim or args.resume_settlement):
         parser.error('the Studio queue source requires a Studio run before claim admission')
     continuation = None
-    if 'studio' in config:
+    if 'studio' in config and not args.prepare_funding:
         def continuation(registration, clients, step, logs, executor_bond):
             if args.resume_settlement is not None:
                 return resume_receipt_settlement(config, args.output, args.resume_settlement, registration, clients, step)
@@ -1417,7 +1426,7 @@ def main():
     result = run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
                  resume_tokenizer=args.resume_tokenizer, tokenizer_clock_checkpoint=args.tokenizer_clock_checkpoint,
                  isolated_node=args.isolated_node, resume_studio=args.resume_studio,
-                 resume_claim=args.resume_claim, resume_settlement=args.resume_settlement)
+                 resume_claim=args.resume_claim, resume_settlement=args.resume_settlement, prepare_funding=args.prepare_funding)
     print(json.dumps(result))
     return 3 if result.get('status') == 'receipt-deadline-passed-unspent' else 0
 

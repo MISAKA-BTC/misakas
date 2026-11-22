@@ -56,5 +56,27 @@
       "class-setup/class-semantics.object": "4792093bd5ce62faa3eb6bb4b98e225a29a169cb2167a83ab8566ce9595f3188",
       "class-setup/container-binding.object": "023388aa7bca07ca2f6875ff2342a3cb4ccb1947af9fe9cd4517ead966eb8745"
     }
+  },
+  "carrierFunding": {
+    "status": "registration-carriers-funded",
+    "sink": "aae1b668261f8fc2e449ad12e2a0cc69ac3cdf1b8f5c82f54b55942d7250e917ca8b3725d7e4ffcebbad558794404de885e92584cf48cf822e138f67b67fe72f",
+    "daa": 2,
+    "signers": [
+      "registration",
+      "studio"
+    ],
+    "registrationSubmitted": false,
+    "outpoints": {
+      "registration": {
+        "outpoint": "617eb249038b1afcecbad8d3a259cf1b1c98cf4a2fe7a28f2fe41082f7b1e7e13d47bcfdb12fde6d198f303008b5a24e93f7dd5a58e5c075b22357cba236aa19:0",
+        "amountSompi": 10000000000
+      },
+      "studio": {
+        "outpoint": "cfbe8b92d28e534c3f95bcd80d640ad5eb1566beb1a6e546a27c9a34226dad87424ad7671ddf4c50eeb33845b30c21af700b853590a2ee375db9d4de546b4709:0",
+        "amountSompi": 10000000000
+      }
+    },
+    "drillExit": 0,
+    "liveRelayHelperExit": 0
   }
 }
