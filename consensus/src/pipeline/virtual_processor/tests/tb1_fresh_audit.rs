@@ -309,7 +309,7 @@ pub(super) async fn replay_window(
     );
     if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some() {
         use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{
-            ArithmeticControlView, ArithmeticEvaluation, CASES, exact_digit_score, submission_marker,
+            ArithmeticControlView, ArithmeticEvaluation, ArithmeticPanelPolicy, CASES, exact_digit_score, submission_marker,
         };
         let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
         assert_eq!(node.chain.sink(), certificate);
@@ -447,7 +447,8 @@ pub(super) async fn replay_window(
                 assert_eq!(at, parent);
                 let fold = node.vp().palw_model_registry_fold_at(node.chain.daa_of(parent)).unwrap();
                 let control = ArithmeticControlView { state: &state, config: &node.config.params, registry: &fold };
-                let policy = std::env::var("MISAKA_PRIVATE_ARITHMETIC_CONTROL_POLICY").unwrap().parse::<Hash64>().unwrap();
+                let seats = std::env::var("MISAKA_PRIVATE_ARITHMETIC_CONTROL_SEATS").unwrap().parse().unwrap();
+                let policy = ArithmeticPanelPolicy::new(seats).unwrap();
                 let assessment = frozen
                     .prepare_arithmetic_panel(
                         node.api().as_ref(),
@@ -485,7 +486,7 @@ pub(super) async fn replay_window(
                     std::process::id(),
                     serde_json::json!({"block":close.hash(), "parent":parent, "round":Hash64::from_bytes(panel.id()),
                         "blue":close.header.blue_score, "daa":close.header.daa_score, "state":close.header.palw_state_root,
-                        "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy})
+                        "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy.id()})
                 );
             }
         }

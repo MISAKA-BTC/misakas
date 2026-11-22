@@ -8,7 +8,10 @@ use kaspa_consensus_core::{
     palw_execution_lane_v1::palw_execution_span_v1,
     palw_mode_v2::PalwConsensusMode,
     palw_model_registry_v1::PalwModelRegistryFoldV1,
-    palw_panel_v2::{PALW_DRAW_WEIGHT_MAX_MSK_V1, PalwPanelStakeDrawV1, palw_panel_stake_operator_weights_v1},
+    palw_panel_v2::{
+        PALW_DRAW_WEIGHT_MAX_MSK_V1, PalwPanelStakeDrawV1, palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1,
+        palw_panel_stake_operator_weights_v1, palw_panel_stake_ticket_v1,
+    },
     palw_qf1::{Stop, is_eos},
     palw_state_v2::{PalwChainStateV2, palw_base_population_v1},
 };
@@ -156,7 +159,7 @@ pub struct ArithmeticControlView<'a> {
 }
 
 impl ArithmeticControlView<'_> {
-    fn roster(&self, class: Hash64, daa: u64) -> io::Result<(Hash64, [u8; 64])> {
+    fn roster(&self, class: Hash64, daa: u64) -> io::Result<Vec<(Hash64, u64)>> {
         let PalwConsensusMode::ConsensusV2(bundle) = &self.config.palw_consensus_mode else {
             return Err(invalid("arithmetic PANEL needs a native control registry"));
         };
@@ -169,9 +172,32 @@ impl ArithmeticControlView<'_> {
             .transpose()?;
         let eligible = palw_base_population_v1(self.state, &bundle.state, self.registry, &class, daa, span, activation_pool);
         let bonds = eligible.into_iter().map(|(_, bond)| bond).filter(|bond| owner.is_none_or(|owner| owner.pubkey != bond.pubkey));
-        let operators: Vec<_> = palw_panel_stake_operator_weights_v1(bonds, &PalwPanelStakeDrawV1::V1).into_iter().collect();
-        let root = self.state.state_root();
-        Ok((root, arithmetic_control_roster(root, &operators)?))
+        Ok(palw_panel_stake_operator_weights_v1(bonds, &PalwPanelStakeDrawV1::V1).into_iter().collect())
+    }
+}
+
+/// The private rule commits to the seat count before reading the PANEL seed.
+#[derive(Clone, Copy)]
+pub struct ArithmeticPanelPolicy {
+    seats: u32,
+}
+
+impl ArithmeticPanelPolicy {
+    pub fn new(seats: u32) -> io::Result<Self> {
+        if seats == 0 {
+            return Err(invalid("empty arithmetic PANEL"));
+        }
+        Ok(Self { seats })
+    }
+
+    pub fn id(self) -> Hash64 {
+        Hash64::from_bytes(
+            Sha3_512::new()
+                .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/stake-ticket/full-replay/v1")
+                .chain_update(self.seats.to_be_bytes())
+                .finalize()
+                .into(),
+        )
     }
 }
 
@@ -179,6 +205,9 @@ impl ArithmeticControlView<'_> {
 pub struct ArithmeticPanelCut {
     parent: Hash64,
     control_state: Hash64,
+    operators: Vec<(Hash64, u64)>,
+    policy: ArithmeticPanelPolicy,
+    submission_marker: Hash64,
     closure: Tb1MiningClosure,
 }
 
@@ -203,6 +232,59 @@ impl ArithmeticPanelCut {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(freeze)
+    }
+    pub fn observe_publication(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        q: &Tb1Qualification<'_>,
+    ) -> io::Result<NativePublicationGate> {
+        self.holder_freeze(native, close, q)?;
+        NativePublicationGate::observe(native, close, &self.closure, q)
+    }
+
+    /// Draw only after the original PANEL release certificate is accepted on
+    /// the finalized selected branch. Return operators in draw order.
+    #[allow(clippy::too_many_arguments)]
+    pub fn selected_operators(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<Vec<Hash64>> {
+        let tip = native.get_sink();
+        let freeze = self.holder_freeze(native, close, q)?;
+        let published = gate.holder_freeze();
+        if published.accepting_block != close || published.freeze_id != freeze.freeze_id {
+            return Err(invalid("different arithmetic PANEL publication gate"));
+        }
+        let seed = gate.read_seed(native, batch, certificate, releases, q, limits)?;
+        let anchor = Hash64::from_bytes(
+            Sha3_512::new()
+                .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/draw-anchor/v1")
+                .chain_update(freeze.freeze_id)
+                .chain_update(seed.as_bytes())
+                .finalize()
+                .into(),
+        );
+        let mut ranked: Vec<_> = self
+            .operators
+            .iter()
+            .map(|(id, weight)| {
+                let ticket = palw_panel_stake_ticket_v1(anchor, &self.submission_marker, id);
+                (palw_draw_neg_log2_q64_v1(palw_draw_ticket_u64_v1(&ticket)), *weight, *id)
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| palw_draw_key_cmp_v1(a.0, a.1, &a.2, b.0, b.1, &b.2));
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(ranked.into_iter().take(self.policy.seats as usize).map(|(_, _, id)| id).collect())
     }
 }
 
@@ -272,21 +354,23 @@ impl FrozenAudit<'_> {
         panel_q: &Tb1Qualification<'_>,
         parent: Hash64,
         control: ArithmeticControlView<'_>,
-        draw_policy: Hash64,
+        policy: ArithmeticPanelPolicy,
     ) -> io::Result<ArithmeticPanelCut> {
         let round = self.cut.assessment_panel(panel_q)?;
         if native.get_sink() != parent {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         let h = native.get_header(parent).map_err(io::Error::other)?;
-        if h.blue_score.checked_add(1) != Some(round.close_blue_score)
-            || h.daa_score >= round.release_from_daa
-            || draw_policy == Hash64::default()
-        {
+        if h.blue_score.checked_add(1) != Some(round.close_blue_score) || h.daa_score >= round.release_from_daa {
             return Err(invalid("invalid arithmetic PANEL parent or control policy"));
         }
         let admitted = self.cut.candidates.get(candidate as usize).ok_or_else(|| invalid("unknown audit candidate"))?;
-        let (control_state, control_roster) = control.roster(admitted.class, h.daa_score)?;
+        let operators = control.roster(admitted.class, h.daa_score)?;
+        if operators.len() < policy.seats as usize {
+            return Err(invalid("insufficient arithmetic PANEL operators"));
+        }
+        let control_state = control.state.state_root();
+        let control_roster = arithmetic_control_roster(control_state, &operators)?;
         let marker =
             self.read_arithmetic_submission(native, batch, certificate, releases, audit_q, limits, candidate, submission, originals)?;
         if native.get_sink() != parent {
@@ -302,8 +386,8 @@ impl FrozenAudit<'_> {
             .chain_update(control_roster)
             .finalize()
             .into();
-        let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: draw_policy.as_bytes() };
-        Ok(ArithmeticPanelCut { parent, control_state, closure })
+        let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: policy.id().as_bytes() };
+        Ok(ArithmeticPanelCut { parent, control_state, operators, policy, submission_marker: Hash64::from_bytes(marker), closure })
     }
 
     fn read_arithmetic_marker(
@@ -428,6 +512,12 @@ mod tests {
         rows[1].original.roots[2] = Hash64::default();
         rows[1].output[0] += 1;
         assert_ne!(submission_marker(certificate, &rows).unwrap(), original);
+    }
+
+    #[test]
+    fn assessment_policy_binds_seats_before_the_draw() {
+        assert!(ArithmeticPanelPolicy::new(0).is_err());
+        assert_ne!(ArithmeticPanelPolicy::new(2).unwrap().id(), ArithmeticPanelPolicy::new(3).unwrap().id());
     }
 
     #[test]
