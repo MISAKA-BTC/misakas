@@ -1265,3 +1265,14 @@ out=$(mktemp -d)
 tar -xf qf1-arithmetic-registration-population.tar.zst -C "$out"
 python3 -B check_arithmetic_control_population.py "$out" | diff - qf1-arithmetic-registration-population.json
 ```
+
+### Round 15 の算術評価を別の2プロセスで再実行
+
+同一バイナリの提出ノードと、空のDBから起動した2つのノードで、元の提出ブロック `050f2fd1…` を照合した。各再実行ノードは履歴、登録済みshareからのseed、2問のchallengeを復元し、個別に取得した提出資料を照合してQwen3-8Bの整数推論を実行した。「1 + 3?」の出力は `[19, 151645]`、「2 - 1?」は `[16, 151645]`。両問とも、4つのRoot、Readout、Ticket、出力と停止位置が提出時と一致した。履歴再生を含む各テストの所要時間は2,196.74秒と2,099.26秒。2台目の資料digestの先頭1桁を変えたログは照合時に拒否された。[照合結果](qf1-arithmetic-replicas.json)・[元のseed](qf1-arithmetic-replicas-seed.json)・[2プロセスのログ](qf1-arithmetic-replicas.tar.zst)
+
+この非報酬試験は提出物の再現性を確認した。Round 16で選出された担当者の評価は `pending`。上記の提出ブロックを再現したディレクトリにログを加えて実行する。
+
+```sh
+tar -xf "$p/qf1-arithmetic-replicas.tar.zst" -C "$out"
+uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_arithmetic_submission.py" "$out" "$MISAKA_PRIVATE_QF1_TOKENIZER" --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-replicas.json"
+```
