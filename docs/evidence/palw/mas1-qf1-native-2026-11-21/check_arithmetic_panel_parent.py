@@ -40,6 +40,10 @@ def verify(prefix, log):
                        r"round=([a-f0-9]{128}) blue=(\d+) daa=(\d+)$", text, re.M)
     submission, parent, panel_round, blue, daa = row
     require(submission == published["submission"], "different evaluation submission")
+    qualification = json.loads((HERE / "qf1-arithmetic-qualification.json").read_bytes())
+    [panel] = [r for r in qualification["rounds"] if r["purpose"] == "PANEL"]
+    require(qualification["close"] == published["close"] and panel_round == panel["round"],
+            "different prequalified evaluation PANEL")
     with prefix.open("rb") as stream:
         report = check_prefix(stream, submission, published["assessment_position"], parent)
     require((report["blue"], report["daa"]) == (int(blue), int(daa)), "native position differs from header")
