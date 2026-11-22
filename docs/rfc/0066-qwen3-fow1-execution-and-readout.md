@@ -364,7 +364,7 @@ cache keyは少なくともnumeric artifact/program/profile、実入力prefix全
 
 停止位置を調べるための追加実行を、正規Ticketの生成に必ず必要な仕事として計上しない。次の費用検査では、予測と再試行の両方を計上する。同じ仕事を反復できる場合の「2 + 2?」を回帰対象に残し、異なる仕事と停止位置での結果も仕事別に記録する。この5件は同じ回答を返した過去の標本で、一般の仕事における予測成功率と採択済み費用閾値は未確定である。QF1のG-COSTはUNKNOWNを維持する。[元のTicketと計時の照合](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-predicted-length.json)
 
-同じ初回実測で停止位置を取得し、残り5件を順序交互で比較した。初回とセットアップを含む6件の合計はオンライン停止278.703秒、実測停止位置を使う経路279.367秒だった。全組で元のTicketに一致した。意図的に停止位置を外した対照は再試行を含め122.147秒だった。同一問題の1回の比較で、隔離ノードの履歴生成と並行している。G-COSTはUNKNOWNを維持する。[結果と各組の時間](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-online-calibrated.json)・[計画と生ログ](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-online-calibrated.tar.zst)
+同じ初回実測で停止位置を取得し、残り5件を順序交互で比較した。初回とセットアップを含む6件の合計はオンライン停止278.703秒、実測停止位置を使う経路279.367秒だった。全組で元のTicketに一致した。意図的に停止位置を外した対照は再試行を含め122.147秒だった。初回は隔離ノードの履歴生成と並行して計測した。同じ計画での再測定ではオンライン停止273.393秒、実測停止位置を使う経路271.744秒となり、速い側が入れ替わった。再測定の終盤は隔離試験バイナリのビルドと重なった。両測定とも同一問題で、採択済み費用閾値と誤差の扱いが未確定のため、G-COSTはUNKNOWNを維持する。[結果と各組の時間](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-online-calibrated.json)・[計画と生ログ](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-online-calibrated.tar.zst)・[再測定の照合結果](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-online-calibrated-repeat.json)
 
 別に、抽選前に固定した3問をそれぞれ新しいEXECとPANELで実行した。元の回答長は2（EOS）、2（EOS）、16（上限）であり、固定予測9は3件とも外れた。予測経路で失敗したtraceと完全な再試行を計上すると3件で368.101秒、基準の2回実行は244.377秒であった。全て元の四RootとTicketに一致した。同じ仕事を反復した5件と、異なる仕事の各1件とは費用判断を分ける。事前閾値と誤差の扱いが未採択のため、現世代は引き続きUNKNOWNである。[仕事別の費用と再試行](../evidence/palw/mas1-qf1-native-2026-11-21/g-cost-varied-jobs.json)
 
