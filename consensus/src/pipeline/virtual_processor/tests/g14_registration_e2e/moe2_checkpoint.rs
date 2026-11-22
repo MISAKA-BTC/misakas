@@ -166,6 +166,47 @@ pub(super) fn check_exec_settlement_rewind(
 
     let mut book = registered_book.clone();
     let before_award = book.clone();
+    let check_forged_journal = |parent: &PalwChainStateV2, mut state: PalwChainStateV2, mut delta: PalwStateDeltaV2, block: &Block| {
+        let at = Moe2Position { point: delta.point, ..position };
+        let mut book = registered_book.clone();
+        book.admit_exec_slot(claim, &slot, state.bond_budget().unwrap(), |_, id| registered_book.model(&id).copied()).unwrap();
+        let before = (state.state_root(), book.clone(), delta.clone());
+        assert_eq!(
+            state.settle_private_moe2_exec_work(
+                config,
+                &mut book,
+                &mut delta,
+                claim,
+                at,
+                release,
+                &slot,
+                work,
+                payees,
+                block,
+                worker_start,
+            ),
+            Err(Moe2SettlementError::ReservationMismatch),
+        );
+        assert_eq!((state.state_root(), book.clone(), delta.clone()), before);
+
+        // Produce an otherwise valid receipt/debit pair and replace only the
+        // journal variant, as if restoring a forged keyed settlement.
+        state
+            .settle_private_moe2_exec_slot(config, &mut book, &mut delta, claim, at, release, &slot, payees, block, worker_start)
+            .unwrap();
+        assert_eq!(apply_delta_v2(parent, &delta, params).unwrap().state_root(), state.state_root());
+        let Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }) = delta.entries.pop() else { unreachable!() };
+        delta.entries.push(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record });
+        let mut carried = PalwStateCarriageV2::from_state(&state);
+        carried.private_moe2_work_uses.insert(work, claim);
+        let restored = carried.into_state(params, None).unwrap();
+        for result in [apply_delta_v2(parent, &delta, params), revert_delta_v2(&restored, &delta, params)] {
+            assert!(matches!(
+                result,
+                Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC reservation differs from selected parent"))
+            ));
+        }
+    };
 
     // Simulate an award with a budget row that was absent from its parent.
     let mut header = award_block.header.as_ref().clone();
@@ -198,24 +239,36 @@ pub(super) fn check_exec_settlement_rewind(
         ),
         Err(Moe2SettlementError::ReservationMismatch),
     );
-    assert_eq!((detached_state.state_root(), detached_delta, &book), (detached_root, detached_before, &before_award));
+    assert_eq!((detached_state.state_root(), &detached_delta, &book), (detached_root, &detached_before, &before_award));
+    check_forged_journal(&unreserved, detached_state, detached_delta, &funded_in_award);
 
-    use kaspa_consensus_core::palw_bond_budget_v1::PALW_BUDGET_TABLE_CLAIMS_V1;
+    use kaspa_consensus_core::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PALW_BUDGET_TABLE_RELEASES_V1};
     let key = slot.reservation_key();
     let row = *reserved.bond_budget().unwrap().claim_row(&key).unwrap();
     let mut altered_delta = award_delta.clone();
-    altered_delta.entries.push(PalwDeltaEntryV2::BondBudgetRow {
-        table: PALW_BUDGET_TABLE_CLAIMS_V1,
-        key: key.as_byte_slice().to_vec(),
-        old: Some(borsh::to_vec(&row).unwrap()),
-        new: Some(
-            borsh::to_vec(&kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetClaimRowV1 {
-                reuse_not_before: row.reuse_not_before + 1,
-                ..row
-            })
-            .unwrap(),
-        ),
-    });
+    let earlier = row.reuse_not_before.checked_sub(1).unwrap();
+    let altered = kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetClaimRowV1 { reuse_not_before: earlier, ..row };
+    altered_delta.entries.extend([
+        PalwDeltaEntryV2::BondBudgetRow {
+            table: PALW_BUDGET_TABLE_CLAIMS_V1,
+            key: key.as_byte_slice().to_vec(),
+            old: Some(borsh::to_vec(&row).unwrap()),
+            new: Some(borsh::to_vec(&altered).unwrap()),
+        },
+        // Keep the window queue consistent so restore reaches settlement replay.
+        PalwDeltaEntryV2::BondBudgetRow {
+            table: PALW_BUDGET_TABLE_RELEASES_V1,
+            key: borsh::to_vec(&(row.reuse_not_before, key)).unwrap(),
+            old: Some(Vec::new()),
+            new: None,
+        },
+        PalwDeltaEntryV2::BondBudgetRow {
+            table: PALW_BUDGET_TABLE_RELEASES_V1,
+            key: borsh::to_vec(&(earlier, key)).unwrap(),
+            old: None,
+            new: Some(Vec::new()),
+        },
+    ]);
     let mut altered_state = apply_delta_v2(&reserved, &altered_delta, params).unwrap();
     let altered_before = (altered_state.state_root(), altered_delta.clone());
     assert_eq!(
@@ -236,8 +289,9 @@ pub(super) fn check_exec_settlement_rewind(
         ),
         Err(Moe2SettlementError::ReservationMismatch),
     );
-    assert_eq!((altered_state.state_root(), altered_delta), altered_before);
+    assert_eq!((altered_state.state_root(), &altered_delta), (altered_before.0, &altered_before.1));
     assert_eq!(book, before_award);
+    check_forged_journal(&reserved, altered_state, altered_delta, &award_block);
 
     let duplicate = [panel[0], panel[0]];
     assert_eq!(

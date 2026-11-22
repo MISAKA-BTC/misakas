@@ -24075,10 +24075,7 @@ pub(crate) fn apply_delta_prefix_v2(
     let entries = delta.entries.get(..end).ok_or(PalwStateV2Error::DeltaMismatch("recorded prefix exceeds actual delta"))?;
     let mut state = parent.clone();
     for (index, entry) in entries.iter().enumerate() {
-        if let PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } = entry
-        {
-            private_moe2_settlement::check_exec_settlement_debit_v1(record, delta.point, &entries[..index])?;
-        }
+        private_moe2_settlement::check_exec_settlement_debit_v1(entry, delta.point, &entries[..index])?;
         apply_delta_entry(&mut state, entry, false)?;
     }
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, false, params)?;
@@ -24120,10 +24117,7 @@ pub(crate) fn replay_delta_owned_v1(
     let mut batch_numerical_receipt_changed = false;
     let mut batch_plain_output_receipt_changed = false;
     for (index, entry) in delta.entries.iter().enumerate() {
-        if let PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } = entry
-        {
-            private_moe2_settlement::check_exec_settlement_debit_v1(record, delta.point, &delta.entries[..index])?;
-        }
+        private_moe2_settlement::check_exec_settlement_debit_v1(entry, delta.point, &delta.entries[..index])?;
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
             tokenizer_intake_changed |= crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_delta_entry_v1(
                 key,

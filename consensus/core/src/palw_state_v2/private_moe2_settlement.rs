@@ -23,13 +23,38 @@ pub struct Moe2ExecWorkerPayees<'a> {
     pub panel: &'a [(PalwBondKeyV2, u64)],
 }
 
+// The ordinary clock can release window capacity independently of the
+// outstanding liability. Every other funding field must survive until debit.
+fn same_exec_reservation(original: &PalwBudgetClaimRowV1, current: &PalwBudgetClaimRowV1) -> bool {
+    (original.in_window || !current.in_window) && *original == (PalwBudgetClaimRowV1 { in_window: original.in_window, ..*current })
+}
+
+fn exec_reservation_from_parent(prefix: &[PalwDeltaEntryV2], reservation: Hash64, current: &PalwBudgetClaimRowV1) -> bool {
+    for entry in prefix {
+        let PalwDeltaEntryV2::BondBudgetRow { table: PALW_BUDGET_TABLE_CLAIMS_V1, key, old, .. } = entry else { continue };
+        if key.as_slice() == reservation.as_byte_slice() {
+            return old
+                .as_deref()
+                .and_then(|bytes| borsh::from_slice::<PalwBudgetClaimRowV1>(bytes).ok())
+                .is_some_and(|original| same_exec_reservation(&original, current));
+        }
+    }
+    // No earlier write in the block changed this row.
+    true
+}
+
 /// The private fold journals the one-shot EXEC debit, any market change,
 /// and the receipt together. Replay must see that exact debit in this block.
 pub(super) fn check_exec_settlement_debit_v1(
-    record: &Moe2NativeExecSettlement,
+    entry: &PalwDeltaEntryV2,
     point: PalwBlockContextV2,
     prefix: &[PalwDeltaEntryV2],
 ) -> Result<(), PalwStateV2Error> {
+    let (record, keyed) = match entry {
+        PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } => (record, false),
+        PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => (record, true),
+        _ => return Ok(()),
+    };
     let mismatch = || PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit");
     if record.position.point != point {
         return Err(mismatch());
@@ -39,7 +64,7 @@ pub(super) fn check_exec_settlement_debit_v1(
     }
     let allocation = &record.reward.allocation;
     let total = record.total_reward().ok_or_else(mismatch)?;
-    let (debit, before_market) = match allocation.market {
+    let (through_debit, before_market) = match allocation.market {
         Some(quote) if quote.split.purchase != 0 || quote.split.liquidity != 0 => {
             let Some((PalwDeltaEntryV2::ModelMarket { key, old: Some(old), new: Some(new) }, preceding)) = prefix.split_last() else {
                 return Err(mismatch());
@@ -47,9 +72,9 @@ pub(super) fn check_exec_settlement_debit_v1(
             if *key != record.model || *new != quote.after {
                 return Err(mismatch());
             }
-            (preceding.last(), Some(*old))
+            (preceding, Some(*old))
         }
-        market => (prefix.last(), market.map(|quote| quote.after)),
+        market => (prefix, market.map(|quote| quote.after)),
     };
     if let Some((market, quote)) = before_market.zip(allocation.market) {
         let bounds = Moe2QuantityLimits {
@@ -66,8 +91,8 @@ pub(super) fn check_exec_settlement_debit_v1(
             return Err(mismatch());
         }
     }
-    let Some(PalwDeltaEntryV2::BondBudgetRow { table: PALW_BUDGET_TABLE_CLAIMS_V1, key, old: Some(old), new: Some(new) }) = debit
-    else {
+    let Some((debit, before_debit)) = through_debit.split_last() else { return Err(mismatch()) };
+    let PalwDeltaEntryV2::BondBudgetRow { table: PALW_BUDGET_TABLE_CLAIMS_V1, key, old: Some(old), new: Some(new) } = debit else {
         return Err(mismatch());
     };
     if key.as_slice() != record.reservation.as_byte_slice() {
@@ -78,6 +103,9 @@ pub(super) fn check_exec_settlement_debit_v1(
     let expected = before.after_exec_slot_reward(total).ok();
     if before.model.map(|(model, _)| model) != Some(record.model) || expected != Some(after) {
         return Err(mismatch());
+    }
+    if keyed && !exec_reservation_from_parent(before_debit, record.reservation, &before) {
+        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC reservation differs from selected parent"));
     }
     Ok(())
 }
@@ -236,11 +264,7 @@ impl PalwChainStateV2 {
         let key = slot.reservation_key();
         let original = budget.claim_row(&key).ok_or(ReservationMismatch)?;
         let current = self.bond_budget().and_then(|budget| budget.claim_row(&key)).ok_or(ReservationMismatch)?;
-        // The window sweep can release window capacity independently of the
-        // outstanding liability. All other reservation fields must survive.
-        if (!original.in_window && current.in_window)
-            || *original != (PalwBudgetClaimRowV1 { in_window: original.in_window, ..*current })
-        {
+        if !same_exec_reservation(original, current) {
             return Err(ReservationMismatch);
         }
         book.admit_exec_slot(claim, slot, budget, |_, _| Some(historical))?;
@@ -421,9 +445,11 @@ impl PalwChainStateV2 {
         if budget.header.policy_digest != policy.digest() {
             return Err(ReservationMismatch);
         }
-        let row = budget
-            .claim_row(&slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key))
-            .ok_or(ReservationMismatch)?;
+        let reservation = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
+        let row = budget.claim_row(&reservation).ok_or(ReservationMismatch)?;
+        if work.is_some() && !exec_reservation_from_parent(&delta.entries, reservation, row) {
+            return Err(ReservationMismatch);
+        }
         let (bond_collateral, other_live_liability, bond_locked_until) =
             self.bond_liability_terms_v1(&terms.funding_bond, row.liability_sompi);
         let paid_now =
