@@ -14306,6 +14306,28 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         .expect("some claim id wins the receipt lottery under the seed target");
     let injected = build_injected(claim_id);
 
+    // Quote the same unspent winning index on either side of its inclusive
+    // deadline. Only the next candidate's DAA changes at this fixed parent.
+    {
+        use crate::model::stores::virtual_state::VirtualStateStore;
+        use kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1;
+        use std::sync::Arc;
+        let reader = Arc::new(NativeChainStateV1::retain_existing_v1(injected.clone()).unwrap());
+        let previous_reader = vp.palw_reader_snapshot.lock().replace((tip, reader));
+        let original = vp.lkg_virtual_state.load_full();
+        let end = beacon.beacon_daa + bundle.freeprompt.receipt_use_window_daa();
+        for (daa, eligible) in [(end, true), (end + 1, false)] {
+            let mut candidate = (*original).clone();
+            candidate.daa_score = daa;
+            vp.virtual_stores.write().state.set(Arc::new(candidate)).unwrap();
+            let (parent, rows) = vp.palw_fp_spendable_with_parent_v3_impl(harness_bond).unwrap();
+            assert_eq!(parent, tip);
+            assert_eq!(rows.iter().any(|row| row.claim_id == claim_id && row.quantum_index == 0 && row.wins), eligible);
+        }
+        vp.virtual_stores.write().state.set(original).unwrap();
+        *vp.palw_reader_snapshot.lock() = previous_reader;
+    }
+
     // ---- 4. Two receipt-lane (algo-7) siblings on the SAME parent, each a different block
     //         (nonce/timestamp) but both spending the SAME quantum 0 of the SAME claim, each with a
     //         real ML-DSA-87 signature and the correct draw beacon. Cheap to make; the header gate

@@ -4680,6 +4680,15 @@ impl VirtualStateProcessor {
         let freeprompt = self.palw_freeprompt_params_v3.as_ref()?;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
+        // The admission check evaluates the candidate block's DAA against the
+        // selected parent's claim state. Capture both from the same virtual tip.
+        let candidate_daa = {
+            let virtual_state = self.lkg_virtual_state.load();
+            if virtual_state.ghostdag_data.selected_parent != chain_point {
+                return None;
+            }
+            virtual_state.daa_score
+        };
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -4692,10 +4701,7 @@ impl VirtualStateProcessor {
         // built ONCE per call (the audit review): asking `palw_execution_root_is_forfeited_v1` per
         // claim scanned every consumed offence for every Final free-prompt claim, O(claims ×
         // offences) on the producer's path to being paid.
-        let forfeited = state
-            .last_point()
-            .is_some_and(|point| self.palw_audit_2026_09_23_at(point.daa_score))
-            .then(|| state.palw_forfeited_execution_roots_v1());
+        let forfeited = self.palw_audit_2026_09_23_at(candidate_daa).then(|| state.palw_forfeited_execution_roots_v1());
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if claim.bond != key {
@@ -4704,8 +4710,12 @@ impl VirtualStateProcessor {
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
                 continue;
             };
-            let now = state.last_point().map(|point| point.daa_score).unwrap_or(final_daa);
-            if !kaspa_consensus_core::palw_state_v2::palw_protected_receipt_window_open_v1(&state, claim_id, claim.accepted_daa, now) {
+            if !kaspa_consensus_core::palw_state_v2::palw_protected_receipt_window_open_v1(
+                &state,
+                claim_id,
+                claim.accepted_daa,
+                candidate_daa,
+            ) {
                 continue;
             }
             if kaspa_consensus_core::palw_state_v2::palw_protected_admission_reads_back_v1(&state, claim_id, claim).is_err()
@@ -4753,8 +4763,8 @@ impl VirtualStateProcessor {
                 Ok(None) => {}
                 Err(_) => continue,
             }
-            // A deadline already behind the tip cannot be carried by the next block.
-            if spend_deadline_daa < now {
+            // The beacon and the final eligible DAA are both inclusive.
+            if candidate_daa < beacon.beacon_daa || spend_deadline_daa < candidate_daa {
                 continue;
             }
             for quantum_index in 0..*quanta {
