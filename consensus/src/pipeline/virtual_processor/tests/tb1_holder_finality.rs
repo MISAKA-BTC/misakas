@@ -1243,9 +1243,9 @@ async fn run(stable: bool, registered: bool) {
             jobs.derive_recorded_at_parent(&history, parent, snapshot, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS)
         };
         let branch_input = read_at(certificate.hash(), &settlement).unwrap();
-        assert_eq!(branch_input.attempt(), r.attempt());
-        assert_eq!(branch_input.registration_key(), r.registration_key());
-        assert_eq!(branch_input.tokens(), r.tokens());
+        assert_eq!(branch_input.derived().attempt(), r.attempt());
+        assert_eq!(branch_input.derived().registration_key(), r.registration_key());
+        assert_eq!(branch_input.derived().tokens(), r.tokens());
         assert!(read_at(batch.hash(), &settlement).is_err());
         for finalized in [None, Some(genesis)] {
             let invalid = NativeSettlementSnapshotV1 { finalized, ..settlement.clone() };
@@ -1418,8 +1418,36 @@ async fn run(stable: bool, registered: bool) {
         peer_log!("TB1 TIR inference pid {} {}", std::process::id(), serde_json::to_string(run).unwrap());
     }
     let original_receipt = if let Some((r, body, sig, id)) = &retained_qf1 {
+        let certificate_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
         let block = local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await;
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
+        let api = node.api().as_ref();
+        let history = CandidateHistory(api);
+        let receipt_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
+        let recorded_input = |parent, settlement: &NativeSettlementSnapshotV1| {
+            jobs.derive_recorded_at_parent(&history, parent, settlement, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS)
+                .unwrap()
+        };
+        let bound_instance = instance.as_ref().unwrap();
+        let recorded = recorded_input(block.hash(), &receipt_settlement);
+        assert_eq!(recorded.parent(), block.hash());
+        let execution = recorded.read_qf1_execution(&history, block.hash(), body, sig, bound_instance).unwrap();
+        assert_eq!((execution.original(), execution.original_block()), (*id, block.hash()));
+        assert_eq!((execution.parent(), execution.ticket()), (block.hash(), &body.ticket));
+        assert_eq!(execution.work(), r.qf1_computational_work_key(api, bound_instance).unwrap());
+        let mut ticket = [0u8; 33];
+        ticket[1..].copy_from_slice(&body.ticket);
+        assert_eq!(execution.ticket_meets_target(), ticket < r.terms().target);
+        assert!(recorded.read_qf1_execution(&history, block.hash(), body, &owner_sig, bound_instance).is_err());
+        let (artifact, norm) = exercise.as_ref().unwrap();
+        let wrong_model = prediction::bind_scale(artifact, *norm, b"branch read substitute");
+        assert!(recorded.read_qf1_execution(&history, block.hash(), body, sig, &wrong_model).is_err());
+        assert!(
+            recorded_input(certificate.hash(), &certificate_settlement)
+                .read_qf1_execution(&history, block.hash(), body, sig, bound_instance)
+                .is_err()
+        );
+        peer_log!("QF1 branch execution pid={} original={} work={}", std::process::id(), id, execution.work());
         peer_log!("QF1 receipt pid={} block={} original={}", std::process::id(), block.hash(), id);
         use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{LocalPanelInputs, LocalSubmission, RecordedLocalSubmission};
         let actors = stable.then(|| stable_panel::Actors::enroll(&mut parent_socket, &mut peers));

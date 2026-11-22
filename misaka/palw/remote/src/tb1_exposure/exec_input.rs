@@ -418,6 +418,22 @@ pub struct DerivedExecInput<'a> {
     terms: &'a ExecInputTerms<'a>,
 }
 
+/// An EXEC input reconstructed against the accepting candidate's own parent.
+pub struct BranchExecInput<'a> {
+    input: DerivedExecInput<'a>,
+    parent: Hash64,
+}
+
+impl<'a> BranchExecInput<'a> {
+    pub fn derived(&self) -> &DerivedExecInput<'a> {
+        &self.input
+    }
+
+    pub fn parent(&self) -> Hash64 {
+        self.parent
+    }
+}
+
 impl DerivedExecInput<'_> {
     /// Recheck the original certificate on the current selected history and the
     /// job deadline when resuming work or returning a result from a long run.
@@ -512,9 +528,9 @@ impl<'a> FrozenExecInputs<'a> {
         rows: &[PublishedRelease<'_>],
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
-    ) -> io::Result<DerivedExecInput<'a>> {
+    ) -> io::Result<BranchExecInput<'a>> {
         let seed = self.gate.read_seed_at_parent(native, parent, settlement, publication, certificate, rows, q, limits)?;
-        self.derive_from_seed(slot, certificate, &seed)
+        Ok(BranchExecInput { input: self.derive_from_seed(slot, certificate, &seed)?, parent })
     }
 
     fn derive_from_seed(
@@ -638,6 +654,10 @@ impl DerivedExecInput<'_> {
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> Result<(), String> {
         self.check_live(native).map_err(|e| e.to_string())?;
+        self.check_qf1_instance_binding(instance)
+    }
+
+    fn check_qf1_instance_binding(&self, instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>) -> Result<(), String> {
         let terms = self.terms;
         let frame = terms.qf1.ok_or("signed EXEC input has no QF1 frame")?.admitted().map_err(|e| e.to_string())?;
         let id = instance.identity();
@@ -709,7 +729,7 @@ impl DerivedExecInput<'_> {
 #[cfg(feature = "private-tb1-tir")]
 mod original;
 #[cfg(feature = "private-tb1-tir")]
-pub use original::{LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody};
+pub use original::{BranchQf1Execution, LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody};
 
 #[cfg(feature = "private-tb1-tir")]
 pub mod panel_cut;

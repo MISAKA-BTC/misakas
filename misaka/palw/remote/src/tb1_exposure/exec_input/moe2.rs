@@ -194,6 +194,23 @@ impl AuthenticatedMoe2ExecClose {
         &self.close.slots
     }
 
+    /// Find the authenticated quote for this exact recorded execution.
+    /// This joins the two signed inputs before checking award authority.
+    #[cfg(feature = "private-tb1-tir")]
+    pub fn slot_for_qf1_execution(&self, execution: &BranchQf1Execution) -> io::Result<&Moe2ExecSlot> {
+        if !execution.ticket_meets_target() || execution.close != self.close.block {
+            return Err(invalid("QF1 execution differs from close or original target"));
+        }
+        let slots = self.quoted_slots();
+        let index =
+            slots.binary_search_by_key(&execution.slot, |slot| slot.slot).map_err(|_| invalid("no MOE2 quote at EXEC slot"))?;
+        let slot = &slots[index];
+        if slot.registration != execution.registration || Some(slot.quote) != execution.quote {
+            return Err(invalid("MOE2 quote differs from recorded QF1 execution"));
+        }
+        Ok(slot)
+    }
+
     pub fn into_mining_reservation(self) -> io::Result<Moe2ExecCloseV1> {
         if let Some(profile) = self.first_quoted_profile {
             return Err(match profile {

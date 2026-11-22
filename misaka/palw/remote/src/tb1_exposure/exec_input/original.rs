@@ -15,6 +15,78 @@ pub struct LocalOriginalBody {
     pub ticket: [u8; 32],
 }
 
+/// The envelope, target evaluation and numerical work identity on a
+/// candidate branch. Independent replay and Gate C precede reward authority.
+pub struct BranchQf1Execution {
+    pub(super) close: Hash64,
+    pub(super) registration: [u8; 64],
+    pub(super) slot: u64,
+    pub(super) quote: Option<Moe2PreDrawQuote>,
+    parent: Hash64,
+    original: Hash64,
+    original_block: Hash64,
+    work: Hash64,
+    ticket: [u8; 32],
+    ticket_meets_target: bool,
+}
+
+impl BranchQf1Execution {
+    pub fn parent(&self) -> Hash64 {
+        self.parent
+    }
+
+    pub fn original(&self) -> Hash64 {
+        self.original
+    }
+
+    pub fn original_block(&self) -> Hash64 {
+        self.original_block
+    }
+
+    pub fn work(&self) -> Hash64 {
+        self.work
+    }
+
+    pub fn ticket(&self) -> &[u8; 32] {
+        &self.ticket
+    }
+
+    pub fn ticket_meets_target(&self) -> bool {
+        self.ticket_meets_target
+    }
+}
+
+impl BranchExecInput<'_> {
+    /// Bind a recorded Original and its numerical work. This reads the
+    /// envelope and the candidate branch's commitment without model replay.
+    pub fn read_qf1_execution(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        body: &LocalOriginalBody,
+        sig: &MLDSA65Signature,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> io::Result<BranchQf1Execution> {
+        let input = &self.input;
+        let original = input.read_qf1_original_on_branch(native, self.parent, block, body, sig)?;
+        let invalid_work = |why| io::Error::new(io::ErrorKind::InvalidData, why);
+        input.check_qf1_instance_binding(instance).map_err(invalid_work)?;
+        let work = instance.computational_work_key(&input.tokens, input.terms.decode_tokens).map_err(invalid_work)?;
+        Ok(BranchQf1Execution {
+            close: input.close,
+            registration: input.registration_key,
+            slot: input.slot,
+            quote: input.terms.moe2_quote,
+            parent: self.parent,
+            original,
+            original_block: block,
+            work,
+            ticket: body.ticket,
+            ticket_meets_target: input.terms.threshold()?.admits_ticket_be(&body.ticket),
+        })
+    }
+}
+
 impl LocalOriginalBody {
     pub(crate) fn from_trace(trace: &LocalTrace) -> Self {
         Self { counts: trace.roots.map(|r| r.count()), roots: trace.roots.map(|r| Hash64::from_bytes(r.digest)), ticket: trace.ticket }
@@ -136,18 +208,30 @@ impl DerivedExecInput<'_> {
         sig: &MLDSA65Signature,
     ) -> io::Result<Hash64> {
         let (_, tip) = self.check_selected(native)?;
+        let original = self.read_qf1_original_on_branch(native, tip, block, body, sig)?;
+        if self.check_selected(native)?.1 != tip {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "local Original view moved"));
+        }
+        Ok(original)
+    }
+
+    fn read_qf1_original_on_branch(
+        &self,
+        native: &dyn ConsensusApi,
+        selected_parent: Hash64,
+        block: Hash64,
+        body: &LocalOriginalBody,
+        sig: &MLDSA65Signature,
+    ) -> io::Result<Hash64> {
         let original = self.verify_original_body(body, sig)?;
         let header = native.get_header(block).map_err(io::Error::other)?;
         let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
         if !(self.terms.open_daa..self.terms.deadline_exclusive_daa).contains(&header.daa_score)
             || !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
-            || !native.is_chain_ancestor_of(block, tip).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(block, selected_parent).map_err(io::Error::other)?
             || !native.palw_coinbase_commits_to(self.chain, block, &original.as_bytes()).map_err(io::Error::other)?
         {
             return Err(invalid("local Original outside committed EXEC history"));
-        }
-        if self.check_selected(native)?.1 != tip {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "local Original view moved"));
         }
         Ok(original)
     }
