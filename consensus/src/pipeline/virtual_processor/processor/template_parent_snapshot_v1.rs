@@ -114,6 +114,18 @@ fn walk_fault_v1(error: crate::processes::palw_state_walk::PalwStateWalkError) -
 }
 
 impl VirtualStateProcessor {
+    /// Borrow an already authenticated parent for a block-pinned proof. A
+    /// historical query must not evict the producer's memo or start a walk
+    /// while holding its lock.
+    pub(super) fn resident_template_parent_for_proof_v1(&self, target: BlockHash) -> Option<Arc<NativeChainStateV1>> {
+        let entry = self.template_parent_snapshot_v1.entry.try_lock()?;
+        let (key, state) = entry.as_ref()?;
+        if key.target != target || self.template_parent_key_v1(target).ok()? != *key {
+            return None;
+        }
+        Some(Arc::clone(state))
+    }
+
     fn template_parent_key_v1(&self, target: BlockHash) -> Result<ParentKeyV1, PalwWeighFaultV2> {
         let meta = self.pruning_meta_stores.try_read().ok_or(PalwWeighFaultV2::NoOpinion)?;
         let import = meta.import_session().map_err(store_fault_v1)?;

@@ -320,3 +320,11 @@ DAA 7751の隔離作業DB3個にZFS snapshot `p200-before-bounded-forward` を�
 後続試験は選択tipを `20834c6dc69efc9d…`、virtual DAAを7753まで進めた直後に履歴proofの照合で終了コード1。採取時のノードログでは、選択親の状態再構築に約17.0 GB必要なところ、約18.2 GBが予約済みで約20.6 GBの論理上限に達していた。発行を止めて再起動した3ピアの読戻しは終了コード0。同じ選択tip、ヘッダーの親状態root、親状態proofのpreimage、選択tipのpost-state root `ff74dfb10930acae…` が一致した。
 
 最後の短い試験の発行中は、全ピアの選択tipを揃えて現在のnative post-state rootを照合した。終了コード0。3ピアがalgo 8ブロック `c07eaca5b8b7a751…`、virtual DAA 7754、post-state root `125cdac1ab342017…` を返した。Panel承認済みの同じStudio claimは `receipt_licensed`、異議保留なし、Final期限10866、Gate Cはpending。新規Attempt、Final、当選Ticket、受賞権利消費は今回の試験では確認していない。作業コピーをこの位置で停止した。完全な識別子と終了コードは [P200実行記録](p200-studio-mining-path.json) に収録した。
+
+### 履歴proofで保持済み親状態を再利用
+
+`getPalwStateProof` が対象ブロックの選択親を知った後、テンプレート処理がすでに保持している状態の親ブロック・root・pruning point・import世代を照合する。一致した場合は状態を借り、native状態の複製と履歴差分の巻き戻しを省く。キャッシュが空、別の親、別世代、または取得中の場合は従来の履歴読取りを使う。proofを生成する際はどちらもヘッダーのcommitmentと照合する。履歴proofの問い合わせはテンプレート用キャッシュの中身を入れ替えない。
+
+`template_parent_snapshot` は12件、終了コード0（試験0.95秒、ビルド2分49秒）。追加試験では通常の履歴歩行を利用できなくした後、照合済みのキャッシュから同じ親のproofが生成され、親の保存済みroot参照を取り除くと拒否されることを確認した。初回は試験コードで設定値の所有権を移動してビルド終了コード101。クローンを渡すように修正して再実行した。同じバイナリのround observer試験5件（0.57秒）とT12当選・3ピア受理fixture（3.77秒）も終了コード0。
+
+DAA 7754の隔離P200作業コピーには今回のバイナリを適用していない。キャッシュにない履歴読取りの容量制限、実claimのFinal・Gate C・当選、MOE2同一実ブロック決済の検証は残る。

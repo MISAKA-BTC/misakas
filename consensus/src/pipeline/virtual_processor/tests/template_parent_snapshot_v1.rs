@@ -4,6 +4,47 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use std::sync::atomic::Ordering;
 
 #[tokio::test]
+async fn block_pinned_proof_reuses_the_resident_template_parent_snapshot() {
+    use kaspa_consensus_core::palw_state_proof_v1::{PALW_PROOF_LABEL_BONDS, prove_bonds_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|params| {
+            params.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *params = params.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let parent = ctx.consensus.get_sink();
+    let vp = ctx.consensus.virtual_processor().clone();
+    let cached = vp.palw_template_parent_checked_v1(parent).unwrap();
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let block = ctx.consensus.get_sink();
+    assert_eq!(vp.ghostdag_store.get_selected_parent(block).unwrap(), parent);
+    assert_ne!(block, parent);
+    vp.palw_template_parent_checked_v1(parent).unwrap();
+
+    // Make the legacy walk unavailable after the parent was authenticated.
+    // Its immutable delta identity and the child's header remain readable.
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    assert!(vp.old_template_parent_for_tests_v1(parent).is_none());
+    let (header, proof) = vp.palw_state_proof_v1_impl(block, PALW_PROOF_LABEL_BONDS).unwrap();
+    let expected = prove_bonds_v1(&cached);
+    assert_eq!(header.hash, block);
+    assert_eq!(header.palw_state_root, expected.state.root());
+    assert_eq!(proof.state.preimage, expected.state.preimage);
+    assert_eq!(proof.collection.rows, expected.collection.rows);
+
+    vp.palw_state_v2_store.write().delete_delta_for_tests(parent).unwrap();
+    assert!(vp.palw_state_proof_v1_impl(block, PALW_PROOF_LABEL_BONDS).is_err());
+}
+
+#[tokio::test]
 async fn template_parent_snapshot_reuses_exact_root_across_tip_walks_without_blocking_writer() {
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);

@@ -5569,7 +5569,9 @@ impl VirtualStateProcessor {
             .get_selected_parent(block)
             .map_err(|_| format!("the node holds no GHOSTDAG data for block {block}"))?;
         let (at, state) = self
-            .palw_v2_state_at(parent)
+            .resident_template_parent_for_proof_v1(parent)
+            .map(|state| (parent, state))
+            .or_else(|| self.palw_v2_state_at(parent))
             .ok_or_else(|| format!("this node cannot establish the PALW state as-of {parent}, the selected parent of {block}"))?;
         if (collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32
             || collection == kaspa_consensus_core::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32
