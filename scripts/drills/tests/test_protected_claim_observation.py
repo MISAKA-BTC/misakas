@@ -35,6 +35,9 @@ class Rpc:
                            claim=dict(claimId=h(4), phase='final', phaseDaa=150, executorBond=h(20),
                                       seats=[h(21)], securityCertification='certified'),
                            protectedOriginal=self.read, tipBlock=h(10), tipDaa=200)
+        self.vesting = dict(available=True, native=dict(available=True, claimId=h(4), tipDaa=200),
+                            stateRoot=h(25), outstandingSompi='20', queryOutstandingSompi='10',
+                            queryExecPendingSompi='8', queryExecReadySompi='2')
         self.blocks = {}
         for n in (8, 9, 10):
             self.blocks[h(n)] = dict(header=dict(hash=h(n), daaScore=100 if n == 9 else 200, blueScore=100, powAlgoId=7),
@@ -53,6 +56,8 @@ class Rpc:
             return copy.deepcopy(self.dag)
         if method == 'getPalwNodeStatus':
             return copy.deepcopy(self.node)
+        if method == 'getPalwRewardVesting':
+            return copy.deepcopy(self.vesting)
         if method == 'getPalwClaimDetail':
             return dict(available=True, found=True, viewJson=json.dumps(self.detail))
         if method == 'getBlock':
@@ -298,6 +303,13 @@ class ObservationTests(unittest.TestCase):
         second = receipt_peer_view(rpc, rpc.expected, producer, h(10), 1)
         self.assertNotEqual(producer['context'], second['context'])
         self.assertEqual(second['receiptBlock']['header']['hash'], h(10))
+        for field, other in [('stateRoot', h(26)), ('queryOutstandingSompi', '11')]:
+            with self.subTest(field=field):
+                original = rpc.vesting[field]
+                rpc.vesting[field] = other
+                with self.assertRaisesRegex(ValueError, 'root or reward balances'):
+                    receipt_peer_view(rpc, rpc.expected, producer, h(10), 1)
+                rpc.vesting[field] = original
         rpc.detail['receiptQuanta']['spentIndices'] = [2]
         with self.assertRaisesRegex(ValueError, 'unique consumed quantum'):
             receipt_peer_view(rpc, rpc.expected, producer, h(10), 1)

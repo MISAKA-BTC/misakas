@@ -290,6 +290,7 @@ def observe(rpc, expected, *, previous=None, receipt=None, panel_approval=None, 
                     for tx in approval_carrier['transactions']) == 1, 'exact approval carrier body unavailable')
 
     receipt_block = None
+    reward_state = None
     if receipt is not None:
         require(require_gate_c_status(detail), 'protected receipt observed before Gate C certification')
         receipt_block = block_read(rpc, receipt)
@@ -305,13 +306,28 @@ def observe(rpc, expected, *, previous=None, receipt=None, panel_approval=None, 
                 and origin['acceptedDaa'] < unsigned(claim['phaseDaa']) <= receipt_daa <= detail['tipDaa'],
                 'receipt DAA does not match a Final claim in the observed history')
 
+        vesting = rpc.call('getPalwRewardVesting', dict(bond='', payoutAddress='', claimId=expected['claim'],
+                                                       limit=1, after='', execAfter=''))
+        require(vesting['available'] is True and vesting['native']['available'] is True
+                and vesting['native']['claimId'] == expected['claim'], 'native reward state unavailable for claim')
+        if unsigned(vesting['native']['tipDaa']) != detail['tipDaa']:
+            raise ContextMoved('reward state and receipt readback have different tips')
+        reward_state = dict(stateRoot=hash64(vesting['stateRoot']))
+        for field in ('outstandingSompi', 'queryOutstandingSompi', 'queryExecPendingSompi', 'queryExecReadySompi'):
+            value = vesting[field]
+            require(isinstance(value, str) and re.fullmatch(r'0|[1-9][0-9]*', value), 'invalid reward balance')
+            reward_state[field] = value
+
     after = context(rpc.call('getBlockDagInfo'), rpc.call('getPalwNodeStatus'))
     if before != after:
         raise ContextMoved('native generation changed during protected claim readback')
+    if (reward_state is not None and previous and previous.get('rewardState') is not None
+            and previous['context'][0] == before[0]):
+        require(reward_state == previous['rewardState'], 'receipt observations at the same sink differ in root or reward balances')
     return dict(version=1, kind='protectedClaimObservation', source='node-rpc', expected=expected,
                 context=list(before), origin=origin, detail=detail, acceptingBlock=accepting,
                 acceptedTransactionIds=entries[0], carrierBlock=carrier, receiptBlock=receipt_block,
-                panelApprovalAcceptance=approval_entry,
+                panelApprovalAcceptance=approval_entry, rewardState=reward_state,
                 nativeReceiptEnvelopeValidated=False, actualClaimCompletion=False)
 
 
