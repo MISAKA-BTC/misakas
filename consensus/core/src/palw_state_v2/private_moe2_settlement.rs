@@ -44,6 +44,49 @@ impl PalwChainStateV2 {
         self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot))
     }
 
+    /// Remove an EXEC settlement from this block before disconnecting its
+    /// ordinary native delta. Unwind multiple settlements newest first.
+    /// A journal from another branch, or a later write in this block, must
+    /// leave both the native state and the accounting book untouched.
+    pub fn revert_private_moe2_exec_slot(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        slot: &Moe2ExecSlot,
+        undo: &Moe2SettlementUndo,
+    ) -> Result<(), Moe2SettlementError> {
+        use Moe2SettlementError::UndoMismatch;
+        if config.private_moe2_registration_from().is_none_or(|from| delta.point.daa_score < from)
+            || self.last_point() != Some(&delta.point)
+            || delta.point != undo.point()
+        {
+            return Err(UndoMismatch);
+        }
+        let reward = book.entitlement(&undo.claim()).ok_or(UndoMismatch)?;
+        let model = slot.quote.model;
+        let before = undo.market_before();
+        let after = reward.allocation.market.map(|quote| quote.after);
+        if self.model_market(&model) != after.as_ref() {
+            return Err(UndoMismatch);
+        }
+        let mut suffix = vec![PalwDeltaEntryV2::from(undo.exec_debit(slot)?)];
+        if before != after {
+            suffix.push(PalwDeltaEntryV2::ModelMarket { key: model, old: before, new: after });
+        }
+        if !delta.entries.ends_with(&suffix) {
+            return Err(UndoMismatch);
+        }
+
+        let budget = self.bond_budget.as_mut().ok_or(UndoMismatch)?;
+        book.revert_exec_settlement(slot, undo, budget, &mut Vec::new())?;
+        if let Some(market) = before {
+            self.model_markets.insert(model, market);
+        }
+        delta.entries.truncate(delta.entries.len() - suffix.len());
+        Ok(())
+    }
+
     fn settle_private_moe2_funding(
         &mut self,
         config: &Params,

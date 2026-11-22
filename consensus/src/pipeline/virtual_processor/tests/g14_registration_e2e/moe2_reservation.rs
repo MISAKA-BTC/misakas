@@ -131,6 +131,14 @@ pub(super) async fn exercise(
     assert_eq!(tip, execution.hash());
     assert_eq!(state.model_market(&model), next_state.model_market(&model));
     let at = Moe2Position { point: *next_state.last_point().unwrap(), ordinal: 1 };
+    checkpoint::check_exec_settlement_rewind(
+        env,
+        state,
+        &book,
+        enrollment.hash(),
+        at,
+        registration_quote(state, model, bond, policy.digest()),
+    );
     book.admit(terms, |anchor, id| (anchor == point.block && id == model).then_some(registered)).unwrap();
     let mut journal = Vec::new();
     let held = u128::from(reward) * 4;

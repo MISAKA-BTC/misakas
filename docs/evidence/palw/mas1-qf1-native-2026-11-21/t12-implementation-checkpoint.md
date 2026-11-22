@@ -180,3 +180,13 @@ private Linux ARM64ノードの再ビルドは終了コード0、24.86秒。SHA-
 過去のT-N1のnative RocksDBをコピーし、`recover_tn1_receipt_from_cold_native_db` を独立した2プロセスで順に実行した。各プロセスがgenesisを再処理せずにDBを開き、DAA 2725の受理済みPFS3 `7cb8b072…` を選択親 `3c1cd4ff…` から通常の再提出用lookupで復元した。両プロセスで通常のRPCブロック形式の全バイトがDB内の受理済み本体と一致し、その受賞の選択親ではないDB先端 `53b8c9fa…` からのlookupは空だった。終了コードはそれぞれ0、試験時間は0.11秒と0.09秒。初回はテスト内の参照型が一致せずビルド終了コード101で、参照を修正後に上記を取得した。
 
 再現にはコピーのパスを `MISAKA_TN1_COLD_RECEIPT_DB_COPY`、対応するreceiptとtipを記録したJSONのパスを `MISAKA_TN1_COLD_RECEIPT_CONTEXT` に指定し、kaspadのテストビルドで `recover_tn1_receipt_from_cold_native_db -- --ignored` を実行する。検証対象は過去の受理済みブロックの本体復元。保留中の候補を実ノードが再提出する経路、3ピアの選択鎖切り替えと消費・報酬の巻き戻しは未検証。
+
+### EXEC slotによるMOE2決済差分の取り消し
+
+`revert_private_moe2_exec_slot` は、取り消し記録に結合したブロック位置と、native delta末尾の予約消費・市場更新を照合する。元の予算行、worker配分・永久LPを持つ決済台帳、市場状態を戻し、その決済差分だけを取り除く。選択親への通常の巻き戻しは、取り除いた後のnative deltaで行う。この接続点に渡す採掘権利は、FOW1 claimの正規受付、Panel承認、Gate C、当選、同一ブロックでの権利消費を確認した処理から取得する必要がある。その通常ブロック処理からの呼び出しは未接続。
+
+`private_moe2_three_process_registration` は終了コード0（実行1.14秒）。3プロセスが共通のnativeブロック `3bc753c0…` の差分と試験用EXEC slotで決済を計算し、決済後root `74a710ae…`、決済台帳root `dcabe505…`、購入4,800,000,000 sompi、永久LP 3,200,000,000 sompi、余剰Position 1単位burn、Miner 6,400,000,000 sompi、Panel 1,600,000,000 sompiで一致した。エンコードした取り消し記録と再読込した台帳を使い、別ブロック・別close・欠けた差分・二重取り消しを拒否した。正しい記録では決済前root `91f1d8dd…` を復元し、再適用で決済後rootを再現した。これらは各プロセスの試験用差分に対する結果であり、選択済みブロックの通常の決済ではない。
+
+テストビルドは終了コード0（2分51秒）。初回は指定featureが対象crateになく終了コード101。続くビルドはテスト内の一時参照が短く終了コード101。対象crateの `evm` featureでビルドし、テスト内の参照を修正して上記を取得した。
+
+同じビルドで既存のT12当選・落選とPFS3/PFS4同一量子の二重消費拒否を再実行し、いずれも終了コード0を取得した。

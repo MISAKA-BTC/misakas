@@ -270,6 +270,44 @@ pub struct Moe2SettlementUndo {
 }
 
 impl Moe2SettlementUndo {
+    pub(crate) fn point(&self) -> PalwBlockContextV2 {
+        self.position.point
+    }
+
+    pub(crate) fn claim(&self) -> Hash64 {
+        self.terms.claim
+    }
+
+    pub(crate) fn market_before(&self) -> Option<PalwModelMarketV1> {
+        match self.before_model.allocation {
+            Moe2ModelAllocation::Core => None,
+            Moe2ModelAllocation::Additional(market) => Some(market),
+        }
+    }
+
+    pub(crate) fn exec_debit(&self, slot: &Moe2ExecSlot) -> Result<PalwBudgetWriteV1, Moe2SettlementError> {
+        let after = self.after_budget(true)?;
+        Ok(self.debit(slot.reservation_key(), &after))
+    }
+
+    fn after_budget(&self, exec: bool) -> Result<PalwBudgetClaimRowV1, Moe2SettlementError> {
+        let mut after = self.before_budget;
+        if exec {
+            after.consumed.claims = 1;
+        }
+        after.consumed.reward_sompi = after.consumed.reward_sompi.checked_add(self.draw).ok_or(Moe2SettlementError::UndoMismatch)?;
+        Ok(after)
+    }
+
+    fn debit(&self, key: Hash64, after: &PalwBudgetClaimRowV1) -> PalwBudgetWriteV1 {
+        PalwBudgetWriteV1::Row {
+            table: PALW_BUDGET_TABLE_CLAIMS_V1,
+            key: borsh::to_vec(&key).expect("budget key serializes"),
+            old: Some(borsh::to_vec(&self.before_budget).expect("budget row serializes")),
+            new: Some(borsh::to_vec(after).expect("budget row serializes")),
+        }
+    }
+
     fn digest(&self) -> Hash64 {
         let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/settlement-undo/v1").to_state();
         h.update(&borsh::to_vec(self).expect("fixed-size settlement undo serializes"));
@@ -877,21 +915,14 @@ impl Moe2SettlementBook {
             return Err(UndoMismatch);
         }
         let key = slot.map_or_else(|| terms.reservation_key(), Moe2ExecSlot::reservation_key);
-        let mut after_row = undo.before_budget;
-        if slot.is_some() {
-            after_row.consumed.claims = 1;
-        }
-        after_row.consumed.reward_sompi = after_row.consumed.reward_sompi.checked_add(undo.draw).ok_or(UndoMismatch)?;
+        let after_row = undo.after_budget(slot.is_some())?;
         if budget.claim_row(&key) != Some(&after_row) {
             return Err(ReservationMismatch);
         }
         if undo.draw != 0 || slot.is_some() {
-            let table = PALW_BUDGET_TABLE_CLAIMS_V1;
-            let key = borsh::to_vec(&key).expect("budget key serializes");
-            let old = Some(borsh::to_vec(&after_row).expect("budget row serializes"));
-            let new = Some(borsh::to_vec(&undo.before_budget).expect("budget row serializes"));
-            budget.apply_row(table, &key, &old, &new, false).map_err(|_| ReservationMismatch)?;
-            journal.push(PalwBudgetWriteV1::Row { table, key, old, new });
+            let PalwBudgetWriteV1::Row { table, key, old, new } = undo.debit(key, &after_row) else { unreachable!() };
+            budget.apply_row(table, &key, &old, &new, true).map_err(|_| ReservationMismatch)?;
+            journal.push(PalwBudgetWriteV1::Row { table, key, old: new, new: old });
         }
         self.models.insert(terms.model, undo.before_model);
         if self.receipts.remove(&terms.claim).is_some() {
