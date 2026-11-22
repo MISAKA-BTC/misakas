@@ -96,12 +96,14 @@ def retry_retained_sink(clients, views, *, relay_missing=False):
 
 
 def retry_shared_child(clients, views):
-    """Resolve a retained direct child when all restarted peers report the same pending tip."""
+    """Revalidate a single retained child, including on peers still advertising its parent."""
     best = views[0]
-    tips = best['tipHashes']
-    if len(tips) != 1 or tips[0] == best['sink'] or not all(v['tipHashes'] == tips for v in views):
+    children = {tip for view in views for tip in view['tipHashes'] if tip != best['sink']}
+    if len(children) != 1 or any(view['sink'] != best['sink'] for view in views):
         return False
-    child = block_read(clients[0], tips[0], transactions=True)
+    child_hash, = children
+    source = next(client for client, view in zip(clients, views) if child_hash in view['tipHashes'])
+    child = block_read(source, child_hash, transactions=True)
     if child['verboseData']['selectedParentHash'] != best['sink'] or child['verboseData']['isChainBlock']:
         return False
     for client in clients:
@@ -517,7 +519,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
 
         next_retained_retry = 0.0
 
-        def agreement(*, recover_retained=False):
+        def agreement():
             nonlocal next_retained_retry
             clock._alive()
             try:
@@ -525,9 +527,12 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
             except ContextMoved:
                 return None
             if len({(view['sink'], view['virtualDaaScore']) for view in views}) == 1:
-                if recover_retained and time.monotonic() >= next_retained_retry and retry_shared_child(clients, views):
-                    next_retained_retry = time.monotonic() + 2
-                    return None
+                if any(view['tipHashes'] != [view['sink']] for view in views):
+                    if time.monotonic() < next_retained_retry:
+                        return None
+                    if retry_shared_child(clients, views):
+                        next_retained_retry = time.monotonic() + 2
+                        return None
                 return views[0]
             if time.monotonic() >= next_retained_retry:
                 retry_retained_sink(clients, views, relay_missing=True)
@@ -587,7 +592,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
 
         # Registration supplies the normal signed carriers. The owned clock
         # advances only between reads, so it cannot race a control send.
-        view = wait_until(time.monotonic() + step_timeout, partial(agreement, recover_retained=resume_claim is not None))
+        view = wait_until(time.monotonic() + step_timeout, agreement)
         registration_budget = sum(unsigned(registration[field]) for field in (
             'maximumCarrierBatchFeeSompi', 'maximumInventoryPrepaidSompi',
             'maximumTkrFeeSompi', 'maximumRegistrationChargeSompi'))

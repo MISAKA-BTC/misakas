@@ -43,6 +43,8 @@
 
 #[cfg(feature = "private-integration-clock")]
 mod private_heartbeat;
+#[cfg(feature = "private-integration-clock")]
+mod submitted_child;
 
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::network::NetworkId;
@@ -566,6 +568,13 @@ impl PalwHeartbeatMinerService {
         let permit = if let Some(path) = &self.historical_permit_path {
             match read_historical_heartbeat_permit(path) {
                 Ok(permit) if session.async_get_sink().await == permit.sink && session.get_virtual_daa_score() == permit.daa => {
+                    if let Some(child) = submitted_child::read(path, permit.sink.as_bytes()).map_err(|err| err.to_string())? {
+                        let status = session.async_get_block_status(kaspa_consensus_core::BlockHash::from_bytes(child)).await;
+                        if status.is_some_and(|status| status.is_utxo_valid_or_pending()) {
+                            self.wait_for_slot(MIN_WAIT_MS).await;
+                            return Ok(PassOutcomeV1::Waited);
+                        }
+                    }
                     Some(permit)
                 }
                 Ok(_) => {
@@ -745,6 +754,12 @@ impl PalwHeartbeatMinerService {
         } else {
             0
         };
+        // Journal before submission so reopening the same private clock after a process exit
+        // can distinguish a retained body awaiting virtual resolution from a failed submission.
+        #[cfg(feature = "private-integration-clock")]
+        if let (Some(path), Some(permit)) = (&self.historical_permit_path, permit) {
+            submitted_child::write(path, permit.sink.as_bytes(), hash.as_bytes()).map_err(|err| err.to_string())?;
+        }
         // T12-049: a submit past the exit signal waits on a stopped pipeline forever — so it yields to
         // the signal, and the pass reads as the shutdown it is.
         let Some(submitted) =
