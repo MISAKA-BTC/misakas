@@ -5,8 +5,8 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateV2Error,
-    apply_delta_v2, revert_delta_v2,
+    Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2,
+    PalwStateV2Error, PalwTransitionExtrasV1, apply_delta_v2, apply_palw_transition_v2_with_extras, revert_delta_v2,
 };
 use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
@@ -25,7 +25,7 @@ pub(super) fn check_exec_settlement_rewind(
     let config = &env.config.params;
     let vp = env.chain.vp();
     let store = vp.palw_state_v2_store.read();
-    let (_, mut close_delta) = store.delta_of(close).unwrap();
+    let (_, close_delta) = store.delta_of(close).unwrap();
     drop(store);
     let slot = Moe2ExecSlot { registration: [24; 64], slot: 1, close, close_daa: close_delta.point.daa_score, quote };
     let claim = Hash64::from_u64_word(642);
@@ -42,7 +42,7 @@ pub(super) fn check_exec_settlement_rewind(
     };
     let mut book = registered_book.clone();
     let unreserved = apply_delta_v2(registration, &close_delta, params).unwrap();
-    let mut budget = unreserved.bond_budget().unwrap().clone();
+    let budget = unreserved.bond_budget().unwrap();
     let policy = &params.bond_budget().unwrap().policy;
     let release_window_at = slot.close_daa + policy.window_daa;
     for expires_at in [release_window_at, release_window_at + 1] {
@@ -72,26 +72,38 @@ pub(super) fn check_exec_settlement_rewind(
         assert!(sample.claim_row(&key).is_none());
         sample.check_consistency().unwrap();
     }
-    let mut writes = Vec::new();
-    for slot in [&slot, &alias_slot] {
-        let (capital, ask) = slot.quote.budget_ask_at(config, &unreserved, slot.close_daa).unwrap();
-        budget
-            .reserve_claim_v1(
-                &params.bond_budget().unwrap().policy,
-                capital,
-                slot.reservation_key(),
-                slot.quote.funding_bond,
-                Some(slot.quote.model),
-                slot.close_daa,
-                ask,
-                slot.budget_origin().unwrap(),
-                &mut writes,
-            )
-            .unwrap();
+    let parent_root = registration.state_root();
+    let input = Moe2ExecCloseV1 {
+        selected_parent: registration.last_point().unwrap().block,
+        parent_state_root: parent_root,
+        block: close,
+        blue_score: close_delta.point.blue_score,
+        daa_score: close_delta.point.daa_score,
+        private_from: config.private_moe2_registration_from().unwrap(),
+        slots: vec![slot, alias_slot],
+    };
+    let fold_close = |input, enabled| {
+        let extras =
+            PalwTransitionExtrasV1 { private_moe2_registration: enabled, private_moe2_exec_close: input, ..Default::default() };
+        apply_palw_transition_v2_with_extras(registration, params, &close_delta.point, &[], None, false, false, false, false, &extras)
+    };
+    let (_, blank) = fold_close(None, true).unwrap();
+    let (reserved, reserved_delta) = fold_close(Some(input.clone()), true).unwrap();
+    assert!(reserved_delta.entries.starts_with(&blank.entries));
+    let reservation_writes = reserved_delta.entries[blank.entries.len()..].to_vec();
+    for (bad_input, enabled) in [
+        (input.clone(), false),
+        (Moe2ExecCloseV1 { parent_state_root: Hash64::default(), ..input.clone() }, true),
+        (Moe2ExecCloseV1 { slots: vec![alias_slot, slot], ..input.clone() }, true),
+    ] {
+        assert!(matches!(fold_close(Some(bad_input), enabled), Err(PalwStateV2Error::DeltaMismatch(_))));
     }
-    let reservation_writes: Vec<_> = writes.into_iter().map(PalwDeltaEntryV2::from).collect();
-    close_delta.entries.extend(reservation_writes.iter().cloned());
-    let reserved = apply_delta_v2(registration, &close_delta, params).unwrap();
+    let mut failing = input;
+    failing.slots[1].quote.limits.max_reward = u64::MAX;
+    assert!(matches!(fold_close(Some(failing), true), Err(PalwStateV2Error::BondBudgetRefused(_))));
+    assert_eq!(registration.state_root(), parent_root);
+    assert_eq!(revert_delta_v2(&reserved, &reserved_delta, params).unwrap().state_root(), parent_root);
+    assert_eq!(apply_delta_v2(registration, &reserved_delta, params).unwrap().state_root(), reserved.state_root());
     let sibling = Moe2ExecSlot { close: Hash64::from_u64_word(647), ..slot };
     let revised = Moe2ExecSlot {
         quote: Moe2PreDrawQuote { price_limits: Moe2PriceLimits { max_output_slippage_bps: 1, ..quote.price_limits }, ..quote },

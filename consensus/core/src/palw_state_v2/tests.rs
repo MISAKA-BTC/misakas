@@ -29143,6 +29143,7 @@ mod evm_market {
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
             private_moe2_registration: false,
+            private_moe2_exec_close: None,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
@@ -29467,6 +29468,7 @@ mod evm_market {
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
             private_moe2_registration: false,
+            private_moe2_exec_close: None,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,

@@ -7,13 +7,14 @@ use super::{
 };
 use crate::Hash64;
 use crate::palw_bond_budget_v1::{
-    PALW_BUDGET_TABLE_CLAIMS_V1, PalwBondBudgetStateV1, PalwBudgetClaimRowV1, PalwBudgetDimV1, PalwBudgetOriginV1, PalwBudgetWriteV1,
+    PALW_BUDGET_TABLE_CLAIMS_V1, PalwBondBudgetPolicyV1, PalwBondBudgetStateV1, PalwBudgetAskV1, PalwBudgetClaimRowV1,
+    PalwBudgetDimV1, PalwBudgetOriginV1, PalwBudgetRefusalV1, PalwBudgetWriteV1,
 };
 use crate::palw_model_market_v1::PalwModelMarketV1;
 use crate::palw_settlement_liability_v1::{
     PalwSettlementLiabilityRefusalV1, PalwSettlementTermsSourcedV1, palw_settlement_liability_sourced_v1,
 };
-use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2};
+use crate::palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwStateParamsV2};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -83,6 +84,45 @@ impl Moe2ExecSlot {
     pub fn budget_origin(&self) -> Result<PalwBudgetOriginV1, Moe2SettlementError> {
         let expires_at = self.quote.deadline.checked_add(1).ok_or(Moe2SettlementError::OutsideWindow)?;
         Ok(PalwBudgetOriginV1::Moe2Exec { expires_at })
+    }
+
+    /// Consume capacity for this authenticated slot. The owning batch discards
+    /// all scratch writes if any slot is refused.
+    pub fn reserve_budget(
+        &self,
+        budget: &mut PalwBondBudgetStateV1,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        ask: PalwBudgetAskV1,
+        writes: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<u64, Moe2SettlementError> {
+        use Moe2SettlementError::*;
+        if ask.reward_sompi != self.quote.limits.max_reward || self.quote.policy != budget.header.policy_digest {
+            return Err(ReservationMismatch);
+        }
+        let key = self.reservation_key();
+        let granted = budget
+            .reserve_claim_v1(
+                policy,
+                capital,
+                key,
+                self.quote.funding_bond,
+                Some(self.quote.model),
+                self.close_daa,
+                ask,
+                self.budget_origin()?,
+                writes,
+            )
+            .map_err(Budget)?;
+        if granted.reward_sompi != ask.reward_sompi {
+            return Err(ReservationMismatch);
+        }
+        budget
+            .claim_row(&key)
+            .and_then(|r| r.model)
+            .filter(|(id, _)| *id == self.quote.model)
+            .map(|(_, epoch)| epoch)
+            .ok_or(ReservationMismatch)
     }
 
     pub fn consent_ref(registration: [u8; 64], slot: u64) -> [u8; 64] {
@@ -183,19 +223,31 @@ impl Moe2PreDrawQuote {
         state: &crate::palw_state_v2::PalwChainStateV2,
         daa: u64,
     ) -> Result<(u64, crate::palw_bond_budget_v1::PalwBudgetAskV1), Moe2SettlementError> {
-        use crate::palw_bond_budget_v1::{PalwBudgetAskV1, palw_bond_budget_export_cap_v1};
         use crate::palw_mode_v2::PalwConsensusMode;
+        use Moe2SettlementError::UnknownClaimContext;
+        let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
+        self.budget_ask_at_state(&bundle.state, from, state, daa)
+    }
+
+    pub(crate) fn budget_ask_at_state(
+        &self,
+        params: &PalwStateParamsV2,
+        from: u64,
+        state: &PalwChainStateV2,
+        daa: u64,
+    ) -> Result<(u64, PalwBudgetAskV1), Moe2SettlementError> {
+        use crate::palw_bond_budget_v1::palw_bond_budget_export_cap_v1;
         use crate::palw_state_v2::palw_bond_may_take_work_v2;
         use Moe2SettlementError::*;
         if self.deadline == u64::MAX || !(self.valid_from..=self.deadline).contains(&daa) {
             return Err(OutsideWindow);
         }
-        self.allocation_at(config, state, daa)?;
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
-        let policy = &bundle.state.bond_budget().ok_or(ReservationMismatch)?.policy;
+        self.allocation_at_state(params, from, state, daa)?;
+        let policy = &params.bond_budget().ok_or(ReservationMismatch)?.policy;
         let capital = state
             .bond(&self.funding_bond)
-            .filter(|bond| palw_bond_may_take_work_v2(bond, bundle.state.min_collateral_sompi()))
+            .filter(|bond| palw_bond_may_take_work_v2(bond, params.min_collateral_sompi()))
             .ok_or(ReservationMismatch)?
             .collateral;
         let reward_sompi = self.limits.max_reward;
@@ -215,16 +267,27 @@ impl Moe2PreDrawQuote {
         daa: u64,
     ) -> Result<Moe2ModelAllocation, Moe2SettlementError> {
         use crate::palw_mode_v2::PalwConsensusMode;
-        use crate::palw_model_tier_v1::palw_model_tier_of_v1;
-        use Moe2SettlementError::*;
+        use Moe2SettlementError::UnknownClaimContext;
         let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
         let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
-        let catalog = bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or(UnknownRegistration)?;
+        self.allocation_at_state(&bundle.state, from, state, daa)
+    }
+
+    fn allocation_at_state(
+        &self,
+        params: &PalwStateParamsV2,
+        from: u64,
+        state: &PalwChainStateV2,
+        daa: u64,
+    ) -> Result<Moe2ModelAllocation, Moe2SettlementError> {
+        use crate::palw_model_tier_v1::palw_model_tier_of_v1;
+        use Moe2SettlementError::*;
+        let catalog = params.model_tier_v1().filter(|c| c.active_at(daa)).ok_or(UnknownRegistration)?;
         let class = state.class(&self.model).ok_or(UnknownRegistration)?;
         if self.valid_from < from
             || class.artifact_root != self.artifact_root
             || self.valid_from < class.registered_daa
-            || bundle.state.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
+            || params.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
             || state.bond_budget().is_none_or(|b| b.header.policy_digest != self.policy)
             || state.bond(&self.funding_bond).is_none()
         {
@@ -483,6 +546,7 @@ pub enum Moe2SettlementError {
     UndoMismatch,
     CheckpointMismatch,
     OutsideWindow,
+    Budget(PalwBudgetRefusalV1),
     Quote(Moe2QuoteRefusal),
     Liability(PalwSettlementLiabilityRefusalV1),
 }

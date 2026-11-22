@@ -10,7 +10,7 @@ use kaspa_consensus_core::{
     config::params::Params,
     palw_attempt_v2::palw_network_domain_v2_for,
     palw_mode_v2::PalwConsensusMode,
-    palw_state_v2::{PalwChainStateV2, PalwStateDeltaV2, apply_delta_v2},
+    palw_state_v2::{Moe2ExecCloseV1, PalwBlockContextV2, PalwChainStateV2, PalwStateDeltaV2, apply_delta_v2},
 };
 use libcrux_ml_dsa::ml_dsa_87::{self, MLDSA87VerificationKey};
 
@@ -241,17 +241,34 @@ impl ExecInputBatch<'_> {
         parent: &PalwChainStateV2,
         delta: &mut PalwStateDeltaV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
-        let close = delta.point.block;
+        let input = self.resolve_moe2_exec_close(native, config, &delta.point, closure, q, parent)?;
+        self.close_budget(config, input.block, input.daa_score, parent, Some(delta))
+    }
+
+    /// Resolve the branch-owned input for the native block fold. The set has
+    /// already been owner- and funder-authenticated by `from_signed_at_parent`.
+    pub fn resolve_moe2_exec_close(
+        &self,
+        native: &dyn ConsensusApi,
+        config: &Params,
+        point: &PalwBlockContextV2,
+        closure: &Tb1MiningClosure,
+        q: &Tb1Qualification<'_>,
+        parent: &PalwChainStateV2,
+    ) -> io::Result<Moe2ExecCloseV1> {
+        let close = point.block;
         let (header, selected_parent) = self.check_close(native, close, closure)?;
         Tb1HolderFreeze::resolve_in_branch(native, close, closure, q)?;
         self.check_close_parent(config, &header, close, selected_parent, parent)?;
-        if (delta.point.daa_score, delta.point.blue_score) != (header.daa_score, header.blue_score) {
+        if (point.daa_score, point.blue_score) != (header.daa_score, header.blue_score) {
             return Err(invalid("MOE2 reservation differs from close position"));
         }
 
         // The signed quote authorizes the price and funder. The signed EXEC
         // context must independently authorize a mining job before locking funds.
-        for entry in self.entries.values().filter(|entry| entry.terms.moe2_quote.is_some()) {
+        let mut slots = Vec::new();
+        for (&slot, entry) in &self.entries {
+            let Some(quote) = entry.terms.moe2_quote else { continue };
             match entry.terms.qf1 {
                 Some(mode @ super::super::qf1::Qf1Use::NewMining(_)) => {
                     mode.admitted()?;
@@ -261,8 +278,17 @@ impl ExecInputBatch<'_> {
                 }
                 None => return Err(invalid("TIR input has no admitted FOW1 mining profile")),
             }
+            slots.push(Moe2ExecSlot { registration: reg_key(&entry.context), slot, close, close_daa: header.daa_score, quote });
         }
-        self.close_budget(config, close, header.daa_score, parent, Some(delta))
+        Ok(Moe2ExecCloseV1 {
+            selected_parent,
+            parent_state_root: state_root_of_pinned_header_v1(&header, close).map_err(io::Error::other)?,
+            block: close,
+            blue_score: header.blue_score,
+            daa_score: header.daa_score,
+            private_from: config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?,
+            slots,
+        })
     }
 
     fn check_close_parent(
@@ -323,28 +349,9 @@ impl ExecInputBatch<'_> {
             let consent = Hash64::from_bytes(consent_ref(registration, slot));
             let exec_slot = Moe2ExecSlot { registration, slot, close, close_daa: daa, quote };
             let reservation_key = exec_slot.reservation_key();
-            let origin = exec_slot.budget_origin().map_err(|_| invalid("invalid signed MOE2 deadline"))?;
-            let grant = budget
-                .reserve_claim_v1(
-                    policy,
-                    capital,
-                    reservation_key,
-                    quote.funding_bond,
-                    Some(quote.model),
-                    daa,
-                    ask,
-                    origin,
-                    &mut writes,
-                )
-                .map_err(|err| io::Error::other(err.to_string()))?;
-            if grant.reward_sompi != ask.reward_sompi {
-                return Err(invalid("native budget clipped a signed MOE2 reward ceiling"));
-            }
-            let (_, epoch) = budget
-                .claim_row(&reservation_key)
-                .and_then(|r| r.model)
-                .filter(|(id, _)| *id == quote.model)
-                .ok_or_else(|| invalid("missing native model allocation"))?;
+            let epoch = exec_slot
+                .reserve_budget(&mut budget, policy, capital, ask, &mut writes)
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, format!("native MOE2 reservation refused: {err:?}")))?;
             result.insert(
                 slot,
                 Moe2BudgetPreview {

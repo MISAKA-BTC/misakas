@@ -11993,8 +11993,8 @@ pub struct PalwChainStateV2 {
 }
 
 mod chain_state;
-mod private_moe2_settlement;
-pub use private_moe2_settlement::Moe2ExecWorkerPayees;
+pub(crate) mod private_moe2_settlement;
+pub use private_moe2_settlement::{Moe2ExecCloseV1, Moe2ExecWorkerPayees};
 mod evm_replay_settlements_owned_v2;
 mod evm_view_owned_v2;
 pub mod included_replay;
@@ -16767,6 +16767,9 @@ fn apply_palw_transition_v7_inner(
         })? {
             builder.write_kernel_row_encoded_v1(crate::palw_positive_contract_v2::PUBLIC_REPLAY_APPROVAL_TABLE_V1, &key, Some(row))?;
         }
+    }
+    if let Some(close) = &extras.private_moe2_exec_close {
+        private_moe2_settlement::fold_exec_close_v1(&mut builder, parent, ctx, close)?;
     }
     palw_claim_local_execution_cohort_census_v15::finish_compact_observations_v15(&mut builder);
 
@@ -21685,6 +21688,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Isolated RFC-0064 registration cohort. No shipped network selects this
     /// path. Classification uses the active catalog in the native state params.
     pub private_moe2_registration: bool,
+    /// Complete, authenticated EXEC set resolved by the owner for this block.
+    pub private_moe2_exec_close: Option<Moe2ExecCloseV1>,
     /// Node-owned planning declaration selected at this block's inclusion DAA.
     /// Archive replay resolves it at the original point, never today's tip.
     pub protected_planning_v3: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,

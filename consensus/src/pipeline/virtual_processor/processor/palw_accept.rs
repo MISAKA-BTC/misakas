@@ -4198,6 +4198,7 @@ impl VirtualStateProcessor {
         };
         let mut extras = kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
             private_moe2_registration: self.private_moe2_registration_from.is_some_and(|from| daa_score >= from),
+            private_moe2_exec_close: None,
             protected_planning_v3: self.palw_protected_planning_v3
                 .filter(|fence| fence.active_at(daa_score)).map(|fence| fence.declaration),
             // Base rule extras: transaction-local metadata is attached after accepted extraction.

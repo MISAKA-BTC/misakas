@@ -17,6 +17,52 @@ use crate::palw_model_market_v1::moe2::{
 use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
 use crate::tx::TransactionOutput;
 
+/// Block-owned input. The owner verifies the closure, signed set and effective
+/// mining eligibility before constructing it. The fold binds it to its exact
+/// parent and candidate and journals all reservations or refuses the block.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Moe2ExecCloseV1 {
+    pub selected_parent: Hash64,
+    pub parent_state_root: Hash64,
+    pub block: Hash64,
+    pub blue_score: u64,
+    pub daa_score: u64,
+    pub private_from: u64,
+    pub slots: Vec<Moe2ExecSlot>,
+}
+
+pub(super) fn fold_exec_close_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    point: &PalwBlockContextV2,
+    close: &Moe2ExecCloseV1,
+) -> Result<(), PalwStateV2Error> {
+    use super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1;
+    if !builder.extras.private_moe2_registration
+        || point.daa_score < close.private_from
+        || (point.block, point.blue_score, point.daa_score) != (close.block, close.blue_score, close.daa_score)
+        || parent.last_point().map(|p| p.block) != Some(close.selected_parent)
+        || parent.state_root() != close.parent_state_root
+        || close.slots.windows(2).any(|pair| pair[0].slot >= pair[1].slot)
+        || close.slots.iter().any(|slot| (slot.close, slot.close_daa) != (close.block, close.daa_score))
+    {
+        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC close differs from candidate context or slot order"));
+    }
+    let policy = &builder.params.bond_budget().ok_or(PalwStateV2Error::DeltaMismatch("MOE2 EXEC has no budget policy"))?.policy;
+    for slot in &close.slots {
+        let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC slot {}: {why:?}", slot.slot));
+        let (capital, ask) =
+            slot.quote.budget_ask_at_state(builder.params, close.private_from, &builder.state, point.daa_score).map_err(refuse)?;
+        builder
+            .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, writes| {
+                slot.reserve_budget(budget, policy, capital, ask, writes)
+            })?
+            .ok_or(PalwStateV2Error::DeltaMismatch("MOE2 EXEC has no native budget"))?
+            .map_err(refuse)?;
+    }
+    Ok(())
+}
+
 /// Recipient bonds and amounts selected by the accepted claim's worker plan.
 /// The block owner supplies the authenticated Miner and Panel legs in plan order.
 #[derive(Clone, Copy)]
