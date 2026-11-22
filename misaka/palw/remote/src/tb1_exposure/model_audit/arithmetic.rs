@@ -115,6 +115,33 @@ pub fn exact_digit_score(expected: u32, output: &[u32]) -> bool {
     matches!(output, [digit, eos] if *digit == expected && is_eos(*eos))
 }
 
+/// Private assessment close prepared against a single selected parent. The
+/// enclosing control policy resolves eligible operators and their draw weights.
+pub struct ArithmeticPanelCut {
+    parent: Hash64,
+    closure: Tb1MiningClosure,
+}
+
+impl ArithmeticPanelCut {
+    pub fn commitment(&self) -> [u8; 64] {
+        self.closure.commitment(self.parent)
+    }
+
+    pub fn holder_freeze(&self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<Tb1HolderFreeze> {
+        let tip = native.get_sink();
+        if native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent != self.parent
+            || !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)?
+        {
+            return Err(invalid("arithmetic PANEL close is outside the prepared selected branch"));
+        }
+        let freeze = Tb1HolderFreeze::resolve(native, close, &self.closure, q)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(freeze)
+    }
+}
+
 impl FrozenAudit<'_> {
     fn check_arithmetic_model(&self, candidate: u32, model: &LocalInstance<'_>) -> io::Result<()> {
         if self.cut.plan.suite != suite_id() || self.cut.plan.tests_per_candidate != CASES {
@@ -161,6 +188,57 @@ impl FrozenAudit<'_> {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(marker)
+    }
+
+    /// Prepare the scheduled assessment close before PANEL release. The
+    /// enclosing policy must derive the control population from the supplied
+    /// parent. Its commitment covers the eligible operators and draw weights.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_arithmetic_panel(
+        &self,
+        native: &dyn ConsensusApi,
+        batch: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        audit_q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        candidate: u32,
+        submission: Hash64,
+        originals: &[ArithmeticEvaluation; CASES as usize],
+        panel_q: &Tb1Qualification<'_>,
+        parent: Hash64,
+        control_population: Hash64,
+        draw_policy: Hash64,
+    ) -> io::Result<ArithmeticPanelCut> {
+        let round = self.cut.assessment_panel(panel_q)?;
+        if native.get_sink() != parent {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let h = native.get_header(parent).map_err(io::Error::other)?;
+        if h.blue_score.checked_add(1) != Some(round.close_blue_score)
+            || h.daa_score >= round.release_from_daa
+            || control_population == Hash64::default()
+            || draw_policy == Hash64::default()
+        {
+            return Err(invalid("invalid arithmetic PANEL parent or control policy"));
+        }
+        let marker =
+            self.read_arithmetic_submission(native, batch, certificate, releases, audit_q, limits, candidate, submission, originals)?;
+        if native.get_sink() != parent {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        let consumer_set_root = Sha3_512::new()
+            .chain_update(b"MISAKA/private/MAS1/arithmetic-panel-inputs/v1")
+            .chain_update(self.cut.closure.consumer_set_root)
+            .chain_update(certificate.as_bytes())
+            .chain_update(candidate.to_be_bytes())
+            .chain_update(submission.as_bytes())
+            .chain_update(marker)
+            .chain_update(control_population.as_bytes())
+            .finalize()
+            .into();
+        let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: draw_policy.as_bytes() };
+        Ok(ArithmeticPanelCut { parent, closure })
     }
 
     fn read_arithmetic_marker(
