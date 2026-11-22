@@ -6,7 +6,7 @@ use crate::config::params::Params;
 use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
-    Moe2ModelAllocation, Moe2QuantityLimits, Moe2RewardSplit, quote_additional_reward,
+    Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit, quote_additional_reward,
     settlement::{
         Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError,
         Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
@@ -177,6 +177,96 @@ impl PalwChainStateV2 {
         worker_start: usize,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
         self.settle_private_moe2_exec(config, book, delta, claim, position, release, slot, Some(work), payees, block, worker_start)
+    }
+
+    /// Admit and settle an authenticated award using its selected-parent
+    /// reservation. The block owner supplies the authenticated price-anchor
+    /// state, signed slot, claim/work binding and worker allocation. The
+    /// candidate header and ordinary delta must both name the supplied parent.
+    pub fn settle_private_moe2_exec_award(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        parent: &PalwChainStateV2,
+        quote_anchor: &PalwChainStateV2,
+        claim: Hash64,
+        position: Moe2Position,
+        release: Moe2WorkerRelease,
+        slot: &Moe2ExecSlot,
+        work: Hash64,
+        payees: Moe2ExecWorkerPayees<'_>,
+        block: &Block,
+        worker_start: usize,
+    ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        use Moe2SettlementError::*;
+        let parent_point = parent.last_point().ok_or(UnknownClaimContext)?;
+        let anchor_point = quote_anchor.last_point().ok_or(UnknownClaimContext)?;
+        if anchor_point.block != slot.quote.quote_anchor
+            || anchor_point.blue_score > parent_point.blue_score
+            || !(anchor_point.daa_score..=parent_point.daa_score).contains(&slot.close_daa)
+            || !(slot.quote.valid_from..=slot.quote.deadline).contains(&anchor_point.daa_score)
+            || !delta.entries.iter().any(|entry| {
+                matches!(entry, PalwDeltaEntryV2::LastPoint { old: Some(old), new: Some(new) }
+                    if old == parent_point && *new == delta.point)
+            })
+            || crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&block.header, delta.point.block)
+                .map_err(|_| UnknownClaimContext)?
+                != parent.state_root()
+        {
+            return Err(UnknownClaimContext);
+        }
+        if self.private_moe2_work_claim(&work).is_some() {
+            return Err(WorkAlreadyConsumed);
+        }
+        let class = quote_anchor.class(&slot.quote.model).ok_or(UnknownRegistration)?;
+        let historical = Moe2RegisteredModel {
+            model: slot.quote.model,
+            artifact_root: class.artifact_root,
+            registration_daa: class.registered_daa,
+            owner: class.registrant_bond,
+            allocation: slot.quote.allocation_at(config, quote_anchor, anchor_point.daa_score)?,
+        };
+        if book.model(&slot.quote.model).ok_or(UnknownRegistration)?.allocation == Moe2ModelAllocation::Core
+            && historical.allocation != Moe2ModelAllocation::Core
+        {
+            return Err(UnknownRegistration);
+        }
+        let budget = parent.bond_budget().ok_or(ReservationMismatch)?;
+        let key = slot.reservation_key();
+        let original = budget.claim_row(&key).ok_or(ReservationMismatch)?;
+        let current = self.bond_budget().and_then(|budget| budget.claim_row(&key)).ok_or(ReservationMismatch)?;
+        // The window sweep can release window capacity independently of the
+        // outstanding liability. All other reservation fields must survive.
+        if (!original.in_window && current.in_window)
+            || *original != (PalwBudgetClaimRowV1 { in_window: original.in_window, ..*current })
+        {
+            return Err(ReservationMismatch);
+        }
+        book.admit_exec_slot(claim, slot, budget, |_, _| Some(historical))?;
+        let result =
+            self.settle_private_moe2_exec_work(config, book, delta, claim, position, release, slot, work, payees, block, worker_start);
+        if result.is_err() {
+            book.revert_exec_admission(claim, slot).expect("failed settlement leaves the new admission intact");
+        }
+        result
+    }
+
+    /// Disconnect a settlement whose admission was created in the award block.
+    pub fn revert_private_moe2_exec_award(
+        &mut self,
+        config: &Params,
+        book: &mut Moe2SettlementBook,
+        delta: &mut PalwStateDeltaV2,
+        slot: &Moe2ExecSlot,
+        undo: &Moe2SettlementUndo,
+    ) -> Result<(), Moe2SettlementError> {
+        if !book.has_exec_binding(undo.claim(), slot) {
+            return Err(Moe2SettlementError::UndoMismatch);
+        }
+        self.revert_private_moe2_exec_slot(config, book, delta, slot, undo)?;
+        book.revert_exec_admission(undo.claim(), slot).expect("settlement rollback restores the verified admission");
+        Ok(())
     }
 
     fn settle_private_moe2_exec(

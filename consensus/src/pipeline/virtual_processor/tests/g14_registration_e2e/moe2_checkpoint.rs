@@ -60,7 +60,8 @@ pub(super) fn check_exec_settlement_rewind(
             )
             .unwrap();
     }
-    close_delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
+    let reservation_writes: Vec<_> = writes.into_iter().map(PalwDeltaEntryV2::from).collect();
+    close_delta.entries.extend(reservation_writes.iter().cloned());
     let reserved = apply_delta_v2(registration, &close_delta, params).unwrap();
     let sibling = Moe2ExecSlot { close: Hash64::from_u64_word(647), ..slot };
     let revised = Moe2ExecSlot {
@@ -85,11 +86,6 @@ pub(super) fn check_exec_settlement_rewind(
         (anchor == quote.quote_anchor && id == quote.model).then(|| *registered_book.model(&id).unwrap())
     })
     .unwrap();
-    book.admit_exec_slot(alias_claim, &alias_slot, reserved.bond_budget().unwrap(), |anchor, id| {
-        (anchor == quote.quote_anchor && id == quote.model).then(|| *registered_book.model(&id).unwrap())
-    })
-    .unwrap();
-    let admitted = book.clone();
     let reward = quote.limits.max_reward;
     let release = Moe2WorkerRelease {
         reward,
@@ -168,6 +164,81 @@ pub(super) fn check_exec_settlement_rewind(
         assert_eq!(revert_delta_v2(&old_state, &old_delta, params).unwrap().state_root(), reserved.state_root());
     }
 
+    let mut book = registered_book.clone();
+    let before_award = book.clone();
+
+    // Simulate an award with a budget row that was absent from its parent.
+    let mut header = award_block.header.as_ref().clone();
+    header.palw_state_root = unreserved.state_root();
+    header.finalize();
+    let funded_in_award = Block::from_arcs(std::sync::Arc::new(header), award_block.transactions.clone())
+        .with_evm_payload(award_block.evm_payload.clone());
+    let point = PalwBlockContextV2 { block: funded_in_award.hash(), ..position.point };
+    let (_, mut detached_delta) = apply_palw_transition_v2(&unreserved, params, &point, &[], None).unwrap();
+    detached_delta.entries.extend(reservation_writes);
+    let mut detached_state = apply_delta_v2(&unreserved, &detached_delta, params).unwrap();
+    assert!(detached_state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_some());
+    let detached_root = detached_state.state_root();
+    let detached_before = detached_delta.clone();
+    assert_eq!(
+        detached_state.settle_private_moe2_exec_award(
+            config,
+            &mut book,
+            &mut detached_delta,
+            &unreserved,
+            registration,
+            claim,
+            Moe2Position { point, ..position },
+            release,
+            &slot,
+            work,
+            payees,
+            &funded_in_award,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::ReservationMismatch),
+    );
+    assert_eq!((detached_state.state_root(), detached_delta, &book), (detached_root, detached_before, &before_award));
+
+    use kaspa_consensus_core::palw_bond_budget_v1::PALW_BUDGET_TABLE_CLAIMS_V1;
+    let key = slot.reservation_key();
+    let row = *reserved.bond_budget().unwrap().claim_row(&key).unwrap();
+    let mut altered_delta = award_delta.clone();
+    altered_delta.entries.push(PalwDeltaEntryV2::BondBudgetRow {
+        table: PALW_BUDGET_TABLE_CLAIMS_V1,
+        key: key.as_byte_slice().to_vec(),
+        old: Some(borsh::to_vec(&row).unwrap()),
+        new: Some(
+            borsh::to_vec(&kaspa_consensus_core::palw_bond_budget_v1::PalwBudgetClaimRowV1 {
+                reuse_not_before: row.reuse_not_before + 1,
+                ..row
+            })
+            .unwrap(),
+        ),
+    });
+    let mut altered_state = apply_delta_v2(&reserved, &altered_delta, params).unwrap();
+    let altered_before = (altered_state.state_root(), altered_delta.clone());
+    assert_eq!(
+        altered_state.settle_private_moe2_exec_award(
+            config,
+            &mut book,
+            &mut altered_delta,
+            &reserved,
+            registration,
+            claim,
+            position,
+            release,
+            &slot,
+            work,
+            payees,
+            &award_block,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::ReservationMismatch),
+    );
+    assert_eq!((altered_state.state_root(), altered_delta), altered_before);
+    assert_eq!(book, before_award);
+
     let duplicate = [panel[0], panel[0]];
     assert_eq!(
         child.private_moe2_exec_worker_outputs(
@@ -184,10 +255,12 @@ pub(super) fn check_exec_settlement_rewind(
         let (mut state, mut delta, at) = fold(&block);
         let original = (state.state_root(), delta.clone());
         assert_eq!(
-            state.settle_private_moe2_exec_work(
+            state.settle_private_moe2_exec_award(
                 config,
                 &mut book,
                 &mut delta,
+                &reserved,
+                registration,
                 claim,
                 at,
                 release,
@@ -200,19 +273,23 @@ pub(super) fn check_exec_settlement_rewind(
             Err(Moe2SettlementError::WorkerOutputsMismatch),
         );
         assert_eq!((state.state_root(), delta), original);
-        assert_eq!(&book, &admitted);
+        assert_eq!(&book, &before_award);
     }
     let detached = Block::from_arcs(award_block.header.clone(), execution.transactions.clone());
-    for (block, start, expected) in [
-        (&detached, worker_start, Moe2SettlementError::WorkerOutputsMismatch),
-        (&award_block, usize::MAX, Moe2SettlementError::WorkerOutputsMismatch),
-        (&execution, worker_start, Moe2SettlementError::UnknownClaimContext),
+    for (block, parent, price_state, start, expected) in [
+        (&detached, &reserved, registration, worker_start, Moe2SettlementError::WorkerOutputsMismatch),
+        (&award_block, &reserved, registration, usize::MAX, Moe2SettlementError::WorkerOutputsMismatch),
+        (&execution, &reserved, registration, worker_start, Moe2SettlementError::UnknownClaimContext),
+        (&award_block, &unreserved, registration, worker_start, Moe2SettlementError::UnknownClaimContext),
+        (&award_block, &reserved, &unreserved, worker_start, Moe2SettlementError::UnknownClaimContext),
     ] {
         assert_eq!(
-            child.settle_private_moe2_exec_work(
+            child.settle_private_moe2_exec_award(
                 config,
                 &mut book,
                 &mut award_delta,
+                parent,
+                price_state,
                 claim,
                 position,
                 release,
@@ -224,7 +301,7 @@ pub(super) fn check_exec_settlement_rewind(
             ),
             Err(expected),
         );
-        assert_eq!((child.state_root(), &book, &award_delta), (before, &admitted, &original_delta));
+        assert_eq!((child.state_root(), &book, &award_delta), (before, &before_award, &original_delta));
     }
     // Unrelated transactions cannot be substituted while keeping the award
     // header and the expected worker outputs.
@@ -232,10 +309,12 @@ pub(super) fn check_exec_settlement_rewind(
     swapped.push(execution.transactions[0].clone());
     let mismatched_body = Block::from_arcs(award_block.header.clone(), swapped);
     assert_eq!(
-        child.settle_private_moe2_exec_work(
+        child.settle_private_moe2_exec_award(
             config,
             &mut book,
             &mut award_delta,
+            &reserved,
+            registration,
             claim,
             position,
             release,
@@ -247,12 +326,33 @@ pub(super) fn check_exec_settlement_rewind(
         ),
         Err(Moe2SettlementError::WorkerOutputsMismatch),
     );
-    assert_eq!((child.state_root(), &book, &award_delta), (before, &admitted, &original_delta));
-    let (payment, undo) = child
-        .settle_private_moe2_exec_work(
+    assert_eq!((child.state_root(), &book, &award_delta), (before, &before_award, &original_delta));
+    assert!(matches!(
+        child.settle_private_moe2_exec_award(
             config,
             &mut book,
             &mut award_delta,
+            &reserved,
+            registration,
+            claim,
+            position,
+            Moe2WorkerRelease { reward: release.reward + 1, ..release },
+            &slot,
+            work,
+            payees,
+            &award_block,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::Quote(_))
+    ));
+    assert_eq!((child.state_root(), &book, &award_delta), (before, &before_award, &original_delta));
+    let (payment, undo) = child
+        .settle_private_moe2_exec_award(
+            config,
+            &mut book,
+            &mut award_delta,
+            &reserved,
+            registration,
             claim,
             position,
             release,
@@ -329,10 +429,12 @@ pub(super) fn check_exec_settlement_rewind(
     let mut conflict_delta = award_delta.clone();
     let mut conflict_book = book.clone();
     assert_eq!(
-        child.settle_private_moe2_exec_work(
+        child.settle_private_moe2_exec_award(
             config,
             &mut conflict_book,
             &mut conflict_delta,
+            &reserved,
+            registration,
             alias_claim,
             position,
             release,
@@ -389,26 +491,26 @@ pub(super) fn check_exec_settlement_rewind(
     let mut sibling = award_delta.clone();
     sibling.point.block = Hash64::from_u64_word(643);
     assert_eq!(
-        child.revert_private_moe2_exec_slot(config, &mut book, &mut sibling, &slot, &undo),
+        child.revert_private_moe2_exec_award(config, &mut book, &mut sibling, &slot, &undo),
         Err(Moe2SettlementError::UndoMismatch)
     );
     let mut truncated = award_delta.clone();
     truncated.entries.pop();
     assert_eq!(
-        child.revert_private_moe2_exec_slot(config, &mut book, &mut truncated, &slot, &undo),
+        child.revert_private_moe2_exec_award(config, &mut book, &mut truncated, &slot, &undo),
         Err(Moe2SettlementError::UndoMismatch)
     );
     let other = Moe2ExecSlot { close: Hash64::from_u64_word(644), ..slot };
     assert_eq!(
-        child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &other, &undo),
+        child.revert_private_moe2_exec_award(config, &mut book, &mut award_delta, &other, &undo),
         Err(Moe2SettlementError::UndoMismatch)
     );
     assert_eq!((child.state_root(), &book), (after, &paid_book));
-    child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).unwrap();
+    child.revert_private_moe2_exec_award(config, &mut book, &mut award_delta, &slot, &undo).unwrap();
     assert!(child.private_moe2_work_claim(&work).is_none());
-    assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &admitted, &original_delta.entries));
+    assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &before_award, &original_delta.entries));
     assert_eq!(revert_delta_v2(&child, &award_delta, params).unwrap().state_root(), reserved.state_root());
-    assert!(child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).is_err());
+    assert!(child.revert_private_moe2_exec_award(config, &mut book, &mut award_delta, &slot, &undo).is_err());
     // Once the first settlement leaves the branch, the other independently
     // funded slot may consume the same work identity.
     let mut header = award_block.header.as_ref().clone();
@@ -418,10 +520,12 @@ pub(super) fn check_exec_settlement_rewind(
     let (mut replacement, mut replacement_delta, replacement_at) = fold(&sibling);
     let mut replacement_book = book.clone();
     replacement
-        .settle_private_moe2_exec_work(
+        .settle_private_moe2_exec_award(
             config,
             &mut replacement_book,
             &mut replacement_delta,
+            &reserved,
+            registration,
             alias_claim,
             replacement_at,
             release,
@@ -436,10 +540,12 @@ pub(super) fn check_exec_settlement_rewind(
     assert_eq!(apply_delta_v2(&reserved, &replacement_delta, params).unwrap().state_root(), replacement.state_root());
 
     let (repaid, _) = child
-        .settle_private_moe2_exec_work(
+        .settle_private_moe2_exec_award(
             config,
             &mut book,
             &mut award_delta,
+            &reserved,
+            registration,
             claim,
             position,
             release,

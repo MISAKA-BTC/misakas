@@ -202,7 +202,7 @@ impl Moe2PreDrawQuote {
         Ok((capital, PalwBudgetAskV1 { block_units: 0, final_weight: 0, reward_sompi, liability_sompi }))
     }
 
-    fn allocation_at(
+    pub(crate) fn allocation_at(
         &self,
         config: &crate::config::params::Params,
         state: &crate::palw_state_v2::PalwChainStateV2,
@@ -799,6 +799,10 @@ impl Moe2SettlementBook {
         self.assigned_slots.insert(binding.0);
         self.exec_claims.insert(claim, binding);
         Ok(())
+    }
+
+    pub(crate) fn has_exec_binding(&self, claim: Hash64, slot: &Moe2ExecSlot) -> bool {
+        self.exec_claims.get(&claim) == Some(&slot.binding())
     }
 
     /// Disconnect the admission only after disconnecting its settlement.
