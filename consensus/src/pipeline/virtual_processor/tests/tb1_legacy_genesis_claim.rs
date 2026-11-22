@@ -300,6 +300,58 @@ pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, 
     );
 }
 
+fn open_private_snapshot(path: &Path) -> std::sync::Arc<kaspa_database::prelude::DB> {
+    let files_limit = 32;
+    let guard = kaspa_utils::fd_budget::acquire_guard(files_limit).unwrap();
+    let mut options = rocksdb::Options::default();
+    options.set_max_open_files(files_limit);
+    let inner = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_for_read_only(&options, path, false).unwrap();
+    std::sync::Arc::new(kaspa_database::prelude::DB::new(inner, guard))
+}
+
+#[test]
+#[ignore = "requires a preserved private consensus DB and its accepted raw block archive"]
+fn verify_recovery_snapshot_tip() {
+    use crate::{
+        model::stores::{
+            headers::{DbHeadersStore, HeaderStoreReader},
+            palw_state_v2::DbPalwStateV2Store,
+        },
+        pipeline::virtual_processor::tests::g14_registration_e2e::private_moe2::arm_private_registration,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_database::prelude::CachePolicy::Empty;
+    use std::io::{BufRead, BufReader};
+
+    let db = open_private_snapshot(Path::new(&std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap()));
+    let headers = DbHeadersStore::new(db.clone(), Empty, Empty);
+    let (config, _, _, _) = parts_custom(Some(FENCE), false, |params| arm_private_registration(params, true));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    let store = DbPalwStateV2Store::new(db, Empty)
+        .with_uncertified_weightless(config.params.palw_uncertified_weightless)
+        .with_canonical_work_daa(config.params.palw_canonical_work_daa())
+        .with_native39_frontier_context_v1(&config.params);
+    let point = store.tip_record().unwrap().unwrap();
+    let (tip, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!((tip, state.state_root()), (point.block, point.state_root));
+    let header = headers.get_header(tip).unwrap();
+    assert_eq!(kaspa_consensus_core::hashing::header::hash(&header), tip);
+    let archive = File::open(std::env::var_os("MISAKA_PRIVATE_SNAPSHOT_ARCHIVE").unwrap()).unwrap();
+    for line in BufReader::new(archive).lines() {
+        let raw: RpcRawBlock = serde_json::from_str(&line.unwrap()).unwrap();
+        if raw.header.blue_score != header.blue_score {
+            continue;
+        }
+        let block = Block::try_from(raw).unwrap();
+        if block.hash() == tip {
+            assert_eq!(block.header.daa_score, header.daa_score);
+            println!("snapshot tip={tip} daa={} blue={} state_root={}", header.daa_score, header.blue_score, point.state_root);
+            return;
+        }
+    }
+    panic!("materialized PALW tip {tip} missing from the supplied archive");
+}
+
 /// Export a retained private suffix from a read-only database copy. Readers
 /// validate the raw blocks from the signed job as usual; no state is imported.
 #[test]
@@ -314,17 +366,7 @@ fn export_genesis_claim_suffix() {
     };
     use kaspa_database::prelude::{CachePolicy::Empty, StoreResultExt};
     use std::sync::Arc;
-    let files_limit = 32;
-    let guard = kaspa_utils::fd_budget::acquire_guard(files_limit).unwrap();
-    let mut options = rocksdb::Options::default();
-    options.set_max_open_files(files_limit);
-    let inner = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_for_read_only(
-        &options,
-        std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap(),
-        false,
-    )
-    .unwrap();
-    let db = Arc::new(kaspa_database::prelude::DB::new(inner, guard));
+    let db = open_private_snapshot(Path::new(&std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap()));
     let held = std::path::PathBuf::from(std::env::var_os("MISAKA_PRIVATE_GENESIS_ATTEMPT_READ").unwrap());
     let winning: WinningBlock = serde_json::from_reader(File::open(held.join("winning.json")).unwrap()).unwrap();
     let base = Block::try_from(winning.raw).unwrap().hash();

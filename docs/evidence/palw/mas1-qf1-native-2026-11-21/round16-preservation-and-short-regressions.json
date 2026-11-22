@@ -16,5 +16,15 @@
     "execution_quanta_turn_one_final_into_n_unique_round_permits_consumed_once": 0.03,
     "unified_an1_batch_refutation_priority_atomic_consumption_and_reorg_w06_to_w08": 0.25,
     "moe2-registration": 1.3
+  },
+  "read_only_reopen": {
+    "test": "verify_recovery_snapshot_tip",
+    "materialized_tip": "375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604",
+    "daa": 51258,
+    "blue": 102520,
+    "palw_state_root": "964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1",
+    "matched_archive_sha256": "371ad6c0292c18f6800ef43d599b4fa48bb718697923d7919f9b2b1381819706",
+    "empty_archive_rejected": true,
+    "verified_manifest_files_after_read": 118
   }
 }
