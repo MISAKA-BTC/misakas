@@ -4,8 +4,13 @@ use super::*;
 use crate::tb1_exposure::exec_input::LocalOriginalBody;
 use crate::tb1_exposure::qf1::Qf1Prompt;
 use kaspa_consensus_core::{
-    palw_panel_v2::PALW_DRAW_WEIGHT_MAX_MSK_V1,
+    config::params::Params,
+    palw_execution_lane_v1::palw_execution_span_v1,
+    palw_mode_v2::PalwConsensusMode,
+    palw_model_registry_v1::PalwModelRegistryFoldV1,
+    palw_panel_v2::{PALW_DRAW_WEIGHT_MAX_MSK_V1, PalwPanelStakeDrawV1, palw_panel_stake_operator_weights_v1},
     palw_qf1::{Stop, is_eos},
+    palw_state_v2::{PalwChainStateV2, palw_base_population_v1},
 };
 use misaka_palw_tir_exec::node::qf1::{LocalInstance, TraceRequest};
 
@@ -142,10 +147,38 @@ fn arithmetic_control_roster(state: Hash64, operators: &[(Hash64, u64)]) -> io::
     Ok(h.finalize().into())
 }
 
-/// Private assessment close prepared against a single selected parent. The
-/// enclosing control policy resolves eligible operators and their draw weights.
+/// The native observer supplies the selected parent's post-state and the
+/// registry policy resolved at that parent.
+pub struct ArithmeticControlView<'a> {
+    pub state: &'a PalwChainStateV2,
+    pub config: &'a Params,
+    pub registry: &'a PalwModelRegistryFoldV1,
+}
+
+impl ArithmeticControlView<'_> {
+    fn roster(&self, class: Hash64, daa: u64) -> io::Result<(Hash64, [u8; 64])> {
+        let PalwConsensusMode::ConsensusV2(bundle) = &self.config.palw_consensus_mode else {
+            return Err(invalid("arithmetic PANEL needs a native control registry"));
+        };
+        let span = palw_execution_span_v1(daa, self.registry.span_daa);
+        let activation_pool = self.config.palw_activation_pool_at(daa).is_some();
+        let registered = self.state.class(&class).ok_or_else(|| invalid("arithmetic candidate absent at PANEL parent"))?;
+        let owner = registered
+            .registrant_bond
+            .map(|key| self.state.bond(&key).ok_or_else(|| invalid("arithmetic registrant bond absent at PANEL parent")))
+            .transpose()?;
+        let eligible = palw_base_population_v1(self.state, &bundle.state, self.registry, &class, daa, span, activation_pool);
+        let bonds = eligible.into_iter().map(|(_, bond)| bond).filter(|bond| owner.is_none_or(|owner| owner.pubkey != bond.pubkey));
+        let operators: Vec<_> = palw_panel_stake_operator_weights_v1(bonds, &PalwPanelStakeDrawV1::V1).into_iter().collect();
+        let root = self.state.state_root();
+        Ok((root, arithmetic_control_roster(root, &operators)?))
+    }
+}
+
+/// Private assessment close prepared against a single selected parent.
 pub struct ArithmeticPanelCut {
     parent: Hash64,
+    control_state: Hash64,
     closure: Tb1MiningClosure,
 }
 
@@ -160,6 +193,10 @@ impl ArithmeticPanelCut {
             || !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)?
         {
             return Err(invalid("arithmetic PANEL close is outside the prepared selected branch"));
+        }
+        let header = native.get_header(close).map_err(io::Error::other)?;
+        if state_root_of_pinned_header_v1(&header, close).map_err(io::Error::other)? != self.control_state {
+            return Err(invalid("arithmetic PANEL close commits a different control state"));
         }
         let freeze = Tb1HolderFreeze::resolve(native, close, &self.closure, q)?;
         if native.get_sink() != tip {
@@ -234,8 +271,7 @@ impl FrozenAudit<'_> {
         originals: &[ArithmeticEvaluation; CASES as usize],
         panel_q: &Tb1Qualification<'_>,
         parent: Hash64,
-        control_state: Hash64,
-        control_operators: &[(Hash64, u64)],
+        control: ArithmeticControlView<'_>,
         draw_policy: Hash64,
     ) -> io::Result<ArithmeticPanelCut> {
         let round = self.cut.assessment_panel(panel_q)?;
@@ -249,7 +285,8 @@ impl FrozenAudit<'_> {
         {
             return Err(invalid("invalid arithmetic PANEL parent or control policy"));
         }
-        let control_roster = arithmetic_control_roster(control_state, control_operators)?;
+        let admitted = self.cut.candidates.get(candidate as usize).ok_or_else(|| invalid("unknown audit candidate"))?;
+        let (control_state, control_roster) = control.roster(admitted.class, h.daa_score)?;
         let marker =
             self.read_arithmetic_submission(native, batch, certificate, releases, audit_q, limits, candidate, submission, originals)?;
         if native.get_sink() != parent {
@@ -266,7 +303,7 @@ impl FrozenAudit<'_> {
             .finalize()
             .into();
         let closure = Tb1MiningClosure { round, qual_root: panel_q.root(), consumer_set_root, policy_root: draw_policy.as_bytes() };
-        Ok(ArithmeticPanelCut { parent, closure })
+        Ok(ArithmeticPanelCut { parent, control_state, closure })
     }
 
     fn read_arithmetic_marker(
