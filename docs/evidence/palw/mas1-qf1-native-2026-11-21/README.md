@@ -1296,3 +1296,13 @@ out=$(mktemp -d)
 tar -xf "$p/qf1-arithmetic-panel-preparation.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_qualification.py" --openssl "$(brew --prefix openssl@3)/bin/openssl" --arithmetic-peers "$out/peer-0.log" "$out/peer-1.log" "$out/peer-2.log" | cmp - "$p/qf1-arithmetic-panel-preparation.json"
 ```
+
+### close 直前の状態を子ヘッダーで照合
+
+隔離ノードは準備ブロックを受理した時点で、そのブロックを処理した後の状態から検証者候補集合を取得した。次に元のcloseブロックを受理し、そのヘッダーに含まれる親の状態rootと照合した。3回とも起点・DAA・状態root・候補集合が一致し、元の登録時点（DAA 1）には対象bondが0件だった。1台の事前観測のDAAだけを変えた対照は拒否された。Round 16でも同じ読み方で選出直前の親自身の状態を取得する。Round 16の実際の候補数はこの早い時点の件数からは決まらない。[3回の照合結果](qf1-arithmetic-preclose-population.json)・[受理前後のnativeログ](qf1-arithmetic-preclose-population.tar.zst)
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/qf1-arithmetic-preclose-population.tar.zst" -C "$out"
+python3 -B "$p/check_arithmetic_control_population.py" "$out" --openssl "$(brew --prefix openssl@3)/bin/openssl" --before-close | cmp - "$p/qf1-arithmetic-preclose-population.json"
+```

@@ -39,7 +39,7 @@ def verify_registration_signature(payload, genesis, openssl):
     return message.hex()
 
 
-def verify(directory, openssl):
+def verify(directory, openssl, *, before_close=False):
     audit = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())["audit"]
     archive = HERE / "qf1-arithmetic-audit-close-public.tar.zst"
     wire = subprocess.check_output(["tar", "-xOf", archive, "public.jsonl"])
@@ -75,6 +75,12 @@ def verify(directory, openssl):
                 and row["state"] == close["palwStateRoot"] and row["source_daa"] == headers[row["source"]]["daaScore"]
                 and row["class"] == audit["class"] and row["registrant"] == bond and row["registrant_key"] == key_id,
                 "population differs from the pinned registration or source state")
+        if before_close:
+            [(live_pid, live)] = records(log, "arithmetic preparation parent state")
+            require(live_pid == pid and live == {k: v for k, v in row.items() if k != "block"},
+                    "live parent view differs from the subsequently committed population")
+            require(log.index("arithmetic preparation parent state") < log.index("arithmetic control population"),
+                    "parent observation follows close confirmation")
         bonds = row["bonds"]
         identities = {(b["txid"], b["index"]) for b in bonds}
         require(len(identities) == len(bonds) and tuple(bond) not in identities
@@ -85,12 +91,16 @@ def verify(directory, openssl):
         pids.append(pid)
     require(len(set(pids)) == 3 and observed[0] == observed[1] == observed[2], "different population or duplicate process")
     message = verify_registration_signature(registration, meta["genesis"], openssl)
-    return dict(processes=pids, snapshot=observed[0], registration_signing_message=message)
+    result = dict(processes=pids, snapshot=observed[0], registration_signing_message=message)
+    if before_close:
+        result["observed_before_close"] = True
+    return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("--openssl", required=True, help="verify the original registration signature with an ML-DSA-87 capable OpenSSL")
+    parser.add_argument("--before-close", action="store_true", help="require the live parent observation before the signed close is inserted")
     args = parser.parse_args()
-    print(json.dumps(verify(args.directory, args.openssl), indent=2))
+    print(json.dumps(verify(args.directory, args.openssl, before_close=args.before_close), indent=2))

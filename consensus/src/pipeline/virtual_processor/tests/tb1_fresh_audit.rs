@@ -411,7 +411,9 @@ pub(super) async fn replay_window(
                 marker
             );
             if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_BASE_OBSERVE").is_some() {
-                peer_log!("arithmetic control population {} {}", std::process::id(), control_population(node, parent, class));
+                assert_eq!(node.chain.sink(), parent);
+                let observed = control_population_at(node, parent, class);
+                peer_log!("arithmetic assessment parent state {} {}", std::process::id(), observed);
             }
             peer_log!(
                 "arithmetic PANEL prefix pid={} submission={} parent={} round={} blue={} daa={}",
@@ -429,19 +431,33 @@ pub(super) async fn replay_window(
 /// Observe the network's existing base population at the state committed by this
 /// selected header. This is a population observation only; it assigns no seats.
 fn control_population(node: &Rig, block: Hash64, class: Hash64) -> serde_json::Value {
-    use kaspa_consensus_core::{
-        mldsa87_primitives::mldsa87_key_id, palw_execution_lane_v1::palw_execution_span_v1,
-        palw_state_proof_v1::state_root_of_pinned_header_v1, palw_state_v2::palw_base_population_v1,
-    };
+    use kaspa_consensus_core::palw_state_proof_v1::state_root_of_pinned_header_v1;
     let native = node.api();
     let tip = native.get_sink();
     assert!(native.is_chain_ancestor_of(block, tip).unwrap());
     let header = native.get_header(block).unwrap();
     let source = native.get_ghostdag_data(block).unwrap().selected_parent;
+    let mut observed = control_population_at(node, source, class);
+    let committed = state_root_of_pinned_header_v1(&header, block).unwrap();
+    assert_eq!(observed["state"], serde_json::json!(committed));
+    assert_eq!(native.get_sink(), tip);
+    observed["block"] = serde_json::json!(block);
+    observed
+}
+
+/// Read the post-state of the specified selected block. At the pre-close tip this is
+/// the state the next header will commit, including transitions made at this block.
+fn control_population_at(node: &Rig, source: Hash64, class: Hash64) -> serde_json::Value {
+    use kaspa_consensus_core::{
+        mldsa87_primitives::mldsa87_key_id, palw_execution_lane_v1::palw_execution_span_v1, palw_state_v2::palw_base_population_v1,
+    };
+    let native = node.api();
+    let tip = native.get_sink();
+    assert!(native.is_chain_ancestor_of(source, tip).unwrap());
     let vp = node.vp();
     let (at, state) = vp.palw_observer_state_at_cached_v1(source).unwrap();
-    let root = state_root_of_pinned_header_v1(&header, block).unwrap();
-    assert_eq!((at, state.state_root()), (source, root));
+    assert_eq!(at, source);
+    let root = state.state_root();
     let daa = native.get_header(source).unwrap().daa_score;
     let fold = vp.palw_model_registry_fold_at(daa).expect("the isolated control registry must be active");
     let span = palw_execution_span_v1(daa, fold.span_daa);
@@ -461,7 +477,7 @@ fn control_population(node: &Rig, block: Hash64, class: Hash64) -> serde_json::V
                                       "key_id":mldsa87_key_id(&bond.pubkey),"collateral":bond.collateral}));
     }
     assert_eq!(native.get_sink(), tip);
-    serde_json::json!({"block":block,"source":source,"source_daa":daa,"state":root,"class":class,
+    serde_json::json!({"source":source,"source_daa":daa,"state":root,"class":class,
                        "registrant":registrant.map(|k|(k.0.transaction_id,k.0.index)), "registrant_operator":owner.map(|b|b.operator_id),
                        "registrant_key":owner.map(|b|mldsa87_key_id(&b.pubkey)),
                        "base_class":node.bundle.state.base_class_id(),"span":span,"operator_count":operators.len(),"bonds":bonds})
@@ -572,6 +588,16 @@ async fn read_registered_arithmetic_control_population() {
     stable_panel::arm(&mut node);
     let mut reader = history::Reader::open(node.chain.sink()).unwrap();
     assert_eq!(reader.header.registered, id("registered"));
+    while node.chain.sink() != id("preparation") {
+        reader.next(&mut node).await;
+    }
+    let before_close = control_population_at(&node, node.chain.sink(), id("class"));
+    let close = reader.next(&mut node).await;
+    assert_eq!(close.hash(), id("close"));
+    let mut confirmed = control_population(&node, close.hash(), id("class"));
+    confirmed.as_object_mut().unwrap().remove("block");
+    assert_eq!(confirmed, before_close);
+    peer_log!("arithmetic preparation parent state {} {}", std::process::id(), before_close);
     reader.finish(&mut node).await;
     assert_eq!(node.chain.sink(), id("tip"));
     assert_eq!(node.chain.tip_state().1.class(&id("class")).unwrap().artifact_root, id("inventory"));
