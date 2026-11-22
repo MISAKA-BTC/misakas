@@ -381,7 +381,7 @@
       "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
     ],
     "independentOwnerReplayAndReleaseQueued": true,
-    "signedReleaseCarriageVerified": false,
+    "signedReleaseCarriageVerified": true,
     "retainedHeartbeat": "b3d561f6a27951a1e7036ba08b2dde2944359c6a809e13742291fea84573797147cc155c3a5680c4630eeb6e0499946eb8fc1c52d7ab4d647156bb035ef750d8",
     "peerSinks": [
       "b3d561f6a27951a1e7036ba08b2dde2944359c6a809e13742291fea84573797147cc155c3a5680c4630eeb6e0499946eb8fc1c52d7ab4d647156bb035ef750d8",
@@ -424,6 +424,34 @@
       "carrierBodyPeerCount": 3,
       "readbackSha256": "2ae4795e90c3a796f919bc0e889b76409345790010b646fb174f6a532a554bc9",
       "stepDriverExitCode": 1
+    },
+    "acceptedReleases": {
+      "peers": 3,
+      "acceptedAtBlockByTransaction": {
+        "e6f0f0be0961752db8d9ba0d3f18e40ac54ef20fd40c0211355a693017e01f00a23c685b005d24effd5a4a7e3227bcc2a56ceb01dcde70a0b9fbd7df2004854d": "1d7c6c62841412f8b780a8508a57a79076aea93cd69e1550e2ca73ef6c01cc66f413a01f044759eaec90dc3973f0e6ce605b5e071d1e735d5bdbd41fefdd27fb",
+        "8ee551eed3d8230b91ac698447c64b0dca475cdccf29d71c8f65c4e609511352b76b96fc30c4470397084ca37445a6bb079bacb88dd29b243f1d893b54d563b3": "1bf869a123fd46234ff343a1c3f51db534d5886e93b84b535c58b43fbc28727331471352d2b4aad8a79473919e3e74c82ab1950916738a04c752abfc82798993"
+      },
+      "selectedBlocks": [
+        "c02540720d47483cae3a22691d46d981bb9f7e1c3e2353caf39f8185aeaba6d5e4b93e1d5c61d3f61acee25441cd202d4384803d60cb4fe7edb207b3b4414025",
+        "1d7c6c62841412f8b780a8508a57a79076aea93cd69e1550e2ca73ef6c01cc66f413a01f044759eaec90dc3973f0e6ce605b5e071d1e735d5bdbd41fefdd27fb",
+        "1bf869a123fd46234ff343a1c3f51db534d5886e93b84b535c58b43fbc28727331471352d2b4aad8a79473919e3e74c82ab1950916738a04c752abfc82798993"
+      ],
+      "sink": "1bf869a123fd46234ff343a1c3f51db534d5886e93b84b535c58b43fbc28727331471352d2b4aad8a79473919e3e74c82ab1950916738a04c752abfc82798993",
+      "headerPalwStateRoot": "a7a4dddca33b437a90ac82e6b7c8d22c3cff84b885833502a0b84deee02691a014ca12e57e449a109562d1f2d70d31a4a663685a3261f43b3f88e79275be583a",
+      "virtualDaa": 7751,
+      "tipDaa": 7750,
+      "closedReservers": [
+        "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+        "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+      ],
+      "accusationPending": false,
+      "openCourtSessions": [],
+      "claimPhase": "receipt_licensed",
+      "phaseDeadlineDaa": 10866,
+      "certification": "pending",
+      "acceptanceDriverExitCode": 0,
+      "originVerificationExitCode": 0,
+      "readbackSha256": "87c26c109816afaf1ebe4b84958fdbdf1ced6d3bc15158202509eb16fb79e157"
     }
   }
 }
