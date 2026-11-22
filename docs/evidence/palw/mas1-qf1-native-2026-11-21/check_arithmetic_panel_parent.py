@@ -118,7 +118,7 @@ def identify_control_cards(snapshot, identities):
     for bond in snapshot["bonds"]:
         card = identities.get(bond["key_id"])
         if card is not None:
-            known.append(dict(txid=bond["txid"], index=bond["index"], operator=bond["operator"], card=card))
+            known.append(dict(txid=bond["txid"], index=bond["index"], operator=bond["operator"], card=card, key_id=bond["key_id"]))
     return known
 
 
