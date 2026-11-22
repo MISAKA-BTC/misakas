@@ -1,0 +1,26 @@
+{
+  "submission": "050f2fd1b1d9fec94c03476e5301162207fd105daddd4ca84586279369f066e29185d77cd4d459cb0eb69a0a75faef6dab67173146911f97eeb17ecf71f4970b",
+  "branch_parent": {
+    "block": "3eb58b1e5fcd9a6fe222c3ea13257e5d6f7adcc03d5113c20cd6d343ce69277f8fc3ffdd0574b449c97db852dbed19dee8077305f68cf9cc2b2bab61ce5e8512",
+    "blue": 106200,
+    "daa": 53098,
+    "prefix_block": 30676
+  },
+  "heartbeat_prefix_sha256": "371ad6c0292c18f6800ef43d599b4fa48bb718697923d7919f9b2b1381819706",
+  "funding_outpoint": {
+    "index": 0,
+    "transactionId": "e9d8ba1d4875d3ba7b08b08830f2d5a41b63d6c3d1f917a88ed6e0a97d2c4cd989157bff682b9c6e035d3ea4afe1b785c896f4065f4726e701538702533a00e0"
+  },
+  "funding_parent_archive_sha256": "33e61701753280bec0f3aed2e20c8d5588d8e8bc11ba25f85a43fc91e2c3ddb4",
+  "release_window_archive_sha256": "7c9bb4dc1a5b46081d0be16c5b2a304a919c218c7013ee87951f353dc69af1f8",
+  "audit_publication_sha256": "bd4e8701def901061d08dde841bcd85466dc635af7668cc0c8c816b590e4ac65",
+  "arithmetic_submission_archive_sha256": "d5a1886ef1c9de4b2b3f28e8bea1cd18ece2afc4da5f37bd0e834718f36a30d9",
+  "assessment_position": {
+    "submission_daa": 37760,
+    "submission_blue": 75524,
+    "panel_close_blue": 181382,
+    "panel_release_from_daa": 90741,
+    "panel_deadline_exclusive_daa": 256802,
+    "case_deadline_exclusive_daa": 256803
+  }
+}
