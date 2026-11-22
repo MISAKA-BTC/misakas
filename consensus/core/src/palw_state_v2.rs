@@ -24068,7 +24068,10 @@ pub(crate) fn apply_delta_prefix_v2(
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let entries = delta.entries.get(..end).ok_or(PalwStateV2Error::DeltaMismatch("recorded prefix exceeds actual delta"))?;
     let mut state = parent.clone();
-    for entry in entries {
+    for (index, entry) in entries.iter().enumerate() {
+        if let PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } = entry {
+            private_moe2_settlement::check_exec_settlement_debit_v1(record, delta.point, &entries[..index])?;
+        }
         apply_delta_entry(&mut state, entry, false)?;
     }
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, false, params)?;
@@ -24109,7 +24112,10 @@ pub(crate) fn replay_delta_owned_v1(
     let mut tokenizer_intake_changed = false;
     let mut batch_numerical_receipt_changed = false;
     let mut batch_plain_output_receipt_changed = false;
-    for entry in &delta.entries {
+    for (index, entry) in delta.entries.iter().enumerate() {
+        if let PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } = entry {
+            private_moe2_settlement::check_exec_settlement_debit_v1(record, delta.point, &delta.entries[..index])?;
+        }
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
             tokenizer_intake_changed |= crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_delta_entry_v1(
                 key,
@@ -24811,8 +24817,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
         PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } => {
-            if state.last_point != Some(record.position.point) || !record.has_consistent_liquidity() {
-                return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement has the wrong block or liquidity data"));
+            if state.last_point != Some(record.position.point)
+                || !record.has_consistent_liquidity()
+                || state.model_market(&record.model) != record.reward.allocation.market.map(|quote| quote.after).as_ref()
+            {
+                return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement has the wrong block or market state"));
             }
             let reserved = state.bond_budget.as_ref().and_then(|budget| budget.claim_row(&record.reservation));
             if reserved.is_none_or(|row| {

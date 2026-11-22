@@ -6,7 +6,8 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecWorkerPayees, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2,
+    Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateV2Error,
+    apply_delta_v2, revert_delta_v2,
 };
 use std::path::Path;
 
@@ -126,6 +127,28 @@ pub(super) fn check_exec_settlement_rewind(
     let receipt = child.private_moe2_exec_settlement(&claim).unwrap();
     assert_eq!((receipt.reservation, receipt.reward, receipt.position), (slot.reservation_key(), payment, position));
     assert_eq!(receipt.permanent_liquidity.as_ref(), book.receipt(&claim));
+    // A receipt at a different block must not use the already consumed
+    // reservation from the parent, even after restoring the native snapshot.
+    let later = PalwBlockContextV2 { block: Hash64::from_u64_word(645), blue_score: position.point.blue_score + 1, ..position.point };
+    let mut duplicate = receipt.clone();
+    duplicate.claim = Hash64::from_u64_word(646);
+    duplicate.position.point = later;
+    if let Some(lp) = duplicate.permanent_liquidity.as_mut() {
+        lp.claim = duplicate.claim;
+        lp.position = duplicate.position;
+    }
+    let unpaired = PalwStateDeltaV2 {
+        point: later,
+        entries: vec![
+            PalwDeltaEntryV2::LastPoint { old: Some(position.point), new: Some(later) },
+            PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(duplicate) },
+        ],
+    };
+    assert!(matches!(
+        apply_delta_v2(&child, &unpaired, params),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit"))
+    ));
+    assert_eq!(child.state_root(), after);
     carried.private_moe2_exec_settlements.clear();
     assert!(carried.into_state(params, Some(after)).is_err(), "omitting a settled worker and LP receipt changes the root");
     assert!(

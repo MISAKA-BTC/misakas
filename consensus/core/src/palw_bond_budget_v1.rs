@@ -1427,6 +1427,23 @@ pub struct PalwBudgetClaimRowV1 {
     pub liability_sompi: u128,
 }
 
+impl PalwBudgetClaimRowV1 {
+    pub(crate) fn after_exec_slot_reward(mut self, reward: u64) -> Result<Self, PalwBudgetRefusalV1> {
+        if self.origin != PalwBudgetOriginV1::Attempt || !self.open || !self.live {
+            return Err(PalwBudgetRefusalV1::NotOpen);
+        }
+        if self.consumed != PalwBudgetVectorV1::ZERO || self.reserved.claims != 1 {
+            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Claims });
+        }
+        if reward > self.reserved.reward_sompi {
+            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward });
+        }
+        self.consumed.claims = 1;
+        self.consumed.reward_sompi = reward;
+        Ok(self)
+    }
+}
+
 /// A bond's capital assignment (table 4; ADR-0177 D3).
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwCapitalAssignmentRowV1 {
@@ -3321,18 +3338,7 @@ impl PalwBondBudgetStateV1 {
         reward: u64,
         journal: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
-        let mut row = self.claims.get(key).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
-        if row.origin != PalwBudgetOriginV1::Attempt || !row.open || !row.live {
-            return Err(PalwBudgetRefusalV1::NotOpen);
-        }
-        if row.consumed != PalwBudgetVectorV1::ZERO || row.reserved.claims != 1 {
-            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Claims });
-        }
-        if reward > row.reserved.reward_sompi {
-            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward });
-        }
-        row.consumed.claims = 1;
-        row.consumed.reward_sompi = reward;
+        let row = self.claims.get(key).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?.after_exec_slot_reward(reward)?;
         self.put_claim(key, Some(row), journal);
         Ok(())
     }

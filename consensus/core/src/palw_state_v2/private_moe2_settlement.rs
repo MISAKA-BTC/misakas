@@ -2,7 +2,7 @@
 //! settlement book and the authenticated claim release. No public object dispatch.
 use super::*;
 use crate::config::params::Params;
-use crate::palw_bond_budget_v1::palw_bond_budget_export_cap_v1;
+use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2RewardSplit,
@@ -20,6 +20,42 @@ use crate::tx::TransactionOutput;
 pub struct Moe2ExecWorkerPayees<'a> {
     pub miner: PalwBondKeyV2,
     pub panel: &'a [(PalwBondKeyV2, u64)],
+}
+
+/// The private fold journals the one-shot EXEC debit, any market change,
+/// and the receipt together. Replay must see that exact debit in this block.
+pub(super) fn check_exec_settlement_debit_v1(
+    record: &Moe2NativeExecSettlement,
+    point: PalwBlockContextV2,
+    prefix: &[PalwDeltaEntryV2],
+) -> Result<(), PalwStateV2Error> {
+    let mismatch = || PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit");
+    if record.position.point != point {
+        return Err(mismatch());
+    }
+    let debit = match prefix.split_last() {
+        Some((PalwDeltaEntryV2::ModelMarket { key, new, .. }, preceding)) if *key == record.model => {
+            if record.reward.allocation.market.map(|quote| quote.after).as_ref() != new.as_ref() {
+                return Err(mismatch());
+            }
+            preceding.last()
+        }
+        _ => prefix.last(),
+    };
+    let Some(PalwDeltaEntryV2::BondBudgetRow { table: PALW_BUDGET_TABLE_CLAIMS_V1, key, old: Some(old), new: Some(new) }) = debit
+    else {
+        return Err(mismatch());
+    };
+    if key.as_slice() != record.reservation.as_byte_slice() {
+        return Err(mismatch());
+    }
+    let before = borsh::from_slice::<PalwBudgetClaimRowV1>(old).map_err(|_| mismatch())?;
+    let after = borsh::from_slice::<PalwBudgetClaimRowV1>(new).map_err(|_| mismatch())?;
+    let expected = record.total_reward().and_then(|reward| before.after_exec_slot_reward(reward).ok());
+    if before.model.map(|(model, _)| model) != Some(record.model) || expected != Some(after) {
+        return Err(mismatch());
+    }
+    Ok(())
 }
 
 impl PalwChainStateV2 {

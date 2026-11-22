@@ -291,10 +291,10 @@ impl Moe2SettlementUndo {
     }
 
     fn after_budget(&self, exec: bool) -> Result<PalwBudgetClaimRowV1, Moe2SettlementError> {
-        let mut after = self.before_budget;
         if exec {
-            after.consumed.claims = 1;
+            return self.before_budget.after_exec_slot_reward(self.draw).map_err(|_| Moe2SettlementError::UndoMismatch);
         }
+        let mut after = self.before_budget;
         after.consumed.reward_sompi = after.consumed.reward_sompi.checked_add(self.draw).ok_or(Moe2SettlementError::UndoMismatch)?;
         Ok(after)
     }

@@ -453,5 +453,39 @@
       "originVerificationExitCode": 0,
       "readbackSha256": "87c26c109816afaf1ebe4b84958fdbdf1ced6d3bc15158202509eb16fb79e157"
     }
+  },
+  "attemptReadback": {
+    "nativeBinarySha256": "a5c384b3a9e554587b69502dd90c1314a54818c5cc45d08de9c0149649f2e4ea",
+    "selectedHistory": {
+      "block": "9252197f4243fb34bbaab4615249c8e9f1c9e996cdb35e91a93d23e562875e768d3ff93c5394c05c7ecb9973abda07c3f02d4ac090c96410dd3b5c1ffee82edb",
+      "algo": 6,
+      "daa": 7747,
+      "root": "5559564216b6ba0181ce3f384676dcb915a3d91a8f0e28aeee912e8719567929d79845c0ad256f5c3d1d4ea7636c3bbd24b02447dc08551d29ed1332cf705461",
+      "claim": "a3cdfe8c80c9e39a6cb5e41ce31de3e8b0415d0e4c1aa9999a06377d3f316d6754d3a2b70d69e76cddc934043c5f231442ebea55ee3d34594a6f930762cb2143",
+      "claimDaa": 7747,
+      "phase": "provisional",
+      "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "peers": 3,
+      "exitCode": 0
+    },
+    "newAttemptTrial": {
+      "observationSeconds": 300,
+      "peerSink": "1bf869a123fd46234ff343a1c3f51db534d5886e93b84b535c58b43fbc28727331471352d2b4aad8a79473919e3e74c82ab1950916738a04c752abfc82798993",
+      "virtualDaa": 7751,
+      "draws": [
+        117,
+        116
+      ],
+      "networkLost": [
+        0,
+        0
+      ],
+      "producedBlocks": [
+        0,
+        0
+      ],
+      "heartbeatPermits": 0,
+      "exitCode": 4
+    }
   }
 }
