@@ -497,6 +497,26 @@ impl<'a> FrozenExecInputs<'a> {
         Ok(input)
     }
 
+    /// Recover the recorded job inputs on a candidate's own parent branch.
+    /// Claim eligibility and original deadlines are still checked by the
+    /// consumer at the candidate's execution position.
+    #[allow(clippy::too_many_arguments)]
+    pub fn derive_recorded_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1,
+        slot: u64,
+        publication: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<DerivedExecInput<'a>> {
+        let seed = self.gate.read_seed_at_parent(native, parent, settlement, publication, certificate, rows, q, limits)?;
+        self.derive_from_seed(slot, certificate, &seed)
+    }
+
     fn derive_from_seed(
         &self,
         slot: u64,

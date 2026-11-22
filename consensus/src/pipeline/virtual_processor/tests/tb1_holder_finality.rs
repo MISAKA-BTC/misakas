@@ -59,6 +59,33 @@ use kaspa_consensus_core::palw_tb1::{
 use libcrux_ml_dsa::ml_dsa_65;
 use misaka_palw_remote::tb1_exposure::{Tb1ExposureJournal, Tb1HolderFreeze};
 
+use kaspa_consensus_core::{
+    api::ConsensusApi, errors::consensus::ConsensusResult, header::Header, palw_native_settlement_v1::NativeSettlementSnapshotV1,
+    trusted::ExternalGhostdagData,
+};
+use std::sync::Arc;
+struct CandidateHistory<'a>(&'a dyn ConsensusApi);
+impl ConsensusApi for CandidateHistory<'_> {
+    fn get_sink(&self) -> Hash64 {
+        panic!("candidate validation must not consult the live sink");
+    }
+    fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
+        self.0.get_header(block)
+    }
+    fn get_block(&self, block: Hash64) -> ConsensusResult<Block> {
+        self.0.get_block(block)
+    }
+    fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+        self.0.get_ghostdag_data(block)
+    }
+    fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
+        self.0.is_chain_ancestor_of(low, high)
+    }
+    fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, id: &[u8; 64]) -> ConsensusResult<bool> {
+        self.0.palw_coinbase_commits_to(chain, block, id)
+    }
+}
+
 const LIMITS: PublicationLimits = PublicationLimits { records: 4, message_bytes: 2048, matrix_cells: 100 };
 
 #[derive(Serialize, Deserialize)]
@@ -768,31 +795,6 @@ async fn run(stable: bool, registered: bool) {
         let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
         assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9, 10]);
         {
-            use kaspa_consensus_core::{
-                api::ConsensusApi, errors::consensus::ConsensusResult, header::Header, trusted::ExternalGhostdagData,
-            };
-            use std::sync::Arc;
-            struct CandidateHistory<'a>(&'a dyn ConsensusApi);
-            impl ConsensusApi for CandidateHistory<'_> {
-                fn get_sink(&self) -> Hash64 {
-                    panic!("candidate validation must not consult the live sink");
-                }
-                fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
-                    self.0.get_header(block)
-                }
-                fn get_block(&self, block: Hash64) -> ConsensusResult<Block> {
-                    self.0.get_block(block)
-                }
-                fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
-                    self.0.get_ghostdag_data(block)
-                }
-                fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
-                    self.0.is_chain_ancestor_of(low, high)
-                }
-                fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, id: &[u8; 64]) -> ConsensusResult<bool> {
-                    self.0.palw_coinbase_commits_to(chain, block, id)
-                }
-            }
             let history = CandidateHistory(api);
             let batch_at = |candidate_parent, state| {
                 ExecInputBatch::from_signed_at_parent(&history, candidate_parent, parent, state, &rounds, &entries, 4, 16)
@@ -1126,6 +1128,7 @@ async fn run(stable: bool, registered: bool) {
     }
     let jobs = inputs.observe(api, anchor, &closure, &q).unwrap();
     let gate = jobs.publication_gate();
+    let observed_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
     let freeze = gate.holder_freeze();
     let mut other_chain = round.chain_id;
     other_chain[0] ^= 1;
@@ -1216,6 +1219,38 @@ async fn run(stable: bool, registered: bool) {
     let mut retained_qf1 = None;
     if let Some(terms) = &qf1_terms {
         let r = jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+        let settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
+        let history = CandidateHistory(api);
+        let restore_gate = |snapshot: &NativeSettlementSnapshotV1| {
+            misaka_palw_remote::tb1_exposure::publication::NativePublicationGate::observe_at_snapshot(
+                &history, anchor, &closure, &q, snapshot,
+            )
+        };
+        let restored = restore_gate(&observed_settlement).unwrap();
+        assert_eq!(
+            restored
+                .read_seed_at_parent(&history, certificate.hash(), &settlement, batch.hash(), certificate.hash(), &rows, &q, LIMITS)
+                .unwrap(),
+            seed
+        );
+        assert!(
+            restore_gate(&settlement)
+                .unwrap()
+                .read_seed_at_parent(&history, certificate.hash(), &settlement, batch.hash(), certificate.hash(), &rows, &q, LIMITS)
+                .is_err()
+        );
+        let read_at = |parent, snapshot: &NativeSettlementSnapshotV1| {
+            jobs.derive_recorded_at_parent(&history, parent, snapshot, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS)
+        };
+        let branch_input = read_at(certificate.hash(), &settlement).unwrap();
+        assert_eq!(branch_input.attempt(), r.attempt());
+        assert_eq!(branch_input.registration_key(), r.registration_key());
+        assert_eq!(branch_input.tokens(), r.tokens());
+        assert!(read_at(batch.hash(), &settlement).is_err());
+        for finalized in [None, Some(genesis)] {
+            let invalid = NativeSettlementSnapshotV1 { finalized, ..settlement.clone() };
+            assert!(read_at(certificate.hash(), &invalid).is_err());
+        }
         assert_eq!(r.registration_key(), &terms.registration_key(parent, &rounds, &owner.verification_key, 16).unwrap());
         assert_ne!(r.attempt(), request.attempt());
         // One write keeps the record intact when all three processes report at once.

@@ -6,6 +6,7 @@ use super::{AnchorState, Tb1HolderFreeze, anchor_state, invalid};
 use kaspa_consensus_core::{
     Hash64,
     api::ConsensusApi,
+    palw_native_settlement_v1::NativeSettlementSnapshotV1,
     palw_tb1::{
         freeze::Tb1MiningClosure,
         qualification::Tb1Qualification,
@@ -114,18 +115,60 @@ impl NativePublicationGate {
         if !matches!(state, AnchorState::Finalized) {
             return Err(Error::new(ErrorKind::WouldBlock, "TB1 close has not finalized"));
         }
-        let header = native.get_header(close).map_err(Error::other)?;
+        let gate = Self::from_observation(native, closure, freeze, stable_block)?;
+        gate.require_tip(native, stable_block)?;
+        Ok(gate)
+    }
+
+    /// Reconstruct the pre-publication gate from the original branch-owned
+    /// settlement snapshot. A later snapshot cannot move this observation
+    /// past the signed publication, and the caller owns snapshot provenance.
+    pub fn observe_at_snapshot(
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        closure: &Tb1MiningClosure,
+        q: &Tb1Qualification<'_>,
+        settlement: &NativeSettlementSnapshotV1,
+    ) -> io::Result<Self> {
+        Self::check_finalized_branch(native, close, settlement.generation, settlement)?;
+        let freeze = Tb1HolderFreeze::resolve_in_branch(native, close, closure, q)?;
+        Self::from_observation(native, closure, freeze, settlement.generation)
+    }
+
+    fn from_observation(
+        native: &dyn ConsensusApi,
+        closure: &Tb1MiningClosure,
+        freeze: Tb1HolderFreeze,
+        stable_block: Hash64,
+    ) -> io::Result<Self> {
+        let header = native.get_header(freeze.accepting_block).map_err(Error::other)?;
         let stable = native.get_header(stable_block).map_err(Error::other)?;
-        let gate = Self {
+        freeze.check_deadline(stable.daa_score)?;
+        Ok(Self {
             freeze,
             chain: closure.round.chain_id,
             round: closure.round.id(),
             stable_block,
             closed_at: position(header.daa_score, header.blue_score, 3)?,
-            stable_at: position(daa, stable.blue_score, 3)?,
-        };
-        gate.require_tip(native, stable_block)?;
-        Ok(gate)
+            stable_at: position(stable.daa_score, stable.blue_score, 3)?,
+        })
+    }
+
+    fn check_finalized_branch(
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
+    ) -> io::Result<()> {
+        let finalized = settlement.finalized.ok_or_else(|| invalid("TB1 candidate parent has no finalized head"))?;
+        if settlement.version != 1
+            || settlement.generation != parent
+            || !native.is_chain_ancestor_of(finalized, parent).map_err(Error::other)?
+            || !native.is_chain_ancestor_of(close, finalized).map_err(Error::other)?
+        {
+            return Err(invalid("TB1 freeze outside the candidate parent's finalized history"));
+        }
+        Ok(())
     }
 
     fn assemble(
@@ -138,12 +181,29 @@ impl NativePublicationGate {
         limits: PublicationLimits,
     ) -> io::Result<(Hash64, [u8; 64], Tb1BeaconSeed)> {
         let (state, _, tip) = anchor_state(native, self.freeze.accepting_block)?;
-        let at = certificate.unwrap_or(tip);
-        if !matches!(state, AnchorState::Finalized)
-            || batch == self.stable_block
+        if !matches!(state, AnchorState::Finalized) {
+            return Err(invalid("TB1 publication outside stabilized selected history"));
+        }
+        let (marker, seed) = self.assemble_on_branch(native, tip, batch, certificate.unwrap_or(tip), rows, q, limits)?;
+        self.require_tip(native, tip)?;
+        Ok((tip, marker, seed))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn assemble_on_branch(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        batch: Hash64,
+        at: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<([u8; 64], Tb1BeaconSeed)> {
+        if batch == self.stable_block
             || !native.is_chain_ancestor_of(self.stable_block, batch).map_err(Error::other)?
             || !native.is_chain_ancestor_of(batch, at).map_err(Error::other)?
-            || !native.is_chain_ancestor_of(at, tip).map_err(Error::other)?
+            || !native.is_chain_ancestor_of(at, parent).map_err(Error::other)?
         {
             return Err(invalid("TB1 publication outside stabilized selected history"));
         }
@@ -176,8 +236,7 @@ impl NativePublicationGate {
         let cert = set.assemble(limits.matrix_cells).map_err(|_| invalid("TB1 batch lacks reconstructible quorum"))?;
         let seed = set.verify_seed(&cert).map_err(|_| invalid("TB1 certificate verification failed"))?;
         let marker = certificate_commitment(batch, &cert)?;
-        self.require_tip(native, tip)?;
-        Ok((tip, marker, seed))
+        Ok((marker, seed))
     }
 
     pub(super) fn require_tip(&self, native: &dyn ConsensusApi, expected: Hash64) -> io::Result<()> {
@@ -213,6 +272,29 @@ impl NativePublicationGate {
             return Err(invalid("TB1 certificate differs from selected block"));
         }
         self.require_tip(native, tip)?;
+        Ok(seed)
+    }
+
+    /// Check a recorded release against the candidate's selected parent.
+    /// The native owner supplies its validated settlement snapshot for that
+    /// parent. The gate still binds the original pre-publication observation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_seed_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
+        batch: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<Tb1BeaconSeed> {
+        Self::check_finalized_branch(native, self.freeze.accepting_block, parent, settlement)?;
+        let (marker, seed) = self.assemble_on_branch(native, parent, batch, certificate, rows, q, limits)?;
+        if certificate == batch || !native.palw_coinbase_commits_to(self.chain, certificate, &marker).map_err(Error::other)? {
+            return Err(invalid("TB1 certificate differs from selected block"));
+        }
         Ok(seed)
     }
 }

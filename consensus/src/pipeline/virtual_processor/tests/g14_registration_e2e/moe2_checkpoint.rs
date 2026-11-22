@@ -5,14 +5,159 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwBlockWorkV3,
-    PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateV2Error, PalwTransitionExtrasV1, PositiveCaseReplayInputV2,
-    apply_delta_v2, apply_palw_transition_retained_v8, apply_palw_transition_v2_with_extras, revert_delta_v2,
+    Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2,
+    PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1,
+    PositiveCaseReplayInputV2, apply_delta_v2, apply_palw_transition_retained_v8, apply_palw_transition_v2_with_extras,
+    revert_delta_v2,
 };
 use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
 };
 use std::path::Path;
+
+const RESOURCE_PROBE: &str = "MISAKA_TEST_PRIVATE_MOE2_AWARD_RESOURCE";
+
+#[derive(borsh::BorshDeserialize, borsh::BorshSerialize)]
+struct ResourceProbe {
+    parent: Vec<u8>,
+    parent_root: Hash64,
+    anchor: Vec<u8>,
+    anchor_root: Hash64,
+    after_root: Hash64,
+    delta: PalwStateDeltaV2,
+    registration: [u8; 64],
+    slot: u64,
+    close: Hash64,
+    close_daa: u64,
+    quote: Moe2PreDrawQuote,
+    worker_start: u64,
+    miner: PalwBondKeyV2,
+    panel: Vec<(PalwBondKeyV2, u64)>,
+}
+
+#[test]
+#[ignore = "child of private_moe2_three_process_registration"]
+fn retained_moe2_award_resource_probe() {
+    use kaspa_consensus_core::palw_native_resource_v1::{
+        NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, native_logical_admission_enabled_v1,
+    };
+    let path = std::path::PathBuf::from(std::env::var_os(RESOURCE_PROBE).expect("probe fixture directory"));
+    let cap = std::env::var("MISAKA_TEST_PRIVATE_MOE2_AWARD_CAP").unwrap().parse().unwrap();
+    let probe: ResourceProbe = borsh::from_slice(&std::fs::read(path.join("state.borsh")).unwrap()).unwrap();
+    let raw: RpcRawBlock = serde_json::from_reader(std::fs::File::open(path.join("block.json")).unwrap()).unwrap();
+    let block = Block::try_from(raw).unwrap();
+    let (config, bundle, ..) = super::super::registration_config();
+    let params = &bundle.state;
+    let restore = |bytes: &[u8], root| {
+        borsh::from_slice::<PalwStateCarriageV2>(bytes).unwrap().into_state(params, Some(root)).unwrap()
+    };
+    let parent = restore(&probe.parent, probe.parent_root);
+    let anchor = restore(&probe.anchor, probe.anchor_root);
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record }) = probe.delta.entries.last() else {
+        panic!("missing expected award receipt");
+    };
+    let slot = Moe2ExecSlot {
+        registration: probe.registration,
+        slot: probe.slot,
+        close: probe.close,
+        close_daa: probe.close_daa,
+        quote: probe.quote,
+    };
+    let release = Moe2WorkerRelease {
+        reward: probe.quote.limits.max_reward,
+        miner_now: record.reward.miner_now,
+        panel_now: record.reward.panel_now,
+        liability_until: probe.quote.deadline,
+        signed_hard_deadline: probe.quote.deadline,
+        material_ttl_until: probe.quote.deadline,
+        vest_until: None,
+        retire_not_before: probe.quote.deadline,
+    };
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: cap, database_bytes: 0 }));
+    assert!(native_logical_admission_enabled_v1());
+    let outcome = fold_retained_award(
+        &config.params,
+        params,
+        &parent,
+        &anchor,
+        &block,
+        Moe2ExecAwardV1 {
+            claim: record.claim,
+            position: record.position,
+            release,
+            slot: &slot,
+            work: *work,
+            payees: Moe2ExecWorkerPayees { miner: probe.miner, panel: &probe.panel },
+            worker_start: probe.worker_start.try_into().unwrap(),
+        },
+        true,
+    );
+    if cap == 1 {
+        assert!(matches!(outcome, Err(PalwStateV2Error::NativeResource(_))));
+    } else {
+        let (state, delta) = outcome.unwrap();
+        assert_eq!((state.state_root(), &*delta), (probe.after_root, &probe.delta));
+        let reversed = state.try_delta_v1(&delta, params, true).unwrap();
+        assert_eq!(reversed.state_root(), probe.parent_root);
+    }
+    assert_eq!(parent.state_root(), probe.parent_root);
+    println!("MOE2 retained award resource cap={cap} verified");
+}
+
+fn run_resource_probes(probe: ResourceProbe, block: &Block) {
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    std::fs::write(dir.path().join("state.borsh"), borsh::to_vec(&probe).unwrap()).unwrap();
+    serde_json::to_writer(std::fs::File::create(dir.path().join("block.json")).unwrap(), &RpcRawBlock::from(block)).unwrap();
+    for cap in [134_217_728_u64, 1] {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["retained_moe2_award_resource_probe", "--ignored", "--nocapture", "--test-threads=1"])
+            .env(RESOURCE_PROBE, dir.path())
+            .env("MISAKA_TEST_PRIVATE_MOE2_AWARD_CAP", cap.to_string())
+            .status()
+            .unwrap();
+        assert!(status.success(), "MOE2 award resource probe with cap {cap} exited {status}");
+    }
+}
+
+fn fold_retained_award(
+    config: &kaspa_consensus_core::config::params::Params,
+    params: &PalwStateParamsV2,
+    parent: &PalwChainStateV2,
+    anchor: &PalwChainStateV2,
+    block: &Block,
+    award: Moe2ExecAwardV1<'_>,
+    enabled: bool,
+) -> Result<
+    (
+        kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1,
+    ),
+    PalwStateV2Error,
+> {
+    let point = award.position.point;
+    apply_palw_transition_retained_v8(
+        parent,
+        params,
+        None,
+        &point,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1 { private_moe2_registration: enabled, ..Default::default() },
+        PositiveCaseReplayInputV2 {
+            selected_parent: parent.last_point().unwrap().block,
+            live_case_cap: 0,
+            load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
+        },
+        Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, block, award }),
+    )
+    .map(|(state, delta, _, _)| (state, delta))
+}
 
 pub(super) fn check_exec_settlement_rewind(
     env: &Env,
@@ -491,34 +636,34 @@ pub(super) fn check_exec_settlement_rewind(
     let (mut native, mut native_delta) = apply_palw_transition_v2(&restored, params, &position.point, &[], None).unwrap();
     let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
     let retained = |parent: &PalwChainStateV2, block: &Block, input: Moe2ExecAwardV1<'_>, enabled| {
-        let point = input.position.point;
-        apply_palw_transition_retained_v8(
-            parent,
-            params,
-            None,
-            &point,
-            &[],
-            PalwBlockWorkV3::None,
-            &[],
-            Hash64::default(),
-            false,
-            false,
-            false,
-            false,
-            &PalwTransitionExtrasV1 { private_moe2_registration: enabled, ..Default::default() },
-            PositiveCaseReplayInputV2 {
-                selected_parent: parent.last_point().unwrap().block,
-                live_case_cap: 0,
-                load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
-            },
-            Some(Moe2ExecAwardInputV1 { config, quote_anchor: registration, block, award: input }),
-        )
+        fold_retained_award(config, params, parent, registration, block, input, enabled)
     };
     let input = || native_award(claim, &slot, work, position);
     assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
-    let (retained_child, retained_delta, _, _) = retained(&restored, &award_block, input(), true).unwrap();
+    let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
     assert_eq!((retained_child.state_root(), &*retained_delta), (child.state_root(), &award_delta));
     assert_eq!(revert_delta_v2(&retained_child, &retained_delta, params).unwrap().state_root(), restored.state_root());
+    if std::env::var_os("MISAKA_TEST_MOE2_REGISTRATION_BLOCKS").is_none() {
+        run_resource_probes(
+            ResourceProbe {
+                parent: bytes,
+                parent_root: restored.state_root(),
+                anchor: borsh::to_vec(&PalwStateCarriageV2::from_state(registration)).unwrap(),
+                anchor_root: registration.state_root(),
+                after_root: child.state_root(),
+                delta: award_delta.clone(),
+                registration: slot.registration,
+                slot: slot.slot,
+                close: slot.close,
+                close_daa: slot.close_daa,
+                quote: slot.quote,
+                worker_start: worker_start as u64,
+                miner: payees.miner,
+                panel: payees.panel.to_vec(),
+            },
+            &award_block,
+        );
+    }
     let folded = native
         .fold_private_moe2_exec_award(
             config,
