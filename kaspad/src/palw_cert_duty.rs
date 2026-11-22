@@ -84,10 +84,10 @@ pub(super) enum PalwCertDutyVerdictV1 {
     Unjudged { retry_at: u64 },
 }
 
-/// **The duty's book** — the chain's owed rows (read once a DAA), the one replay in flight, verdicts and queue dates.
+/// **The duty's book** — the chain's owed rows (read once per selected sink and DAA), the one replay in flight, verdicts and queue dates.
 pub(super) struct PalwCertDutyV1 {
     owed: Vec<PalwCertificationDutyV1>,
-    read_at: Option<u64>,
+    read_at: Option<(kaspa_consensus_core::BlockHash, u64)>,
     verdicts: BTreeMap<Hash64, PalwCertDutyVerdictV1>,
     queued: BTreeMap<Hash64, u64>,
     pub(super) replays: PalwSeatReplaysV1,
@@ -137,7 +137,7 @@ impl PalwCertDutyV1 {
         }
     }
 
-    fn refresh(&mut self, owed: Vec<PalwCertificationDutyV1>, now_daa: u64) {
+    fn refresh(&mut self, owed: Vec<PalwCertificationDutyV1>, at: (kaspa_consensus_core::BlockHash, u64)) {
         let previous: BTreeMap<_, _> = self.owed.iter().map(|d| (d.claim_id, d)).collect();
         let unchanged: std::collections::BTreeSet<_> =
             owed.iter().filter(|d| previous.get(&d.claim_id) == Some(d)).map(|d| d.claim_id).collect();
@@ -148,7 +148,7 @@ impl PalwCertDutyV1 {
             self.fp_active = None;
         }
         self.owed = owed;
-        self.read_at = Some(now_daa);
+        self.read_at = Some(at);
     }
 
     /// The next row to replay: a replayable chain claim not yet judged here (or whose retry is due), outside the last margin.
@@ -171,7 +171,7 @@ impl PalwCertDutyV1 {
 }
 
 impl PalwPanelService {
-    /// **One tick of the Gate C `'S'`/`'V'` duty** — read the owed rows once a DAA, poll the replay in flight, start the next replay
+    /// **One tick of the Gate C `'S'`/`'V'` duty** — read the owed rows once per selected sink and DAA, poll the replay in flight, start the next replay
     /// in the duty's own slot, and queue a signed attestation for every row with a verdict to attest.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn cert_duty_tick_v1(
@@ -195,10 +195,22 @@ impl PalwPanelService {
         if self.config.fee_outpoint.is_none() || self.keypair.is_none() {
             return;
         }
-        if duty.read_at != Some(current_daa) {
-            let owed = session.clone().spawn_blocking(move |c| c.palw_certification_duties_v1(bond_key, current_daa)).await;
-            duty.refresh(owed, current_daa);
+        let selected = |c: &dyn kaspa_consensus_core::api::ConsensusApi| (c.get_sink(), c.get_virtual_daa_score());
+        let at = session.with_consensus_api_v1(selected);
+        let discard_pending = |duty: &mut PalwCertDutyV1, outbox: &mut CourtOutboxV1| {
+            duty.queued.clear();
+            outbox.retain_pending(|(_, round, responder, _)| !mine(*round, *responder));
+        };
+        if duty.read_at != Some(at) && at.1 == current_daa {
+            let owed = session.clone().spawn_blocking(move |c| c.palw_certification_duties_v1(bond_key, at.0, current_daa)).await;
+            if let Some(owed) = owed {
+                duty.refresh(owed, at);
+            }
             court_outbox.retain_pending(|(claim, round, responder, _)| !mine(*round, *responder) || duty.queued.contains_key(claim));
+        }
+        if duty.read_at != Some(at) || session.with_consensus_api_v1(selected) != at || at.1 != current_daa {
+            discard_pending(duty, court_outbox);
+            return;
         }
         if duty.owed.is_empty() && duty.replaying.is_none() {
             court_outbox.retain_pending(|(_, round, responder, _)| !mine(*round, *responder));
@@ -309,6 +321,12 @@ impl PalwPanelService {
         {
             self.cert_duty_start_replay_v1(session, duty, &d, current_daa, network_domain, heavy);
         }
+        // Replay can await material or a worker while the selected sink changes,
+        // including a reorg that leaves the DAA unchanged.
+        if session.with_consensus_api_v1(selected) != at {
+            discard_pending(duty, court_outbox);
+            return;
+        }
         // Attest every row with a verdict due now.
         let me = palw_kernel_bond_id_v1(&bond_key);
         let mut out = Vec::new();
@@ -348,13 +366,18 @@ impl PalwPanelService {
                 warn!("[{PALW_PANEL}] claim {}: Gate C attestation owed and no key to sign it (GC-DUTY)", d.claim_id);
                 continue;
             };
-            info!(
-                "[{PALW_PANEL}] claim {}: this drawn verifier attests {verdict:?} for its Gate C certification ({} position(s), deadline DAA {}) (GC-DUTY)",
-                d.claim_id, d.positions, d.deadline_daa
-            );
-            out.push((d.claim_id, PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond_key, signature }));
+            out.push((d, verdict, PalwConsensusObjectV2::KernelRouteV1 { bytes, signer: bond_key, signature }));
         }
-        for (claim, object) in out {
+        if session.with_consensus_api_v1(selected) != at {
+            discard_pending(duty, court_outbox);
+            return;
+        }
+        for (d, verdict, object) in out {
+            let claim = d.claim_id;
+            info!(
+                "[{PALW_PANEL}] claim {claim}: this drawn verifier attests {verdict:?} for its Gate C certification ({} position(s), deadline DAA {}) (GC-DUTY)",
+                d.positions, d.deadline_daa
+            );
             court_outbox.retain_pending(|(c, round, responder, _)| !(mine(*round, *responder) && *c == claim));
             court_outbox.set_due((claim, PALW_CERT_DUTY_ROUND_V1, false), current_daa);
             court_outbox.push_pending((claim, PALW_CERT_DUTY_ROUND_V1, false, object));
@@ -444,14 +467,17 @@ pub(super) mod tests {
         let original = duty(1_000);
         let claim = original.claim_id;
         let mut book = PalwCertDutyV1::new();
-        book.refresh(vec![original.clone()], 100);
+        let first_sink = Hash64::from_bytes([1; 64]);
+        let replacement_sink = Hash64::from_bytes([2; 64]);
+        book.refresh(vec![original.clone()], (first_sink, 100));
         book.verdicts.insert(claim, PalwCertDutyVerdictV1::Unavailable);
         book.fp_active = Some(claim);
         book.queued.insert(claim, 100);
-        book.refresh(vec![original.clone()], 101);
+        book.refresh(vec![original.clone()], (first_sink, 101));
         assert!(book.verdicts.contains_key(&claim));
-        let replacement = PalwCertificationDutyV1 { drawn_daa: 101, ..original };
-        book.refresh(vec![replacement], 102);
+        let replacement = PalwCertificationDutyV1 { positions: 1, ..original };
+        assert_ne!(book.read_at, Some((replacement_sink, 101)));
+        book.refresh(vec![replacement], (replacement_sink, 101));
         assert!(!book.verdicts.contains_key(&claim));
         assert!(!book.queued.contains_key(&claim));
         assert_eq!(book.fp_active, None);

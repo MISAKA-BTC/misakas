@@ -228,3 +228,11 @@ native39の隔離fixtureで、生成とヘッダー検証を同じノード内�
 `rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_reorg_restart` は終了コード0（試験555.21秒、ビルド2分50秒）。DAA 7626でjob・MasterのFinal、DAA 12669で7検証者のGate C認証と、4量子を持つreceiptの発行を確認。PNR9 `4082af34…` が受理され、coinbaseに812,500,001 sompiを計上した。Bの4ブロックの分岐へのreorgで、Aの報酬出力が消え、B側の報酬出力と元のjob creditのUTXO消費をブロック `1add9799…` が受理した。同じDBからの再起動でtip・state root・台帳行・UTXOを復元し、独立ノードの再生で選択tip・state root・台帳行と選択鎖の各delta rootが一致した。
 
 `rfc0012_native39_fixture_clock_survives_same_db_restart` も終了コード0（0.16秒）。前回のSIGTERMによる中断は完走結果に含めない。今回の完走はnative39 fixtureの結果で、隔離P200の新規Studio受賞、Round 16の実close、新profileのMOE2同一ブロック決済とは別の試験。
+
+### Gate C検証義務と同一DAAのreorg
+
+Gate Cの検証義務を、選択sinkとvirtual DAAの組で管理する。コンセンサスの読み取り口は、指定されたsinkと同じ選択鎖のPALWスナップショットからだけ義務を返す。読み取り後、非同期再実行後、署名のキュー登録前に選択履歴を再確認する。同一DAAでも選択sinkが変われば読み直し、引き継がれなかった検証義務の判定・再実行結果・送信待ち署名を破棄する。受付済みTFO3の再実行入力は、既存のcarrier・原受付の照合を維持する。
+
+`palw_cert_duty` は7件すべて終了コード0（試験0.14秒、ビルド5分13秒）。同一DAAで検証義務が置き換わった場合の旧判定・送信予定の破棄と、実バックエンドによる正しい根の一致・偽根の反証を検査した。初回ビルドは指定sinkをコンセンサスAPIで照合する修正を加えるため中断し、終了コード130。
+
+隔離P200の実Studio claimはDAA 7746で受理済み。DAA 7751の3ピア共通状態ではPanel承認済みで、Finalの期限はDAA 10866。保存した旧台帳の再生およびP200の追加発行は実行していない。P200のFinal、独立したGate Cの75枠中41枠の認証、その認証後のbeaconとTicket、受賞ブロックの実消費・受理は未確認。MOE2は別profileの適格なFOW1入力と実ブロックへの決済接続を要する。
