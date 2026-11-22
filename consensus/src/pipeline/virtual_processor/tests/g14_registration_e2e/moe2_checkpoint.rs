@@ -5,17 +5,50 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2,
-    PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1,
-    PositiveCaseReplayInputV2, apply_delta_v2, apply_palw_transition_retained_v8, apply_palw_transition_v2_with_extras,
-    revert_delta_v2,
+    Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, Moe2QuoteAnchorV1, PalwBlockContextV2,
+    PalwBlockWorkV3, PalwBondKeyV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
+    PalwTransitionExtrasV1, PositiveCaseReplayInputV2, apply_delta_v2, apply_palw_transition_retained_v8,
+    apply_palw_transition_v2_with_extras, revert_delta_v2,
 };
 use kaspa_consensus_core::{
-    merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
+    api::ConsensusApi,
+    errors::consensus::{ConsensusError, ConsensusResult},
+    header::Header,
+    merkle::calc_hash_merkle_root,
+    palw_bond_budget_v1::PalwBondBudgetStateV1,
+    palw_state_v2::apply_palw_transition_v2,
+    trusted::ExternalGhostdagData,
 };
 use std::path::Path;
+use std::sync::Arc;
 
 const RESOURCE_PROBE: &str = "MISAKA_TEST_PRIVATE_MOE2_AWARD_RESOURCE";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RetainedPriceHistory {
+    header: Arc<Header>,
+    dag: ExternalGhostdagData,
+}
+
+impl ConsensusApi for RetainedPriceHistory {
+    fn get_sink(&self) -> Hash64 {
+        panic!("MOE2 price resolution must not consult the live sink")
+    }
+
+    fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
+        (block == self.header.hash).then(|| self.header.clone()).ok_or(ConsensusError::BlockNotFound(block))
+    }
+
+    fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+        (block == self.header.hash).then(|| self.dag.clone()).ok_or(ConsensusError::BlockNotFound(block))
+    }
+
+    fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
+        // This saved fixture uses the close, the price witness and the
+        // award's selected parent at the same native block.
+        Ok(low == self.header.hash && high == self.header.hash)
+    }
+}
 
 #[derive(borsh::BorshDeserialize, borsh::BorshSerialize)]
 struct ResourceProbe {
@@ -48,9 +81,8 @@ fn retained_moe2_award_resource_probe() {
     let block = Block::try_from(raw).unwrap();
     let (config, bundle, ..) = super::super::registration_config();
     let params = &bundle.state;
-    let restore = |bytes: &[u8], root| {
-        borsh::from_slice::<PalwStateCarriageV2>(bytes).unwrap().into_state(params, Some(root)).unwrap()
-    };
+    let restore =
+        |bytes: &[u8], root| borsh::from_slice::<PalwStateCarriageV2>(bytes).unwrap().into_state(params, Some(root)).unwrap();
     let parent = restore(&probe.parent, probe.parent_root);
     let anchor = restore(&probe.anchor, probe.anchor_root);
     let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record }) = probe.delta.entries.last() else {
@@ -63,6 +95,12 @@ fn retained_moe2_award_resource_probe() {
         close_daa: probe.close_daa,
         quote: probe.quote,
     };
+    let history: RetainedPriceHistory = serde_json::from_reader(std::fs::File::open(path.join("price.json")).unwrap()).unwrap();
+    let price = Moe2QuoteAnchorV1::resolve(&history, parent.last_point().unwrap().block, slot.close, &slot).unwrap();
+    let mut header = (*history.header).clone();
+    header.palw_state_root = Hash64::from_u64_word(3);
+    let substituted = RetainedPriceHistory { header: Arc::new(header), dag: history.dag };
+    assert!(Moe2QuoteAnchorV1::resolve(&substituted, parent.last_point().unwrap().block, slot.close, &slot).is_err());
     let release = Moe2WorkerRelease {
         reward: probe.quote.limits.max_reward,
         miner_now: record.reward.miner_now,
@@ -80,6 +118,7 @@ fn retained_moe2_award_resource_probe() {
         params,
         &parent,
         &anchor,
+        price,
         &block,
         Moe2ExecAwardV1 {
             claim: record.claim,
@@ -104,10 +143,11 @@ fn retained_moe2_award_resource_probe() {
     println!("MOE2 retained award resource cap={cap} verified");
 }
 
-fn run_resource_probes(probe: ResourceProbe, block: &Block) {
+fn run_resource_probes(probe: ResourceProbe, block: &Block, history: &RetainedPriceHistory) {
     let dir = kaspa_database::utils::get_kaspa_tempdir();
     std::fs::write(dir.path().join("state.borsh"), borsh::to_vec(&probe).unwrap()).unwrap();
     serde_json::to_writer(std::fs::File::create(dir.path().join("block.json")).unwrap(), &RpcRawBlock::from(block)).unwrap();
+    serde_json::to_writer(std::fs::File::create(dir.path().join("price.json")).unwrap(), history).unwrap();
     for cap in [134_217_728_u64, 1] {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["retained_moe2_award_resource_probe", "--ignored", "--nocapture", "--test-threads=1"])
@@ -124,6 +164,7 @@ fn fold_retained_award(
     params: &PalwStateParamsV2,
     parent: &PalwChainStateV2,
     anchor: &PalwChainStateV2,
+    price: Moe2QuoteAnchorV1,
     block: &Block,
     award: Moe2ExecAwardV1<'_>,
     enabled: bool,
@@ -154,7 +195,7 @@ fn fold_retained_award(
             live_case_cap: 0,
             load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
         },
-        Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, block, award }),
+        Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, price, block, award }),
     )
     .map(|(state, delta, _, _)| (state, delta))
 }
@@ -635,14 +676,27 @@ pub(super) fn check_exec_settlement_rewind(
     let restored = carriage.into_state(params, Some(reserved.state_root())).unwrap();
     let (mut native, mut native_delta) = apply_palw_transition_v2(&restored, params, &position.point, &[], None).unwrap();
     let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
+    let api = env.chain.ctx.consensus.as_ref();
+    let price = Moe2QuoteAnchorV1::resolve(api, close, close, &slot).unwrap();
+    assert!(Moe2QuoteAnchorV1::resolve(api, quote.quote_anchor, close, &slot).is_err());
+    assert!(Moe2QuoteAnchorV1::resolve(api, close, quote.quote_anchor, &slot).is_err());
     let retained = |parent: &PalwChainStateV2, block: &Block, input: Moe2ExecAwardV1<'_>, enabled| {
-        fold_retained_award(config, params, parent, registration, block, input, enabled)
+        fold_retained_award(config, params, parent, registration, price, block, input, enabled)
     };
     let input = || native_award(claim, &slot, work, position);
     assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
     assert_eq!((retained_child.state_root(), &*retained_delta), (child.state_root(), &award_delta));
     assert_eq!(revert_delta_v2(&retained_child, &retained_delta, params).unwrap().state_root(), restored.state_root());
+    let mut changed = PalwStateCarriageV2::from_state(registration);
+    changed.model_markets.get_mut(&quote.model).unwrap().burned_sompi += 1;
+    let changed = changed.into_state(params, None).unwrap();
+    assert_eq!(changed.last_point(), registration.last_point());
+    assert_ne!(changed.state_root(), registration.state_root());
+    assert!(matches!(
+        fold_retained_award(config, params, &restored, &changed, price, &award_block, input(), true),
+        Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"))
+    ));
     if std::env::var_os("MISAKA_TEST_MOE2_REGISTRATION_BLOCKS").is_none() {
         run_resource_probes(
             ResourceProbe {
@@ -662,6 +716,7 @@ pub(super) fn check_exec_settlement_rewind(
                 panel: payees.panel.to_vec(),
             },
             &award_block,
+            &RetainedPriceHistory { header: api.get_header(close).unwrap(), dag: api.get_ghostdag_data(close).unwrap() },
         );
     }
     let folded = native

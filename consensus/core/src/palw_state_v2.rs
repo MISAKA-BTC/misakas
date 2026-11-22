@@ -11994,7 +11994,7 @@ pub struct PalwChainStateV2 {
 
 mod chain_state;
 pub(crate) mod private_moe2_settlement;
-pub use private_moe2_settlement::{Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees};
+pub use private_moe2_settlement::{Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, Moe2QuoteAnchorV1};
 mod evm_replay_settlements_owned_v2;
 mod evm_view_owned_v2;
 pub mod included_replay;

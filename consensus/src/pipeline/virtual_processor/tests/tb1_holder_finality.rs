@@ -883,6 +883,14 @@ async fn run(stable: bool, registered: bool) {
             };
             let body_close = read(original_state, &rounds, 4, 16).unwrap();
             assert_eq!(body_close.quoted_slots(), &[*closed_quote.exec_slot(), *long.exec_slot()]);
+            assert!(body_close.price_anchor(&history, anchor, closed_quote.exec_slot()).is_ok());
+            assert!(body_close.price_anchor(&history, anchor, long.exec_slot()).is_ok());
+            assert!(body_close.price_anchor(&history, parent, closed_quote.exec_slot()).is_err());
+            let swapped = kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot {
+                quote: long.terms(),
+                ..*closed_quote.exec_slot()
+            };
+            assert!(body_close.price_anchor(&history, anchor, &swapped).is_err());
             assert!(read(&close_parent_state, &rounds, 4, 16).err().unwrap().to_string().contains("preparation state"));
             assert!(read(original_state, &other_rounds, 4, 16).err().unwrap().to_string().contains("differs from its preparation"));
             assert!(read(original_state, &rounds, 2, 16).err().unwrap().to_string().contains("Limit"));

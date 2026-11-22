@@ -90,8 +90,41 @@ pub struct Moe2ExecAwardV1<'a> {
 pub struct Moe2ExecAwardInputV1<'a> {
     pub config: &'a Params,
     pub quote_anchor: &'a PalwChainStateV2,
+    pub price: Moe2QuoteAnchorV1,
     pub block: &'a Block,
     pub award: Moe2ExecAwardV1<'a>,
+}
+
+/// Price-state commitment resolved on the award candidate's own branch.
+#[derive(Clone, Copy, Debug)]
+pub struct Moe2QuoteAnchorV1 {
+    parent: Hash64,
+    anchor: Hash64,
+    root: Hash64,
+    reservation: Hash64,
+}
+
+impl Moe2QuoteAnchorV1 {
+    /// The EXEC owner supplies the preparation block committed by the
+    /// authenticated allocation. Its selected parent's post-state set the quote.
+    pub fn resolve(
+        native: &dyn crate::api::ConsensusApi,
+        parent: Hash64,
+        preparation: Hash64,
+        slot: &Moe2ExecSlot,
+    ) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+        let header = native.get_header(preparation).map_err(Error::other)?;
+        let anchor = native.get_ghostdag_data(preparation).map_err(Error::other)?.selected_parent;
+        if anchor != slot.quote.quote_anchor
+            || !native.is_chain_ancestor_of(preparation, slot.close).map_err(Error::other)?
+            || !native.is_chain_ancestor_of(slot.close, parent).map_err(Error::other)?
+        {
+            return Err(Error::new(ErrorKind::InvalidData, "MOE2 preparation or close outside the award's selected-parent history"));
+        }
+        let root = crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, preparation).map_err(Error::other)?;
+        Ok(Self { parent, anchor, root, reservation: slot.reservation_key() })
+    }
 }
 
 pub(super) fn fold_exec_award_v1(
@@ -101,12 +134,19 @@ pub(super) fn fold_exec_award_v1(
     input: Moe2ExecAwardInputV1<'_>,
 ) -> Result<(), PalwStateV2Error> {
     use super::{native_writers::NativeWriteQuoteV1, palw_bond_budget_fold_v1::PalwBudgetGrowthV1};
-    let Moe2ExecAwardInputV1 { config, quote_anchor, block, award } = input;
+    let Moe2ExecAwardInputV1 { config, quote_anchor, price, block, award } = input;
     let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award has no consensus configuration"));
     };
     if !builder.extras.private_moe2_registration || &bundle.state != builder.params || award.position.point != *point {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from candidate context"));
+    }
+    if parent.last_point().map(|point| point.block) != Some(price.parent)
+        || quote_anchor.last_point().map(|point| point.block) != Some(price.anchor)
+        || award.slot.reservation_key() != price.reservation
+        || builder.native_reservation.state_root_v2(quote_anchor).map_err(PalwStateV2Error::NativeResource)? != price.root
+    {
+        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"));
     }
     let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC award: {why:?}"));
     if builder.native_writers_tracking_v1() {

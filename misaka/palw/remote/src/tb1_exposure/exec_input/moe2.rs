@@ -185,6 +185,7 @@ pub struct Moe2BudgetPreview {
 /// separate step before this can become a native reservation.
 pub struct AuthenticatedMoe2ExecClose {
     close: Moe2ExecCloseV1,
+    preparation: Hash64,
     first_quoted_profile: Option<ExecRegistrationProfile>,
     freeze_id: [u8; 64],
 }
@@ -192,6 +193,22 @@ pub struct AuthenticatedMoe2ExecClose {
 impl AuthenticatedMoe2ExecClose {
     pub fn quoted_slots(&self) -> &[Moe2ExecSlot] {
         &self.close.slots
+    }
+
+    /// Bind the price reference of a quote read from this close, using its
+    /// authenticated preparation instead of a header chosen by the award.
+    pub fn price_anchor(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        slot: &Moe2ExecSlot,
+    ) -> io::Result<kaspa_consensus_core::palw_state_v2::Moe2QuoteAnchorV1> {
+        let index =
+            self.close.slots.binary_search_by_key(&slot.slot, |row| row.slot).map_err(|_| invalid("no MOE2 quote at EXEC slot"))?;
+        if self.close.slots[index] != *slot {
+            return Err(invalid("MOE2 price anchor differs from the authenticated quote"));
+        }
+        kaspa_consensus_core::palw_state_v2::Moe2QuoteAnchorV1::resolve(native, parent, self.preparation, slot)
     }
 
     /// Find the authenticated quote for this exact recorded execution.
@@ -295,6 +312,7 @@ pub fn read_moe2_exec_close_at_parent(
         first_quoted_profile.get_or_insert(row.profile);
     }
     Ok(AuthenticatedMoe2ExecClose {
+        preparation: carrier.preparation,
         close: Moe2ExecCloseV1 {
             selected_parent,
             parent_state_root: parent.state_root(),
