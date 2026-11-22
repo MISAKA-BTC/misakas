@@ -1024,6 +1024,16 @@ fn recovery_suffix(path: &Path, tip: &Block, parent: Hash64) -> PrefixArchive {
 #[tokio::test]
 #[ignore = "continues the preserved Round 16 prefix on a private copy of its database"]
 async fn resume_round16_recovery_work() {
+    run_saved_recovery(false).await;
+}
+
+#[tokio::test]
+#[ignore = "validates the two archived successors across the saved writer's read-ahead boundary"]
+async fn resume_round16_across_saved_input_cursor() {
+    run_saved_recovery(true).await;
+}
+
+async fn run_saved_recovery(cursor_only: bool) {
     use crate::pipeline::virtual_processor::tests::{
         g14_registration_e2e::private_moe2::arm_private_registration, t12_round_lane_e2e::t12_reopened_chain,
     };
@@ -1033,7 +1043,6 @@ async fn resume_round16_recovery_work() {
     let plan: RecoveryWorkPlan =
         serde_json::from_reader(File::open(std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_PLAN").unwrap()).unwrap())
             .unwrap();
-    let held = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").unwrap());
     let evidence = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/evidence/palw/mas1-qf1-native-2026-11-21");
     let saved: serde_json::Value =
         serde_json::from_reader(File::open(evidence.join("round16-preservation-and-short-regressions.json")).unwrap()).unwrap();
@@ -1061,13 +1070,42 @@ async fn resume_round16_recovery_work() {
     let tip = consensus.get_block(consensus.get_sink()).unwrap();
     let expected = &saved["read_only_reopen"];
     assert_eq!(serde_json::json!(tip.hash()), expected["materialized_tip"]);
-    let archive = recovery_suffix(&plan.prefix, &tip, plan.parent);
+    let mut archive = recovery_suffix(&plan.prefix, &tip, plan.parent);
     let chain = t12_reopened_chain(consensus, &config, bundle, tip.header.timestamp, tip.header.nonce);
     assert_eq!(serde_json::json!(chain.tip_state().1.state_root()), expected["palw_state_root"]);
     let mut node = Rig::resumed(chain, &parts, Default::default(), tip.header.nonce);
     stable_panel::arm(&mut node);
+    if cursor_only {
+        let PrefixArchive::Read(lines, _) = &mut archive else { unreachable!() };
+        let cursor = &saved["frozen_replay_input_position"];
+        let cursor_blue = cursor["blue"].as_u64().unwrap();
+        assert!(tip.header.blue_score < cursor_blue && cursor_blue <= plan.parent_blue);
+        for blue in tip.header.blue_score + 1..=cursor_blue {
+            let parent = node.chain.sink();
+            let next = accept_prefix_line(&mut node, parent, lines.next().expect("missing archived successor").unwrap()).await;
+            assert_eq!(next.header.blue_score, blue);
+            assert_eq!(node.chain.tip_state().0, next.hash());
+            assert_eq!(node.chain.sink(), next.hash());
+        }
+        let (last, state) = node.chain.tip_state();
+        assert_eq!(cursor["daa"], node.chain.daa_of(last));
+        eprintln!("recovered through cursor blue={cursor_blue} tip={last} root={}", state.state_root());
+        return;
+    }
+    let held = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").unwrap());
     panel_prefix(&mut node, tip.hash(), plan.parent_blue + 1, release, archive).await;
     legacy_work::genesis_claim::extend_with_certified_work(&mut node, &held, plan.funding, close_blue, &plan.output).await;
+}
+
+async fn accept_prefix_line(node: &mut Rig, parent: Hash64, line: String) -> Block {
+    let raw: RpcRawBlock = serde_json::from_str(&line).unwrap();
+    let block = Block::try_from(raw).unwrap();
+    assert_eq!(block.header.direct_parents(), &[parent]);
+    node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(block.header.timestamp);
+    stable_panel::arm(node);
+    let status = node.api().validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
+    assert!(status.has_block_body());
+    block
 }
 
 /// Retain or validate ordinary accepted blocks up to the parent of the PANEL close.
@@ -1085,14 +1123,7 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, relea
         let block = match &mut archive {
             PrefixArchive::Write(_) => node.chain.heartbeat(step, vec![]).await,
             PrefixArchive::Read(lines, _) => {
-                let raw: RpcRawBlock = serde_json::from_str(&lines.next().expect("truncated PANEL prefix").unwrap()).unwrap();
-                let block = Block::try_from(raw).unwrap();
-                assert_eq!(block.header.direct_parents(), &[tip]);
-                node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(block.header.timestamp);
-                stable_panel::arm(node);
-                let status = node.api().validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
-                assert!(status.has_block_body());
-                block
+                accept_prefix_line(node, tip, lines.next().expect("truncated PANEL prefix").unwrap()).await
             }
         };
         assert_eq!(block.header.direct_parents(), &[tip]);
