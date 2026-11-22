@@ -368,5 +368,32 @@
       "carrierReplayExitCode": 0,
       "approvalInclusionDriverExitCode": 0
     }
+  },
+  "courtWithdrawalReplay": {
+    "nativeBinarySha256": "499f9ee3f6b284bc562693e5fd8cc155d31b26afb829c4f5932f74d6bb615732",
+    "buildTarget": "aarch64-unknown-linux-gnu.2.34",
+    "buildSeconds": 477,
+    "buildExitCode": 0,
+    "enabledFeature": "private-integration-clock",
+    "resumedFrom": "618fcd5a207fb5f8b0fc0480542093af2a10d981864684abed62f0aecc2cd04596801ea210ee66a7d37a5d9a2666b77c70029076beb4dae16b8ae57779af65fd",
+    "owners": [
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+      "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+    ],
+    "independentOwnerReplayAndReleaseQueued": true,
+    "signedReleaseCarriageVerified": false,
+    "retainedHeartbeat": "b3d561f6a27951a1e7036ba08b2dde2944359c6a809e13742291fea84573797147cc155c3a5680c4630eeb6e0499946eb8fc1c52d7ab4d647156bb035ef750d8",
+    "peerSinks": [
+      "b3d561f6a27951a1e7036ba08b2dde2944359c6a809e13742291fea84573797147cc155c3a5680c4630eeb6e0499946eb8fc1c52d7ab4d647156bb035ef750d8",
+      "b3d561f6a27951a1e7036ba08b2dde2944359c6a809e13742291fea84573797147cc155c3a5680c4630eeb6e0499946eb8fc1c52d7ab4d647156bb035ef750d8",
+      "618fcd5a207fb5f8b0fc0480542093af2a10d981864684abed62f0aecc2cd04596801ea210ee66a7d37a5d9a2666b77c70029076beb4dae16b8ae57779af65fd"
+    ],
+    "retainedEvidenceSha256": "876aa499a14b6ec88621fbd7e3b616fd4624e936bcdabddb493348d455961eec",
+    "commonSinkWaitExitCode": 1,
+    "followerReadRefusal": {
+      "outstandingRamBytes": 3250529142,
+      "requestedRamBytes": 17017982196,
+      "limitRamBytes": 18341616020
+    }
   }
 }
