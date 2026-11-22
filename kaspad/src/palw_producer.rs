@@ -41,10 +41,12 @@
 
 use std::sync::Arc;
 
+use kaspa_consensus_core::api::ConsensusApi;
 use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::blockstatus::BlockStatus;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::config::Config;
+use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
     class_ticket_v3,
@@ -67,6 +69,12 @@ struct PendingReceiptBlock {
     last_submission: std::time::Instant,
 }
 
+#[derive(Default)]
+struct ReceiptRetry {
+    scanned_parent: Option<(Hash64, TransactionOutpoint)>,
+    pending: Option<PendingReceiptBlock>,
+}
+
 impl PendingReceiptBlock {
     fn still_pending(&self, sink: Hash64, status: Option<BlockStatus>) -> bool {
         sink == self.parent && status.is_some_and(BlockStatus::is_utxo_valid_or_pending)
@@ -79,6 +87,76 @@ impl PendingReceiptBlock {
         self.last_submission = now;
         Some(self.block.clone())
     }
+}
+
+/// Find a previously submitted PFS3/PFS4 child of this producer in the native DAG.
+/// A header-only entry cannot be re-submitted, and a mergeset child selected on
+/// another branch cannot be retried against this parent.
+fn retained_receipt_child(
+    consensus: &dyn ConsensusApi,
+    parent: Hash64,
+    network_domain: Hash64,
+    bond: TransactionOutpoint,
+    public_key: &[u8],
+) -> Option<Block> {
+    let mut children = consensus.get_block_children(parent)?;
+    children.sort_unstable();
+    children.into_iter().find_map(|hash| {
+        let status = consensus.get_block_status(hash)?;
+        if !status.is_utxo_valid_or_pending() {
+            return None;
+        }
+        let header = consensus.get_header(hash).ok()?;
+        if !is_own_receipt_header(&header, network_domain, bond, public_key)
+            || consensus.get_ghostdag_data(hash).ok()?.selected_parent != parent
+        {
+            return None;
+        }
+        consensus.get_block(hash).ok()
+    })
+}
+
+fn is_own_receipt_header(header: &Header, network_domain: Hash64, bond: TransactionOutpoint, public_key: &[u8]) -> bool {
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_SPEND_CARRIAGE_MAGIC, PalwReceiptSpendEnvelopeV3};
+    use kaspa_consensus_core::palw_receipt_v4::{PalwReceiptSpendEnvelopeV4, palw_receipt_v4_carriage_is_v4};
+    use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+
+    if header.pow_algo_id != POW_ALGO_ID_PALW_RECEIPT_V3 {
+        return false;
+    }
+    let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
+        kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+    };
+    let commitment = &header.palw_commitment;
+    if commitment.starts_with(&PALW_FP_V3_SPEND_CARRIAGE_MAGIC) {
+        return PalwReceiptSpendEnvelopeV3::decode(commitment).is_ok_and(|envelope| {
+            envelope.spend.producer_bond == bond
+                && envelope.spend.producer_pubkey == public_key
+                && envelope
+                    .validate_stateless_v3(
+                        network_domain,
+                        kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
+                        header.timestamp,
+                        header.nonce,
+                    )
+                    .is_ok()
+                && envelope.validate_signature_v3(verify).is_ok()
+        });
+    }
+    palw_receipt_v4_carriage_is_v4(commitment)
+        && PalwReceiptSpendEnvelopeV4::decode(commitment).is_ok_and(|envelope| {
+            envelope.spend.builder_bond == bond
+                && envelope.spend.builder_pubkey == public_key
+                && envelope
+                    .validate_stateless_v4(
+                        network_domain,
+                        kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
+                        header.timestamp,
+                        header.nonce,
+                    )
+                    .is_ok()
+                && envelope.validate_signatures_v4(verify).is_ok()
+        })
 }
 
 /// RDA4's canonical ML-DSA fields fit within the receipt commitment cap.
@@ -1208,7 +1286,7 @@ impl PalwProducerService {
         let mut draws_reported_at: Option<std::time::Instant> = None;
         // Where the bucket walk stands on the template last drawn against — see `produce_one`.
         let mut cursor: Option<(Hash64, u64)> = None;
-        let mut pending_receipt = None;
+        let mut receipt_retry = ReceiptRetry::default();
         // The last receipt-lane failure printed, and when — the same once-per-change-then-every-
         // five-minutes rule as the holds. The receipt lane is now tried while the attempt lane
         // holds, on that branch's 5 s cadence, so an unchanging failure must not repeat per tick.
@@ -1377,9 +1455,9 @@ impl PalwProducerService {
             // forfeited it. The bond that fills its ceiling is exactly the one committing
             // free-prompt claims.
             if facts.ready_to_spend_receipts(&self.verification_key()).is_ok()
-                && !self.retry_pending_receipt(&session, &mut pending_receipt).await
+                && !self.retry_pending_receipt(&session, &mut receipt_retry, network_domain, bond).await
             {
-                match self.produce_receipt(&session, network_domain, bond, miner_data.clone(), &mut pending_receipt).await {
+                match self.produce_receipt(&session, network_domain, bond, miner_data.clone(), &mut receipt_retry).await {
                     Ok(Some(hash)) => {
                         produced += 1;
                         last_progress_at = std::time::Instant::now();
@@ -1397,7 +1475,7 @@ impl PalwProducerService {
                         // redeem. Past `palw_receipt_spend_v4` only; the directory is unread while the fence is dormant.
                         if let Some(dir) = self.config.redemption_auth_dir.clone() {
                             match self
-                                .produce_redemption(&session, network_domain, bond, miner_data.clone(), &dir, &mut pending_receipt)
+                                .produce_redemption(&session, network_domain, bond, miner_data.clone(), &dir, &mut receipt_retry)
                                 .await
                             {
                                 Ok(Some(hash)) => {
@@ -1788,13 +1866,29 @@ impl PalwProducerService {
     async fn retry_pending_receipt(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
-        pending: &mut Option<PendingReceiptBlock>,
+        retry: &mut ReceiptRetry,
+        network_domain: Hash64,
+        bond: TransactionOutpoint,
     ) -> bool {
-        let Some(receipt) = pending.as_mut() else { return false };
+        let parent = session.async_get_sink().await;
+        if retry.scanned_parent != Some((parent, bond)) {
+            retry.pending = None;
+            let key = self.verification_key();
+            let retained = session
+                .clone()
+                .spawn_blocking(move |consensus| retained_receipt_child(consensus, parent, network_domain, bond, &key))
+                .await;
+            retry.scanned_parent = Some((parent, bond));
+            if let Some(block) = retained {
+                info!("[{PALW_PRODUCER}] recovered retained receipt {} for parent {parent}", block.hash());
+                retry.pending = Some(PendingReceiptBlock { parent, block, last_submission: std::time::Instant::now() });
+            }
+        }
+        let Some(receipt) = retry.pending.as_mut() else { return false };
         let hash = receipt.block.hash();
         let status = session.async_get_block_status(hash).await;
         if !receipt.still_pending(session.async_get_sink().await, status) {
-            *pending = None;
+            retry.pending = None;
             return false;
         }
         if let Some(block) = receipt.retry_at(std::time::Instant::now()) {
@@ -1866,7 +1960,7 @@ impl PalwProducerService {
         network_domain: Hash64,
         bond: TransactionOutpoint,
         miner_data: MinerData,
-        pending: &mut Option<PendingReceiptBlock>,
+        retry: &mut ReceiptRetry,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
         let Some((quoted_parent, next_daa, spendable)) =
@@ -1874,6 +1968,9 @@ impl PalwProducerService {
         else {
             return Ok(None);
         };
+        if retry.scanned_parent != Some((quoted_parent, bond)) {
+            return Ok(None);
+        }
         // Spend the earliest deadline first at the candidate DAA used by admission.
         let Some(win) = spendable
             .into_iter()
@@ -1929,7 +2026,7 @@ impl PalwProducerService {
         let block: kaspa_consensus_core::block::Block =
             template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
         let hash = block.hash();
-        self.submit_receipt_block(session, quoted_parent, block, pending).await?;
+        self.submit_receipt_block(session, quoted_parent, block, &mut retry.pending).await?;
         info!(
             "[{PALW_PRODUCER}] PFS3 submitted block={hash} claim={claim_id} quantum={quantum_index} parent={quoted_parent} daa={next_daa}"
         );
@@ -1952,7 +2049,7 @@ impl PalwProducerService {
         builder_bond: TransactionOutpoint,
         miner_data: MinerData,
         dir: &std::path::Path,
-        pending: &mut Option<PendingReceiptBlock>,
+        retry: &mut ReceiptRetry,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let next_daa = session.get_virtual_daa_score();
         if !self.consensus_config.params.palw_receipt_spend_v4_active_at(next_daa) {
@@ -1985,6 +2082,9 @@ impl PalwProducerService {
             else {
                 return Ok(None);
             };
+            if retry.scanned_parent != Some((quoted_parent, builder_bond)) {
+                return Ok(None);
+            }
             if !self.consensus_config.params.palw_receipt_spend_v4_active_at(next_daa) || next_daa > auth.expiry_daa {
                 continue;
             }
@@ -2044,7 +2144,7 @@ impl PalwProducerService {
             let block: kaspa_consensus_core::block::Block =
                 template.into_immutable_v3().map_err(|e| format!("local coinbase export capacity unavailable: {e:?}"))?;
             let hash = block.hash();
-            self.submit_receipt_block(session, quoted_parent, block, pending).await?;
+            self.submit_receipt_block(session, quoted_parent, block, &mut retry.pending).await?;
             info!(
                 "[{PALW_PRODUCER}] PFS4 submitted block={hash} claim={} quantum={} parent={quoted_parent} daa={next_daa}",
                 win.claim_id, win.quantum_index
@@ -3572,6 +3672,110 @@ mod tests {
         assert!(pending.retry_at(submitted_at).is_none());
         assert_eq!(pending.retry_at(retry_at).unwrap().hash(), hash);
         assert!(pending.retry_at(retry_at).is_none());
+    }
+
+    #[test]
+    fn restarted_producer_recovers_its_signed_receipt_from_the_native_dag() {
+        use super::{Block, BlockStatus, ConsensusApi, Hash64, Header, TransactionOutpoint, retained_receipt_child};
+        use kaspa_consensus_core::{
+            config::params::devnet_shipped_params,
+            errors::consensus::{ConsensusError, ConsensusResult},
+            hashing::header::pre_pow_hash_64,
+            pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+            trusted::ExternalGhostdagData,
+        };
+        use kaspa_pq_validator_core::ValidatorKey;
+        use std::sync::Arc;
+
+        struct RetainedChild {
+            parent: Hash64,
+            selected_parent: Hash64,
+            status: BlockStatus,
+            block: Block,
+        }
+        impl ConsensusApi for RetainedChild {
+            fn get_block_children(&self, hash: Hash64) -> Option<Vec<Hash64>> {
+                (hash == self.parent).then(|| vec![self.block.hash()])
+            }
+
+            fn get_block_status(&self, hash: Hash64) -> Option<BlockStatus> {
+                (hash == self.block.hash()).then_some(self.status)
+            }
+
+            fn get_header(&self, hash: Hash64) -> ConsensusResult<Arc<Header>> {
+                Ok(self.get_block(hash)?.header)
+            }
+
+            fn get_ghostdag_data(&self, hash: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+                self.get_block(hash)?;
+                Ok(ExternalGhostdagData {
+                    blue_score: 0,
+                    blue_work: Default::default(),
+                    selected_parent: self.selected_parent,
+                    mergeset_blues: Vec::new(),
+                    mergeset_reds: Vec::new(),
+                    blues_anticone_sizes: Default::default(),
+                })
+            }
+
+            fn get_block(&self, hash: Hash64) -> ConsensusResult<Block> {
+                (hash == self.block.hash()).then(|| self.block.clone()).ok_or(ConsensusError::BlockNotFound(hash))
+            }
+        }
+
+        let parent = Hash64::from_u64_word(1);
+        let other_parent = Hash64::from_u64_word(2);
+        let domain = Hash64::from_u64_word(3);
+        let bond = TransactionOutpoint::new(Hash64::from_u64_word(4), 0);
+        let executor_bond = TransactionOutpoint::new(Hash64::from_u64_word(5), 0);
+        let claim = Hash64::from_u64_word(6);
+        let beacon = Hash64::from_u64_word(7);
+        let producer = ValidatorKey::from_seed([41; 32]);
+        let executor = ValidatorKey::from_seed([42; 32]);
+        let mut fixture = RetainedChild {
+            parent,
+            selected_parent: parent,
+            status: BlockStatus::StatusUTXOPendingVerification,
+            block: Block::from(&devnet_shipped_params().genesis),
+        };
+        let header = Arc::make_mut(&mut fixture.block.header);
+        header.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
+        let pre_pow = pre_pow_hash_64(header);
+        let v3 = producer.build_fp_receipt_spend_envelope(domain, pre_pow, header.timestamp, header.nonce, claim, 0, bond, beacon);
+        let authorization = executor.build_redemption_bundle_v4(domain, claim, executor_bond, 0, 1, 0, 100).unwrap();
+        let v4 = producer.build_fp_receipt_spend_envelope_v4(
+            domain,
+            pre_pow,
+            header.timestamp,
+            header.nonce,
+            claim,
+            0,
+            beacon,
+            bond,
+            authorization.authorization,
+            authorization.executor_pubkey,
+            authorization.signature,
+        );
+        for commitment in [v3.encode(), v4.encode()] {
+            let header = Arc::make_mut(&mut fixture.block.header);
+            header.palw_commitment = commitment;
+            header.finalize();
+            let restore = |dag: &RetainedChild| retained_receipt_child(dag, parent, domain, bond, producer.public_key());
+            assert_eq!(restore(&fixture).unwrap().hash(), fixture.block.hash());
+            assert!(retained_receipt_child(&fixture, parent, domain, bond, executor.public_key()).is_none());
+            assert!(retained_receipt_child(&fixture, parent, domain, executor_bond, producer.public_key()).is_none());
+            fixture.selected_parent = other_parent;
+            assert!(restore(&fixture).is_none());
+            fixture.selected_parent = parent;
+            fixture.status = BlockStatus::StatusHeaderOnly;
+            assert!(restore(&fixture).is_none());
+            fixture.status = BlockStatus::StatusUTXOPendingVerification;
+            let header = Arc::make_mut(&mut fixture.block.header);
+            header.nonce += 1;
+            header.finalize();
+            assert!(restore(&fixture).is_none(), "the signed position cannot be transplanted");
+            Arc::make_mut(&mut fixture.block.header).nonce -= 1;
+        }
     }
 
     #[test]
