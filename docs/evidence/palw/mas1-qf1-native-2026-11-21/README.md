@@ -1327,3 +1327,5 @@ Round 16 の close は share 公開開始（DAA 90741）より前のブロック
 mkfifo "$fifo"
 python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writer_pid" "$parent_report" > "$fifo"
 ```
+
+並行再生用のビルドでは、照合済み親の報告を使う native 再生と share 公開開始の境界拒否が通過した。FIFO では、生成継続中にも完全な行が届くこと、途中の行が保留されること、最終報告が EOF より先に作られることを確認した。[境界試験ログ](round16-stream-regressions.tar.zst)
