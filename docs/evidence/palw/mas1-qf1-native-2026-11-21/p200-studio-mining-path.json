@@ -394,6 +394,19 @@
       "outstandingRamBytes": 3250529142,
       "requestedRamBytes": 17017982196,
       "limitRamBytes": 18341616020
+    },
+    "retainedReleaseTransaction": {
+      "txid": "8ee551eed3d8230b91ac698447c64b0dca475cdccf29d71c8f65c4e609511352b76b96fc30c4470397084ca37445a6bb079bacb88dd29b243f1d893b54d563b3",
+      "peer": 0,
+      "bondOutputIndex": 7,
+      "location": "mempool",
+      "evidenceSha256": "8a47d2fc8536bc1c13e2ebd889a4fe79e575e1803aaa57dafb7159dff6a46b2f"
+    },
+    "targetedRetry": {
+      "exitCode": 1,
+      "retainedHeartbeatCommon": false,
+      "peakObservedNativeRequestBytes": 17017982196,
+      "lastReportedAvailableBytes": 13893500928
     }
   }
 }
