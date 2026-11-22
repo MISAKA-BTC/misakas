@@ -1337,3 +1337,7 @@ python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writ
 算術採点付き承認を含む remote 全試験は217件成功・1件ignoredだった。これとは別に、post-close work の読込経路を含む native ビルドで予定親までの再生と share 公開開始境界の2件が通過した。
 
 Round 16 の生成ノードは、元の評価提出から105,857ブロックを受理・保存し、予定 close の親である blue 181381・DAA 90688 に達した。別の照合器で全ブロックの親参照と取引コミットメントを検査した。親で元の監査証明書を再照合すると、native gate は TB1 publication outside stabilized selected history を返した。そこで生成ノードの試験を停止した。close 自体の生成・受理、Panel の share 公開と抽選は未確認。生成ログは、保存した履歴の12,597ブロック目（blue 88121・DAA 44058）で、対象の確定済みブロックが選択鎖に残る状態で native finality が `FrontierNotCovered` により撤回されたことも記録している。撤回時の sink は保存済みヘッダーから再計算して照合した。予定 close の親で返った拒否の詳細条件は、当時の snapshot が保存されていないため未確定。撤回までの保存済み履歴で原因を調べる段階では、後続93,260ブロックの再生成・再生と Qwen 推論の再実行を省ける。[到達点と失敗](round16-writer-parent-refusal.json)・[生ログ](round16-writer-parent-refusal.log.zst)
+
+### Qwen3-8B の停止位置予測を同じ試行で再測定
+
+最初の Ticket で観測した出力長から、残り5試行の停止位置を予測した。同じバイナリ・計画・試行ごとに、予測経路と通常経路が元の Ticket と全件一致した。準備と最初の Ticket を含む6件の合計は通常273.393秒、予測271.744秒（約0.60%短縮）。意図的に予測を外した対照は、通常経路へのやり直しを含め122.721秒。同じホストで、終盤は隔離試験用バイナリのビルドと重なった。G-COST の判定は `UNKNOWN`。[照合結果](g-cost-online-calibrated-repeat.json)・[元の計画と計測ログ](g-cost-online-calibrated-repeat.tar.zst)
