@@ -82,3 +82,17 @@ DAA 51258・blue 102520のDBを読み取り専用で開き、保存ブロック�
 登録5件はすべてActive。TIRの最大コンテキスト8192の2件（DAA 1、7で登録）は、この状態で `palw_fp_lane_available_v1` がともにfalse。さらに、保存系統の元の設定で `palw_tir_public_conviction_v1_fence()` はNone。DAAを進めても発効予定はない。通常の `palw_accept.rs` のfunded original処理はこの場合carrierを拒否する。したがって保存台帳の規則では、どの登録モデルにも新規Studio TFO3を受け付ける経路がない。旧Studio claimを受理した隔離系統のgenesis（3b4233ae…）と保存台帳（20482be2…）も異なる。新規nonceによる推論・抽選・受賞は未実行。
 
 `b43fb4ebc` はPFS3/PFS4の候補一覧から署名直前まで、適格性を評価した親とDAAの組を使う。consensusとkaspadのテストビルドはともに終了コード0。同じ親で期限をまたぐ候補・二重消費（1.02秒）、3 DBのfloor受賞（4.50秒）、funded originalの不完全受付拒否（0.83秒）、kaspadのT12 producer 2件（計0.10秒）はすべて終了コード0。
+
+## Panel承認とcloseのfinality
+
+`303157128` はprivateの算術PanelとTB1実行Panelで、署名集合、過去の承認、未検証期限終了を返す直前に、対象closeのfinalityとcertificateの選択鎖上の位置を再照合する。同じsinkでもcommitment照合中にfinalityが撤回された場合を回帰試験に加えた。remoteの対象13件は終了コード0（3.76秒）、nativeテストビルドは終了コード0。
+
+以下はRound 3の非報酬3プロセスfixture。各試験で3つのPIDが同じ結果のブロックhashを返した。
+
+| 試験 | 観測 | 終了コード |
+|---|---|---:|
+| 期限・再起動（4.81秒） | 選出2席が完全再実行。DAA 27 の承認 `9fe6d2ba64927ee57af41461f763f0342eb9a0cffc6f054e20ea8c2028b9f87294c386a5f94cd21b3851cf85d7fe4892e5fff5e697c90f31d954310ec7342d91` を期限 60 のDBから復元し、期限当日の新規承認を拒否。 | 0 |
+| 偽readout（4.37秒） | 選出席は署名せず、Court Endは3ピアとも `ComputationRefuted`。裁定ブロック `bcf22f7182c500a7ec0b27daf2a777cfc30bbfe824ee6085bb5b1c4443edc4bdced50c4a158b36eae6283c39a52a8458239fd3ac4fc4fe88d899b5645d6e5585`。 | 0 |
+| 資料遮断（261.39秒） | Qwen3-8Bで1席の登録済みscale sectionを遮断。1署名だけで期限に達し、3ピアが未検証終了 `e220caac5af4f711b4b3b0c2f7d9e898e83b9344513bc2e757d2524fb44a38c8751242ac4c7a85b88579095144b565035410259e72f5fded9c487d3a4e1f3815` をDB再開後も確認。 | 0 |
+
+Round 16の実close、当選権利の消費、MOE2決済は上記の試験範囲外。
