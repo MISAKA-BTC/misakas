@@ -674,13 +674,56 @@ async fn run(stable: bool, registered: bool) {
             }
             (anchor, assignment)
         } else {
+            use kaspa_consensus_core::{
+                palw_tb1::{exec_close_carrier::ExecCloseCarrier, exec_registration::SignedExecRegistration},
+                subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+                tx::{Transaction, TransactionInput, TransactionOutput},
+            };
+            let preimages: Vec<_> =
+                entries.iter().map(|row| row.terms.registration_preimage(parent, &rounds, row.owner, 16).unwrap()).collect();
+            let rows: Vec<_> = entries
+                .iter()
+                .zip(&preimages)
+                .map(|(row, context)| SignedExecRegistration {
+                    context,
+                    owner_signature: row.signature,
+                    slot: row.slot,
+                    funding_ref: row.funding_ref,
+                    quote_consent: row.quote_consent,
+                })
+                .collect();
+            let payload = ExecCloseCarrier::encode(
+                &closure,
+                parent,
+                Hash64::from_bytes(rounds.commitment()),
+                &rows,
+                entries.len(),
+                node.config.params.max_block_mass as usize,
+            )
+            .unwrap();
+            let funding = &parts.3[3];
+            let mut tx = Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![TransactionInput::new(funding.0, vec![], 0, 1)],
+                vec![TransactionOutput::new(funding.1.amount - 2_000_000, card_payout_spk(3))],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            super::super::t12_round_lane_e2e::sign_spend(&mut tx, funding.1.clone(), 3, node.config.params.storage_mass_parameter);
+            let carrier = tx.id();
             let mut miner = new_miner_data();
             miner.extra_data = freeze_id.to_vec();
-            let t = stable_panel::heartbeat(&mut node, miner);
+            let t = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]);
             let close = node.take(t, "registered EXEC close").await;
+            assert!(close.transactions.iter().any(|tx| tx.id() == carrier));
             let mut blocks = vec![RpcRawBlock::from(&close)];
             let mut funding = parts.3[0].clone();
             blocks.extend(offers::assign(&mut node, registered_quote.unwrap(), &mut funding).await);
+            assert!(node.api().get_virtual_utxos(None, 1_000_000, false).iter().any(|(out, _)| {
+                *out == kaspa_consensus_core::tx::TransactionOutpoint::new(carrier, 0)
+            }));
             let assignment = node.chain.sink();
             while node.chain.daa_of(node.chain.sink()) < round.release_from_daa {
                 assert!(blocks.len() < 120, "native release DAA did not advance");
@@ -737,6 +780,9 @@ async fn run(stable: bool, registered: bool) {
                 fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
                     self.0.get_header(block)
                 }
+                fn get_block(&self, block: Hash64) -> ConsensusResult<Block> {
+                    self.0.get_block(block)
+                }
                 fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
                     self.0.get_ghostdag_data(block)
                 }
@@ -760,10 +806,8 @@ async fn run(stable: bool, registered: bool) {
                     ExecInputSetBinding, ExecRegistration, ExecRegistrationError, ExecRegistrationProfile, REGISTRATION_DOMAIN,
                     SignedExecRegistration, registration_key,
                 };
-                let preimages: Vec<_> = entries
-                    .iter()
-                    .map(|entry| entry.terms.registration_preimage(parent, &rounds, entry.owner, 16).unwrap())
-                    .collect();
+                let preimages: Vec<_> =
+                    entries.iter().map(|entry| entry.terms.registration_preimage(parent, &rounds, entry.owner, 16).unwrap()).collect();
                 let rows: Vec<_> = entries
                     .iter()
                     .zip(&preimages)
@@ -787,10 +831,34 @@ async fn run(stable: bool, registered: bool) {
                 assert!(matches!(decoded[&9].profile, ExecRegistrationProfile::Qf1Local { .. }));
                 assert_eq!(decoded[&9].quote, registered_quote);
                 assert_eq!(decoded[&10].quote, long_terms.as_ref().unwrap().moe2_quote);
+                use kaspa_consensus_core::palw_tb1::exec_close_carrier::{ExecCloseCarrier, ExecCloseCarrierError};
+                let block = history.get_block(anchor).unwrap();
+                let carrier = ExecCloseCarrier::from_block(&block, 4, node.config.params.max_block_mass as usize).unwrap();
+                let from_body = carrier.verify(parent, block.header.blue_score, block.header.daa_score, freeze_id, funder).unwrap();
+                assert_eq!(from_body[&9].quote, registered_quote);
+                assert_eq!(from_body[&10].quote, decoded[&10].quote);
+                assert!(matches!(
+                    carrier.verify(parent, block.header.blue_score, block.header.daa_score, [0; 64], funder),
+                    Err(ExecCloseCarrierError::Freeze)
+                ));
+                assert!(matches!(ExecCloseCarrier::from_block(&block, 2, usize::MAX), Err(ExecCloseCarrierError::Limit)));
+                assert_eq!(block.transactions.len(), 2);
+                peer_log!(
+                    "TB1 EXEC carrier pid={} close={} transaction={} bytes={} slots={:?}",
+                    std::process::id(),
+                    block.hash(),
+                    block.transactions[1].id(),
+                    block.transactions[1].payload.len(),
+                    from_body.keys().copied().collect::<Vec<_>>(),
+                );
+                let mut trailing = block.transactions[1].payload.clone();
+                trailing.push(0);
+                assert!(matches!(ExecCloseCarrier::decode(&trailing, 4, usize::MAX), Err(ExecCloseCarrierError::Encoding)));
                 assert!(matches!(binding.verify(&rows[..2], 4, funder), Err(ExecRegistrationError::InputSetRoot)));
                 let mut malleated = preimages[1].clone();
                 malleated.push(0);
-                let signature = ml_dsa_65::sign(&owner.signing_key, &registration_key(&malleated), REGISTRATION_DOMAIN, [91; 32]).unwrap();
+                let signature =
+                    ml_dsa_65::sign(&owner.signing_key, &registration_key(&malleated), REGISTRATION_DOMAIN, [91; 32]).unwrap();
                 assert!(matches!(ExecRegistration::verify(&malleated, &signature), Err(ExecRegistrationError::Encoding)));
             }
             use kaspa_consensus_core::palw_state_v2::apply_delta_v2;
@@ -798,7 +866,7 @@ async fn run(stable: bool, registered: bool) {
             let (published, mut delta) = node.vp().palw_state_v2_store.read().delta_of(anchor).unwrap();
             let original_delta = borsh::to_vec(&delta).unwrap();
             let reserve = |state, delta: &mut kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2| {
-                candidate_batch.reserve_closed_moe2_budget(&history, &node.config.params, &closure, &q, state, delta)
+                candidate_batch.reserve_closed_moe2_budget(&history, &node.config.params, &closure, &q, state, original_state, delta)
             };
             let wrong_parent = reserve(original_state, &mut delta).unwrap_err();
             assert!(wrong_parent.to_string().contains("close parent state"));

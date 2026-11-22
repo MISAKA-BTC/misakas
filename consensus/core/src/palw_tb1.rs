@@ -1,6 +1,7 @@
 //! RFC-0061 private profile for signed qualification, release and seed reconstruction.
 //! The native owner supplies the authenticated roster, VSS outcomes, original
 //! timing plan, branch positions and resource limits for the frozen purpose.
+pub mod exec_close_carrier;
 pub mod exec_registration;
 pub mod freeze;
 pub mod qualification;

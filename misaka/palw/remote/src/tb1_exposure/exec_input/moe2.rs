@@ -6,6 +6,7 @@ use crate::tb1_exposure::Tb1HolderFreeze;
 use kaspa_consensus_core::palw_state_proof_v1::{
     PALW_PROOF_LABEL_BONDS, PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1,
 };
+use kaspa_consensus_core::palw_tb1::exec_close_carrier::ExecCloseCarrier;
 use kaspa_consensus_core::palw_tb1::exec_registration::verify_quote_consent;
 use kaspa_consensus_core::{
     config::params::Params,
@@ -235,6 +236,7 @@ impl ExecInputBatch<'_> {
     /// The block owner supplies the ordinary fold and its exact selected-parent
     /// state. Native header, body and DAG context must be available for
     /// the candidate. Earlier writes in that block compete for the same budget.
+    #[allow(clippy::too_many_arguments)]
     pub fn reserve_closed_moe2_budget(
         &self,
         native: &dyn ConsensusApi,
@@ -242,14 +244,16 @@ impl ExecInputBatch<'_> {
         closure: &Tb1MiningClosure,
         q: &Tb1Qualification<'_>,
         parent: &PalwChainStateV2,
+        preparation_state: &PalwChainStateV2,
         delta: &mut PalwStateDeltaV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
-        let input = self.resolve_moe2_exec_close(native, config, &delta.point, closure, q, parent)?;
+        let input = self.resolve_moe2_exec_close(native, config, &delta.point, closure, q, parent, preparation_state)?;
         self.close_budget(config, input.block, input.daa_score, parent, Some(delta))
     }
 
     /// Resolve the branch-owned input for the native block fold. The set has
     /// already been owner- and funder-authenticated by `from_signed_at_parent`.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_moe2_exec_close(
         &self,
         native: &dyn ConsensusApi,
@@ -258,6 +262,7 @@ impl ExecInputBatch<'_> {
         closure: &Tb1MiningClosure,
         q: &Tb1Qualification<'_>,
         parent: &PalwChainStateV2,
+        preparation_state: &PalwChainStateV2,
     ) -> io::Result<Moe2ExecCloseV1> {
         let close = point.block;
         let (header, selected_parent) = self.check_close(native, close, closure)?;
@@ -266,6 +271,23 @@ impl ExecInputBatch<'_> {
         if (point.daa_score, point.blue_score) != (header.daa_score, header.blue_score) {
             return Err(invalid("MOE2 reservation differs from close position"));
         }
+        let preparation = native.get_header(self.preparation).map_err(io::Error::other)?;
+        QuotePreparation::resolve(native, &preparation, self.preparation, Some(preparation_state))?;
+        let block = native.get_block(close).map_err(io::Error::other)?;
+        if block.hash() != close {
+            return Err(invalid("EXEC close body differs from candidate"));
+        }
+        let byte_cap = usize::try_from(config.max_block_mass).map_err(|_| invalid("EXEC carrier budget overflow"))?;
+        let evidence_error = |why| io::Error::new(io::ErrorKind::InvalidData, format!("invalid EXEC close carrier: {why:?}"));
+        let carrier = ExecCloseCarrier::from_block(&block, self.entries.len(), byte_cap).map_err(evidence_error)?;
+        if carrier.preparation != self.preparation || carrier.qualified_rounds.as_bytes() != self.rounds.commitment() {
+            return Err(invalid("EXEC close carrier differs from its preparation"));
+        }
+        let rows = carrier
+            .verify(selected_parent, point.blue_score, point.daa_score, closure.commitment(selected_parent), |quote| {
+                preparation_state.bond(&quote.funding_bond).map(|bond| bond.pubkey.as_slice())
+            })
+            .map_err(evidence_error)?;
 
         // The signed quote authorizes the price and funder. The signed EXEC
         // context must independently authorize a mining job before locking funds.
@@ -281,7 +303,17 @@ impl ExecInputBatch<'_> {
                 }
                 None => return Err(invalid("TIR input has no admitted FOW1 mining profile")),
             }
-            slots.push(Moe2ExecSlot { registration: reg_key(&entry.context), slot, close, close_daa: header.daa_score, quote });
+            let carried_quote = rows.get(&slot).and_then(|row| row.quote).ok_or_else(|| invalid("EXEC carrier lacks signed quote"))?;
+            if quote != carried_quote {
+                return Err(invalid("EXEC carried quote differs from authenticated input"));
+            }
+            slots.push(Moe2ExecSlot {
+                registration: reg_key(&entry.context),
+                slot,
+                close,
+                close_daa: header.daa_score,
+                quote: carried_quote,
+            });
         }
         Ok(Moe2ExecCloseV1 {
             selected_parent,

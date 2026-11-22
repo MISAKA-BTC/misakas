@@ -1,16 +1,17 @@
 //! Private TB1 round and closure commitments. Each round commits to its
 //! schedule before dealer preparation. Consumer roots come from the owning
 //! registration or Original fold. No public network recognizes this codec.
+use borsh::{BorshDeserialize, BorshSerialize};
 use sha3::{Digest, Sha3_512};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Tb1MiningPurpose {
     Exec,
     Panel,
     ModelAudit,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct Tb1MiningRound {
     pub chain_id: [u8; 64],
     pub roster_root: [u8; 64],
@@ -47,7 +48,7 @@ impl Tb1MiningRound {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct Tb1MiningClosure {
     pub round: Tb1MiningRound,
     pub qual_root: [u8; 64],

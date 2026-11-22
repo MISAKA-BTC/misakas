@@ -24,11 +24,19 @@ fn clocked(node: &Rig) -> bool {
 }
 
 pub(super) fn heartbeat(node: &mut Rig, miner: MinerData) -> MutableBlock {
+    heartbeat_with_transactions(node, miner, vec![])
+}
+
+pub(super) fn heartbeat_with_transactions(
+    node: &mut Rig,
+    miner: MinerData,
+    txs: Vec<kaspa_consensus_core::tx::Transaction>,
+) -> MutableBlock {
     if clocked(node) {
         node.chain.ctx.simulated_time += node.config.params.target_time_per_block();
         arm(node);
     }
-    let b = node.beat_with_miner(miner, vec![]);
+    let b = node.beat_with_miner(miner, txs);
     if clocked(node) {
         node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(b.header.timestamp);
         arm(node);
