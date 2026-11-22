@@ -407,6 +407,23 @@
       "retainedHeartbeatCommon": false,
       "peakObservedNativeRequestBytes": 17017982196,
       "lastReportedAvailableBytes": 13893500928
+    },
+    "bothSigned": {
+      "txids": [
+        "8ee551eed3d8230b91ac698447c64b0dca475cdccf29d71c8f65c4e609511352b76b96fc30c4470397084ca37445a6bb079bacb88dd29b243f1d893b54d563b3",
+        "e6f0f0be0961752db8d9ba0d3f18e40ac54ef20fd40c0211355a693017e01f00a23c685b005d24effd5a4a7e3227bcc2a56ceb01dcde70a0b9fbd7df2004854d"
+      ],
+      "vmRamGiB": 28,
+      "commonHeartbeat": "c02540720d47483cae3a22691d46d981bb9f7e1c3e2353caf39f8185aeaba6d5e4b93e1d5c61d3f61acee25441cd202d4384803d60cb4fe7edb207b3b4414025",
+      "headerPalwStateRoot": "84a6ad84e6323e802f8908d1fac8ee335cfdfb4668a79bab7aab5dd84b03932c92b39ba795a4b991ab062f4a7995a142c8475d35ca01beb596a7b3b7f19fc23b",
+      "receiptPhase": "receipt_licensed",
+      "observedDaa": 7750,
+      "pendingReservations": 2,
+      "accusationPending": true,
+      "verifiedCarrierTransaction": "e6f0f0be0961752db8d9ba0d3f18e40ac54ef20fd40c0211355a693017e01f00a23c685b005d24effd5a4a7e3227bcc2a56ceb01dcde70a0b9fbd7df2004854d",
+      "carrierBodyPeerCount": 3,
+      "readbackSha256": "2ae4795e90c3a796f919bc0e889b76409345790010b646fb174f6a532a554bc9",
+      "stepDriverExitCode": 1
     }
   }
 }
