@@ -86,6 +86,16 @@ pub(in super::super) async fn extend_with_certified_work(
     );
 }
 
+pub(in super::super) fn append_certified_work(path: &Path, mut writer: impl std::io::Write, deadline: u64) {
+    let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
+    assert!(!branch.blocks.is_empty());
+    for block in branch.blocks {
+        assert!(block.header.daa_score < deadline, "additional certification crossed the signed deadline");
+        serde_json::to_writer(&mut writer, &block).unwrap();
+        writer.write_all(b"\n").unwrap();
+    }
+}
+
 /// Independently validate every block used to certify the new non-floor claim.
 pub(in super::super) async fn replay_certified_work(node: &mut Rig, path: &Path, close_blue: u64, release_from_daa: u64) -> Hash64 {
     let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();

@@ -437,6 +437,11 @@ pub(super) async fn replay_window(
             _ => panic!("choose one arithmetic assessment close source"),
         };
         let work_path = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_WORK_READ");
+        let work_plan = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_WORK_WRITE");
+        assert!(
+            work_plan.is_none() || (work_path.is_none() && close_path.is_some()),
+            "post-close work generation requires a pinned assessment close and its own archive"
+        );
         let release_output = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_SHARE_WRITE");
         assert!(release_output.is_none() || work_path.is_some(), "PANEL shares require independently replayed post-close work");
         let panel_write = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_PUBLICATION_WRITE");
@@ -555,6 +560,10 @@ pub(super) async fn replay_window(
                         "blue":close.header.blue_score, "daa":close.header.daa_score, "state":close.header.palw_state_root,
                         "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy.id()})
                 );
+                if let Some(path) = work_plan {
+                    let plan = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+                    generate_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, plan).await;
+                }
                 if let Some(path) = work_path {
                     let gate =
                         replay_assessment_work(node, &assessment, close.hash(), panel, panel_qualification, Path::new(&path)).await;
@@ -786,6 +795,79 @@ async fn seed_publication(
             result
         }
         _ => panic!("choose one TB1 publication input or output"),
+    }
+}
+
+#[derive(Deserialize)]
+struct PostCloseWorkPlan {
+    /// Advance past the checkpoint that the new claim will have to cover.
+    start_blue: u64,
+    funding: TransactionOutpoint,
+    certificate_archive: PathBuf,
+    output: PathBuf,
+}
+
+async fn generate_assessment_work(
+    node: &mut Rig,
+    assessment: &misaka_palw_remote::tb1_exposure::model_audit::arithmetic::ArithmeticPanelCut,
+    close: Hash64,
+    round: Tb1MiningRound,
+    q: &Tb1Qualification<'_>,
+    plan: PostCloseWorkPlan,
+) {
+    use std::io::{BufWriter, ErrorKind, Write};
+
+    let start = node.api().get_header(close).unwrap();
+    assert!(plan.start_blue >= start.blue_score);
+    let mut prefix = BufWriter::new(File::create_new(&plan.output).unwrap());
+    let step = node.config.params.target_time_per_block();
+    let mut pruning_point = start.pruning_point;
+    while node.api().get_header(node.chain.sink()).unwrap().blue_score < plan.start_blue {
+        let block = node.chain.heartbeat(step, vec![]).await;
+        assert!(block.header.daa_score < round.deadline_exclusive_daa);
+        if block.header.pruning_point != pruning_point {
+            pruning_point = block.header.pruning_point;
+            legacy_work::await_pruning_capture(node, pruning_point).await;
+        }
+        serde_json::to_writer(&mut prefix, &RpcRawBlock::from(&block)).unwrap();
+        prefix.write_all(b"\n").unwrap();
+    }
+
+    let artifact = std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").expect("the original 8K work class");
+    legacy_work::genesis_claim::extend_with_certified_work(
+        node,
+        Path::new(&artifact),
+        plan.funding,
+        u64::MAX,
+        &plan.certificate_archive,
+    )
+    .await;
+    legacy_work::genesis_claim::append_certified_work(&plan.certificate_archive, &mut prefix, round.deadline_exclusive_daa);
+
+    let mut pruning_point = node.api().get_header(node.chain.sink()).unwrap().pruning_point;
+    loop {
+        let tip = node.chain.sink();
+        let daa = node.chain.daa_of(tip);
+        assert!(daa < round.deadline_exclusive_daa, "PANEL work did not mature within the signed deadline");
+        if daa >= round.release_from_daa {
+            match assessment.observe_publication(node.api().as_ref(), close, q) {
+                Ok(_) => {
+                    prefix.flush().unwrap();
+                    prefix.get_ref().sync_all().unwrap();
+                    peer_log!("arithmetic PANEL work retained {}", serde_json::json!({"close":close,"tip":tip,"daa":daa}));
+                    return;
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+                Err(error) => panic!("generated PANEL work cannot be published: {error}"),
+            }
+        }
+        let block = node.chain.heartbeat(step, vec![]).await;
+        if block.header.pruning_point != pruning_point {
+            pruning_point = block.header.pruning_point;
+            legacy_work::await_pruning_capture(node, pruning_point).await;
+        }
+        serde_json::to_writer(&mut prefix, &RpcRawBlock::from(&block)).unwrap();
+        prefix.write_all(b"\n").unwrap();
     }
 }
 
