@@ -1421,11 +1421,11 @@ impl ConsensusApi for Consensus {
         self.palw_fp_spendable_with_parent_v3(bond).map_or_else(Vec::new, |(_, rows)| rows)
     }
 
-    fn palw_fp_spendable_with_parent_v3(
+    fn palw_fp_spendable_at_virtual_v3(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,
-    ) -> Option<(BlockHash, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
-        self.virtual_processor.palw_fp_spendable_with_parent_v3_impl(bond)
+    ) -> Option<(BlockHash, u64, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
+        self.virtual_processor.palw_fp_spendable_at_virtual_v3_impl(bond)
     }
 
     fn palw_locked_bond_outpoints_checked_v3(

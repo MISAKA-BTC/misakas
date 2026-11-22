@@ -4670,10 +4670,10 @@ impl VirtualStateProcessor {
     /// quantum), so a quantum either wins at its beacon or it never does. `wins: false` rows are
     /// returned too — an operator asking "why am I not producing receipt blocks" deserves to see
     /// the tickets that lost rather than an empty list that also means "no claims".
-    pub fn palw_fp_spendable_with_parent_v3_impl(
+    pub fn palw_fp_spendable_at_virtual_v3_impl(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,
-    ) -> Option<(BlockHash, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
+    ) -> Option<(BlockHash, u64, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpSpendableQuantumV3, fp_draw_slot_v3, fp_quantum_ticket_v3};
         use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
 
@@ -4795,7 +4795,7 @@ impl VirtualStateProcessor {
                 right.quantum_index,
             ))
         });
-        Some((chain_point, out))
+        Some((chain_point, candidate_daa, out))
     }
 
     /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.

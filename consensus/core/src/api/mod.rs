@@ -521,8 +521,16 @@ pub trait ConsensusApi: Send + Sync {
     /// A builder matches this parent against the template before it signs.
     fn palw_fp_spendable_with_parent_v3(
         &self,
-        _bond: crate::tx::TransactionOutpoint,
+        bond: crate::tx::TransactionOutpoint,
     ) -> Option<(BlockHash, Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
+        self.palw_fp_spendable_at_virtual_v3(bond).map(|(parent, _, rows)| (parent, rows))
+    }
+
+    /// Returns the selected parent and candidate DAA used to evaluate these receipt candidates.
+    fn palw_fp_spendable_at_virtual_v3(
+        &self,
+        _bond: crate::tx::TransactionOutpoint,
+    ) -> Option<(BlockHash, u64, Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
         None
     }
 

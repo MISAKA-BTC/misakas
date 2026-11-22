@@ -13362,7 +13362,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_adopt_class_carriage_v1_impl(class_id, &[]);
     let _ = vp.palw_seat_duties_v2_impl(&mine);
     let _ = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
-    let _ = vp.palw_fp_spendable_with_parent_v3_impl(bond_key.0);
+    let _ = vp.palw_fp_spendable_at_virtual_v3_impl(bond_key.0);
     let _ = vp.palw_locked_bond_outpoints_v2_impl();
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
     // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read
@@ -14320,8 +14320,8 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             let mut candidate = (*original).clone();
             candidate.daa_score = daa;
             vp.virtual_stores.write().state.set(Arc::new(candidate)).unwrap();
-            let (parent, rows) = vp.palw_fp_spendable_with_parent_v3_impl(harness_bond).unwrap();
-            assert_eq!(parent, tip);
+            let (parent, quoted_daa, rows) = vp.palw_fp_spendable_at_virtual_v3_impl(harness_bond).unwrap();
+            assert_eq!((parent, quoted_daa), (tip, daa));
             assert_eq!(rows.iter().any(|row| row.claim_id == claim_id && row.quantum_index == 0 && row.wins), eligible);
         }
         vp.virtual_stores.write().state.set(original).unwrap();

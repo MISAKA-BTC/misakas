@@ -1793,16 +1793,12 @@ impl PalwProducerService {
         miner_data: MinerData,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
-        let Some((quoted_parent, spendable)) =
-            session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(bond)).await
+        let Some((quoted_parent, next_daa, spendable)) =
+            session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_at_virtual_v3(bond)).await
         else {
             return Ok(None);
         };
-        // A win licenses a block only inside its use window (invariant F14). A protected
-        // claim's shorter deadline is already applied in the spendable list. This check still
-        // drops a row whose use window closed between that read and the template. Among the
-        // rows the next block can still carry, the soonest deadline is spent first.
-        let next_daa = session.get_virtual_daa_score();
+        // Spend the earliest deadline first at the candidate DAA used by admission.
         let Some(win) = spendable
             .into_iter()
             .filter(|quantum| quantum.wins && next_daa <= quantum.spend_deadline_daa)
@@ -1909,15 +1905,15 @@ impl PalwProducerService {
                 continue;
             }
             let auth = &bundle.authorization;
-            if next_daa > auth.expiry_daa {
-                continue;
-            }
             let executor_bond = auth.executor_bond;
-            let Some((quoted_parent, spendable)) =
-                session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(executor_bond)).await
+            let Some((quoted_parent, next_daa, spendable)) =
+                session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_at_virtual_v3(executor_bond)).await
             else {
                 return Ok(None);
             };
+            if !self.consensus_config.params.palw_receipt_spend_v4_active_at(next_daa) || next_daa > auth.expiry_daa {
+                continue;
+            }
             let Some(win) = spendable.into_iter().find(|q| {
                 q.claim_id == auth.claim_id
                     && q.wins
