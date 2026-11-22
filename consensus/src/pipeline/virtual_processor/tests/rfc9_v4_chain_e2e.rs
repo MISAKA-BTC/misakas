@@ -959,7 +959,7 @@ async fn rfc9_v4_chain_e2e_the_offline_miner_is_paid_by_another_builders_block()
 
 /// **Every block in `upto`'s past, in an order a peer can take them**: the selected chain from genesis, each chain block preceded by its
 /// mergeset in consensus (topological) order — what an IBD replays, side blocks (receipt blocks, merged reds) included.
-fn past_in_order(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
+pub(super) fn past_in_order(chain: &T12Chain, upto: BlockHash) -> Vec<Block> {
     let vp = chain.vp();
     let genesis = chain.config.params.genesis.hash;
     let mut spine = Vec::new();

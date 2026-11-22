@@ -1324,7 +1324,14 @@ async fn t12_a_floor_final_becomes_a_permitted_round_block_whose_fee_pays_its_bo
     use kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
     const ROUND_FEE: u64 = 500_000;
     let started = std::time::Instant::now();
-    let mut at = a_floor_final_scheduled(SeedDraw::MintsATicket).await;
+    let (mut at, (premine, floats)) = a_floor_final_scheduled_with_setup(
+        SeedDraw::MintsATicket,
+        None,
+        false,
+        |_| {},
+        |chain, premine, floats| async { (chain, (premine, floats)) },
+    )
+    .await;
 
     // The tickets: the Final's, the executor's, on the span's own rounds, consecutively from the lead.
     let mine: Vec<_> = at.schedule.quanta.iter().filter(|q| q.final_id == at.claim_id).copied().collect();
@@ -1373,6 +1380,41 @@ async fn t12_a_floor_final_becomes_a_permitted_round_block_whose_fee_pays_its_bo
     let row = kaspa_consensus_core::palw_producer_v2::palw_claim_exec_lane_v1(&state, &at.claim_id).expect("the claim is in the lane");
     assert_eq!((row.stage, row.span, row.tickets as usize, row.tickets_spent), ("scheduled", at.target, mine.len(), 1));
     assert_eq!((row.first_round, row.last_round), (Some(first), rounds.last().copied()));
+    // Two independent databases receive the same winning DAG, including its mergeset.
+    // Reopen each node and submit the already consumed round block again.
+    let sink = at.chain.sink();
+    let blocks = super::rfc9_v4_chain_e2e::past_in_order(&at.chain, sink);
+    let root = state.state_root();
+    for _ in 0..2 {
+        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let (sender, _receiver) = async_channel::unbounded();
+        let peer = t12_genesis_chain_on(
+            TestConsensus::with_db(db.clone(), &at.chain.config, sender),
+            &at.chain.config,
+            &at.chain.bundle,
+            &premine,
+            &floats,
+        );
+        for block in &blocks {
+            super::g14_registration_e2e::arrive(&peer, block.clone(), "winning round history").await;
+        }
+        assert_eq!((peer.sink(), peer.tip_state().1.state_root()), (sink, root));
+        drop(peer);
+        let mut config = at.chain.config.clone();
+        config.process_genesis = false;
+        let (sender, _receiver) = async_channel::unbounded();
+        let peer =
+            t12_reopened_chain(TestConsensus::with_db(db, &config, sender), &config, &at.chain.bundle, at.chain.ctx.simulated_time, 0);
+        let known = peer.ctx.consensus.get_block(round_block.header.hash).unwrap();
+        super::g14_registration_e2e::arrive(&peer, known, "previously accepted round block").await;
+        let restored = peer.tip_state().1;
+        assert_eq!((peer.sink(), restored.state_root()), (sink, root));
+        let restored_row = kaspa_consensus_core::palw_producer_v2::palw_claim_exec_lane_v1(&restored, &at.claim_id).unwrap();
+        assert_eq!(restored_row.tickets_spent, 1);
+        assert!(restored.round_permit_used(at.target, round, permit.index));
+        assert_eq!(restored.round_permits_accepted(at.target), 1);
+    }
     eprintln!(
         "[t12-e2e] done: round block {} permitted and paid by {}; {} heartbeats + {} attempt blocks, sink DAA {}, {:.1} s",
         round_block.header.hash,
