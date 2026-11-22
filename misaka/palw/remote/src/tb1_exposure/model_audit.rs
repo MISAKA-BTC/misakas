@@ -46,8 +46,8 @@ pub struct PreparedAudit<'a> {
     candidates: &'a [AuditCandidate],
     plan: AuditPlan,
     closure: Tb1MiningClosure,
-    #[cfg(feature = "private-tb1-tir")]
-    panel_close_blue_score: u64,
+    panel: Tb1MiningRound,
+    panel_qualification: [u8; 64],
 }
 
 impl<'a> PreparedAudit<'a> {
@@ -135,14 +135,16 @@ impl<'a> PreparedAudit<'a> {
             consumer_set_root: h.finalize().into(),
             policy_root: plan.suite.as_bytes(),
         };
-        Ok(Self {
-            preparation,
-            candidates,
-            plan,
-            closure,
-            #[cfg(feature = "private-tb1-tir")]
-            panel_close_blue_score: panel.close_blue_score,
-        })
+        Ok(Self { preparation, candidates, plan, closure, panel: *panel, panel_qualification: panel_q.root() })
+    }
+
+    /// Recover the evaluation schedule committed at preparation using its original
+    /// qualification. MODEL_AUDIT and PANEL use different release material.
+    pub fn assessment_panel(&self, qualification: &Tb1Qualification<'_>) -> io::Result<Tb1MiningRound> {
+        if qualification.root() != self.panel_qualification {
+            return Err(invalid("different evaluation PANEL qualification"));
+        }
+        Ok(self.panel)
     }
 
     pub fn close_commitment(&self, parent: Hash64) -> [u8; 64] {

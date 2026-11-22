@@ -127,7 +127,8 @@ pub(super) async fn replay_window(
     cut: &PreparedAudit<'_>,
     close: Hash64,
     q: &Tb1Qualification<'_>,
-    rounds: [Tb1MiningRound; 2],
+    round: Tb1MiningRound,
+    panel_qualification: &Tb1Qualification<'_>,
     marker: [u8; 64],
     roots: [Hash64; 4],
     seals: [Hash64; 3],
@@ -140,7 +141,7 @@ pub(super) async fn replay_window(
         palw_native_settlement_v1::native_delta_evidence_v1,
     };
     use std::io::{BufRead, BufReader, ErrorKind};
-    let [round, panel] = rounds;
+    let panel = cut.assessment_panel(panel_qualification).unwrap();
     let slot: usize = std::env::var("MISAKA_PRIVATE_FRESH_SLOT").unwrap().parse().unwrap();
     let dir = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_FRESH_HOLDER").unwrap()).join("audit");
     let id = round.id();

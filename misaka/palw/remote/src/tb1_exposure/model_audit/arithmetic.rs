@@ -176,7 +176,7 @@ impl FrozenAudit<'_> {
         let header = native.get_header(submission).map_err(io::Error::other)?;
         if parent != certificate
             || header.daa_score >= self.cut.plan.case_deadline_exclusive_daa
-            || header.blue_score >= self.cut.panel_close_blue_score
+            || header.blue_score >= self.cut.panel.close_blue_score
             || !native.is_chain_ancestor_of(submission, tip).map_err(io::Error::other)?
             || !native.palw_coinbase_commits_to(self.cut.closure.round.chain_id, submission, &marker).map_err(io::Error::other)?
         {

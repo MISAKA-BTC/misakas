@@ -215,8 +215,15 @@ async fn private_fresh_audit_custody() {
     registered_audit_history(AuditHistory::Fresh).await;
 }
 
+#[tokio::test]
+#[ignore = "requires the original arithmetic registration, qualified close and tiled QF1 artifact"]
+async fn read_arithmetic_panel_preparation() {
+    registered_audit_history(AuditHistory::FreshPreparation).await;
+}
+
 #[derive(PartialEq, Eq)]
 enum AuditHistory {
+    FreshPreparation,
     CertifiedFloor,
     LegacyWork,
     Fresh,
@@ -230,7 +237,8 @@ async fn registered_audit_history(mode: AuditHistory) {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     let asset = std::env::var_os("MISAKA_PRIVATE_QF1_FULL").expect("full QF1 model");
     let held = misaka_palw_tir_exec::node::TirArtifactV1::open(Path::new(&asset)).unwrap();
-    let tiled = (mode == AuditHistory::Fresh).then(|| {
+    let fresh = matches!(mode, AuditHistory::Fresh | AuditHistory::FreshPreparation);
+    let tiled = fresh.then(|| {
         let recipe = misaka_palw_sdk::qf1_local::residual_tiles::Candidate::over(&held).unwrap();
         let section = std::env::var_os("MISAKA_PRIVATE_QF1_TILES").expect("registered residual scales");
         let artifact = recipe.open(&held, Path::new(&section)).unwrap();
@@ -243,7 +251,7 @@ async fn registered_audit_history(mode: AuditHistory) {
     };
     let identity = model.identity();
     let (mut config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
-    if mode == AuditHistory::Fresh && std::env::var_os("MISAKA_PRIVATE_FRESH_ARCHIVAL").is_some() {
+    if fresh && std::env::var_os("MISAKA_PRIVATE_FRESH_ARCHIVAL").is_some() {
         config.is_archival = true;
     }
     let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
@@ -253,6 +261,9 @@ async fn registered_audit_history(mode: AuditHistory) {
     let dir = kaspa_database::utils::get_kaspa_tempdir();
     let archive = std::env::var_os(history::OUTPUT).map(std::path::PathBuf::from).unwrap_or_else(|| dir.path().join("blocks.jsonl"));
     let mut reader = history::Reader::open(node.chain.sink());
+    if mode == AuditHistory::FreshPreparation {
+        assert!(reader.is_some(), "provide the archived arithmetic registration and original qualification");
+    }
     if let Some(r) = &mut reader {
         while node.chain.sink() != r.header.registered {
             r.next(&mut node).await;
@@ -273,8 +284,8 @@ async fn registered_audit_history(mode: AuditHistory) {
     let coordinates: Vec<_> = (1..=4).map(field).collect();
     let roster = Tb1Roster { coordinates: &coordinates, holder_keys: &public, f: 1 };
     let certification_window = policy.verifier_maturity_daa + policy.prosecution_window_daa + policy.lifetime_daa();
-    let fresh = mode == AuditHistory::Fresh;
-    let arithmetic = fresh && std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some();
+    let arithmetic =
+        mode == AuditHistory::FreshPreparation || (fresh && std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some());
     let audit_number = if arithmetic {
         15
     } else if fresh {
@@ -380,6 +391,8 @@ async fn registered_audit_history(mode: AuditHistory) {
         case_deadline_exclusive_daa: panel.deadline_exclusive_daa + 1,
     };
     let cut = PreparedAudit::read(node.api().as_ref(), prep.hash(), audit, &aq, &panel, &pq, plan, &candidates).unwrap();
+    assert_eq!(cut.assessment_panel(&pq).unwrap().id(), panel.id());
+    assert!(cut.assessment_panel(&aq).is_err());
     let marker = cut.close_commitment(prep.hash());
     let close = if let Some(r) = &mut reader {
         r.next(&mut node).await
@@ -387,6 +400,24 @@ async fn registered_audit_history(mode: AuditHistory) {
         local_carrier(&mut node, &mut None, &mut [], 0, marker, "long audit close").await
     };
     cut.holder_freeze(node.api().as_ref(), close.hash(), &aq).unwrap();
+    if mode == AuditHistory::FreshPreparation {
+        let other_qualification = qualified(&p, roster, &keys, &dealers, 43, Some(&roots[1]));
+        assert_eq!(other_qualification.round_ref(), pq.round_ref());
+        assert_ne!(other_qualification.root(), pq.root());
+        assert!(cut.assessment_panel(&other_qualification).is_err());
+        let reader = reader.as_mut().expect("read the archived evaluation preparation");
+        reader.finish(&mut node).await;
+        let scheduled = cut.assessment_panel(&pq).unwrap();
+        peer_log!(
+            "arithmetic assessment preparation {} {}",
+            std::process::id(),
+            serde_json::json!({"tip":node.chain.sink(),"preparation":prep.hash(),"close":close.hash(),
+                "round":Hash64::from_bytes(scheduled.id()),"qualification":Hash64::from_bytes(pq.root()),
+                "close_blue":scheduled.close_blue_score,"release_from":scheduled.release_from_daa,
+                "deadline_exclusive":scheduled.deadline_exclusive_daa})
+        );
+        return;
+    }
     if fresh {
         while node.chain.daa_of(node.chain.sink()) < audit.release_from_daa {
             if let Some(r) = &mut reader {
@@ -415,7 +446,8 @@ async fn registered_audit_history(mode: AuditHistory) {
                 &cut,
                 close.hash(),
                 &aq,
-                [audit, panel],
+                audit,
+                &pq,
                 marker,
                 roots[0],
                 seals[0],

@@ -1286,3 +1286,13 @@ out=$(mktemp -d)
 tar -xf "$p/g-cost-repeated-job-one-pass.tar.zst" -C "$out"
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_cost_repeated_job.py" "$MISAKA_PRIVATE_QF1_TOKENIZER" "$out" | cmp - "$p/g-cost-repeated-job-one-pass.json"
 ```
+
+### Round 16 の元の準備記録と公開期限
+
+空のDBから起動した同一バイナリの3プロセスが、登録と元の準備ブロックを再生し、そこで固定された評価Panelの資格と日程を復元した。Panel用READY署名9件は元の公開資料からも照合した。close は blue score 181382、share公開開始は DAA 90741、期限は DAA 256802 未満。監査用の資格と、同じRound 16で別の準備記録に署名した資格は、いずれも元の評価Panelの読み出しで拒否された。この試験で確認したのは抽選前の日程で、実際の担当者の選出・承認は未完了。[3プロセスの照合結果](qf1-arithmetic-panel-preparation.json)・[nativeログ](qf1-arithmetic-panel-preparation.tar.zst)
+
+```sh
+out=$(mktemp -d)
+tar -xf "$p/qf1-arithmetic-panel-preparation.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_qualification.py" --openssl "$(brew --prefix openssl@3)/bin/openssl" --arithmetic-peers "$out/peer-0.log" "$out/peer-1.log" "$out/peer-2.log" | cmp - "$p/qf1-arithmetic-panel-preparation.json"
+```

@@ -2,11 +2,12 @@
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
-from check_fresh_audit import arithmetic_suite, audit_binding, coinbase_extra
+from check_fresh_audit import arithmetic_suite, audit_binding, coinbase_extra, records
 from check_genesis_draw import header_hash
 from check_transaction_root import verify_block_transactions
 from check_legacy_work import HERE, require
@@ -126,9 +127,31 @@ def verify(openssl, arithmetic=False):
     return dict(close=audit["close"], roster=roster.hex(), rounds=results)
 
 
+def arithmetic_panel_reads(openssl, logs):
+    signed = verify(openssl, arithmetic=True)
+    audit = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())["audit"]
+    [panel] = [item for item in signed["rounds"] if item["purpose"] == "PANEL"]
+    expected = dict(tip=audit["tip"], preparation=audit["preparation"], close=signed["close"],
+                    round=panel["round"], qualification=panel["qualification"], close_blue=panel_close_blue(audit),
+                    release_from=audit["panel_from"], deadline_exclusive=audit["panel_deadline"])
+    builds, processes = set(), []
+    for path in logs:
+        log = path.read_text()
+        require("test result: ok. 1 passed; 0 failed" in log, "incomplete native preparation replay")
+        [build] = re.findall(r"^test_binary_sha256=([0-9a-f]{64})$", log, re.M)
+        [(pid, observed)] = records(log, "arithmetic assessment preparation")
+        require(observed == expected, "native preparation differs from the signed PANEL schedule")
+        builds.add(build)
+        processes.append(pid)
+    require(len(builds) == 1 and len(set(processes)) == len(processes) == 3, "different build or repeated preparation process")
+    return dict(binary_sha256=builds.pop(), processes=processes, signed_ready_rows=panel["ready_signatures"], **expected)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--openssl", default="openssl", help="OpenSSL with ML-DSA support")
     parser.add_argument("--arithmetic", action="store_true", help="verify the arithmetic MODEL_AUDIT and its later PANEL")
+    parser.add_argument("--arithmetic-peers", type=Path, nargs=3, help="compare three native preparation reads with the original arithmetic READY signatures")
     args = parser.parse_args()
-    print(json.dumps(verify(args.openssl, args.arithmetic), indent=2))
+    result = arithmetic_panel_reads(args.openssl, args.arithmetic_peers) if args.arithmetic_peers else verify(args.openssl, args.arithmetic)
+    print(json.dumps(result, indent=2))
