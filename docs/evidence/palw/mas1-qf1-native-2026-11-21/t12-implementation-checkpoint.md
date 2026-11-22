@@ -131,3 +131,22 @@ nativeビルドは終了コード0。独立3プロセスの private_registered_t
 新規 claim の当落には Panel の完全再実行、Final、Gate C、成熟後の beacon が要る。旧規則の claim に MOE2 は適用されない。新 profile は `private_moe2_settlement.rs` の予約・決済を受賞ブロック本体の fold に結合する必要がある。
 
 24 GiB の VM で保持済みの子を通常の submitBlock に再提出し、独立3 DB が DAA 7746 で同一の新規 claim、carrier 取引、original、execution root を返した。全ピアで provisional、認証 pending、Panel 承認未記録。受付ブロックは 2 対 1 に分かれた。共通の子を生成・再提出しても、26 tip を保持した peer 1 では 723,108,006 bytes 予約中に 30,076,294,708 bytes を要求し、上限 17,603,214,538 bytes を超えて virtual 更新を保留した。他2ピアは子を選択した。3ピア一致、Panel、Final、Gate C、当選、受賞および決済は未実証。分岐前の各 DB に適用する実ブロック3個を取り出した。作業ボリュームが ENOSPC になり、隔離 VM を停止した。
+
+## 新規Studio claimの現在地と新profileの前提
+
+隔離P200の3ピアは新規Studio claimのPanel承認と異議予約2件の返上を受理した。最新の共通ブロックはDAA 7751の `1bf869a1…`、PALW state rootは `a7a4dddc…`。claimは `receipt_licensed`、`accusationPending=false`、通常のphase期限はDAA 10866、Gate C認証は `pending`。[選択鎖の返上取引と承認](p200-studio-mining-path.json)
+
+旧規則で受け付けたこのclaimは、受付時のTFO3規則でFinal、Gate C、成熟後のTicketへ進む。新profileのMOE2へ移す経路は規則にない。新profileの実ブロック検証には、署名済みEXEC closeで採掘適格な入力、対応する公開済みseed、正規のFOW1 Ticket、選出席の完全再実行承認とGate Cが必要。現在のprivate入口は `qf1.rs` の `Qf1Use::NewMining` で `REVIEW_HOLD` を返す。`exec_input/moe2.rs` の `reserve_closed_moe2_budget` は非報酬QF1と旧TIRの入力を採掘予約に使用できない。このため、決済kernelを呼べる適格な新profileの受賞ブロックが現行入力から得られない。
+
+`fe910813d` で、private MOE2市場の登録・価格更新にブロック単位の巻き戻し記録を追加した。3プロセスの登録試験では、native登録差分から記録を作成してエンコード・復元し、異なるブロック、未切り離しの状態、同じ記録の二重適用を拒否した。登録元へ巻き戻してから同じ差分を適用すると、元の市場状態に戻った。実ブロックの決済呼び出しは未接続。
+
+| 現行試験 | 終了コード | 実行時間 |
+|---|---:|---:|
+| Rustテストバイナリのビルド | 0 | 13分06秒 |
+| T12当選fixture。3個のDBで受賞ブロック・root・消費数・経済状態が一致 | 0 | 3.82秒 |
+| T12落選fixture | 0 | 1.68秒 |
+| 同じ量子のV3/V4二重消費 | 0 | 1.04秒 |
+| MOE2の独立3プロセス登録・巻き戻し・再適用 | 0 | 1.11秒 |
+| QF1の隔離3プロセスで署名済みEXEC closeを読み、非報酬入力の予算予約を拒否 | 0 | 40.53秒 |
+
+当選fixtureは決定論的なseedを選んで正規の後続状態遷移を試す。新規Studio claimの当選結果は未取得。初回ビルドは実装編集中に停止し、終了コード130。QF1試験の初回はartifact指定が欠けて終了コード101。引き継ぎ済みartifact・tokenizerを指定し、上表の結果を取得した。
