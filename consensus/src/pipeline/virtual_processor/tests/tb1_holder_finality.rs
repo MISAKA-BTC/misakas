@@ -1243,6 +1243,7 @@ async fn run(stable: bool, registered: bool) {
                 &rows,
                 actors,
                 r,
+                |api| jobs.derive_recorded(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap(),
                 instance.as_ref().unwrap(),
                 body,
                 sig,

@@ -435,6 +435,25 @@ impl<'a> FrozenExecInputs<'a> {
         Ok(input)
     }
 
+    /// Reconstruct input for inspecting recorded evidence after the original
+    /// deadline. Execution and new submissions still require the live window.
+    pub fn derive_recorded(
+        &self,
+        native: &dyn ConsensusApi,
+        slot: u64,
+        publication: Hash64,
+        certificate: Hash64,
+        rows: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<DerivedExecInput<'a>> {
+        let tip = native.get_sink();
+        let seed = self.gate.read_seed(native, publication, certificate, rows, q, limits)?;
+        let input = self.derive_from_seed(slot, certificate, &seed)?;
+        self.gate.require_tip(native, tip)?;
+        Ok(input)
+    }
+
     fn derive_from_seed(
         &self,
         slot: u64,

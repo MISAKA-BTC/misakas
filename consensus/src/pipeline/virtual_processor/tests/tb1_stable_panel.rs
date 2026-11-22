@@ -446,7 +446,7 @@ async fn private_read_cold_panel_receipt() {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn release(
+pub(super) async fn release<'t>(
     node: &mut Rig,
     parent: &mut Option<UnixStream>,
     peers: &mut [(Child, UnixStream)],
@@ -465,7 +465,8 @@ pub(super) async fn release(
     exec_seed: &[u8; 32],
     exec_rows: &[PublishedRelease<'_>],
     actors: &Actors,
-    input: &DerivedExecInput<'_>,
+    input: &DerivedExecInput<'t>,
+    recover_exec: impl Fn(&dyn ConsensusApi) -> DerivedExecInput<'t>,
     instance: &LocalInstance<'_>,
     body: &LocalOriginalBody,
     owner: &ml_dsa_65::MLDSA65Signature,
@@ -891,24 +892,24 @@ pub(super) async fn release(
     assert!(input.prepare_stop_case(api, original_receipt, body, owner, &changed).is_err());
     let case = input.prepare_stop_case(api, original_receipt, body, owner, &witness).unwrap();
     assert!(case.verdict_marker(api, before_stop).is_err());
-    let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 last answer / Stop case").await;
-    let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
-    assert!(case.read_verdict(node.api().as_ref(), opened.hash(), opened.hash()).is_err());
-    let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 last answer / Stop verdict").await;
-    let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
+    let stop_case = local_carrier(node, parent, peers, 0, case.marker(), "QF1 last answer / Stop case").await;
+    let marker = case.verdict_marker(node.api().as_ref(), stop_case.hash()).unwrap();
+    assert!(case.read_verdict(node.api().as_ref(), stop_case.hash(), stop_case.hash()).is_err());
+    let stop_verdict = local_carrier(node, parent, peers, 0, marker, "QF1 last answer / Stop verdict").await;
+    let outcome = case.read_verdict(node.api().as_ref(), stop_case.hash(), stop_verdict.hash()).unwrap();
     assert_eq!(outcome, StopOutcome::ChallengeNotEstablished);
     peer_log!(
         "TB1 Court Stop pid={} original={} case={} verdict={} result={:?} witness={}",
         std::process::id(),
         original,
-        opened.hash(),
-        verdict.hash(),
+        stop_case.hash(),
+        stop_verdict.hash(),
         outcome,
         faster_hex::hex_string(&wire)
     );
     let end_wire = std::fs::read(dir.join(format!("{original}.end"))).expect("terminal Readout and End published with the Original");
     let case = input.prepare_end_case(node.api().as_ref(), original_receipt, body, owner, &end_wire).unwrap();
-    assert!(case.verdict_marker(node.api().as_ref(), opened.hash()).is_err());
+    assert!(case.verdict_marker(node.api().as_ref(), stop_case.hash()).is_err());
     let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 Readout / End case").await;
     let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
     let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 Readout / End verdict").await;
@@ -923,5 +924,28 @@ pub(super) async fn release(
         verdict.hash(),
         outcome,
         faster_hex::hex_string(&end_wire)
+    );
+
+    let late = carry_to_daa(node, parent, peers, input.terms().deadline_exclusive_daa, marker).await;
+    let checkpoint = checkpoint_dir.join("after-terminal-deadline");
+    node.api().checkpoint_database(&checkpoint);
+    let recovered = reopen_checkpoint(&node.config, &checkpoint);
+    let api = recovered.as_ref();
+    assert_eq!(api.get_sink(), late.hash());
+    let reconstructed = recover_exec(api);
+    assert!(reconstructed.check_live(api).is_err());
+    assert!(reconstructed.prepare_stop_case(api, original_receipt, body, owner, &witness).is_err());
+    assert!(reconstructed.prepare_end_case(api, original_receipt, body, owner, &end_wire).is_err());
+    let stop = reconstructed.recorded_stop_case(api, original_receipt, body, owner, &witness).unwrap();
+    assert_eq!(stop.read_verdict(api, stop_case.hash(), stop_verdict.hash()).unwrap(), StopOutcome::ChallengeNotEstablished);
+    let end = reconstructed.recorded_end_case(api, original_receipt, body, owner, &end_wire).unwrap();
+    assert!(end.verdict_marker(api, opened.hash()).is_err());
+    assert_eq!(end.read_verdict(api, opened.hash(), verdict.hash()).unwrap(), expected);
+    assert_eq!(end.read_verdict(api, opened.hash(), late.hash()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    peer_log!(
+        "TB1 Court recovered pid={} deadline_tip={} end_verdict={} result={expected:?}",
+        std::process::id(),
+        late.hash(),
+        verdict.hash()
     );
 }

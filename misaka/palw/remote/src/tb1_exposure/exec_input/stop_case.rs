@@ -139,7 +139,22 @@ impl<'t> DerivedExecInput<'t> {
         owner: &MLDSA65Signature,
         w: &StopWitness,
     ) -> io::Result<LocalStopCase<'_, 't>> {
-        let original = self.read_qf1_original(native, receipt, body, owner)?;
+        self.check_live(native)?;
+        let case = self.recorded_stop_case(native, receipt, body, owner, w)?;
+        self.check_live(native)?;
+        Ok(case)
+    }
+
+    /// Recreate the challenge from its retained evidence for historical readback.
+    pub fn recorded_stop_case(
+        &self,
+        native: &dyn ConsensusApi,
+        receipt: Hash64,
+        body: &LocalOriginalBody,
+        owner: &MLDSA65Signature,
+        w: &StopWitness,
+    ) -> io::Result<LocalStopCase<'_, 't>> {
+        let original = self.read_recorded_qf1_original(native, receipt, body, owner)?;
         let outcome = w.judge(self.attempt, body, self.terms.decode_tokens)?;
         let mut h = Sha3_512::new()
             .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")

@@ -102,7 +102,22 @@ impl<'t> DerivedExecInput<'t> {
         owner: &MLDSA65Signature,
         wire: &[u8],
     ) -> io::Result<LocalTerminalCase<'_, 't>> {
-        let original = self.read_qf1_original(native, receipt, body, owner)?;
+        self.check_live(native)?;
+        let case = self.recorded_end_case(native, receipt, body, owner, wire)?;
+        self.check_live(native)?;
+        Ok(case)
+    }
+
+    /// Recreate the challenge from its retained evidence for historical readback.
+    pub fn recorded_end_case(
+        &self,
+        native: &dyn ConsensusApi,
+        receipt: Hash64,
+        body: &LocalOriginalBody,
+        owner: &MLDSA65Signature,
+        wire: &[u8],
+    ) -> io::Result<LocalTerminalCase<'_, 't>> {
+        let original = self.read_recorded_qf1_original(native, receipt, body, owner)?;
         let outcome = judge(self.attempt, body, self.terms.decode_tokens, wire)?;
         let marker = Sha3_512::new()
             .chain_update(b"MISAKA/private/QF1/court/readout-end/v1")
