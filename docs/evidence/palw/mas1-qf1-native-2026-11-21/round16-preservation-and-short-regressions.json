@@ -1,0 +1,20 @@
+{
+  "frozen_replay_input_position": {
+    "archive": "through-recovery-parent.jsonl",
+    "daa": 51259,
+    "blue": 102522
+  },
+  "preserved_database_files": 118,
+  "database_file_manifest_sha256": "17697d9bf0ce11702519dcd2ed2b0fe0a7a27674dae075a34a6d4c5dd3fc621a",
+  "preserved_log_sha256": "38ca3a3fb000ff7cfd761750ec30da3c4af0de05f774bc6c998bf504346d01f0",
+  "isolated_short_tests_seconds": {
+    "g14_adversarial_c_gate_c_with_only_colluders_holding_the_model_is_not_certified": 7.89,
+    "reject_panel_parent_at_share_release": 0.22,
+    "replay_to_original_panel_parent": 0.19,
+    "native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected": 2.27,
+    "rfc18_gate_c_final_is_not_security_certified": 0.11,
+    "execution_quanta_turn_one_final_into_n_unique_round_permits_consumed_once": 0.03,
+    "unified_an1_batch_refutation_priority_atomic_consumption_and_reorg_w06_to_w08": 0.25,
+    "moe2-registration": 1.3
+  }
+}
