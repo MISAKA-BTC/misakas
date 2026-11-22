@@ -309,7 +309,7 @@ pub(super) async fn replay_window(
     );
     if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_AUDIT").is_some() {
         use misaka_palw_remote::tb1_exposure::model_audit::arithmetic::{
-            ArithmeticEvaluation, CASES, exact_digit_score, submission_marker,
+            ArithmeticControlView, ArithmeticEvaluation, CASES, exact_digit_score, submission_marker,
         };
         let tokenizer = fs::read(std::env::var_os("MISAKA_PRIVATE_QF1_TOKENIZER").unwrap()).unwrap();
         assert_eq!(node.chain.sink(), certificate);
@@ -409,6 +409,16 @@ pub(super) async fn replay_window(
             }
             _ => panic!("choose one PANEL prefix source"),
         };
+        let close_path = match (
+            std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_WRITE"),
+            std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_ASSESSMENT_CLOSE_READ"),
+        ) {
+            (None, None) => None,
+            (Some(path), None) => Some((path, true)),
+            (None, Some(path)) => Some((path, false)),
+            _ => panic!("choose one arithmetic assessment close source"),
+        };
+        assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
         if let Some(archive) = archive {
             let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
             assert_eq!(
@@ -431,6 +441,53 @@ pub(super) async fn replay_window(
                 panel.close_blue_score - 1,
                 node.chain.daa_of(parent)
             );
+
+            if let Some((path, write)) = close_path {
+                let (at, state) = node.vp().palw_observer_state_at_cached_v1(parent).unwrap();
+                assert_eq!(at, parent);
+                let fold = node.vp().palw_model_registry_fold_at(node.chain.daa_of(parent)).unwrap();
+                let control = ArithmeticControlView { state: &state, config: &node.config.params, registry: &fold };
+                let policy = std::env::var("MISAKA_PRIVATE_ARITHMETIC_CONTROL_POLICY").unwrap().parse::<Hash64>().unwrap();
+                let assessment = frozen
+                    .prepare_arithmetic_panel(
+                        node.api().as_ref(),
+                        batch,
+                        certificate,
+                        &rows,
+                        q,
+                        LIMITS,
+                        0,
+                        block.hash(),
+                        &results,
+                        panel_qualification,
+                        parent,
+                        control,
+                        policy,
+                    )
+                    .expect("eligible arithmetic PANEL control roster on the scheduled parent");
+                let close = if write {
+                    local_carrier(node, &mut None, &mut [], 0, assessment.commitment(), "arithmetic assessment PANEL close").await
+                } else {
+                    let raw: RpcRawBlock = serde_json::from_reader(File::open(&path).unwrap()).unwrap();
+                    let close = Block::try_from(raw).unwrap();
+                    stable_panel::arrive(node, close.clone(), "archived arithmetic assessment PANEL close").await;
+                    close
+                };
+                assessment.holder_freeze(node.api().as_ref(), close.hash(), panel_qualification).unwrap();
+                assert_eq!(node.chain.sink(), close.hash());
+                if write {
+                    let file = File::create_new(path).unwrap();
+                    serde_json::to_writer(&file, &RpcRawBlock::from(&close)).unwrap();
+                    file.sync_all().unwrap();
+                }
+                peer_log!(
+                    "arithmetic PANEL close {} {}",
+                    std::process::id(),
+                    serde_json::json!({"block":close.hash(), "parent":parent, "round":Hash64::from_bytes(panel.id()),
+                        "blue":close.header.blue_score, "daa":close.header.daa_score, "state":close.header.palw_state_root,
+                        "commitment":Hash64::from_bytes(assessment.commitment()), "policy":policy})
+                );
+            }
         }
     }
 }

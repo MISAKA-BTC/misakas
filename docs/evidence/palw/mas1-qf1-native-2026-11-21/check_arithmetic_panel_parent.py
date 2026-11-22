@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from check_fresh_audit import records
+from check_fresh_audit import coinbase_extra, records
 from check_genesis_draw import header_hash
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
@@ -164,6 +164,26 @@ def control_observations(report, log):
                 known_cards_at_parent=identify_control_cards(parent, identities))
 
 
+def check_close(report, native_log, raw_close):
+    published = json.loads((HERE / "qf1-arithmetic-publisher.json").read_bytes())
+    pos = published["assessment_position"]
+    [(pid, row)] = records(native_log.read_text(), "arithmetic PANEL close")
+    require(pid == report["process"], "closure from another process")
+    block = json.loads(raw_close.read_bytes())
+    verify_block_transactions(block)
+    h = block["header"]
+    close = header_hash(h, bytes(h["palwCommitment"]), False).hex()
+    require(h["parentsByLevel"][0] == [report["parent"]] == [row["parent"]]
+            and h["blueScore"] == row["blue"] == pos["panel_close_blue"]
+            and report["daa"] <= h["daaScore"] == row["daa"] < pos["panel_release_from_daa"]
+            and row["block"] == close and row["round"] == report["native_round"],
+            "closure is outside the confirmed PANEL schedule")
+    require(h["palwStateRoot"] == row["state"] == report["at_parent"]["state"]
+            and coinbase_extra(block).hex() == row["commitment"],
+            "closure does not commit to the observed parent state and marker")
+    return dict(**report, assessment_close=row)
+
+
 def prefix_run(log):
     text = log.read_text()
     [pid] = re.findall(r"^arithmetic PANEL prefix pid=(\d+) ", text, re.M)
@@ -186,9 +206,12 @@ if __name__ == "__main__":
     parser.add_argument("native_log", type=Path)
     parser.add_argument("--control-population", action="store_true", help="also verify the cold reader’s live parent population observation")
     parser.add_argument("--writer-log", type=Path, help="also require agreement with a separate native writer")
+    parser.add_argument("--close", type=Path, help="verify the archived child and its pinned control state")
     args = parser.parse_args()
     result = (agree_on_parent(args.prefix, args.writer_log, args.native_log) if args.writer_log
               else verify(args.prefix, args.native_log))
-    if args.control_population:
+    if args.control_population or args.close:
         result = control_observations(result, args.native_log)
+    if args.close:
+        result = check_close(result, args.native_log, args.close)
     print(json.dumps(result, indent=2))
