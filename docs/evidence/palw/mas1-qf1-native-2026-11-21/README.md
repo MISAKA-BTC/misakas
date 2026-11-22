@@ -1340,7 +1340,7 @@ Round 16 の生成ノードは、元の評価提出から105,857ブロックを�
 
 ### Round 16 の確定範囲と固定日程
 
-独立再生で、DAA 44058 に `frontierNotCovered` と公開拒否を確認した。監査 close と評価提出は選択鎖に残っていた。現行の native settlement は、対象 checkpoint を覆う frontier に加え、その checkpoint 以上の DAA と blue score で受理された成熟 work を要求する。必要な確定深さに数える work anchor にも同じ位置条件がある。元の予定親のヘッダーが指す checkpoint は blue 106200・DAA 53098 で、再生で確認した既存の 8K claim の受理位置は blue 12984 にある。隔離試験で予定親を再構成する場合は、実際に選択された checkpoint に対してこれらの条件を確認する。close は blue 181382、share の公開は DAA 90741 以降かつ DAA 256802 未満、case は DAA 256803 未満に完了する。[独立再生](round16-replayed-withdrawal.json)・[固定日程](qf1-arithmetic-publisher.json)
+独立再生で、DAA 44058 に `frontierNotCovered` と公開拒否を確認した。監査 close と評価提出は選択鎖に残っていた。現行の native settlement は、対象 checkpoint を覆う frontier に加え、その checkpoint 以上の DAA と blue score で受理された成熟 work を要求する。必要な確定深さに数える work anchor にも同じ位置条件がある。 BASE-0 の floor claim は Gate C で認証できるが、native settlement が採用する成熟 work から除外される。追加 work の試験には、元の 8K claim と同様に、floor 以外の正規 work ID と正の work を持つ claim を使う。元の予定親のヘッダーが指す checkpoint は blue 106200・DAA 53098 で、再生で確認した既存の 8K claim の受理位置は blue 12984 にある。隔離試験で予定親を再構成する場合は、実際に選択された checkpoint に対してこれらの条件を確認する。close は blue 181382、share の公開は DAA 90741 以降かつ DAA 256802 未満、case は DAA 256803 未満に完了する。[独立再生](round16-replayed-withdrawal.json)・[固定日程](qf1-arithmetic-publisher.json)
 
 ### Qwen3-8B の停止位置予測を同じ試行で再測定
 
