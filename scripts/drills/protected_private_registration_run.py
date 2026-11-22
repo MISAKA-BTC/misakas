@@ -1255,8 +1255,13 @@ def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on
             raise ContextMoved('worker payout generation changed')
         payouts.append(payout)
         stamps.append(stamp)
-    if any(p != payouts[0] for p in payouts) or any(s[0] != stamps[0][0] for s in stamps):
-        raise ContextMoved('peers have different selected sinks or worker payouts')
+    if any(s[0] != stamps[0][0] for s in stamps):
+        raise ContextMoved('peers have different selected sinks')
+    for index, payout in enumerate(payouts[1:], start=1):
+        if payout != payouts[0]:
+            if any(chain_identity(rpc, expected)[1] != stamp for rpc, stamp in zip(clients, stamps)):
+                raise ContextMoved('a peer moved while comparing worker payouts')
+            raise ValueError(f'worker payout differs at sink {stamps[0][0]}: peer 0 {payouts[0]!r}, peer {index} {payout!r}')
     if on_paid is not None:
         if any(chain_identity(rpc, expected)[1] != stamp for rpc, stamp in zip(clients, stamps)):
             raise ContextMoved('a peer moved before the payout checkpoint')

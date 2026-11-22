@@ -180,6 +180,23 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
         with self.assertRaises(ContextMoved):
             receipt_settlement_view(self.clients, self.expected, self.receipt)
 
+    def test_persistent_payout_disagreement_at_one_sink_fails_before_checkpoint(self):
+        checkpoint = Mock()
+        other = dict(self.payout, output=dict(self.payout['output'], amount=1))
+        self.payment.side_effect = [self.payout, self.payout, other]
+        with self.assertRaisesRegex(ValueError, 'worker payout differs at sink .*peer 2'):
+            receipt_settlement_view(self.clients, self.expected, self.receipt, on_paid=checkpoint)
+        checkpoint.assert_not_called()
+        for rpc in self.clients:
+            rpc.call.assert_not_called()
+
+    def test_moving_peer_during_payout_comparison_is_retried(self):
+        initial = self.identity.return_value
+        self.identity.side_effect = [initial] * 6 + [(self.dag, ('new generation',))]
+        self.payment.side_effect = [self.payout, self.payout, dict(self.payout, child=self.sink)]
+        with self.assertRaises(ContextMoved):
+            receipt_settlement_view(self.clients, self.expected, self.receipt)
+
     def test_settled_peers_must_agree_on_the_anchor_under_the_active_rules(self):
         for changed in (dict(safeFrontierDaa=192), dict(safeFrontierBlueScore=211), dict(depth=2)):
             with self.subTest(changed=changed):
