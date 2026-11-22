@@ -3,10 +3,11 @@ import argparse
 import hashlib
 import json
 import re
+import struct
 import subprocess
 from pathlib import Path
 
-from check_fresh_audit import coinbase_extra, records
+from check_fresh_audit import audit_binding, coinbase_extra, records
 from check_genesis_draw import header_hash
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
@@ -164,7 +165,39 @@ def control_observations(report, log):
                 known_cards_at_parent=identify_control_cards(parent, identities))
 
 
-def check_close(report, native_log, raw_close):
+def control_operator_weights(bonds):
+    sompi_per_msk = 100_000_000
+    max_weight_msk = 1_000_000  # ADR-0152's V1 operator cap
+    posted = {}
+    for bond in bonds:
+        operator = bond["operator"]
+        posted[operator] = posted.get(operator, 0) + bond["collateral"] // sompi_per_msk
+    return [(operator, max(1, min(weight, max_weight_msk))) for operator, weight in sorted(posted.items())]
+
+
+def assessment_commitment(report, published, plan, seats):
+    audit = plan["audit"]
+    _, origin, _ = audit_binding(audit, bytes.fromhex(plan["suite"]))
+    state = report["at_parent"]["state"]
+    weights = control_operator_weights(report["at_parent"]["bonds"])
+    require(len(weights) >= seats, "insufficient eligible control operators")
+    roster = hashlib.sha3_512(b"MISAKA/private/MAS1/arithmetic-panel-roster/v1" + bytes.fromhex(state)
+                              + struct.pack(">I", len(weights)))
+    for operator, weight in weights:
+        roster.update(bytes.fromhex(operator) + struct.pack(">Q", weight))
+    consumer = hashlib.sha3_512(b"MISAKA/private/MAS1/arithmetic-panel-inputs/v1" + origin
+                                + bytes.fromhex(published["certificate"]) + struct.pack(">I", 0)
+                                + bytes.fromhex(published["submission"]) + bytes.fromhex(published["marker"])
+                                + roster.digest()).digest()
+    policy = hashlib.sha3_512(b"MISAKA/private/MAS1/arithmetic-panel/stake-ticket/full-replay/v1"
+                              + struct.pack(">I", seats)).digest()
+    freeze = hashlib.sha3_512(b"MISAKA/private/TB1/mining-freeze/v1" + bytes.fromhex(audit["rounds"][1])
+                              + bytes.fromhex(audit["qualifications"][1]) + bytes.fromhex(report["parent"])
+                              + consumer + policy).hexdigest()
+    return policy.hex(), freeze, weights
+
+
+def check_close(report, native_log, raw_close, seats):
     published = json.loads((HERE / "qf1-arithmetic-publisher.json").read_bytes())
     pos = published["assessment_position"]
     [(pid, row)] = records(native_log.read_text(), "arithmetic PANEL close")
@@ -181,7 +214,12 @@ def check_close(report, native_log, raw_close):
     require(h["palwStateRoot"] == row["state"] == report["at_parent"]["state"]
             and coinbase_extra(block).hex() == row["commitment"],
             "closure does not commit to the observed parent state and marker")
-    return dict(**report, assessment_close=row)
+    require(len(report["known_cards_at_parent"]) == len(report["at_parent"]["bonds"]),
+            "control bond without a verification key in the original isolated inventory")
+    plan = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())
+    policy, marker, weights = assessment_commitment(report, published, plan, seats)
+    require((row["policy"], row["commitment"]) == (policy, marker), "different control roster, policy or assessment commitment")
+    return dict(**report, assessment_close=row, control_operator_weights_msk=weights)
 
 
 def prefix_run(log):
@@ -200,13 +238,13 @@ def agree_on_parent(prefix, writer_log, reader_log):
     return dict(**report, writer=writer, reader=reader)
 
 
-def agree_on_close(prefix, raw_close, logs):
+def agree_on_close(prefix, raw_close, logs, seats):
     runs = [prefix_run(log) for log in logs]
     require(len({run["pid"] for run in runs}) == len(logs), "duplicate native process in close evidence")
     require(len({run["binary_sha256"] for run in runs}) == 1, "assessment close was not replayed by the same build")
     agreed = None
     for log in logs:
-        report = check_close(control_observations(verify(prefix, log), log), log, raw_close)
+        report = check_close(control_observations(verify(prefix, log), log), log, raw_close, seats)
         del report["process"]
         if agreed is None:
             agreed = report
@@ -222,14 +260,17 @@ if __name__ == "__main__":
     parser.add_argument("--writer-log", type=Path, help="also require agreement with a separate native writer")
     parser.add_argument("--close", type=Path, help="verify the archived child and its pinned control state")
     parser.add_argument("--peer-log", type=Path, action="append", default=[], help="additional native reader of the same close")
+    parser.add_argument("--seats", type=int, default=2, help="seat count fixed for the isolated assessment close")
     args = parser.parse_args()
+    if not 0 < args.seats < 1 << 32:
+        parser.error("--seats must be a positive u32")
     if args.peer_log and not args.close:
         parser.error("--peer-log requires --close")
     if args.close:
         logs = [args.native_log, *args.peer_log]
         if args.writer_log:
             logs.insert(0, args.writer_log)
-        print(json.dumps(agree_on_close(args.prefix, args.close, logs), indent=2))
+        print(json.dumps(agree_on_close(args.prefix, args.close, logs, args.seats), indent=2))
         raise SystemExit(0)
     result = (agree_on_parent(args.prefix, args.writer_log, args.native_log) if args.writer_log
               else verify(args.prefix, args.native_log))
