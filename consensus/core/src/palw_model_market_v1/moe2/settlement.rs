@@ -575,6 +575,12 @@ pub struct Moe2MarketBlockUndo {
 }
 
 impl Moe2SettlementBook {
+    /// Scratch projection for one award in the native fold. The native
+    /// reservation, settlement and work-use rows own its durable history.
+    pub(crate) fn for_native_award(model: Moe2RegisteredModel, prior_in_block: Option<Moe2Position>) -> Self {
+        Self { models: BTreeMap::from([(model.model, model)]), last_settlement: prior_in_block, ..Self::default() }
+    }
+
     /// Commit a private store snapshot to its companion native state root. The
     /// owner retains this commitment independently of the checkpoint bytes.
     fn checkpoint_digest(domain: &[u8], native_root: Hash64, bytes: &[u8]) -> Hash64 {

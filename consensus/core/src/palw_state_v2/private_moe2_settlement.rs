@@ -10,8 +10,8 @@ use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit, quote_additional_reward,
     settlement::{
-        Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError,
-        Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
+        Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2PreDrawQuote, Moe2SettledReward, Moe2SettlementBook,
+        Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
     },
 };
 use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
@@ -69,6 +69,36 @@ pub(super) fn fold_exec_close_v1(
 pub struct Moe2ExecWorkerPayees<'a> {
     pub miner: PalwBondKeyV2,
     pub panel: &'a [(PalwBondKeyV2, u64)],
+}
+
+/// An award resolved by the block owner on the candidate's selected-parent
+/// history. The owner authenticates eligibility, Gate C and the winning right,
+/// derives the canonical work identity and validates the distinct coinbase
+/// output range assigned to each award.
+pub struct Moe2ExecAwardV1<'a> {
+    pub claim: Hash64,
+    pub position: Moe2Position,
+    pub release: Moe2WorkerRelease,
+    pub slot: &'a Moe2ExecSlot,
+    pub work: Hash64,
+    pub payees: Moe2ExecWorkerPayees<'a>,
+    pub worker_start: usize,
+}
+
+fn project_award_model(
+    config: &Params,
+    state: &PalwChainStateV2,
+    quote: &Moe2PreDrawQuote,
+    daa: u64,
+) -> Result<Moe2RegisteredModel, Moe2SettlementError> {
+    let class = state.class(&quote.model).ok_or(Moe2SettlementError::UnknownRegistration)?;
+    Ok(Moe2RegisteredModel {
+        model: quote.model,
+        artifact_root: class.artifact_root,
+        registration_daa: class.registered_daa,
+        owner: class.registrant_bond,
+        allocation: quote.allocation_at(config, state, daa)?,
+    })
 }
 
 // The ordinary clock can release window capacity independently of the
@@ -258,6 +288,43 @@ impl PalwChainStateV2 {
         self.settle_private_moe2_exec(config, book, delta, claim, position, release, slot, Some(work), payees, block, worker_start)
     }
 
+    /// Attach a resolved award to the candidate's ordinary state transition.
+    /// Use the live fold state for the execution price and the native parent
+    /// for the reservation. The native delta is the complete undo record.
+    pub fn fold_private_moe2_exec_award(
+        &mut self,
+        config: &Params,
+        delta: &mut PalwStateDeltaV2,
+        parent: &PalwChainStateV2,
+        quote_anchor: &PalwChainStateV2,
+        block: &Block,
+        award: Moe2ExecAwardV1<'_>,
+    ) -> Result<Moe2SettledReward, Moe2SettlementError> {
+        let model = project_award_model(config, self, &award.slot.quote, award.position.point.daa_score)?;
+        let prior = delta.entries.iter().rev().find_map(|entry| match entry {
+            PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }
+            | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => Some(record.position),
+            _ => None,
+        });
+        let mut book = Moe2SettlementBook::for_native_award(model, prior);
+        self.settle_private_moe2_exec_award(
+            config,
+            &mut book,
+            delta,
+            parent,
+            quote_anchor,
+            award.claim,
+            award.position,
+            award.release,
+            award.slot,
+            award.work,
+            award.payees,
+            block,
+            award.worker_start,
+        )
+        .map(|(reward, _)| reward)
+    }
+
     /// Admit and settle an authenticated award using its selected-parent
     /// reservation. The block owner supplies the authenticated price-anchor
     /// state, signed slot, claim/work binding and worker allocation. The
@@ -298,14 +365,7 @@ impl PalwChainStateV2 {
         if self.private_moe2_work_claim(&work).is_some() {
             return Err(WorkAlreadyConsumed);
         }
-        let class = quote_anchor.class(&slot.quote.model).ok_or(UnknownRegistration)?;
-        let historical = Moe2RegisteredModel {
-            model: slot.quote.model,
-            artifact_root: class.artifact_root,
-            registration_daa: class.registered_daa,
-            owner: class.registrant_bond,
-            allocation: slot.quote.allocation_at(config, quote_anchor, anchor_point.daa_score)?,
-        };
+        let historical = project_award_model(config, quote_anchor, &slot.quote, anchor_point.daa_score)?;
         if book.model(&slot.quote.model).ok_or(UnknownRegistration)?.allocation == Moe2ModelAllocation::Core
             && historical.allocation != Moe2ModelAllocation::Core
         {

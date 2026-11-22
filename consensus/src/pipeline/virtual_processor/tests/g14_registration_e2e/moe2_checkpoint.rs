@@ -5,8 +5,8 @@ use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
-    Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2,
-    PalwStateV2Error, PalwTransitionExtrasV1, apply_delta_v2, apply_palw_transition_v2_with_extras, revert_delta_v2,
+    Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2,
+    PalwStateDeltaV2, PalwStateV2Error, PalwTransitionExtrasV1, apply_delta_v2, apply_palw_transition_v2_with_extras, revert_delta_v2,
 };
 use kaspa_consensus_core::{
     merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
@@ -477,6 +477,60 @@ pub(super) fn check_exec_settlement_rewind(
             worker_start,
         )
         .unwrap();
+    // The candidate fold must reproduce the receipt from the native parent
+    // alone, including when the node restored it from a snapshot.
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&reserved)).unwrap();
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+    let restored = carriage.into_state(params, Some(reserved.state_root())).unwrap();
+    let (mut native, mut native_delta) = apply_palw_transition_v2(&restored, params, &position.point, &[], None).unwrap();
+    let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
+    let folded = native
+        .fold_private_moe2_exec_award(
+            config,
+            &mut native_delta,
+            &restored,
+            registration,
+            &award_block,
+            native_award(claim, &slot, work, position),
+        )
+        .unwrap();
+    assert_eq!((folded, native.state_root(), &native_delta), (payment, child.state_root(), &award_delta));
+    let before_duplicate = (native.state_root(), native_delta.clone());
+    assert_eq!(
+        native.fold_private_moe2_exec_award(
+            config,
+            &mut native_delta,
+            &restored,
+            registration,
+            &award_block,
+            native_award(alias_claim, &alias_slot, work, position),
+        ),
+        Err(Moe2SettlementError::WorkAlreadyConsumed)
+    );
+    assert_eq!(
+        native.fold_private_moe2_exec_award(
+            config,
+            &mut native_delta,
+            &restored,
+            registration,
+            &award_block,
+            native_award(alias_claim, &alias_slot, other_work, position),
+        ),
+        Err(Moe2SettlementError::PositionOutOfOrder)
+    );
+    assert_eq!(
+        native.fold_private_moe2_exec_award(
+            config,
+            &mut native_delta,
+            &restored,
+            registration,
+            &award_block,
+            native_award(alias_claim, &slot, other_work, position),
+        ),
+        Err(Moe2SettlementError::ReservationMismatch)
+    );
+    assert_eq!((native.state_root(), &native_delta), (before_duplicate.0, &before_duplicate.1));
+    assert_eq!(revert_delta_v2(&native, &native_delta, params).unwrap().state_root(), restored.state_root());
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let delta_bytes = borsh::to_vec(&award_delta).unwrap();
     kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(
@@ -632,22 +686,14 @@ pub(super) fn check_exec_settlement_rewind(
     header.finalize();
     let sibling = Block::new(header, award_block.transactions.as_ref().to_vec()).with_evm_payload(award_block.evm_payload.clone());
     let (mut replacement, mut replacement_delta, replacement_at) = fold(&sibling);
-    let mut replacement_book = book.clone();
     replacement
-        .settle_private_moe2_exec_award(
+        .fold_private_moe2_exec_award(
             config,
-            &mut replacement_book,
             &mut replacement_delta,
             &reserved,
             registration,
-            alias_claim,
-            replacement_at,
-            release,
-            &alias_slot,
-            work,
-            payees,
             &sibling,
-            worker_start,
+            native_award(alias_claim, &alias_slot, work, replacement_at),
         )
         .unwrap();
     assert_eq!(replacement.private_moe2_work_claim(&work), Some(&alias_claim));
