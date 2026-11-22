@@ -3313,6 +3313,30 @@ impl PalwBondBudgetStateV1 {
         Some(Ok(grant))
     }
 
+    /// Debit the single admission unit and the reward together on a private
+    /// MOE2 EXEC reservation. Even a zero or partial payment exhausts the slot.
+    pub(crate) fn consume_exec_slot_reward(
+        &mut self,
+        key: &Hash64,
+        reward: u64,
+        journal: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let mut row = self.claims.get(key).copied().ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if row.origin != PalwBudgetOriginV1::Attempt || !row.open || !row.live {
+            return Err(PalwBudgetRefusalV1::NotOpen);
+        }
+        if row.consumed != PalwBudgetVectorV1::ZERO || row.reserved.claims != 1 {
+            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Claims });
+        }
+        if reward > row.reserved.reward_sompi {
+            return Err(PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::Reward });
+        }
+        row.consumed.claims = 1;
+        row.consumed.reward_sompi = reward;
+        self.put_claim(key, Some(row), journal);
+        Ok(())
+    }
+
     /// **What a claim may still be granted** in `dim` without consuming (`None`: no row or a Legacy row — the old rule applies).
     pub fn remaining(&self, claim_id: &Hash64, dim: PalwBudgetDimV1) -> Option<u128> {
         let claim = self.claims.get(claim_id).filter(|c| c.origin != PalwBudgetOriginV1::Legacy)?;
