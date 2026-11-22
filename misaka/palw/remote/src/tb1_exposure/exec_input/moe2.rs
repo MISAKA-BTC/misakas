@@ -201,6 +201,19 @@ impl ExecInputBatch<'_> {
         parent: &PalwChainStateV2,
         delta: &mut PalwStateDeltaV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
+        // The signed quote authorizes the price and funder. The signed EXEC
+        // context must independently authorize a mining job before locking funds.
+        for entry in self.entries.values().filter(|entry| entry.terms.moe2_quote.is_some()) {
+            match entry.terms.qf1 {
+                Some(mode @ super::super::qf1::Qf1Use::NewMining(_)) => {
+                    mode.admitted()?;
+                }
+                Some(super::super::qf1::Qf1Use::LocalInference(_)) => {
+                    return Err(invalid("local QF1 inference cannot reserve a mining reward"));
+                }
+                None => return Err(invalid("TIR input has no admitted FOW1 mining profile")),
+            }
+        }
         self.close_budget(native, config, delta.point.block, closure, q, parent, Some(delta))
     }
 

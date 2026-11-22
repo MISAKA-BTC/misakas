@@ -675,44 +675,22 @@ async fn run(stable: bool, registered: bool) {
         let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
         assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9, 10]);
         {
-            use kaspa_consensus_core::palw_state_v2::{apply_delta_v2, revert_delta_v2};
+            use kaspa_consensus_core::palw_state_v2::apply_delta_v2;
             let params = &node.bundle.state;
             let (published, mut delta) = node.vp().palw_state_v2_store.read().delta_of(anchor).unwrap();
-            assert_eq!(apply_delta_v2(&close_parent_state, &delta, params).unwrap().state_root(), published);
-            let reserve =
-                |delta: &mut _| inputs.reserve_closed_moe2_budget(api, &node.config.params, &closure, &q, &close_parent_state, delta);
-            let actual = reserve(&mut delta).unwrap();
-            let funded = apply_delta_v2(&close_parent_state, &delta, params).unwrap();
-            assert_eq!(actual, full);
+            let original_delta = borsh::to_vec(&delta).unwrap();
+            let error = inputs
+                .reserve_closed_moe2_budget(api, &node.config.params, &closure, &q, &close_parent_state, &mut delta)
+                .unwrap_err();
+            assert!(error.to_string().contains("local QF1 inference cannot reserve a mining reward"));
+            assert_eq!(borsh::to_vec(&delta).unwrap(), original_delta);
+            let post = apply_delta_v2(&close_parent_state, &delta, params).unwrap();
+            assert_eq!(post.state_root(), published);
             for closed in [&closed_quote, &long] {
                 let slot = closed.exec_slot();
                 assert_eq!(slot.close, anchor);
-                let row = funded.bond_budget().unwrap().claim_row(&slot.reservation_key()).unwrap();
-                assert_eq!(slot.close_daa, row.accepted_daa);
-                assert_eq!(row.reserved.claims, 1);
-                assert_eq!(slot.quote.limits.max_reward, row.reserved.reward_sompi);
+                assert!(post.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
             }
-            for slot in actual.values() {
-                let row = funded.bond_budget().unwrap().claim_row(&slot.consent).unwrap();
-                assert_eq!(row.reserved.reward_sompi, slot.reward_sompi);
-                assert_eq!(row.liability_sompi, slot.minimum_liability_sompi);
-                assert_eq!(row.consumed.reward_sompi, 0);
-            }
-            let count = delta.entries.len();
-            assert!(reserve(&mut delta).is_err());
-            assert_eq!(delta.entries.len(), count);
-            assert_ne!(funded.state_root(), published);
-            let restored = revert_delta_v2(&funded, &delta, params).unwrap();
-            assert_eq!(restored.state_root(), close_parent_state.state_root());
-            assert_eq!(apply_delta_v2(&restored, &delta, params).unwrap().state_root(), funded.state_root());
-            peer_log!(
-                "MOE2 reserved close pid={} close={} parent={} funded={} slots={}",
-                std::process::id(),
-                anchor,
-                restored.state_root(),
-                funded.state_root(),
-                actual.len()
-            );
         }
         let long_source = full[&10].consent;
         assert_ne!(long_source, full[&9].consent);
