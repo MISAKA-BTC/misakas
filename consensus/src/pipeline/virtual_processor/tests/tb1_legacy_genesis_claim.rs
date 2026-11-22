@@ -118,9 +118,11 @@ pub(in super::super) async fn replay_certified_work(node: &mut Rig, path: &Path,
     assert!(claim.accepted_blue_score > node.api().get_header(branch.base).unwrap().blue_score);
     assert!(state.safe_frontier().0 >= claim.accepted_blue_score);
     let row = executed_certification(&node.chain, branch.claim);
+    let tip_header = node.api().get_header(branch.tip).unwrap();
     peer_log!(
         "arithmetic PANEL recovery work replay {}",
-        serde_json::json!({"base":branch.base,"claim":branch.claim,"accepted":claim.accepted_block,"tip":branch.tip,
+        serde_json::json!({"pid":std::process::id(),"blue":tip_header.blue_score,"daa":tip_header.daa_score,
+            "base":branch.base,"claim":branch.claim,"accepted":claim.accepted_block,"tip":branch.tip,
             "certified_daa":row.outcome.unwrap().1,"approvals":row.positive_positions()})
     );
     branch.tip

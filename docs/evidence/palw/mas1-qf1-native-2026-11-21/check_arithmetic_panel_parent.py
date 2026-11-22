@@ -69,6 +69,29 @@ def check_native_submission(log_text, pid, published, originals):
     require(evaluated == expected, "native numerical replay differs from the archived evaluation cases")
 
 
+def recovery_prefix_start(text, pid, submission, position):
+    """Resolve the first parent of the trailing heartbeat file after native work replay."""
+    lines = [line for line in text.splitlines() if line.startswith("arithmetic PANEL recovery work replay ")]
+    if not lines:
+        return submission, position, {}
+    require(len(lines) == 1, "ambiguous recovery branch")
+    replay = json.loads(lines[0].split("replay ", 1)[1])
+    pinned = json.loads((HERE / "round16-recovery-inputs.json").read_bytes())
+    base = pinned["branch_parent"]
+    require(replay["pid"] == int(pid) and pinned["submission"] == submission
+            and pinned["assessment_position"] == position and replay["base"] == base["block"],
+            "recovery belongs to a different process, submission, parent or schedule")
+    for field in ("claim", "accepted", "tip"):
+        require(re.fullmatch(r"[a-f0-9]{128}", replay[field]) and int(replay[field], 16) > 0,
+                "missing native recovery identity")
+    require(replay["tip"] != replay["base"]
+            and base["blue"] < replay["blue"] < position["panel_close_blue"]
+            and base["daa"] <= replay["certified_daa"] <= replay["daa"] < position["panel_release_from_daa"]
+            and replay["approvals"] > 0, "recovery outside certified pre-close history")
+    start = dict(position, submission_blue=replay["blue"], submission_daa=replay["daa"])
+    return replay["tip"], start, dict(prefix_start=replay["tip"], recovery={k: v for k, v in replay.items() if k != "pid"})
+
+
 def verify(prefix, log):
     published = json.loads((HERE / "qf1-arithmetic-publisher.json").read_bytes())
     text = log.read_text()
@@ -82,10 +105,11 @@ def verify(prefix, log):
     qualification = json.loads((HERE / "qf1-arithmetic-qualification.json").read_bytes())
     prepared = json.loads((HERE / "qf1-arithmetic-panel-preparation.json").read_bytes())
     check_assessment_schedule(published, qualification, prepared, panel_round)
+    start, position, recovery = recovery_prefix_start(text, pid, submission, published["assessment_position"])
     with prefix.open("rb") as stream:
-        report = check_prefix(stream, submission, published["assessment_position"], parent)
+        report = check_prefix(stream, start, position, parent)
     require((report["blue"], report["daa"]) == (int(blue), int(daa)), "native position differs from header")
-    return dict(submission=submission, native_round=panel_round, **report)
+    return dict(submission=submission, native_round=panel_round, **recovery, **report)
 
 
 def check_control_identity(row, registered):

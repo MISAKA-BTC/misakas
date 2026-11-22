@@ -420,7 +420,7 @@ pub(super) async fn replay_window(
                     std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT_REPORT"),
                 ) {
                     (Some(hash), None) => PrefixParent::Known(hash.parse().unwrap()),
-                    (None, Some(report)) => PrefixParent::VerifiedReport(PathBuf::from(report)),
+                    (None, Some(report)) => PrefixParent::VerifiedReport { path: PathBuf::from(report), original: block.hash() },
                     _ => panic!("choose one expected PANEL parent source"),
                 };
                 Some(PrefixArchive::open(Path::new(&path), expected))
@@ -469,7 +469,6 @@ pub(super) async fn replay_window(
         if let Some(archive) = archive {
             let mut start = block.hash();
             if let Some(path) = recovery {
-                assert!(!matches!(archive, PrefixArchive::Read(_, PrefixParent::VerifiedReport(_))));
                 let plan: RecoveryWorkPlan = serde_json::from_reader(File::open(path).unwrap()).unwrap();
                 assert!(plan.parent_blue < panel.close_blue_score - 1);
                 let prefix = PrefixArchive::open(&plan.prefix, PrefixParent::Known(plan.parent));
@@ -986,7 +985,7 @@ enum PrefixParent {
     Known(Hash64),
     // A streaming reader can start before its parent exists. Its feed must
     // close only after the complete writer archive has been verified.
-    VerifiedReport(PathBuf),
+    VerifiedReport { path: PathBuf, original: Hash64 },
 }
 
 enum PrefixArchive {
@@ -1152,9 +1151,10 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, relea
             assert!(lines.next().is_none(), "extra PANEL prefix blocks");
             let expected = match expected {
                 PrefixParent::Known(hash) => hash,
-                PrefixParent::VerifiedReport(path) => {
+                PrefixParent::VerifiedReport { path, original } => {
                     let report: serde_json::Value = serde_json::from_reader(File::open(path).unwrap()).unwrap();
-                    assert_eq!(report["submission"], serde_json::json!(submission));
+                    assert_eq!(report["submission"], serde_json::json!(original));
+                    assert_eq!(report.get("prefix_start").unwrap_or(&report["submission"]), &serde_json::json!(submission));
                     assert_eq!(report["blue"], target);
                     assert_eq!(report["daa"], daa);
                     report["parent"].as_str().unwrap().parse().unwrap()
@@ -1182,7 +1182,14 @@ async fn replay_to_original_panel_parent() {
     )
     .unwrap();
     let mut reader = Rig::new(&parts, 2);
-    let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, PrefixParent::VerifiedReport(report))).await;
+    let restored = panel_prefix(
+        &mut reader,
+        start,
+        5,
+        50,
+        PrefixArchive::open(&path, PrefixParent::VerifiedReport { path: report, original: start }),
+    )
+    .await;
     assert_eq!(reader.api().get_header(restored).unwrap().blue_score, 4);
     assert_eq!(reader.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
     // Resume at an interior committed block from the same full archive.
@@ -1209,7 +1216,16 @@ async fn replay_to_original_panel_parent() {
     );
     let mut resumed = Rig::resumed(chain, &parts, Default::default(), interior.header.nonce);
     stable_panel::arm(&mut resumed);
-    let suffix = recovery_suffix(&path, &interior, parent);
+    let PrefixArchive::Read(lines, _) = recovery_suffix(&path, &interior, parent) else { unreachable!() };
+    let report = dir.path().join("recovered-parent.json");
+    serde_json::to_writer(
+        File::create_new(&report).unwrap(),
+        &serde_json::json!({
+            "submission":start, "prefix_start":interior.hash(), "parent":parent, "blue":4, "daa":writer.chain.daa_of(parent)
+        }),
+    )
+    .unwrap();
+    let suffix = PrefixArchive::Read(lines, PrefixParent::VerifiedReport { path: report, original: start });
     panel_prefix(&mut resumed, interior.hash(), 5, 50, suffix).await;
     assert_eq!(resumed.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
     let class = writer.bundle.state.base_class_id();
