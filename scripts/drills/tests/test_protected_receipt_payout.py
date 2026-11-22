@@ -11,6 +11,7 @@ from protected_private_registration_run import (
     ContextMoved, follow_receipt_settlement, observe_admitted_studio, receipt_checkpoint, receipt_payout,
     receipt_settlement_view, resume_receipt_settlement,
 )
+from protected_claim_observation import receipt_from_producer_log
 
 
 class ReceiptPayoutTest(unittest.TestCase):
@@ -120,10 +121,10 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
             return self.stack.enter_context(patch('protected_private_registration_run.' + name, **kw))
         self.identity = mock('chain_identity', return_value=(self.dag, stamp))
         mock('observe_claim_progress', return_value=self.detail)
-        mock('observe', return_value=observed)
-        mock('receipt_from_producer_log', return_value=(self.receipt, 4))
-        mock('validate_receipt_observation', return_value=dict(claim=self.claim, block=self.receipt, quantumIndex=4,
-                                                              nativeReceiptEnvelopeValidated=True))
+        self.observe = mock('observe', return_value=observed)
+        self.receipt_log = mock('receipt_from_producer_log', return_value=(self.receipt, 4))
+        self.validator = mock('validate_receipt_observation', return_value=dict(claim=self.claim, block=self.receipt,
+                                                                               quantumIndex=4, nativeReceiptEnvelopeValidated=True))
         mock('receipt_peer_view', return_value=observed)
         self.payment = mock('receipt_payout', return_value=self.payout)
         self.block_read = mock('block_read', return_value=dict(header=dict(daaScore=199), verboseData=dict(isChainBlock=True)))
@@ -214,6 +215,54 @@ class StudioReceiptLifecycleTest(unittest.TestCase):
         checkpoint.assert_not_called()
         for rpc in self.clients:
             rpc.call.assert_not_called()
+
+    def test_restart_reaudits_a_different_selected_receipt_for_the_same_quantum(self):
+        self.clients[-1].call.return_value = dict(self.settled, settled=False)
+        with self.assertRaises(TimeoutError):
+            self.run_lifecycle()
+        previous = receipt_checkpoint(self.root)
+        for name, value in [('original.json', self.original), ('studio-run.json', {}),
+                            ('studio-evidence.json', dict(studioRun={}, studioJob={}, rail={}))]:
+            (self.data / name).write_text(json.dumps(value))
+        replacement, unrelated = '09' * 64, '0a' * 64
+        (self.root / 'clock').mkdir()
+        log = self.root / 'clock' / 'peer-0.log'
+        log.write_text(''.join(f'PFS3 submitted block={block} claim={self.claim} quantum={q} parent=x\n'
+                               for block, q in [(self.receipt, 4), (unrelated, 1), (replacement, 4)]))
+        self.receipt_log.side_effect = receipt_from_producer_log
+        self.block_read.side_effect = lambda rpc, block: dict(header=dict(daaScore=199),
+                                                              verboseData=dict(isChainBlock=block != self.receipt))
+        self.observe.return_value = dict(self.observe.return_value, receiptBlock=dict(header=dict(hash=replacement)))
+        self.validator.return_value = dict(self.validator.return_value, block=replacement)
+        fresh_payout = dict(self.payout, block=replacement, child='0b' * 64)
+        self.payment.return_value = fresh_payout
+        self.clients[-1].call.return_value = self.settled
+
+        rejected = self.root / 'resumed-refused'
+        rejected.mkdir()
+        with patch('protected_claim_observation.block_read', self.block_read):
+            self.validator.side_effect = ValueError('native receipt validator refused the replacement')
+            with self.assertRaisesRegex(ValueError, 'native receipt validator refused'):
+                resume_receipt_settlement(self.config, rejected, self.root, self.registration,
+                                          self.clients, lambda: self.fail('invalid replacement advanced the clock'))
+        self.assertEqual(receipt_checkpoint(rejected), previous)
+        self.assertFalse((rejected / 'studio/receipt-settlement.json').exists())
+        self.validator.side_effect = None
+
+        out = self.root / 'resumed-reorg'
+        out.mkdir()
+        with patch('protected_claim_observation.block_read', self.block_read):
+            result = resume_receipt_settlement(self.config, out, self.root, self.registration,
+                                               self.clients, lambda: self.fail('replacement is already settled'))
+        self.assertEqual(result['receiptAudit']['block'], replacement)
+        self.assertEqual(result['receiptAudit']['quantumIndex'], 4)
+        self.assertEqual(result['payout'], fresh_payout)
+        self.assertEqual(receipt_checkpoint(out)['receiptAudit'], result['receiptAudit'])
+        self.assertEqual(receipt_checkpoint(self.root), previous)
+        self.assertTrue((out / 'studio' / previous['receiptObservation']).is_file())
+        self.assertTrue((out / 'studio' / result['receiptObservation']).is_file())
+        self.assertEqual(self.validator.call_args.args[4:], (replacement, Path('/unused-in-test'), 4))
+        self.assertIsNone(self.payment.call_args.kwargs['previously_seen'])
 
     def test_different_acceptance_daa_or_last_peer_reorg_cannot_report_settlement(self):
         self.clients[1].call.return_value = dict(self.settled, daaScore=190)

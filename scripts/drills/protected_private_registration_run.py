@@ -12,6 +12,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from uuid import uuid4
 
 from misaka_wrpc_json import WsRpc
 from rfc12_acceptance_observe import rfc12_state_value, sha256_file
@@ -1033,6 +1034,66 @@ def until_claim_observation(stage, read, *, step, timeout, deadline, check_alive
     raise TimeoutError(stage)
 
 
+def audit_protected_receipt(clients, producer, expected, original, approval, receipt, quantum, validator, record):
+    rpc = clients[producer]
+    observed = observe(rpc, expected, previous=original, receipt=receipt, panel_approval=approval,
+                       maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
+    if not require_gate_c_status(observed['detail']):
+        raise ContextMoved('Gate C certification changed before receipt readback')
+    write_new(record, observed)
+    audit = validate_receipt_observation(rpc, record, observed, expected, receipt, validator, quantum)
+    peers = {str(index): receipt_peer_view(client, expected, observed, receipt, quantum)
+             for index, client in enumerate(clients) if index != producer}
+    for index, client in enumerate(clients):
+        _, stamp = chain_identity(client, expected)
+        prior = observed if index == producer else peers[str(index)]
+        if list(stamp) != prior['context']:
+            raise ContextMoved('peer advanced during the final receipt audit')
+    peer_record = record.with_suffix('.peers.json')
+    write_new(peer_record, peers)
+    return observed, dict(receiptAudit=audit, receiptObservation=record.name,
+                          receiptPeerObservations=peer_record.name,
+                          receiptReadbackPeers=[producer, *(int(index) for index in peers)],
+                          phase=observed['detail']['claim']['phase'],
+                          securityCertification=observed['detail']['claim']['securityCertification'],
+                          panelApproval=observed['panelApprovalAcceptance'])
+
+
+def replacement_receipt_reader(config, log_dirs, data, clients):
+    producer = unsigned(config['studio']['producerPeer'])
+    rpc = clients[producer]
+    validator = Path(config['studio']['receiptValidator'])
+    log_paths = [directory / f'peer-{producer}.log' for directory in log_dirs]
+
+    def read(previous, observed, quantum):
+        expected = previous['expected']
+        _, stamp = chain_identity(rpc, expected)
+        try:
+            detail = observe_claim_progress(rpc, expected, observed)
+            if quantum not in detail['receiptQuanta']['spentIndices']:
+                return None
+            logs = [path for path in log_paths if path.is_file()]
+            candidate = receipt_from_producer_log(logs, expected['claim'], rpc=rpc, spent_indices=[quantum])
+            if chain_identity(rpc, expected)[1] != stamp:
+                raise ContextMoved('selected branch changed while finding the replacement receipt')
+            if candidate is None or candidate[0] == previous['receiptAudit']['block']:
+                return None
+            receipt, _ = candidate
+            record = data / f'replacement-receipt-{uuid4().hex}.json'
+            approval = previous['panelApproval']['carrierTransaction']
+            replacement, fields = audit_protected_receipt(
+                clients, producer, expected, observed, approval, receipt, quantum, validator, record)
+        except ValueError:
+            if chain_identity(rpc, expected)[1] != stamp:
+                raise ContextMoved('selected branch moved during replacement receipt readback')
+            raise
+        if list(stamp) != replacement['context']:
+            raise ContextMoved('replacement receipt audit changed branch generation')
+        return dict(previous, **fields), replacement
+
+    return read
+
+
 def observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond):
     expected = original['expected']
     producer = unsigned(config['studio']['producerPeer'])
@@ -1118,34 +1179,17 @@ def observe_admitted_studio(config, registration, clients, until, log_dirs, data
                 raise ValueError('protected receipt spend is recorded but its selected block could not be matched')
             return None
         receipt, quantum = candidate
-        observed = observe_lifecycle(previous=original, receipt=receipt, panel_approval=approval)
-        if not require_gate_c_status(observed['detail']):
-            raise ContextMoved('Gate C certification changed before receipt readback')
         receipt_reads += 1
         record = data / f'receipt-observation-{receipt_reads:04d}.json'
-        write_new(record, observed)
-        audit = validate_receipt_observation(rpc, record, observed, expected, receipt, validator, quantum)
-        peers = {str(index): receipt_peer_view(client, expected, observed, receipt, quantum)
-                 for index, client in enumerate(clients) if index != producer}
-        for index, client in enumerate(clients):
-            _, stamp = chain_identity(client, expected)
-            prior = observed if index == producer else peers[str(index)]
-            if list(stamp) != prior['context']:
-                raise ContextMoved('peer advanced during the final receipt audit')
-        peer_record = record.with_suffix('.peers.json')
-        write_new(peer_record, peers)
-        return dict(version=1, registration=registration, expected=expected, original=observed['origin'],
-                    phase=observed['detail']['claim']['phase'], receiptAudit=audit,
-                    receiptObservation=record.name, receiptPeerObservations=peer_record.name,
-                    receiptReadbackPeers=[producer, *(int(index) for index in peers)],
-                    securityCertification=observed['detail']['claim']['securityCertification'],
-                    panelApproval=observed['panelApprovalAcceptance'])
+        observed, fields = audit_protected_receipt(clients, producer, expected, original, approval, receipt, quantum, validator, record)
+        return dict(version=1, registration=registration, expected=expected, original=observed['origin'], **fields)
 
     result = until('same-claim receipt block and validated spent quantum', receipt_read, admitted=True)
     if result.get('status') == 'receipt-deadline-passed-unspent':
         return result
     write_receipt_checkpoint(data / 'receipt-checkpoint.json', result)
-    return follow_receipt_settlement(result, data, clients, until)
+    return follow_receipt_settlement(result, data, clients, until,
+                                     replace_receipt=replacement_receipt_reader(config, log_dirs, data, clients))
 
 
 def resume_admitted_studio(config, output, checkpoint, registration, clients, step, logs, executor_bond):
@@ -1325,7 +1369,7 @@ def receipt_settlement_view(clients, expected, receipt, *, seen_payouts=None, on
     return rows
 
 
-def follow_receipt_settlement(previous, data, clients, until, *, restarted=False, seen_payouts=None):
+def follow_receipt_settlement(previous, data, clients, until, *, restarted=False, seen_payouts=None, replace_receipt=None):
     expected, audit = previous['expected'], previous['receiptAudit']
     observed = json.loads((data / previous['receiptObservation']).read_text())
     receipt, quantum = hash64(audit['block']), unsigned(audit['quantumIndex'], 32)
@@ -1362,21 +1406,48 @@ def follow_receipt_settlement(previous, data, clients, until, *, restarted=False
             raise ContextMoved('a peer moved during receipt spend readback')
         return details
 
-    details = until('certified same-claim spend before settlement', consumed, admitted=True)
-    if restarted:
-        write_new(data / 'restarted-claim.json', details)
     seen = list(seen_payouts or [])
     require(not seen or len(seen) == len(clients), 'payout checkpoint peer count differs')
+
+    def selected_spend():
+        nonlocal previous, observed, receipt
+        details = consumed()
+        if details is not None or replace_receipt is None:
+            return details
+        replacement = replace_receipt(previous, observed, quantum)
+        if replacement is None:
+            return None
+        new_previous, new_observed = replacement
+        new_audit = new_previous['receiptAudit']
+        new_receipt = hash64(new_audit['block'])
+        require(new_receipt != receipt and new_receipt == new_observed['receiptBlock']['header']['hash']
+                and new_previous['expected'] == expected == new_observed['expected']
+                and new_previous['original'] == previous['original']
+                and new_previous['registration'] == previous['registration']
+                and new_audit['claim'] == expected['claim'] and new_audit['quantumIndex'] == quantum
+                and new_audit['nativeReceiptEnvelopeValidated'] is True,
+                'replacement receipt differs from the audited claim or quantum')
+        write_receipt_checkpoint(data / 'receipt-checkpoint.json', new_previous, replace=True)
+        previous, observed, receipt = new_previous, new_observed, new_receipt
+        seen.clear()
+        return consumed()
+
+    details = until('certified same-claim spend before settlement', selected_spend, admitted=True)
+    if restarted:
+        write_new(data / 'restarted-claim.json', details)
 
     def keep_payouts(payouts):
         if seen != payouts or not (data / 'receipt-payout.json').exists():
             write_receipt_checkpoint(data / 'receipt-payout.json', payouts, replace=True)
         seen[:] = payouts
 
-    rows = until('native settlement through worker payout',
-                 partial(receipt_settlement_view, clients, expected, receipt, seen_payouts=seen,
-                         on_paid=keep_payouts, confirm_spend=consumed),
-                 admitted=True)
+    def settlement_read():
+        if selected_spend() is None:
+            return None
+        return receipt_settlement_view(clients, expected, receipt, seen_payouts=seen,
+                                       on_paid=keep_payouts, confirm_spend=consumed)
+
+    rows = until('native settlement through worker payout', settlement_read, admitted=True)
     payouts = [row['payout'] for row in rows]
     settled = [dict(sink=row['sink'], settlement=row['settlement'], payout=row['payout']) for row in rows]
     write_new(data / 'receipt-settlement.json', settled)
@@ -1421,7 +1492,8 @@ def resume_receipt_settlement(config, output, checkpoint, registration, clients,
     write_receipt_checkpoint(data / 'receipt-checkpoint.json', previous)
     timeout = unsigned(config['studio']['timeoutSeconds'])
     until = partial(until_claim_observation, step=step, timeout=timeout, deadline=time.monotonic() + timeout, check_alive=None)
-    return follow_receipt_settlement(previous, data, clients, until, restarted=True, seen_payouts=seen)
+    return follow_receipt_settlement(previous, data, clients, until, restarted=True, seen_payouts=seen,
+                                     replace_receipt=replacement_receipt_reader(config, [checkpoint / 'clock', output / 'clock'], data, clients))
 
 
 def main():
