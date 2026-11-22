@@ -1313,6 +1313,51 @@ fn tn1_panel_config() -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Fundi
     (Config::new(params), bundle, premine, floats)
 }
 
+#[test]
+#[ignore = "requires a copy of the accepted T-N1 database and its receipt context"]
+fn recover_tn1_receipt_from_cold_native_db() {
+    use kaspa_consensus_core::blockstatus::BlockStatus;
+    use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+    use kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3;
+    use kaspa_database::prelude::ConnBuilder;
+
+    #[derive(serde::Deserialize)]
+    struct ColdReceipt {
+        receipt: Hash64,
+        tip: Hash64,
+    }
+    let path = std::env::var_os("MISAKA_TN1_COLD_RECEIPT_DB_COPY").expect("path to a writable copy of the T-N1 DB");
+    let context = std::env::var_os("MISAKA_TN1_COLD_RECEIPT_CONTEXT").expect("path to the matching T-N1 receipt context");
+    let expected: ColdReceipt = serde_json::from_reader(std::fs::File::open(context).unwrap()).unwrap();
+    let (mut config, _, _, _) = tn1_panel_config();
+    config.process_genesis = false;
+    let db = ConnBuilder::default().with_files_limit(20).with_db_path(path.into()).with_create_if_missing(false).build().unwrap();
+    let (sender, _receiver) = async_channel::unbounded();
+    let native = TestConsensus::with_db(db, &config, sender);
+    let api = &**native;
+    assert_eq!(api.get_sink(), expected.tip);
+    assert_eq!(api.get_block_status(expected.receipt), Some(BlockStatus::StatusUTXOValid));
+    let accepted = api.get_block(expected.receipt).unwrap();
+    let parent = api.get_ghostdag_data(expected.receipt).unwrap().selected_parent;
+    let spend = PalwReceiptSpendEnvelopeV3::decode(&accepted.header.palw_commitment).unwrap().spend;
+    let domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
+    let recover = |base| crate::palw_producer::retained_receipt_child(api, base, domain, spend.producer_bond, &spend.producer_pubkey);
+    let restored = recover(parent).expect("the native DB retained the signed receipt body");
+    assert_eq!(restored.hash(), expected.receipt);
+    assert_eq!(
+        serde_json::to_vec(&kaspa_rpc_core::RpcRawBlock::from(&restored)).unwrap(),
+        serde_json::to_vec(&kaspa_rpc_core::RpcRawBlock::from(&accepted)).unwrap(),
+    );
+    assert!(recover(expected.tip).is_none());
+    eprintln!(
+        "cold T-N1 receipt restored: pid={} receipt={} parent={parent} sink={} daa={}",
+        std::process::id(),
+        expected.receipt,
+        expected.tip,
+        restored.header.daa_score,
+    );
+}
+
 async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV1) {
     assert!(!forged || !declared, "the separate forged fixture uses the original semantic identities");
     let rail = match producer_kind {

@@ -92,7 +92,7 @@ impl PendingReceiptBlock {
 /// Find a previously submitted PFS3/PFS4 child of this producer in the native DAG.
 /// A header-only entry cannot be re-submitted, and a mergeset child selected on
 /// another branch cannot be retried against this parent.
-fn retained_receipt_child(
+pub(crate) fn retained_receipt_child(
     consensus: &dyn ConsensusApi,
     parent: Hash64,
     network_domain: Hash64,

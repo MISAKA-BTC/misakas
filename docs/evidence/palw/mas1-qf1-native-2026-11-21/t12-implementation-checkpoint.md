@@ -176,3 +176,7 @@ nativeビルドは終了コード0。独立3プロセスの private_registered_t
 `palw_producer::tests` は7件成功、終了コード0、試験時間0.21秒。回帰試験は実署名付きPFS3/PFS4を用いて、同一hashの復元と、異なる選択親・bond・署名者、headerのみ、署名した位置の改変の拒否を確認した。DBの読み出しはテスト用のConsensusApiを使用した。実ノード再起動・選択鎖切り替えによる再提出は未実証。
 
 private Linux ARM64ノードの再ビルドは終了コード0、24.86秒。SHA-256は `ab934ea6213fce8947dae8ef4d4677307197d7a9b474d7968bc3d068666cacb3`。
+
+過去のT-N1のnative RocksDBをコピーし、`recover_tn1_receipt_from_cold_native_db` を独立した2プロセスで順に実行した。各プロセスがgenesisを再処理せずにDBを開き、DAA 2725の受理済みPFS3 `7cb8b072…` を選択親 `3c1cd4ff…` から通常の再提出用lookupで復元した。両プロセスで通常のRPCブロック形式の全バイトがDB内の受理済み本体と一致し、その受賞の選択親ではないDB先端 `53b8c9fa…` からのlookupは空だった。終了コードはそれぞれ0、試験時間は0.11秒と0.09秒。初回はテスト内の参照型が一致せずビルド終了コード101で、参照を修正後に上記を取得した。
+
+再現にはコピーのパスを `MISAKA_TN1_COLD_RECEIPT_DB_COPY`、対応するreceiptとtipを記録したJSONのパスを `MISAKA_TN1_COLD_RECEIPT_CONTEXT` に指定し、kaspadのテストビルドで `recover_tn1_receipt_from_cold_native_db -- --ignored` を実行する。検証対象は過去の受理済みブロックの本体復元。保留中の候補を実ノードが再提出する経路、3ピアの選択鎖切り替えと消費・報酬の巻き戻しは未検証。
