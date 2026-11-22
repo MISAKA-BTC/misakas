@@ -59,24 +59,25 @@ def arithmetic_seed(root, openssl):
     window = json.loads((HERE / "qf1-arithmetic-release-window.json").read_bytes())
     parent = publication_parent(root, window)
     require(parent["close"] == audit["close"], "different arithmetic release window")
-    return publication_readback(root, audit, pub, expected, "holder", "replay", parent)
+    return publication_readback(root, audit, pub, expected, parent, window)
 
 
-def publication_readback(root, audit, pub, expected, holder_prefix, reader_prefix, parent=None):
+def publication_readback(root, audit, pub, expected, parent, window):
     require(pub["rows"] == [json.loads((root / f"released-{slot}.json").read_bytes()) for slot in range(3)],
             "publication differs from the three releases")
     batch, cert = (pub[k]["header"] for k in ("batch", "certificate"))
     holders, readers, binaries, states, finalized = [], [], set(), set(), set()
-    slots = [(i, f"{holder_prefix}-{i}", True) for i in range(3)]
-    slots.extend((i, f"{reader_prefix}-{i}", False) for i in range(2))
+    slots = [(i, f"holder-{i}", True) for i in range(3)]
+    slots.extend((i, f"replay-{i}", False) for i in range(2))
     for slot, name, signing in slots:
         log = (root / f"{name}.log").read_text()
         first = log.partition("\n")[0]
         require(first.startswith("test_binary_sha256=") and "test result: ok. 1 passed; 0 failed" in log, "incomplete native reader")
         binaries.add(first.split("=", 1)[1])
         [(pid, end)] = records(log, "fresh audit window end")
-        if parent is not None:
-            require(all(end[k] == v for k, v in parent.items()), "native holder did not replay the certified branch")
+        maturity = check_maturity(window, root / f"{name}.log", arithmetic=True)
+        require(all(end[k] == v for k, v in parent.items()) and maturity["reader"] == pid and maturity["slot"] == slot,
+                "native holder did not replay the original work and certified branch")
         snapshot = end["committed_snapshot"]["Ok"]
         finalized.add(snapshot["finalized"])
         require(end["slot"] == slot and end["publication"] == "ready" and end["close"] == audit["close"]

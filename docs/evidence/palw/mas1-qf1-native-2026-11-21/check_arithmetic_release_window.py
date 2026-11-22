@@ -83,6 +83,8 @@ def verify(root, window, log):
 
     require(rows[0]["publication"] == audit["publication"] == "held", "different release state at certification")
     observe(0, audit["readiness"]["finalized"]["pruningPoint"])
+    [maturity] = [w["readyDaa"] for w in audit["readiness"]["blocking"]["waits"] if w["kind"] == "waitingMaturity"]
+    crossing = None
     count = 0
     digest = hashlib.sha256()
     with window.open("rb") as stream:
@@ -95,6 +97,10 @@ def verify(root, window, log):
                     "unexpected heartbeat or DAA")
             tip = extend(heights, tip, block)
             daa = h["daaScore"]
+            if crossing is None and daa >= maturity:
+                crossing = dict(blocks=count, tip=tip, daa=daa)
+            elif crossing and count == crossing["blocks"] + 1:
+                crossing["next_header_parent_state"] = h["palwStateRoot"]
             if count == 1:
                 require(tip == confirmed["successor"] and h["palwStateRoot"] == checked["native"]["state"], "wrong first child")
             if count in rows:
@@ -102,7 +108,9 @@ def verify(root, window, log):
     require(len(observations) == len(rows) and observations[-1]["blocks"] == count and
             all(row["publication"] == "held" for row in observations[:-1]) and observations[-1]["publication"] in ("ready", "expired"),
             "window did not reach a terminal observation")
-    return dict(close=audit["close"], close_blue=heights[audit["close"]], certificate=audit["tip"], deadline=audit["deadline"],
+    require(crossing and "next_header_parent_state" in crossing, "missing retained work maturity boundary")
+    return dict(writer=confirmed["processes"][2], forecast_maturity=maturity, maturity_header=crossing,
+                close=audit["close"], close_blue=heights[audit["close"]], certificate=audit["tip"], deadline=audit["deadline"],
                 blocks=count, window_sha256=digest.hexdigest(), observations=observations)
 
 

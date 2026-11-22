@@ -83,15 +83,17 @@ def verify(branch, log):
 
 
 
-def check_maturity(window, native_log):
-    source = json.loads((HERE / "fresh-8k-certificate.json").read_bytes())["native"]
+def check_maturity(window, native_log, *, arithmetic=False):
+    record = "qf1-arithmetic-8k-certification-reader-0.json" if arithmetic else "fresh-8k-certificate.json"
+    source = json.loads((HERE / record).read_bytes())["native"]
     log = native_log.read_text()
     [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log, re.M)
     [(pid, row)] = records(log, "fresh audit maturity")
     [(cert_pid, cert)] = records(log, "legacy genesis certification")
     require(pid == cert_pid and pid != window["writer"] and cert["claim"] == source["claim"] and
             cert["state"] == source["state"] and cert["tip"] == source["tip"], "different cold certification")
-    accepted = json.loads(subprocess.check_output(["tar", "-xOf", HERE / "fresh-retained-audit-public.tar.zst", "accepted/winning.json"]))
+    archive = "qf1-arithmetic-audit-work-public.tar.zst" if arithmetic else "fresh-retained-audit-public.tar.zst"
+    accepted = json.loads(subprocess.check_output(["tar", "-xOf", HERE / archive, "accepted/winning.json"]))
     header = accepted["raw"]["header"]
     wire, _, claim, _, work = attempt_identity(header)
     require(header_hash(header, wire, False).hex() == source["accepted"] and claim == source["claim"] == accepted["claim"] and

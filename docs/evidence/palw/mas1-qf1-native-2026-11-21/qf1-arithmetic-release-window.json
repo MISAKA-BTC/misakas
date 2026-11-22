@@ -1,4 +1,12 @@
 {
+  "writer": 39253,
+  "forecast_maturity": 17931,
+  "maturity_header": {
+    "blocks": 12516,
+    "tip": "156bfff469a0a19cf3760218363e532771a750ac65eddb9fe6a4e7c27488e6ef704f150f9f7a849ea5dda54ea5d29f70b540db96ef7f4a2048e13ad1abc7e0d6",
+    "daa": 17931,
+    "next_header_parent_state": "84ce51fd8465f65771897fc0f2473443f7b5b02b591030e45aaca5bac0a6fb232ddfdde40f2943b3bdd426fd8a0271d7306034af9077d5c4eb711f3162de2ffd"
+  },
   "close": "8f9e2d10d21141dd884336b4e63c9e1e7f3a3af80846d12bff1482bfd10807d031f9a29430fbf527cf6ab3fc1898a12df54669b00e88fc03e2da3cecf446e669",
   "close_blue": 5,
   "certificate": "0225310e292164a365e49fcc781d23a3061ee487ac02ccfc5716106a8ca3499ae62cf17660566d7fbc6c19fdfeb13dce5804e408d5b11312acedc4a258aea067",

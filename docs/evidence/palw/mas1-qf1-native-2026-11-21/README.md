@@ -1227,3 +1227,12 @@ python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" -
 zstd -dc "$p/qf1-arithmetic-release-window-blocks.jsonl.zst" > "$out/after-cert.jsonl"
 python3 -B "$p/check_arithmetic_release_window.py" "$out" "$out/after-cert.jsonl" "$out/read-cert-2.log" | cmp - "$p/qf1-arithmetic-release-window.json"
 ```
+
+holder 0は元のブロック列を再読込し、認証後12,516ブロック目のDAA 17,931で、元の8K claimに対応する仕事ID `07d21a9f…` を成熟済み台帳から復元した。状態root `84ce51fd…` は次ブロックの親状態commitmentと一致した。この時点でsafeは元の受付ブロックに達したが、finalizedは空で公開は保留だった。さらに同じ枝を再読込し、DAA 37,758（認証後52,171ブロック目）で元の登録時に保持したshareに署名した。元の監査round・qualification・freeze・slotでメッセージを組み直し、登録時のsealとML-DSA-65署名を検証した。仕事ID、成熟時の状態root、成熟時の公開判断をそれぞれ変更した対照は拒否した。[holder 0の照合結果](qf1-arithmetic-holder-0.json)・[署名済みrelease・完走ログ](qf1-arithmetic-holder-0.tar.zst)
+
+```sh
+tar -xf "$p/qf1-arithmetic-holder-0.tar.zst" -C "$out"
+zstd -dc "$p/qf1-arithmetic-release-window-blocks.jsonl.zst" > "$out/combined.jsonl"
+cat "$out/extension.jsonl" >> "$out/combined.jsonl"
+python3 -B "$p/check_fresh_holder_release.py" "$out" --arithmetic --holder 0 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-holder-0.json"
+```

@@ -112,12 +112,46 @@ def verify_holder(root, window, slot, openssl):
                 custody_seal=seal, signed_message_sha256=hashlib.sha256(message).hexdigest())
 
 
+def arithmetic_holder(root, window, slot, openssl):
+    from check_arithmetic_release_window import publication_parent as arithmetic_parent
+    audit = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())["audit"]
+    expected_build = json.loads((HERE / "qf1-arithmetic-stream-moe2-book.json").read_bytes())["binary_sha256"]
+    parent = arithmetic_parent(root, window)
+    path = root / f"holder-{slot}.log"
+    maturity = check_maturity(window, path, arithmetic=True)
+    log = path.read_text()
+    [(pid, end)] = records(log, "fresh audit window end")
+    require("test result: ok. 1 passed; 0 failed" in log and pid == maturity["reader"] and
+            end["slot"] == maturity["slot"] == slot and maturity["binary_sha256"] == expected_build and
+            all(end[k] == v for k, v in parent.items()) and end["close"] == audit["close"] and
+            end["publication"] == "ready" and audit["audit_from"] <= end["daa"] < audit["audit_deadline"] and
+            log.count(f"fresh audit signed holder={slot} tip={end['tip']} close={end['close']}") == 1,
+            "wrong arithmetic signing position, executable or release window")
+    snap = end["committed_snapshot"]["Ok"]
+    require(snap["generation"] == end["readiness"]["generation"] == parent["tip"] and
+            snap["finalized"] == end["readiness"]["finalized"]["finalized"] == window["observations"][-1]["finalized"],
+            "different committed finality over the arithmetic close")
+    row = json.loads((root / f"released-{slot}.json").read_bytes())
+    require(row["holder"] == slot, "wrong arithmetic release slot")
+    origin = enrolled_origin(HERE / "qf1-arithmetic-audit-close-public.tar.zst")
+    message, signature, _, seal = release_message(audit, row, openssl, origin)
+    return dict(holder=slot, process=pid, binary_sha256=expected_build, **parent, finalized=snap["finalized"],
+                custody_seal=seal, signed_message_sha256=hashlib.sha256(message).hexdigest(),
+                signature_sha256=hashlib.sha256(signature).hexdigest(), maturity=maturity)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
     parser.add_argument("--holder", type=int, required=True, choices=range(3))
+    parser.add_argument("--arithmetic", action="store_true")
     parser.add_argument("--openssl", default="openssl")
     args = parser.parse_args()
-    verify_qualification(args.openssl)
-    window = json.loads((HERE / "fresh-pruning-transition.json").read_bytes())
-    print(json.dumps(verify_holder(args.root, window, args.holder, args.openssl), indent=2))
+    verify_qualification(args.openssl, arithmetic=args.arithmetic)
+    if args.arithmetic:
+        window = json.loads((HERE / "qf1-arithmetic-release-window.json").read_bytes())
+        result = arithmetic_holder(args.root, window, args.holder, args.openssl)
+    else:
+        window = json.loads((HERE / "fresh-pruning-transition.json").read_bytes())
+        result = verify_holder(args.root, window, args.holder, args.openssl)
+    print(json.dumps(result, indent=2))
