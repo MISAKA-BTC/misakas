@@ -439,7 +439,7 @@ async fn registered_audit_history(mode: AuditHistory) {
                 reader.is_some() && std::env::var_os("MISAKA_PRIVATE_GENESIS_CERTIFY_READ").is_some(),
                 "replay the signed audit and certified work before the release window"
             );
-            let mut node = legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
+            let mut node = legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, audit).await;
             fresh::replay_window(
                 &mut node,
                 &model,
@@ -474,13 +474,13 @@ async fn registered_audit_history(mode: AuditHistory) {
         if std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_READ").is_some()
             || std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_WRITE").is_some()
         {
-            legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
+            legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, audit).await;
         }
         return;
     }
     if mode == AuditHistory::LegacyWork {
         assert!(reader.is_some(), "must start from the recorded audit close");
-        legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, deadline).await;
+        legacy_work::exercise(node, parts, close.hash(), identity.class, &cut, &aq, audit).await;
         return;
     }
     let floor = if let Some(r) = &mut reader {

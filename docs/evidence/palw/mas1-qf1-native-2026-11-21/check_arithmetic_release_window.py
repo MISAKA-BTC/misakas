@@ -44,8 +44,12 @@ def certified_history(root, checked):
 
 def verify(root, window, log):
     checked = json.loads((HERE / "qf1-arithmetic-8k-certification-reader-0.json").read_bytes())
+    schedule = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())["audit"]
     confirmed = json.loads((HERE / "qf1-arithmetic-8k-certified-parent.json").read_bytes())
     audit = checked["audit"]
+    release_from = schedule["audit_from"]
+    require(audit["close"] == schedule["close"] and audit["deadline"] == schedule["audit_deadline"],
+            "different signed audit release schedule")
     tip, daa = audit["tip"], audit["daa"]
     heights = certified_history(root, checked)
     text = log.read_text()
@@ -72,7 +76,7 @@ def verify(root, window, log):
         finalized = snap["finalized"]
         require(finalized is None or finalized in heights, "unrecognized committed finality")
         if row["publication"] == "ready":
-            require(daa < audit["deadline"] and covers and finalized == ready["finalized"]["finalized"] and
+            require(release_from <= daa < audit["deadline"] and covers and finalized == ready["finalized"]["finalized"] and
                     finalized in heights and heights[finalized] >= heights[audit["close"]],
                     "publication lacks committed finality over the signed close")
         elif row["publication"] == "held":

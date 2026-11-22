@@ -216,7 +216,7 @@ pub(super) async fn replay_window(
     // settlement snapshot. Carry that same branch forward until custody observes
     // publication or the original deadline, and retain every successor for peers.
     if let Some(output) = std::env::var_os("MISAKA_PRIVATE_FRESH_EXTEND_WINDOW") {
-        count += legacy_work::follow_release_window(node, cut, close, q, round.deadline_exclusive_daa, Path::new(&output)).await;
+        count += legacy_work::follow_release_window(node, cut, close, q, round, Path::new(&output)).await;
     }
     let (tip, state) = node.chain.tip_state();
     let api = node.api().as_ref();

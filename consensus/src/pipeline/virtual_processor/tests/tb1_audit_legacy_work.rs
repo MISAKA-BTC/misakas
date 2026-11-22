@@ -251,9 +251,11 @@ pub(super) async fn follow_release_window(
     cut: &PreparedAudit<'_>,
     close: Hash64,
     q: &Tb1Qualification<'_>,
-    deadline: u64,
+    round: Tb1MiningRound,
     path: &Path,
 ) -> u64 {
+    assert_eq!(q.round_ref(), round.id());
+    let deadline = round.deadline_exclusive_daa;
     let base = node.chain.sink();
     let step = node.config.params.target_time_per_block();
     let mut archive = std::io::BufWriter::new(File::create_new(path).unwrap());
@@ -275,6 +277,8 @@ pub(super) async fn follow_release_window(
         if covers || last_pruning != Some(pruning) || h.daa_score >= deadline - 1 {
             let gate = cut.observe(node.api().as_ref(), close, q);
             let status = match gate {
+                // A finalized close can be observed before holders may sign.
+                Ok(_) if h.daa_score < round.release_from_daa => "held",
                 Ok(_) => {
                     assert!(covers && h.daa_score < deadline);
                     "ready"
@@ -319,8 +323,9 @@ pub(super) async fn exercise(
     qwen: Hash64,
     cut: &PreparedAudit<'_>,
     qualification: &Tb1Qualification<'_>,
-    deadline: u64,
+    round: Tb1MiningRound,
 ) -> Rig {
+    let deadline = round.deadline_exclusive_daa;
     let path = std::env::var_os("MISAKA_PRIVATE_TB1_TIR_ARTIFACT").expect("held legacy Studio model");
     let held = TirArtifactV1::open(Path::new(&path)).unwrap();
     let class = held.class().unwrap();
@@ -459,6 +464,7 @@ pub(super) async fn exercise(
                     assert!(now < deadline);
                     let gate = cut.observe(node.api().as_ref(), close, qualification);
                     let publication = match gate {
+                        Ok(_) if now < round.release_from_daa => "held",
                         Ok(_) => "ready",
                         Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => "held",
                         Err(e) => panic!("invalid original audit after executing work: {e}"),
@@ -472,7 +478,7 @@ pub(super) async fn exercise(
                     if let Some(input) = std::env::var_os("MISAKA_PRIVATE_AUDIT_WORK_RETIREMENT_READ") {
                         replay_work_retirement(&mut node, Path::new(&input), close, deadline, cut, qualification).await;
                     } else if let Some(out) = std::env::var_os("MISAKA_PRIVATE_AUDIT_FOLLOW_WINDOW") {
-                        follow_release_window(&mut node, cut, close, qualification, deadline, Path::new(&out)).await;
+                        follow_release_window(&mut node, cut, close, qualification, round, Path::new(&out)).await;
                     }
                 }
             }
