@@ -1,5 +1,5 @@
    Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/remote)
-    Finished `test` profile [unoptimized] target(s) in 12.34s
+    Finished `test` profile [unoptimized] target(s) in 12.13s
      Running unittests src/lib.rs (target/protected-core-tests/debug/deps/misaka_palw_remote-3ce51a77c590f6f3)
 
 running 6 tests
@@ -10,4 +10,4 @@ test tb1_exposure::model_audit::arithmetic::tests::submission_binds_originals_in
 test tb1_exposure::model_audit::arithmetic::tests::arithmetic_panel_refuses_an_unselected_operator_and_an_incomplete_reply_set ... ok
 test tb1_exposure::model_audit::arithmetic::tests::arithmetic_reply_requires_distinct_selected_keys_and_live_finality ... ok
 
-test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.12s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 212 filtered out; finished in 0.15s

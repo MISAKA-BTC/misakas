@@ -308,6 +308,7 @@ impl ArithmeticPanelCut {
         let selected: Vec<_> = ranked.into_iter().take(self.policy.seats as usize).map(|(_, _, id)| id).collect();
         let keys = selected.iter().map(|id| (*id, self.roster.keys[id].clone())).collect();
         Ok(ArithmeticPanelDraw {
+            chain: self.closure.round.chain_id,
             close,
             certificate,
             submission: self.submission,
@@ -320,6 +321,7 @@ impl ArithmeticPanelCut {
 }
 
 pub struct ArithmeticPanelDraw {
+    chain: [u8; 64],
     close: Hash64,
     certificate: Hash64,
     submission: Hash64,
@@ -334,23 +336,13 @@ impl ArithmeticPanelDraw {
         &self.selected
     }
 
-    fn reply_message(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8]) -> io::Result<[u8; 64]> {
+    fn signature_message(&self, operator: Hash64, key: &[u8]) -> io::Result<[u8; 64]> {
         if key.len() != MLDSA87_PUBKEY_LEN {
             return Err(invalid("invalid arithmetic PANEL verification key length"));
         }
         let key_id = mldsa87_key_id(key);
         if !self.keys.get(&operator).is_some_and(|keys| keys.contains(&key_id)) {
             return Err(invalid("key is not registered to a selected arithmetic PANEL operator"));
-        }
-        let (state, daa, tip) = anchor_state(native, self.close)?;
-        if !matches!(state, AnchorState::Finalized) || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)? {
-            return Err(invalid("arithmetic PANEL draw no longer on the finalized selected branch"));
-        }
-        if daa >= self.deadline {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
-        if native.get_sink() != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(Sha3_512::new()
             .chain_update(ASSESSMENT_REPLAY_SIGNATURE_DOMAIN)
@@ -365,24 +357,47 @@ impl ArithmeticPanelDraw {
             .into())
     }
 
-    pub fn verify_reply(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8], signature: &[u8]) -> io::Result<()> {
-        let message = self.reply_message(native, operator, key)?;
+    fn branch(&self, native: &dyn ConsensusApi) -> io::Result<(u64, Hash64)> {
+        let (state, daa, tip) = anchor_state(native, self.close)?;
+        if !matches!(state, AnchorState::Finalized) || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)? {
+            return Err(invalid("arithmetic PANEL draw no longer on the finalized selected branch"));
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok((daa, tip))
+    }
+
+    fn reply_message(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8]) -> io::Result<[u8; 64]> {
+        let message = self.signature_message(operator, key)?;
+        if self.branch(native)?.0 >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(message)
+    }
+
+    fn verify_signature(&self, operator: Hash64, key: &[u8], signature: &[u8]) -> io::Result<()> {
+        let message = self.signature_message(operator, key)?;
         if !matches!(
             kaspa_txscript::verify_mldsa87_with_context(key, &message, signature, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN),
             Ok(true)
         ) {
             return Err(invalid("invalid arithmetic PANEL replay signature"));
         }
+        Ok(())
+    }
+
+    pub fn verify_reply(&self, native: &dyn ConsensusApi, operator: Hash64, key: &[u8], signature: &[u8]) -> io::Result<()> {
+        self.reply_message(native, operator, key)?;
+        self.verify_signature(operator, key, signature)?;
         self.reply_message(native, operator, key).map(|_| ())
     }
 
-    /// Close the private approval set only when each seat signed in draw order
-    /// and each reply uses a distinct registered verification key.
-    pub fn reply_commitment(&self, native: &dyn ConsensusApi, replies: &[(&[u8], &[u8])]) -> io::Result<[u8; 64]> {
+    /// Recompute the checksum of the complete signed reply set in draw order.
+    fn replies_marker(&self, replies: &[(&[u8], &[u8])]) -> io::Result<[u8; 64]> {
         if replies.len() != self.selected.len() {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete arithmetic PANEL replies"));
         }
-        let tip = native.get_sink();
         let mut keys = BTreeSet::new();
         let mut h = Sha3_512::new()
             .chain_update(b"MISAKA/private/MAS1/arithmetic-panel/reply-set/v1")
@@ -390,7 +405,7 @@ impl ArithmeticPanelDraw {
             .chain_update(self.certificate.as_bytes())
             .chain_update(self.marker.as_bytes());
         for (&operator, &(key, signature)) in self.selected.iter().zip(replies) {
-            self.verify_reply(native, operator, key, signature)?;
+            self.verify_signature(operator, key, signature)?;
             let key = mldsa87_key_id(key);
             if !keys.insert(key) {
                 return Err(invalid("duplicate key among arithmetic PANEL replies"));
@@ -399,10 +414,41 @@ impl ArithmeticPanelDraw {
             h.update(key.as_bytes());
             h.update(signature);
         }
+        Ok(h.finalize().into())
+    }
+
+    /// Prepare a new approval carrier during the original case window.
+    pub fn reply_commitment(&self, native: &dyn ConsensusApi, replies: &[(&[u8], &[u8])]) -> io::Result<[u8; 64]> {
+        let (daa, tip) = self.branch(native)?;
+        if daa >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let marker = self.replies_marker(replies)?;
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
-        Ok(h.finalize().into())
+        Ok(marker)
+    }
+
+    /// Validate a selected carrier at its original DAA, including after the
+    /// live case window expires. A late carrier never establishes approval.
+    pub fn read_replies(&self, native: &dyn ConsensusApi, block: Hash64, replies: &[(&[u8], &[u8])]) -> io::Result<()> {
+        let (_, tip) = self.branch(native)?;
+        if native.get_header(block).map_err(io::Error::other)?.daa_score >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
+        let marker = self.replies_marker(replies)?;
+        if !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(block, tip).map_err(io::Error::other)?
+            || !native.palw_coinbase_commits_to(self.chain, block, &marker).map_err(io::Error::other)?
+        {
+            return Err(invalid("arithmetic PANEL replies outside their committed branch"));
+        }
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(())
     }
 }
 
@@ -690,6 +736,7 @@ mod tests {
         let operator = Hash64::from_u64_word(8);
         let key = [3; MLDSA87_PUBKEY_LEN];
         let draw = ArithmeticPanelDraw {
+            chain: [0; 64],
             close: Hash64::default(),
             certificate: Hash64::default(),
             submission: Hash64::default(),
@@ -700,31 +747,48 @@ mod tests {
         };
         assert!(draw.reply_message(&NoChain, Hash64::from_u64_word(9), &key).is_err());
         assert!(draw.reply_message(&NoChain, operator, &[2; MLDSA87_PUBKEY_LEN]).is_err());
-        assert_eq!(draw.reply_commitment(&NoChain, &[]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(draw.replies_marker(&[]).unwrap_err().kind(), io::ErrorKind::WouldBlock);
     }
 
     #[test]
     fn arithmetic_reply_requires_distinct_selected_keys_and_live_finality() {
         use kaspa_consensus_core::{
             config::genesis::SIMNET_GENESIS, errors::consensus::ConsensusResult, header::Header,
-            palw_native_settlement_v1::NativeSettlementSnapshotV1,
+            palw_native_settlement_v1::NativeSettlementSnapshotV1, trusted::ExternalGhostdagData,
         };
         use libcrux_ml_dsa::ml_dsa_87;
         use std::sync::Arc;
 
+        #[derive(Clone, Copy)]
         struct Chain {
             finalized: Hash64,
             daa: u64,
+            carrier_daa: u64,
+            committed: Option<[u8; 64]>,
         }
         impl ConsensusApi for Chain {
             fn get_header(&self, hash: Hash64) -> ConsensusResult<Arc<Header>> {
                 let mut h = Header::from(&SIMNET_GENESIS);
                 h.hash = hash;
-                h.daa_score = self.daa;
+                h.daa_score = if hash == Hash64::from_u64_word(5) { self.carrier_daa } else { self.daa };
                 Ok(Arc::new(h))
             }
             fn get_sink(&self) -> Hash64 {
-                Hash64::from_u64_word(5)
+                Hash64::from_u64_word(6)
+            }
+            fn get_ghostdag_data(&self, hash: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+                assert_eq!(hash, Hash64::from_u64_word(5));
+                Ok(ExternalGhostdagData {
+                    blue_score: 5,
+                    blue_work: Default::default(),
+                    selected_parent: Hash64::from_u64_word(4),
+                    mergeset_blues: vec![],
+                    mergeset_reds: vec![],
+                    blues_anticone_sizes: Default::default(),
+                })
+            }
+            fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, marker: &[u8; 64]) -> ConsensusResult<bool> {
+                Ok(chain == [0; 64] && block == Hash64::from_u64_word(5) && self.committed.as_ref() == Some(marker))
             }
             fn is_chain_ancestor_of(&self, lower: Hash64, higher: Hash64) -> ConsensusResult<bool> {
                 Ok(lower <= higher)
@@ -754,6 +818,7 @@ mod tests {
         let ak = one.verification_key.as_slice();
         let bk = two.verification_key.as_slice();
         let mut draw = ArithmeticPanelDraw {
+            chain: [0; 64],
             close: Hash64::from_u64_word(3),
             certificate: Hash64::from_u64_word(4),
             submission: Hash64::from_u64_word(2),
@@ -762,7 +827,7 @@ mod tests {
             selected: vec![a, b],
             keys: BTreeMap::from([(a, BTreeSet::from([mldsa87_key_id(ak)])), (b, BTreeSet::from([mldsa87_key_id(bk)]))]),
         };
-        let native = Chain { finalized: draw.close, daa: 10 };
+        let native = Chain { finalized: draw.close, daa: 10, carrier_daa: 10, committed: None };
         let sign = |key: &ml_dsa_87::MLDSA87KeyPair, node: &ArithmeticPanelDraw, operator| {
             let msg = node.reply_message(&native, operator, key.verification_key.as_slice()).unwrap();
             ml_dsa_87::sign(&key.signing_key, &msg, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN, [23; 32]).unwrap()
@@ -770,13 +835,19 @@ mod tests {
         let asig = sign(&one, &draw, a);
         let bsig = sign(&two, &draw, b);
         let replies = [(ak, asig.as_slice()), (bk, bsig.as_slice())];
-        assert!(draw.reply_commitment(&native, &replies).is_ok());
-        assert!(draw.reply_commitment(&native, &[replies[1], replies[0]]).is_err());
-        assert!(draw.reply_commitment(&Chain { finalized: draw.submission, daa: 10 }, &replies).is_err());
+        let commitment = draw.reply_commitment(&native, &replies).unwrap();
+        let carrier = Hash64::from_u64_word(5);
+        let after = Chain { daa: 12, committed: Some(commitment), ..native };
+        assert!(draw.read_replies(&after, carrier, &replies).is_ok());
         assert_eq!(
-            draw.reply_commitment(&Chain { finalized: draw.close, daa: 11 }, &replies).unwrap_err().kind(),
-            io::ErrorKind::TimedOut
+            draw.read_replies(&Chain { carrier_daa: 11, ..after }, carrier, &replies).unwrap_err().kind(),
+            io::ErrorKind::TimedOut,
         );
+        assert!(draw.read_replies(&Chain { committed: None, ..after }, carrier, &replies).is_err());
+        assert!(draw.read_replies(&Chain { finalized: draw.submission, ..after }, carrier, &replies).is_err());
+        assert!(draw.reply_commitment(&native, &[replies[1], replies[0]]).is_err());
+        assert!(draw.reply_commitment(&Chain { finalized: draw.submission, ..native }, &replies).is_err());
+        assert_eq!(draw.reply_commitment(&Chain { daa: 11, ..native }, &replies).unwrap_err().kind(), io::ErrorKind::TimedOut);
         draw.marker = Hash64::from_u64_word(9);
         assert!(draw.reply_commitment(&native, &replies).is_err());
         draw.keys.get_mut(&b).unwrap().insert(mldsa87_key_id(ak));
