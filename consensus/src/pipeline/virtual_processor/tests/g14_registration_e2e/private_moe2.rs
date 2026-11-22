@@ -166,7 +166,21 @@ async fn private_moe2_three_process_registration() {
     let (root, delta) = env.chain.vp().palw_state_v2_store.read().delta_of(tip).unwrap();
     assert_eq!(root, state.state_root());
     let mut book = Moe2SettlementBook::default();
-    book.register_block(&state, env.bundle.state.model_tier_v1().unwrap(), &delta).unwrap();
+    let catalog = env.bundle.state.model_tier_v1().unwrap();
+    let undo = book.register_block(&state, catalog, &delta).unwrap();
+    let undo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
+    let registered = book.clone();
+    let registration_parent = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&state, &delta, &env.bundle.state).unwrap();
+    let mut wrong_block = delta.point;
+    wrong_block.block = fork.last().unwrap().hash();
+    assert!(book.revert_market_block(&wrong_block, &registration_parent, &undo).is_err());
+    assert!(book.revert_market_block(&delta.point, &state, &undo).is_err());
+    assert_eq!(book, registered);
+    book.revert_market_block(&delta.point, &registration_parent, &undo).unwrap();
+    assert_eq!(book, Moe2SettlementBook::default());
+    assert!(book.revert_market_block(&delta.point, &registration_parent, &undo).is_err());
+    assert_eq!(book.register_block(&state, catalog, &delta).unwrap(), undo);
+    assert_eq!(book, registered);
     assert_eq!(book.model(&class_id).unwrap().owner, Some(bond));
     println!(
         "pid={} tip={tip} root={root} class={class_id} artifact={artifact_root} daa={} burn={burn} market={market:?}",

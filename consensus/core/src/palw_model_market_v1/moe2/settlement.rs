@@ -374,6 +374,16 @@ pub struct Moe2SettlementBook {
     assigned_slots: BTreeSet<Hash64>,
 }
 
+/// Market projection changes installed at one native block. The branch owner
+/// journals this alongside the native delta and reverses settlements and claim
+/// admissions before removing the market projection.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Moe2MarketBlockUndo {
+    point: PalwBlockContextV2,
+    parent: Option<PalwBlockContextV2>,
+    changes: BTreeMap<Hash64, (Option<Moe2RegisteredModel>, Moe2RegisteredModel)>,
+}
+
 impl Moe2SettlementBook {
     /// Commit a private store snapshot to its companion native state root. The
     /// owner retains this commitment independently of the checkpoint bytes.
@@ -439,12 +449,20 @@ impl Moe2SettlementBook {
         state: &crate::palw_state_v2::PalwChainStateV2,
         catalog: &crate::palw_model_tier_v1::PalwModelTierMirrorV1,
         delta: &crate::palw_state_v2::PalwStateDeltaV2,
-    ) -> Result<(), Moe2SettlementError> {
+    ) -> Result<Moe2MarketBlockUndo, Moe2SettlementError> {
         use crate::palw_state_v2::PalwDeltaEntryV2;
         use Moe2SettlementError::*;
         if state.last_point() != Some(&delta.point) {
             return Err(UnknownClaimContext);
         }
+        let parent = delta
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                PalwDeltaEntryV2::LastPoint { old, new } if new.as_ref() == Some(&delta.point) => Some(*old),
+                _ => None,
+            })
+            .ok_or(UnknownClaimContext)?;
         let mut registered = BTreeMap::new();
         for entry in &delta.entries {
             let PalwDeltaEntryV2::Class { key, old: None, new: Some(class) } = entry else {
@@ -508,7 +526,58 @@ impl Moe2SettlementBook {
                 return Err(UnknownRegistration);
             }
         }
+        let changes = registered.iter().map(|(key, after)| (*key, (self.models.get(key).copied(), *after))).collect();
         self.models.append(&mut registered);
+        Ok(Moe2MarketBlockUndo { point: delta.point, parent, changes })
+    }
+
+    /// Restore market rows after the native block has been reversed. The
+    /// disconnected point comes from the block owner, independently of the journal.
+    pub fn revert_market_block(
+        &mut self,
+        disconnected: &PalwBlockContextV2,
+        parent_state: &crate::palw_state_v2::PalwChainStateV2,
+        undo: &Moe2MarketBlockUndo,
+    ) -> Result<(), Moe2SettlementError> {
+        use Moe2SettlementError::UndoMismatch;
+        if disconnected != &undo.point
+            || parent_state.last_point() != undo.parent.as_ref()
+            || self.last_settlement.is_some_and(|last| last.point.blue_score >= undo.point.blue_score)
+        {
+            return Err(UndoMismatch);
+        }
+        for (key, (before, after)) in &undo.changes {
+            if self.models.get(key) != Some(after) {
+                return Err(UndoMismatch);
+            }
+            let restored_market = before.as_ref().and_then(|row| match &row.allocation {
+                Moe2ModelAllocation::Additional(market) => Some(market),
+                Moe2ModelAllocation::Core => None,
+            });
+            if parent_state.model_market(key) != restored_market {
+                return Err(UndoMismatch);
+            }
+            if let Some(before) = before {
+                if parent_state.class(key).is_none_or(|class| {
+                    (class.artifact_root, class.registrant_bond, class.registered_daa)
+                        != (before.artifact_root, before.owner, before.registration_daa)
+                }) {
+                    return Err(UndoMismatch);
+                }
+            } else if parent_state.class(key).is_some()
+                || self.admitted.values().any(|(terms, _)| &terms.model == key)
+                || self.permanent_lp_models.contains(key)
+            {
+                return Err(UndoMismatch);
+            }
+        }
+        for (key, (before, _)) in &undo.changes {
+            if let Some(before) = before {
+                self.models.insert(*key, *before);
+            } else {
+                self.models.remove(key);
+            }
+        }
         Ok(())
     }
 
