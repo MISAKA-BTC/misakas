@@ -7,6 +7,7 @@ use super::{
 use kaspa_consensus_core::{
     Hash64,
     api::ConsensusApi,
+    header::Header,
     palw_prompt_ids_v1::prompt_token_ids_root_v1,
     palw_tb1::{
         freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
@@ -18,6 +19,7 @@ use sha3::{Digest, Sha3_256, Sha3_512};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
+    sync::Arc,
 };
 
 pub mod moe2;
@@ -247,19 +249,66 @@ impl<'a> ExecInputBatch<'a> {
         max_records: usize,
         max_job_tokens: usize,
     ) -> io::Result<Self> {
+        let tip = native.get_sink();
+        let batch = Self::from_signed_on_branch(native, tip, preparation, None, rounds, rows, max_records, max_job_tokens)?;
+        if native.get_sink() != tip {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC registration view moved"));
+        }
+        Ok(batch)
+    }
+
+    /// Authenticate registrations on the candidate's selected-parent chain.
+    /// The block owner supplies validated DAG context and the state committed
+    /// by the preparation header, so validation does not need an RPC proof.
+    pub fn from_signed_at_parent(
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        preparation: Hash64,
+        preparation_parent_state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        rounds: &QualifiedExecPanel,
+        rows: &[SignedExecInput<'a>],
+        max_records: usize,
+        max_job_tokens: usize,
+    ) -> io::Result<Self> {
+        Self::from_signed_on_branch(
+            native,
+            parent,
+            preparation,
+            Some(preparation_parent_state),
+            rounds,
+            rows,
+            max_records,
+            max_job_tokens,
+        )
+    }
+
+    fn from_signed_on_branch(
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        preparation: Hash64,
+        preparation_parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        rounds: &QualifiedExecPanel,
+        rows: &[SignedExecInput<'a>],
+        max_records: usize,
+        max_job_tokens: usize,
+    ) -> io::Result<Self> {
         if rows.len() > max_records {
             return Err(invalid("EXEC batch exceeds registration budget"));
         }
         let exec = &rounds.exec;
-        let tip = native.get_sink();
         let header = native.get_header(preparation).map_err(io::Error::other)?;
         if header.blue_score >= exec.close_blue_score
             || header.daa_score >= exec.release_from_daa
-            || !native.is_chain_ancestor_of(preparation, tip).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(preparation, parent).map_err(io::Error::other)?
             || !native.palw_coinbase_commits_to(exec.chain_id, preparation, &rounds.marker).map_err(io::Error::other)?
         {
             return Err(invalid("missing joint qualification before EXEC close"));
         }
+        let quote_preparation = rows
+            .iter()
+            .any(|row| row.terms.moe2_quote.is_some())
+            .then(|| moe2::QuotePreparation::resolve(native, &header, preparation, preparation_parent_state))
+            .transpose()?;
         let count = u32::try_from(rows.len()).map_err(|_| invalid("EXEC registration count overflow"))?;
         let mut entries = BTreeMap::new();
         let mut keys = BTreeSet::new();
@@ -267,7 +316,7 @@ impl<'a> ExecInputBatch<'a> {
         for row in rows {
             let anchor = row.terms.registration_anchor;
             if !native.is_chain_ancestor_of(preparation, anchor).map_err(io::Error::other)?
-                || !native.is_chain_ancestor_of(anchor, tip).map_err(io::Error::other)?
+                || !native.is_chain_ancestor_of(anchor, parent).map_err(io::Error::other)?
             {
                 return Err(invalid("registration anchor outside prepared selected history"));
             }
@@ -287,7 +336,10 @@ impl<'a> ExecInputBatch<'a> {
             ml_dsa_65::verify(row.owner, &key, REGISTRATION_DOMAIN, row.signature)
                 .map_err(|_| invalid("invalid EXEC owner signature"))?;
             match (&row.terms.moe2_quote, row.quote_consent) {
-                (Some(quote), Some(consent)) => moe2::verify_consent(native, preparation, row, key, quote, consent)?,
+                (Some(quote), Some(consent)) => quote_preparation
+                    .as_ref()
+                    .ok_or_else(|| invalid("missing MOE2 preparation context"))?
+                    .verify_consent(native, row, key, quote, consent)?,
                 (None, None) => {}
                 _ => return Err(invalid("EXEC quote and funder consent must be present together")),
             }
@@ -303,9 +355,6 @@ impl<'a> ExecInputBatch<'a> {
             h.update(key);
             h.update(funding);
         }
-        if native.get_sink() != tip {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC registration view moved"));
-        }
         Ok(Self { preparation, rounds: *rounds, root: h.finalize().into(), entries })
     }
 
@@ -313,7 +362,7 @@ impl<'a> ExecInputBatch<'a> {
         self.root
     }
 
-    fn check_close(&self, native: &dyn ConsensusApi, close: Hash64, closure: &Tb1MiningClosure) -> io::Result<()> {
+    fn check_close(&self, native: &dyn ConsensusApi, close: Hash64, closure: &Tb1MiningClosure) -> io::Result<(Arc<Header>, Hash64)> {
         if closure.round.purpose != Tb1MiningPurpose::Exec
             || closure.round.id() != self.rounds.exec.id()
             || closure.qual_root != self.rounds.exec_qual
@@ -336,7 +385,7 @@ impl<'a> ExecInputBatch<'a> {
                 return Err(invalid("EXEC input outside its registration history or policy"));
             }
         }
-        Ok(())
+        Ok((header, parent))
     }
 
     pub fn observe(

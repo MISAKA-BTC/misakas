@@ -703,13 +703,51 @@ async fn run(stable: bool, registered: bool) {
         let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
         assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9, 10]);
         {
+            use kaspa_consensus_core::{
+                api::ConsensusApi, errors::consensus::ConsensusResult, header::Header, trusted::ExternalGhostdagData,
+            };
+            use std::sync::Arc;
+            struct CandidateHistory<'a>(&'a dyn ConsensusApi);
+            impl ConsensusApi for CandidateHistory<'_> {
+                fn get_sink(&self) -> Hash64 {
+                    panic!("candidate validation must not consult the live sink");
+                }
+                fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
+                    self.0.get_header(block)
+                }
+                fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+                    self.0.get_ghostdag_data(block)
+                }
+                fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
+                    self.0.is_chain_ancestor_of(low, high)
+                }
+                fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, id: &[u8; 64]) -> ConsensusResult<bool> {
+                    self.0.palw_coinbase_commits_to(chain, block, id)
+                }
+            }
+            let history = CandidateHistory(api);
+            let batch_at = |candidate_parent, state| {
+                ExecInputBatch::from_signed_at_parent(&history, candidate_parent, parent, state, &rounds, &entries, 4, 16)
+            };
+            assert!(batch_at(parent, &close_parent_state).is_err());
+            assert!(batch_at(original_state.last_point().unwrap().block, original_state).is_err());
+            let candidate_batch = batch_at(parent, original_state).unwrap();
+            assert_eq!(candidate_batch.root(), inputs.root());
             use kaspa_consensus_core::palw_state_v2::apply_delta_v2;
             let params = &node.bundle.state;
             let (published, mut delta) = node.vp().palw_state_v2_store.read().delta_of(anchor).unwrap();
             let original_delta = borsh::to_vec(&delta).unwrap();
-            let error = inputs
-                .reserve_closed_moe2_budget(api, &node.config.params, &closure, &q, &close_parent_state, &mut delta)
-                .unwrap_err();
+            let reserve = |state, delta: &mut kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2| {
+                candidate_batch.reserve_closed_moe2_budget(&history, &node.config.params, &closure, &q, state, delta)
+            };
+            let wrong_parent = reserve(original_state, &mut delta).unwrap_err();
+            assert!(wrong_parent.to_string().contains("close parent state"));
+            assert_eq!(borsh::to_vec(&delta).unwrap(), original_delta);
+            let mut wrong_position = delta.clone();
+            wrong_position.point.blue_score += 1;
+            let wrong_position = reserve(&close_parent_state, &mut wrong_position).unwrap_err();
+            assert!(wrong_position.to_string().contains("differs from close position"));
+            let error = reserve(&close_parent_state, &mut delta).unwrap_err();
             assert!(error.to_string().contains("local QF1 inference cannot reserve a mining reward"));
             assert_eq!(borsh::to_vec(&delta).unwrap(), original_delta);
             let post = apply_delta_v2(&close_parent_state, &delta, params).unwrap();

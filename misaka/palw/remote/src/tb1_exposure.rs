@@ -110,6 +110,26 @@ impl Tb1HolderFreeze {
         closure: &kaspa_consensus_core::palw_tb1::freeze::Tb1MiningClosure,
         qualified: &Tb1Qualification<'_>,
     ) -> io::Result<Self> {
+        let tip = native.get_sink();
+        let freeze = Self::resolve_in_branch(native, accepting_block, closure, qualified)?;
+        let selected = native.is_chain_ancestor_of(accepting_block, tip).map_err(Error::other)?;
+        if native.get_sink() != tip {
+            return Err(Error::new(ErrorKind::WouldBlock, "TB1 close view moved"));
+        }
+        if !selected {
+            return Err(invalid("TB1 close is outside selected history"));
+        }
+        Ok(freeze)
+    }
+
+    // Verify the closure in a block whose DAG context is already available.
+    // Only the live holder API may use the selected tip as publication authority.
+    fn resolve_in_branch(
+        native: &dyn ConsensusApi,
+        accepting_block: Hash64,
+        closure: &kaspa_consensus_core::palw_tb1::freeze::Tb1MiningClosure,
+        qualified: &Tb1Qualification<'_>,
+    ) -> io::Result<Self> {
         let round = &closure.round;
         if qualified.round_ref() != round.id()
             || qualified.root() != closure.qual_root
@@ -117,7 +137,6 @@ impl Tb1HolderFreeze {
         {
             return Err(invalid("TB1 closure differs from the prepared round"));
         }
-        let tip = native.get_sink();
         let header = native.get_header(accepting_block).map_err(Error::other)?;
         if header.blue_score != round.close_blue_score
             || header.daa_score >= round.release_from_daa
@@ -128,13 +147,6 @@ impl Tb1HolderFreeze {
         let parent = native.get_ghostdag_data(accepting_block).map_err(Error::other)?.selected_parent;
         let freeze_id = closure.commitment(parent);
         let commits = native.palw_coinbase_commits_to(round.chain_id, accepting_block, &freeze_id).map_err(Error::other)?;
-        let selected = native.is_chain_ancestor_of(accepting_block, tip).map_err(Error::other)?;
-        if native.get_sink() != tip {
-            return Err(Error::new(ErrorKind::WouldBlock, "TB1 close view moved"));
-        }
-        if !selected {
-            return Err(invalid("TB1 close is outside selected history"));
-        }
         if !commits {
             return Err(invalid("TB1 close block does not commit to the supplied closure"));
         }

@@ -23,34 +23,66 @@ pub fn consent_ref(reg_key: [u8; 64], slot: u64) -> [u8; 64] {
     Moe2ExecSlot::consent_ref(reg_key, slot)
 }
 
-pub(super) fn verify_consent(
-    native: &dyn ConsensusApi,
-    preparation: Hash64,
-    row: &SignedExecInput<'_>,
-    key: [u8; 64],
-    quote: &Moe2PreDrawQuote,
-    consent: &MLDSA87Signature,
-) -> io::Result<()> {
-    let authorization = consent_ref(key, row.slot);
-    if authorization != row.funding_ref
-        || native.get_ghostdag_data(preparation).map_err(io::Error::other)?.selected_parent != quote.quote_anchor
-    {
-        return Err(invalid("MOE2 quote differs from signed slot or preparation parent"));
+pub(super) struct QuotePreparation<'a> {
+    block: Hash64,
+    parent: Hash64,
+    root: Hash64,
+    daa: u64,
+    state: Option<&'a PalwChainStateV2>,
+}
+
+impl<'a> QuotePreparation<'a> {
+    pub(super) fn resolve(
+        native: &dyn ConsensusApi,
+        header: &Header,
+        block: Hash64,
+        state: Option<&'a PalwChainStateV2>,
+    ) -> io::Result<Self> {
+        let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
+        let root = state_root_of_pinned_header_v1(header, block).map_err(io::Error::other)?;
+        if state.is_some_and(|state| state.last_point().map(|p| p.block) != Some(parent) || state.state_root() != root) {
+            return Err(invalid("MOE2 preparation state differs from its committed parent"));
+        }
+        Ok(Self { block, parent, root, daa: header.daa_score, state })
     }
-    let (header, bonds) = native.palw_state_proof_v1(preparation, PALW_PROOF_LABEL_BONDS).map_err(io::Error::other)?;
-    let root = state_root_of_pinned_header_v1(&header, preparation).map_err(io::Error::other)?;
-    if !(quote.valid_from..=quote.deadline).contains(&header.daa_score) {
-        return Err(invalid("MOE2 quote outside original window at preparation"));
+
+    pub(super) fn verify_consent(
+        &self,
+        native: &dyn ConsensusApi,
+        row: &SignedExecInput<'_>,
+        key: [u8; 64],
+        quote: &Moe2PreDrawQuote,
+        consent: &MLDSA87Signature,
+    ) -> io::Result<()> {
+        let authorization = consent_ref(key, row.slot);
+        if authorization != row.funding_ref || self.parent != quote.quote_anchor {
+            return Err(invalid("MOE2 quote differs from signed slot or preparation parent"));
+        }
+        if !(quote.valid_from..=quote.deadline).contains(&self.daa) {
+            return Err(invalid("MOE2 quote outside original window at preparation"));
+        }
+        let verify_funder = |pubkey: &[u8]| {
+            let vk = MLDSA87VerificationKey::new(pubkey.try_into().map_err(|_| invalid("invalid MOE2 bond key"))?);
+            ml_dsa_87::verify(&vk, &authorization, QUOTE_DOMAIN, consent).map_err(|_| invalid("invalid MOE2 funder consent"))
+        };
+        let (artifact, registered_daa) = if let Some(state) = self.state {
+            let bond = state.bond(&quote.funding_bond).ok_or_else(|| invalid("missing MOE2 funding bond"))?;
+            verify_funder(&bond.pubkey)?;
+            let class = state.class(&quote.model).ok_or_else(|| invalid("missing MOE2 registered class"))?;
+            (class.artifact_root, class.registered_daa)
+        } else {
+            let (_, bonds) = native.palw_state_proof_v1(self.block, PALW_PROOF_LABEL_BONDS).map_err(io::Error::other)?;
+            let bond = verify_bond_v1(&bonds, self.root, &quote.funding_bond).map_err(io::Error::other)?;
+            verify_funder(&bond.pubkey)?;
+            let (_, classes) = native.palw_state_proof_v1(self.block, PALW_PROOF_LABEL_CLASSES).map_err(io::Error::other)?;
+            let class = verify_class_v1(&classes, self.root, &quote.model).map_err(io::Error::other)?;
+            (class.artifact_root, class.registered_daa)
+        };
+        if artifact != quote.artifact_root || quote.valid_from < registered_daa {
+            return Err(invalid("MOE2 quote differs from registered model at preparation"));
+        }
+        Ok(())
     }
-    let bond = verify_bond_v1(&bonds, root, &quote.funding_bond).map_err(io::Error::other)?;
-    let vk = MLDSA87VerificationKey::new(bond.pubkey.as_slice().try_into().map_err(|_| invalid("invalid MOE2 bond key"))?);
-    ml_dsa_87::verify(&vk, &authorization, QUOTE_DOMAIN, consent).map_err(|_| invalid("invalid MOE2 funder consent"))?;
-    let (_, classes) = native.palw_state_proof_v1(preparation, PALW_PROOF_LABEL_CLASSES).map_err(io::Error::other)?;
-    let class = verify_class_v1(&classes, root, &quote.model).map_err(io::Error::other)?;
-    if class.artifact_root != quote.artifact_root || quote.valid_from < class.registered_daa {
-        return Err(invalid("MOE2 quote differs from registered model at preparation"));
-    }
-    Ok(())
 }
 
 /// Historical quote read from a selected close and the state root committed by
@@ -146,10 +178,10 @@ impl ExecInputBatch<'_> {
         slot: u64,
     ) -> io::Result<ClosedMoe2Quote> {
         let tip = native.get_sink();
-        self.check_quote_close(native, close, closure, q, tip)?;
+        let (header, _) = self.check_quote_close(native, close, closure, q, tip)?;
         let entry = self.entries.get(&slot).ok_or_else(|| invalid("unknown EXEC slot"))?;
         let quote = entry.terms.moe2_quote.ok_or_else(|| invalid("no MOE2 quote at EXEC slot"))?;
-        let close_daa = native.get_header(close).map_err(io::Error::other)?.daa_score;
+        let close_daa = header.daa_score;
         let slot = Moe2ExecSlot { registration: reg_key(&entry.context), slot, close, close_daa, quote };
         let header = native.get_header(self.preparation).map_err(io::Error::other)?;
         let state_root = state_root_of_pinned_header_v1(&header, self.preparation).map_err(io::Error::other)?;
@@ -165,13 +197,13 @@ impl ExecInputBatch<'_> {
         closure: &Tb1MiningClosure,
         q: &Tb1Qualification<'_>,
         tip: Hash64,
-    ) -> io::Result<()> {
-        self.check_close(native, close, closure)?;
+    ) -> io::Result<(Arc<Header>, Hash64)> {
+        let position = self.check_close(native, close, closure)?;
         Tb1HolderFreeze::resolve(native, close, closure, q)?;
         if !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)? {
             return Err(invalid("detached EXEC quote close"));
         }
-        Ok(())
+        Ok(position)
     }
 
     /// Price the collateral for full export of each signed reward ceiling. Replay the
@@ -187,12 +219,20 @@ impl ExecInputBatch<'_> {
         q: &Tb1Qualification<'_>,
         state: &PalwChainStateV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
-        self.close_budget(native, config, close, closure, q, state, None)
+        let tip = native.get_sink();
+        let (header, parent) = self.check_quote_close(native, close, closure, q, tip)?;
+        self.check_close_parent(config, &header, close, parent, state)?;
+        let preview = self.close_budget(config, close, header.daa_score, state, None)?;
+        if native.get_sink() != tip {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC budget view moved"));
+        }
+        Ok(preview)
     }
 
-    /// Append the complete signed slot set to the private block owner's close
-    /// delta. Earlier writes in the same block compete for the same budget.
-    /// The caller owns the ordinary close delta and commits it with the block.
+    /// Append the complete signed slot set to the candidate close delta.
+    /// The block owner supplies the ordinary fold and its exact selected-parent
+    /// state. Native header, body and DAG context must be available for
+    /// the candidate. Earlier writes in that block compete for the same budget.
     pub fn reserve_closed_moe2_budget(
         &self,
         native: &dyn ConsensusApi,
@@ -202,6 +242,14 @@ impl ExecInputBatch<'_> {
         parent: &PalwChainStateV2,
         delta: &mut PalwStateDeltaV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
+        let close = delta.point.block;
+        let (header, selected_parent) = self.check_close(native, close, closure)?;
+        Tb1HolderFreeze::resolve_in_branch(native, close, closure, q)?;
+        self.check_close_parent(config, &header, close, selected_parent, parent)?;
+        if (delta.point.daa_score, delta.point.blue_score) != (header.daa_score, header.blue_score) {
+            return Err(invalid("MOE2 reservation differs from close position"));
+        }
+
         // The signed quote authorizes the price and funder. The signed EXEC
         // context must independently authorize a mining job before locking funds.
         for entry in self.entries.values().filter(|entry| entry.terms.moe2_quote.is_some()) {
@@ -215,33 +263,37 @@ impl ExecInputBatch<'_> {
                 None => return Err(invalid("TIR input has no admitted FOW1 mining profile")),
             }
         }
-        self.close_budget(native, config, delta.point.block, closure, q, parent, Some(delta))
+        self.close_budget(config, close, header.daa_score, parent, Some(delta))
+    }
+
+    fn check_close_parent(
+        &self,
+        config: &Params,
+        header: &Header,
+        close: Hash64,
+        selected_parent: Hash64,
+        state: &PalwChainStateV2,
+    ) -> io::Result<()> {
+        let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
+        let from = config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
+        if network.as_bytes() != self.rounds.exec.chain_id
+            || header.daa_score < from
+            || state.last_point().map(|p| p.block) != Some(selected_parent)
+            || state.state_root() != state_root_of_pinned_header_v1(header, close).map_err(io::Error::other)?
+        {
+            return Err(invalid("MOE2 capacity requires the original network and close parent state"));
+        }
+        Ok(())
     }
 
     fn close_budget(
         &self,
-        native: &dyn ConsensusApi,
         config: &Params,
         close: Hash64,
-        closure: &Tb1MiningClosure,
-        q: &Tb1Qualification<'_>,
+        daa: u64,
         state: &PalwChainStateV2,
         delta: Option<&mut PalwStateDeltaV2>,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
-        let tip = native.get_sink();
-        self.check_quote_close(native, close, closure, q, tip)?;
-        let header = native.get_header(close).map_err(io::Error::other)?;
-        let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
-        let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
-        let from = config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
-        let daa = header.daa_score;
-        if network.as_bytes() != self.rounds.exec.chain_id
-            || daa < from
-            || state.last_point().map(|p| p.block) != Some(parent)
-            || state.state_root() != state_root_of_pinned_header_v1(&header, close).map_err(io::Error::other)?
-        {
-            return Err(invalid("MOE2 capacity requires the original network and close parent state"));
-        }
         let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(invalid("missing native budget")) };
         let policy = &bundle
             .state
@@ -252,9 +304,6 @@ impl ExecInputBatch<'_> {
         bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or_else(|| invalid("missing MOE2 catalog"))?;
         let post;
         let state = if let Some(d) = delta.as_deref() {
-            if d.point.daa_score != daa || d.point.blue_score != header.blue_score {
-                return Err(invalid("MOE2 reservation differs from close position"));
-            }
             post = apply_delta_v2(state, d, &bundle.state).map_err(io::Error::other)?;
             &post
         } else {
@@ -306,9 +355,6 @@ impl ExecInputBatch<'_> {
                     allocation_epoch: epoch,
                 },
             );
-        }
-        if native.get_sink() != tip {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC budget view moved"));
         }
         if let Some(delta) = delta {
             delta.entries.extend(writes.into_iter().map(Into::into));
