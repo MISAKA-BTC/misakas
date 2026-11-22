@@ -212,3 +212,11 @@ private Linux ARM64ノードの再ビルドは終了コード0、24.86秒。SHA-
 `private_moe2_three_process_registration` は終了コード0（ビルド7分22秒、試験1.13秒）。3プロセスは受理済みブロック `326c3df5…` のcoinbaseのコピーへ、試験用Miner 6,400,000,000 sompiとPanel 1,600,000,000 sompiの出力を加えた。トランザクションをシリアライズして読み戻し、実際に登録された支払先のスクリプトと金額を照合した。出力がない場合と二つを入れ替えた場合に、state root・決済台帳・差分が変わらないことを検査した。試験用coinbaseを照合した決済後root `5ef64caf…` は全プロセスで一致した。加工したcoinbaseのネットワーク送信や選択鎖への受理は実施していない。
 
 同じビルドの既存T12当選・落選・PFS3/PFS4同一量子の二重消費拒否も、それぞれ終了コード0。
+
+### Round 16の固定closeと公開ゲート
+
+TB1のclose解決に、読み取り開始時の選択tipへの祖先関係と、commitment・選択親の照合後も同じtipにいることを追加した。公開ゲートの観測では、固定closeのfinalityをヘッダー読取り後にも再確認する。未選択のcloseを拒否し、読取り中にtipやfinalityが変わった場合は再試行する。
+
+Round 16の固定値（close blue 181382、公開開始DAA 90741、期限DAA 256802）を使った短いfixtureで、正しいclose、誤ったblue・親commitment、公開開始と同じDAA、選択鎖から外れたclose、読取り中のtip移動と同一tipでのfinality撤回を検査した。remoteのTB1試験14件は終了コード0（4.59秒）。nativeテストビルドは終了コード0（2分59秒）。
+
+短いRound 3の `private_tb1_stable_panel` は終了コード0（4.62秒）。3プロセスが同じclose `42f421c5…`、公開batch `2a39a1f2…`、certificate `dbc73387…` から同じseed `6e2a68b2…` を復元し、選出2席が再実行した。native finality撤回時のholder停止（2.32秒）とclose直前のprefix再開（0.24秒）も終了コード0。保存台帳のRound 16実close・実share公開・Panel最終承認は未実証。

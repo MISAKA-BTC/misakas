@@ -117,6 +117,7 @@ impl Tb1HolderFreeze {
         {
             return Err(invalid("TB1 closure differs from the prepared round"));
         }
+        let tip = native.get_sink();
         let header = native.get_header(accepting_block).map_err(Error::other)?;
         if header.blue_score != round.close_blue_score
             || header.daa_score >= round.release_from_daa
@@ -126,7 +127,15 @@ impl Tb1HolderFreeze {
         }
         let parent = native.get_ghostdag_data(accepting_block).map_err(Error::other)?.selected_parent;
         let freeze_id = closure.commitment(parent);
-        if !native.palw_coinbase_commits_to(round.chain_id, accepting_block, &freeze_id).map_err(Error::other)? {
+        let commits = native.palw_coinbase_commits_to(round.chain_id, accepting_block, &freeze_id).map_err(Error::other)?;
+        let selected = native.is_chain_ancestor_of(accepting_block, tip).map_err(Error::other)?;
+        if native.get_sink() != tip {
+            return Err(Error::new(ErrorKind::WouldBlock, "TB1 close view moved"));
+        }
+        if !selected {
+            return Err(invalid("TB1 close is outside selected history"));
+        }
+        if !commits {
             return Err(invalid("TB1 close block does not commit to the supplied closure"));
         }
         Ok(Self {

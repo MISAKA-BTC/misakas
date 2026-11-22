@@ -79,6 +79,10 @@ fn field(value: u8) -> Tb1Field {
 }
 
 fn qualified() -> Tb1Qualification<'static> {
+    qualified_for(ROUND)
+}
+
+fn qualified_for(round_ref: &[u8]) -> Tb1Qualification<'_> {
     let ends: Vec<_> = (0..4)
         .map(|d| Some(Tb1DealerEnd { end: Tb1VssEnd { transcript_root: [d; 64], end_anchor: [12; 64] }, position: 8 }))
         .collect();
@@ -86,7 +90,7 @@ fn qualified() -> Tb1Qualification<'static> {
     for dealer in Q {
         for slot in 0..3 {
             ready.push(Tb1Ready {
-                round_ref: ROUND,
+                round_ref,
                 dealer_slot: dealer,
                 holder_slot: slot,
                 end: ends[dealer].unwrap().end,
@@ -104,10 +108,10 @@ fn qualified() -> Tb1Qualification<'static> {
     for (row, sig) in ready.iter_mut().zip(&signatures) {
         row.signature = sig.as_slice();
     }
-    let cut = Tb1PreparationCut { round_ref: ROUND, deadline_position: 12, observed_through: 12, dealer_ends: &ends, ready: &ready };
+    let cut = Tb1PreparationCut { round_ref, deadline_position: 12, observed_through: 12, dealer_ends: &ends, ready: &ready };
     Tb1Qualification::resolve(
         Tb1Roster { coordinates: &COORDINATES, holder_keys: &PUBLIC, f: 1 },
-        ROUND,
+        round_ref,
         [21; 64], // reserved resources reference
         &Q,
         &cut,
@@ -115,6 +119,109 @@ fn qualified() -> Tb1Qualification<'static> {
         LIMIT,
     )
     .unwrap()
+}
+
+#[test]
+fn round16_close_requires_its_fixed_position_and_a_stable_selected_view() {
+    use super::publication::NativePublicationGate;
+    use kaspa_consensus_core::{
+        header::Header,
+        palw_tb1::freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
+        trusted::ExternalGhostdagData,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct CloseView {
+        round: Tb1MiningRound,
+        branch: Branch,
+        blue: u64,
+        daa: u64,
+        marker: [u8; 64],
+        move_at_commitment: bool,
+        lose_finality_at_second_tip_header: bool,
+        reads: AtomicUsize,
+        commitments: AtomicUsize,
+    }
+    impl ConsensusApi for CloseView {
+        fn get_header(&self, hash: Hash64) -> ConsensusResult<Arc<Header>> {
+            let mut header = (*self.branch.get_header(hash)?).clone();
+            if hash == block(2) {
+                header.blue_score = self.blue;
+                header.daa_score = self.daa;
+            } else {
+                self.reads.fetch_add(1, Ordering::Relaxed);
+                header.blue_score = self.round.close_blue_score + 2;
+                header.daa_score = self.round.release_from_daa;
+            }
+            Ok(Arc::new(header))
+        }
+        fn get_ghostdag_data(&self, _: Hash64) -> ConsensusResult<ExternalGhostdagData> {
+            Ok(ExternalGhostdagData {
+                blue_score: self.blue,
+                blue_work: Default::default(),
+                selected_parent: block(1),
+                mergeset_blues: Vec::new(),
+                mergeset_reds: Vec::new(),
+                blues_anticone_sizes: Default::default(),
+            })
+        }
+        fn palw_coinbase_commits_to(&self, chain: [u8; 64], hash: Hash64, commitment: &[u8; 64]) -> ConsensusResult<bool> {
+            self.commitments.fetch_add(1, Ordering::Relaxed);
+            Ok(chain == self.round.chain_id && hash == block(2) && commitment == &self.marker)
+        }
+        fn get_sink(&self) -> Hash64 {
+            if self.move_at_commitment && self.commitments.load(Ordering::Relaxed) > 0 { B.get_sink() } else { self.branch.get_sink() }
+        }
+        fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
+            self.branch.is_chain_ancestor_of(low, high)
+        }
+        fn get_native_settlement_snapshot(&self) -> ConsensusResult<Option<NativeSettlementSnapshotV1>> {
+            let mut snapshot = self.branch.get_native_settlement_snapshot()?.unwrap();
+            if self.lose_finality_at_second_tip_header && self.reads.load(Ordering::Relaxed) >= 2 {
+                snapshot.finalized = Some(block(1));
+            }
+            Ok(Some(snapshot))
+        }
+    }
+
+    let round = Tb1MiningRound {
+        chain_id: [32; 64],
+        roster_root: Tb1Roster { coordinates: &COORDINATES, holder_keys: &PUBLIC, f: 1 }.root().unwrap(),
+        role_epoch: 1,
+        logical_round: 16,
+        purpose: Tb1MiningPurpose::Panel,
+        schedule_id: [33; 64],
+        close_blue_score: 181382,
+        release_from_daa: 90741,
+        deadline_exclusive_daa: 256802,
+    };
+    let id = round.id();
+    let q = qualified_for(&id);
+    let closure = Tb1MiningClosure { round, qual_root: q.root(), consumer_set_root: [34; 64], policy_root: [35; 64] };
+    let view = || CloseView {
+        round,
+        branch: A,
+        blue: round.close_blue_score,
+        daa: round.release_from_daa - 1,
+        marker: closure.commitment(block(1)),
+        move_at_commitment: false,
+        lose_finality_at_second_tip_header: false,
+        reads: AtomicUsize::new(0),
+        commitments: AtomicUsize::new(0),
+    };
+    let resolve = |native: &CloseView| Tb1HolderFreeze::resolve(native, block(2), &closure, &q).map(|freeze| freeze.freeze_id);
+    let observe = |native: &CloseView| NativePublicationGate::observe(native, block(2), &closure, &q).map(|_| ());
+    assert_eq!(resolve(&view()).unwrap(), closure.commitment(block(1)));
+    assert!(resolve(&CloseView { blue: round.close_blue_score + 1, ..view() }).is_err());
+    assert!(resolve(&CloseView { daa: round.release_from_daa, ..view() }).is_err());
+    assert!(resolve(&CloseView { marker: closure.commitment(block(4)), ..view() }).is_err());
+    assert!(resolve(&CloseView { branch: B, ..view() }).unwrap_err().to_string().contains("outside selected history"));
+    assert_eq!(resolve(&CloseView { move_at_commitment: true, ..view() }).unwrap_err().kind(), ErrorKind::WouldBlock);
+    observe(&view()).unwrap();
+    assert_eq!(observe(&CloseView { lose_finality_at_second_tip_header: true, ..view() }).unwrap_err().kind(), ErrorKind::WouldBlock);
 }
 
 fn shares(slot: usize) -> Vec<(usize, Tb1Field)> {

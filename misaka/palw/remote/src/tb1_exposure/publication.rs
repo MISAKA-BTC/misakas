@@ -116,14 +116,16 @@ impl NativePublicationGate {
         }
         let header = native.get_header(close).map_err(Error::other)?;
         let stable = native.get_header(stable_block).map_err(Error::other)?;
-        Ok(Self {
+        let gate = Self {
             freeze,
             chain: closure.round.chain_id,
             round: closure.round.id(),
             stable_block,
             closed_at: position(header.daa_score, header.blue_score, 3)?,
             stable_at: position(daa, stable.blue_score, 3)?,
-        })
+        };
+        gate.require_tip(native, stable_block)?;
+        Ok(gate)
     }
 
     fn assemble(
