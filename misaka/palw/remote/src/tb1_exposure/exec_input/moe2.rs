@@ -7,8 +7,11 @@ use kaspa_consensus_core::palw_state_proof_v1::{
     PALW_PROOF_LABEL_BONDS, PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1,
 };
 use kaspa_consensus_core::{
-    config::params::Params, palw_attempt_v2::palw_network_domain_v2_for, palw_bond_budget_v1::PalwBudgetOriginV1,
-    palw_mode_v2::PalwConsensusMode, palw_state_v2::PalwChainStateV2,
+    config::params::Params,
+    palw_attempt_v2::palw_network_domain_v2_for,
+    palw_bond_budget_v1::PalwBudgetOriginV1,
+    palw_mode_v2::PalwConsensusMode,
+    palw_state_v2::{PalwChainStateV2, PalwStateDeltaV2, apply_delta_v2},
 };
 use libcrux_ml_dsa::ml_dsa_87::{self, MLDSA87VerificationKey};
 
@@ -173,6 +176,34 @@ impl ExecInputBatch<'_> {
         q: &Tb1Qualification<'_>,
         state: &PalwChainStateV2,
     ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
+        self.close_budget(native, config, close, closure, q, state, None)
+    }
+
+    /// Append the complete signed slot set to the private block owner's close
+    /// delta. Earlier writes in the same block compete for the same budget.
+    /// The caller owns the ordinary close delta and commits it with the block.
+    pub fn reserve_closed_moe2_budget(
+        &self,
+        native: &dyn ConsensusApi,
+        config: &Params,
+        closure: &Tb1MiningClosure,
+        q: &Tb1Qualification<'_>,
+        parent: &PalwChainStateV2,
+        delta: &mut PalwStateDeltaV2,
+    ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
+        self.close_budget(native, config, delta.point.block, closure, q, parent, Some(delta))
+    }
+
+    fn close_budget(
+        &self,
+        native: &dyn ConsensusApi,
+        config: &Params,
+        close: Hash64,
+        closure: &Tb1MiningClosure,
+        q: &Tb1Qualification<'_>,
+        state: &PalwChainStateV2,
+        delta: Option<&mut PalwStateDeltaV2>,
+    ) -> io::Result<BTreeMap<u64, Moe2BudgetPreview>> {
         let tip = native.get_sink();
         self.check_quote_close(native, close, closure, q, tip)?;
         let header = native.get_header(close).map_err(io::Error::other)?;
@@ -195,6 +226,17 @@ impl ExecInputBatch<'_> {
             .ok_or_else(|| invalid("inactive MOE2 budget at close"))?
             .policy;
         bundle.state.model_tier_v1().filter(|c| c.active_at(daa)).ok_or_else(|| invalid("missing MOE2 catalog"))?;
+        let post;
+        let state = if let Some(d) = delta.as_deref() {
+            if d.point.daa_score != daa || d.point.blue_score != header.blue_score {
+                return Err(invalid("MOE2 reservation differs from close position"));
+            }
+            post = apply_delta_v2(state, d, &bundle.state).map_err(io::Error::other)?;
+            &post
+        } else {
+            state
+        };
+        let mut writes = Vec::new();
         let mut budget = state.bond_budget().ok_or_else(|| invalid("missing native MOE2 budget"))?.clone();
         if budget.header.policy_digest != policy.digest() {
             return Err(invalid("native budget policy differs from MOE2 configuration"));
@@ -216,7 +258,7 @@ impl ExecInputBatch<'_> {
                     daa,
                     ask,
                     PalwBudgetOriginV1::Attempt,
-                    &mut Vec::new(),
+                    &mut writes,
                 )
                 .map_err(|err| io::Error::other(err.to_string()))?;
             if grant.reward_sompi != ask.reward_sompi {
@@ -240,6 +282,9 @@ impl ExecInputBatch<'_> {
         }
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC budget view moved"));
+        }
+        if let Some(delta) = delta {
+            delta.entries.extend(writes.into_iter().map(Into::into));
         }
         Ok(result)
     }
