@@ -48,3 +48,21 @@
 blue 102522 の tip は `07d42def9040cf1f0b57e52682eb11e93810cde8f9b9fda50189d7bf9d7d4e944d839506eb5af7b9fe32244185d6d33e5defa5568a986b3b0ad460f7bdaa1e8b`、state root は `33318f4cab59ba2e70503d1b776de15e10c767dbc817646b0471c22f76d8384050c5c6713a8847352fff636e8aa44ace51221e4963ca36ac6bdd845ee017e016`。
 
 引き継ぎ時の native39 本試験は SIGTERM で終了。上表の clock 試験は本試験の完走件数に含めない。最終の隔離3ピアの一致・決済は未検証。
+
+## 追加検証
+
+`0bbc98ec0` は同じsinkの受賞観測で各ピアのnative reward state rootと報酬残高を比較する。protected drillのPython試験78件が終了コード0。
+
+`b82b279e3` はEXEC closeの予算見積もりにも、署名したMOE2条件の適用開始、モデル登録、元期限、稼働中の予算policyを適用する。締切後とprofile開始前の予約を拒否し、担保はexport上限で署名済み報酬全額を賄う最小整数を使う。変更は `consensus/core/src/palw_model_market_v1/moe2/settlement.rs`、`misaka/palw/remote/src/tb1_exposure/exec_input/moe2.rs`、`consensus/src/pipeline/virtual_processor/tests/g14_registration_e2e/moe2_reservation.rs`。nativeテストビルドは終了コード0。
+
+| native試験 | 終了コード | 時間 |
+|---|---:|---:|
+| `private_moe2_three_process_registration` | 0 | 27.65秒 |
+| `private_registered_tb1_pending_freeze` | 0 | 25.80秒 |
+| `private_tb1_stable_panel` | 0 | 4.55秒 |
+
+登録済みQF1の試験で、3プロセスがDAA 33で短期offerの期限経過を確認した。長期offerの見積もりは購入4,800,000,000 sompi、永久LP 3,200,000,000 sompi、余剰Position 1単位burn、miner 6,400,000,000 sompi、Panel 1,600,000,000 sompi。実際のreward debitは0。
+
+`private_read_cold_panel_receipt` も、独立した3つのRound 3チェックポイントを各プロセスに展開して実行し、各終了コード0、各0.31秒。復元seedは `a68ed6b9029e13b731a6947250e992b416ad5b2a98881e170a9d6d15bb2b219c`。3つとも同じ2席を選出し、記録済みの両署名を検証した。
+
+受賞からMOE2に接続する際は、署名済みEXEC closeの `consent_ref(reg_key, slot)` と、claim確定後の `Moe2SettlementTerms::reservation_key()` が別の識別子になる。前者で現在実行する予算予約はscratch budget内で終了し、後者のキーで実受賞時に消費できる行は生成されない。元の署名・slotと、同じ登録から発生し認証されたclaimの対応を選択鎖の状態遷移で保持する必要がある。旧claimの予約に新しい条件を後付けしてはならない。
