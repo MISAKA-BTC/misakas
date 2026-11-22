@@ -359,14 +359,6 @@ pub(super) async fn replay_window(
         }
         let tokenizer = tokenizer.unwrap();
         if let Some(path) = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_PLAN") {
-            #[derive(Deserialize)]
-            struct RecoveryWorkPlan {
-                prefix: PathBuf,
-                parent: Hash64,
-                parent_blue: u64,
-                funding: TransactionOutpoint,
-                output: PathBuf,
-            }
             let plan: RecoveryWorkPlan = serde_json::from_reader(File::open(path).unwrap()).unwrap();
             assert!(plan.parent_blue < panel.close_blue_score - 1);
             assert!(plan.parent_blue >= node.api().get_header(block.hash()).unwrap().blue_score);
@@ -467,8 +459,25 @@ pub(super) async fn replay_window(
 
         assert!(work_path.is_none() || close_path.is_some(), "replaying PANEL work requires a pinned assessment close");
         assert!(archive.is_some() || close_path.is_none(), "an arithmetic assessment close requires its complete PANEL prefix");
+        let recovery = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_ATTACH");
+        assert!(recovery.is_none() || archive.is_some(), "a recovery branch requires the trailing PANEL prefix");
         if let Some(archive) = archive {
-            let parent = panel_prefix(node, block.hash(), panel.close_blue_score, panel.release_from_daa, archive).await;
+            let mut start = block.hash();
+            if let Some(path) = recovery {
+                assert!(!matches!(archive, PrefixArchive::Read(_, PrefixParent::VerifiedReport(_))));
+                let plan: RecoveryWorkPlan = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+                assert!(plan.parent_blue < panel.close_blue_score - 1);
+                let prefix = PrefixArchive::open(&plan.prefix, PrefixParent::Known(plan.parent));
+                panel_prefix(node, start, plan.parent_blue + 1, panel.release_from_daa, prefix).await;
+                start = legacy_work::genesis_claim::replay_certified_work(
+                    node,
+                    &plan.output,
+                    panel.close_blue_score,
+                    panel.release_from_daa,
+                )
+                .await;
+            }
+            let parent = panel_prefix(node, start, panel.close_blue_score, panel.release_from_daa, archive).await;
             let native = node.api().as_ref();
             let replayed = frozen.read_arithmetic_submission(native, batch, certificate, &rows, q, LIMITS, 0, block.hash(), &results);
             if let Err(error) = &replayed {
@@ -880,6 +889,15 @@ fn control_population_at(node: &Rig, source: Hash64, class: Hash64) -> serde_jso
                        "registrant":registrant.map(|k|(k.0.transaction_id,k.0.index)), "registrant_operator":owner.map(|b|b.operator_id),
                        "registrant_key":owner.map(|b|mldsa87_key_id(&b.pubkey)),
                        "base_class":node.bundle.state.base_class_id(),"span":span,"operator_count":operators.len(),"bonds":bonds})
+}
+
+#[derive(Deserialize)]
+struct RecoveryWorkPlan {
+    prefix: PathBuf,
+    parent: Hash64,
+    parent_blue: u64,
+    funding: TransactionOutpoint,
+    output: PathBuf,
 }
 
 enum PrefixParent {

@@ -86,6 +86,36 @@ pub(in super::super) async fn extend_with_certified_work(
     );
 }
 
+/// Independently validate every block used to certify the new non-floor claim.
+pub(in super::super) async fn replay_certified_work(node: &mut Rig, path: &Path, close_blue: u64, release_from_daa: u64) -> Hash64 {
+    let branch: CertifiedBranch = serde_json::from_reader(std::io::BufReader::new(File::open(path).unwrap())).unwrap();
+    assert_eq!(node.chain.sink(), branch.base);
+    assert!(!branch.blocks.is_empty());
+    let mut pruning_point = node.api().get_header(branch.base).unwrap().pruning_point;
+    for raw in &branch.blocks {
+        assert!(raw.header.blue_score < close_blue && raw.header.daa_score < release_from_daa);
+        genesis_seats::replay(node, raw).await;
+        let point = node.api().get_header(node.chain.sink()).unwrap().pruning_point;
+        if point != pruning_point {
+            super::await_pruning_capture(node, point).await;
+            pruning_point = point;
+        }
+    }
+    assert_eq!(node.chain.sink(), branch.tip);
+    let (_, state) = node.chain.tip_state();
+    let claim = state.claim(&branch.claim).expect("the recorded continuation must contain its claim");
+    assert_eq!(claim.class_id, class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1));
+    assert!(claim.accepted_blue_score > node.api().get_header(branch.base).unwrap().blue_score);
+    assert!(state.safe_frontier().0 >= claim.accepted_blue_score);
+    let row = executed_certification(&node.chain, branch.claim);
+    peer_log!(
+        "arithmetic PANEL recovery work replay {}",
+        serde_json::json!({"base":branch.base,"claim":branch.claim,"accepted":claim.accepted_block,"tip":branch.tip,
+            "certified_daa":row.outcome.unwrap().1,"approvals":row.positive_positions()})
+    );
+    branch.tip
+}
+
 pub(super) async fn run(node: &mut Rig, held: &Path, dir: &Path, produce: bool, renewed: Hash64) {
     let id = class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
     let root = inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1);
