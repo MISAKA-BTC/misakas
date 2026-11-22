@@ -15,10 +15,12 @@ use kaspa_consensus_core::{
 };
 use libcrux_ml_dsa::ml_dsa_87::{self, MLDSA87VerificationKey};
 
-pub const QUOTE_DOMAIN: &[u8] = b"MISAKA/private/FOW1/MOE2/quote-consent/v1";
+use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot;
+
+pub const QUOTE_DOMAIN: &[u8] = Moe2ExecSlot::CONSENT_DOMAIN;
 
 pub fn consent_ref(reg_key: [u8; 64], slot: u64) -> [u8; 64] {
-    Sha3_512::new().chain_update(QUOTE_DOMAIN).chain_update(reg_key).chain_update(slot.to_be_bytes()).finalize().into()
+    Moe2ExecSlot::consent_ref(reg_key, slot)
 }
 
 pub(super) fn verify_consent(
@@ -54,15 +56,18 @@ pub(super) fn verify_consent(
 /// Historical quote read from a selected close and the state root committed by
 /// its preparation. Current settlement authorization must be checked separately.
 pub struct ClosedMoe2Quote {
-    close: Hash64,
-    terms: Moe2PreDrawQuote,
+    slot: Moe2ExecSlot,
     state_root: Hash64,
     network: Hash64,
 }
 
 impl ClosedMoe2Quote {
     pub fn terms(&self) -> Moe2PreDrawQuote {
-        self.terms
+        self.slot.quote
+    }
+
+    pub fn exec_slot(&self) -> &Moe2ExecSlot {
+        &self.slot
     }
 
     pub fn preview(
@@ -75,7 +80,10 @@ impl ClosedMoe2Quote {
         if self.network != network || state.state_root() != self.state_root {
             return Err(invalid("MOE2 preview state or network differs from signed preparation"));
         }
-        self.terms.preview_at_anchor(config, state, reward).map_err(|_| invalid("MOE2 preview outside signed quote or market policy"))
+        self.slot
+            .quote
+            .preview_at_anchor(config, state, reward)
+            .map_err(|_| invalid("MOE2 preview outside signed quote or market policy"))
     }
 
     /// Recheck the signed economic terms against the pre-state committed by
@@ -98,11 +106,11 @@ impl ClosedMoe2Quote {
             || anchor_state.state_root() != self.state_root
             || execution_parent.last_point().map(|p| p.block) != Some(parent)
             || execution_parent.state_root() != root
-            || !native.is_chain_ancestor_of(self.close, parent).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(self.slot.close, parent).map_err(io::Error::other)?
         {
             return Err(invalid("MOE2 quote differs from selected execution history"));
         }
-        let result = self.terms.preview_at_position(config, anchor_state, execution_parent, header.daa_score, reward);
+        let result = self.slot.quote.preview_at_position(config, anchor_state, execution_parent, header.daa_score, reward);
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "MOE2 execution view moved"));
         }
@@ -138,14 +146,16 @@ impl ExecInputBatch<'_> {
     ) -> io::Result<ClosedMoe2Quote> {
         let tip = native.get_sink();
         self.check_quote_close(native, close, closure, q, tip)?;
-        let quote =
-            self.entries.get(&slot).and_then(|entry| entry.terms.moe2_quote).ok_or_else(|| invalid("no MOE2 quote at EXEC slot"))?;
+        let entry = self.entries.get(&slot).ok_or_else(|| invalid("unknown EXEC slot"))?;
+        let quote = entry.terms.moe2_quote.ok_or_else(|| invalid("no MOE2 quote at EXEC slot"))?;
+        let close_daa = native.get_header(close).map_err(io::Error::other)?.daa_score;
+        let slot = Moe2ExecSlot { registration: reg_key(&entry.context), slot, close, close_daa, quote };
         let header = native.get_header(self.preparation).map_err(io::Error::other)?;
         let state_root = state_root_of_pinned_header_v1(&header, self.preparation).map_err(io::Error::other)?;
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC quote view moved"));
         }
-        Ok(ClosedMoe2Quote { close, terms: quote, state_root, network: Hash64::from_bytes(self.rounds.exec.chain_id) })
+        Ok(ClosedMoe2Quote { slot, state_root, network: Hash64::from_bytes(self.rounds.exec.chain_id) })
     }
     fn check_quote_close(
         &self,

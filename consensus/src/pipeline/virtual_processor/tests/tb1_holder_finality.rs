@@ -684,6 +684,14 @@ async fn run(stable: bool, registered: bool) {
             let actual = reserve(&mut delta).unwrap();
             let funded = apply_delta_v2(&close_parent_state, &delta, params).unwrap();
             assert_eq!(actual, full);
+            for closed in [&closed_quote, &long] {
+                let slot = closed.exec_slot();
+                assert_eq!(slot.close, anchor);
+                let row = funded.bond_budget().unwrap().claim_row(&slot.reservation_key()).unwrap();
+                assert_eq!(slot.close_daa, row.accepted_daa);
+                assert_eq!(row.reserved.claims, 1);
+                assert_eq!(slot.quote.limits.max_reward, row.reserved.reward_sompi);
+            }
             for slot in actual.values() {
                 let row = funded.bond_budget().unwrap().claim_row(&slot.consent).unwrap();
                 assert_eq!(row.reserved.reward_sompi, slot.reward_sompi);
