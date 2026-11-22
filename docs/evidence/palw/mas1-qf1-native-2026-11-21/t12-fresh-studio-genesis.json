@@ -37,5 +37,24 @@
   "profilePrintExit": 0,
   "bootstrapExportExit": 0,
   "registrationSubmitted": false,
-  "claimAdmitted": false
+  "claimAdmitted": false,
+  "registrationPreparation": {
+    "class": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "artifactRoot": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "registrantBond": "8756bf4915307c62bdd4f902533a85fcea7d78a377d000433ec463d7ceb3823f2b1583793966af61ee5c1f2a9d69937726c046769f7cd0cab314095a1de38712:7",
+    "runtimePack": "skipped",
+    "cliExit": 0,
+    "classSetupExit": 0,
+    "nodeExitCodes": [
+      0,
+      0,
+      0
+    ],
+    "sha256": {
+      "class-registration.object": "fd7e55998824b0f1e59094eb2175a0d72e3c68060d48803b6ae9cb569008ceff",
+      "class-setup/class-layout.object": "8b35ab661d104c567d557f55966792339f44b8f22dcb1d31c4f7224d532adac1",
+      "class-setup/class-semantics.object": "4792093bd5ce62faa3eb6bb4b98e225a29a169cb2167a83ab8566ce9595f3188",
+      "class-setup/container-binding.object": "023388aa7bca07ca2f6875ff2342a3cb4ccb1947af9fe9cd4517ead966eb8745"
+    }
+  }
 }
