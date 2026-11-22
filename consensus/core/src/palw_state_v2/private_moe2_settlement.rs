@@ -1,6 +1,7 @@
 //! Private post-block accounting. The caller owns the block delta, the branch's
 //! settlement book and the authenticated claim release. No public object dispatch.
 use super::*;
+use crate::block::Block;
 use crate::config::params::Params;
 use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
 use crate::palw_mode_v2::PalwConsensusMode;
@@ -114,8 +115,9 @@ impl PalwChainStateV2 {
 
     /// Accounting entry point for the private block owner after validating the
     /// new-profile claim, its unique EXEC slot and its award in this delta.
-    /// The worker section is taken from the same block's coinbase. The owning
-    /// block validates its other outputs and authenticates the recipient plan.
+    /// Verify the worker outputs against the coinbase committed by this
+    /// award block. Its owner validates the other outputs and authenticates
+    /// the placement and recipient plan.
     pub fn settle_private_moe2_exec_slot(
         &mut self,
         config: &Params,
@@ -126,10 +128,25 @@ impl PalwChainStateV2 {
         release: Moe2WorkerRelease,
         slot: &Moe2ExecSlot,
         payees: Moe2ExecWorkerPayees<'_>,
-        coinbase_worker_outputs: &[TransactionOutput],
+        block: &Block,
+        worker_start: usize,
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
-        if self.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees)? != coinbase_worker_outputs {
-            return Err(Moe2SettlementError::WorkerOutputsMismatch);
+        use Moe2SettlementError::{UnknownClaimContext, WorkerOutputsMismatch};
+        if position.point != delta.point
+            || self.last_point() != Some(&delta.point)
+            || (block.hash(), block.header.daa_score, block.header.blue_score)
+                != (delta.point.block, delta.point.daa_score, delta.point.blue_score)
+            || crate::hashing::header::hash(&block.header) != block.hash()
+        {
+            return Err(UnknownClaimContext);
+        }
+        let expected = self.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees)?;
+        let coinbase = block.transactions.first().filter(|tx| tx.is_coinbase()).ok_or(WorkerOutputsMismatch)?;
+        let worker_end = worker_start.checked_add(expected.len()).ok_or(WorkerOutputsMismatch)?;
+        if coinbase.outputs.get(worker_start..worker_end) != Some(expected.as_slice())
+            || crate::merkle::calc_hash_merkle_root(block.transactions.iter()) != block.header.hash_merkle_root
+        {
+            return Err(WorkerOutputsMismatch);
         }
         self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot))
     }

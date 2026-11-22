@@ -1,13 +1,15 @@
 //! Run the projected reserve and pool moves through the native state delta and
 //! carriage codecs. The fixture retains these roots outside the selected chain.
 use super::*;
-use kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetStateV1;
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
 use kaspa_consensus_core::palw_state_v2::{
     Moe2ExecWorkerPayees, PalwBlockContextV2, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateV2Error,
     apply_delta_v2, revert_delta_v2,
+};
+use kaspa_consensus_core::{
+    merkle::calc_hash_merkle_root, palw_bond_budget_v1::PalwBondBudgetStateV1, palw_state_v2::apply_palw_transition_v2,
 };
 use std::path::Path;
 
@@ -24,7 +26,6 @@ pub(super) fn check_exec_settlement_rewind(
     let vp = env.chain.vp();
     let store = vp.palw_state_v2_store.read();
     let (_, mut close_delta) = store.delta_of(close).unwrap();
-    let (_, mut award_delta) = store.delta_of(position.point.block).unwrap();
     drop(store);
     let slot = Moe2ExecSlot { registration: [24; 64], slot: 1, close, close_daa: close_delta.point.daa_score, quote };
     let claim = Hash64::from_u64_word(642);
@@ -72,9 +73,6 @@ pub(super) fn check_exec_settlement_rewind(
     })
     .unwrap();
     let admitted = book.clone();
-    let original_delta = award_delta.clone();
-    let mut child = apply_delta_v2(&reserved, &award_delta, params).unwrap();
-    let before = child.state_root();
     let reward = quote.limits.max_reward;
     let release = Moe2WorkerRelease {
         reward,
@@ -89,7 +87,7 @@ pub(super) fn check_exec_settlement_rewind(
     let panel = [(env.chain.bonds[1], release.panel_now)];
     let payees = Moe2ExecWorkerPayees { miner: env.chain.bonds[0], panel: &panel };
     assert_eq!(
-        child.private_moe2_exec_worker_outputs(
+        reserved.private_moe2_exec_worker_outputs(
             &kaspa_consensus_core::config::params::palw_t12_shipped_params(),
             position.point.daa_score,
             release,
@@ -97,22 +95,35 @@ pub(super) fn check_exec_settlement_rewind(
         ),
         Err(Moe2SettlementError::UnknownClaimContext),
     );
-    let outputs = child.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees).unwrap();
+    let outputs = reserved.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees).unwrap();
     for (output, (bond, amount)) in outputs.iter().zip([(payees.miner, release.miner_now), panel[0]]) {
-        let payload = child.bond(&bond).unwrap().payout_payload;
+        let payload = reserved.bond(&bond).unwrap().payout_payload;
         assert_eq!(output.value, amount);
         assert_eq!(output.script_public_key, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes()));
     }
     assert_eq!(outputs.len(), 2);
     let execution = env.chain.ctx.consensus.get_block(position.point.block).unwrap();
-    let mut projected_coinbase = execution.transactions[0].clone();
-    assert!(projected_coinbase.is_coinbase());
-    let worker_start = projected_coinbase.outputs.len();
-    projected_coinbase.outputs.extend(outputs.iter().cloned());
-    projected_coinbase.finalize();
-    let decoded: kaspa_consensus_core::tx::Transaction = borsh::from_slice(&borsh::to_vec(&projected_coinbase).unwrap()).unwrap();
-    let coinbase_workers = &decoded.outputs[worker_start..];
-    assert_eq!(coinbase_workers, outputs.as_slice());
+    let worker_start = execution.transactions[0].outputs.len();
+    let candidate = |workers: &[kaspa_consensus_core::tx::TransactionOutput]| {
+        let mut transactions: Vec<_> = execution.transactions.iter().cloned().collect();
+        assert!(transactions[0].is_coinbase());
+        transactions[0].outputs.extend_from_slice(workers);
+        transactions[0].finalize();
+        let mut header = execution.header.as_ref().clone();
+        header.palw_state_root = reserved.state_root();
+        header.hash_merkle_root = calc_hash_merkle_root(transactions.iter());
+        header.finalize();
+        Block::new(header, transactions).with_evm_payload(execution.evm_payload.clone())
+    };
+    let fold = |block: &Block| {
+        let point = PalwBlockContextV2 { block: block.hash(), ..position.point };
+        let (state, delta) = apply_palw_transition_v2(&reserved, params, &point, &[], None).unwrap();
+        (state, delta, Moe2Position { point, ..position })
+    };
+    let award_block = candidate(&outputs);
+    let (mut child, mut award_delta, position) = fold(&award_block);
+    let original_delta = award_delta.clone();
+    let before = child.state_root();
     let duplicate = [panel[0], panel[0]];
     assert_eq!(
         child.private_moe2_exec_worker_outputs(
@@ -125,14 +136,84 @@ pub(super) fn check_exec_settlement_rewind(
     );
     let altered = [outputs[1].clone(), outputs[0].clone()];
     for wrong in [&[][..], &altered] {
+        let block = candidate(wrong);
+        let (mut state, mut delta, at) = fold(&block);
+        let original = (state.state_root(), delta.clone());
         assert_eq!(
-            child.settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, wrong),
+            state.settle_private_moe2_exec_slot(
+                config,
+                &mut book,
+                &mut delta,
+                claim,
+                at,
+                release,
+                &slot,
+                payees,
+                &block,
+                worker_start
+            ),
             Err(Moe2SettlementError::WorkerOutputsMismatch),
         );
-        assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &admitted, &original_delta.entries));
+        assert_eq!((state.state_root(), delta), original);
+        assert_eq!(&book, &admitted);
     }
+    let detached = Block::from_arcs(award_block.header.clone(), execution.transactions.clone());
+    for (block, start, expected) in [
+        (&detached, worker_start, Moe2SettlementError::WorkerOutputsMismatch),
+        (&award_block, usize::MAX, Moe2SettlementError::WorkerOutputsMismatch),
+        (&execution, worker_start, Moe2SettlementError::UnknownClaimContext),
+    ] {
+        assert_eq!(
+            child.settle_private_moe2_exec_slot(
+                config,
+                &mut book,
+                &mut award_delta,
+                claim,
+                position,
+                release,
+                &slot,
+                payees,
+                block,
+                start,
+            ),
+            Err(expected),
+        );
+        assert_eq!((child.state_root(), &book, &award_delta), (before, &admitted, &original_delta));
+    }
+    // Unrelated transactions cannot be substituted while keeping the award
+    // header and the expected worker outputs.
+    let mut swapped: Vec<_> = award_block.transactions.iter().cloned().collect();
+    swapped.push(execution.transactions[0].clone());
+    let mismatched_body = Block::from_arcs(award_block.header.clone(), swapped);
+    assert_eq!(
+        child.settle_private_moe2_exec_slot(
+            config,
+            &mut book,
+            &mut award_delta,
+            claim,
+            position,
+            release,
+            &slot,
+            payees,
+            &mismatched_body,
+            worker_start,
+        ),
+        Err(Moe2SettlementError::WorkerOutputsMismatch),
+    );
+    assert_eq!((child.state_root(), &book, &award_delta), (before, &admitted, &original_delta));
     let (payment, undo) = child
-        .settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, coinbase_workers)
+        .settle_private_moe2_exec_slot(
+            config,
+            &mut book,
+            &mut award_delta,
+            claim,
+            position,
+            release,
+            &slot,
+            payees,
+            &award_block,
+            worker_start,
+        )
         .unwrap();
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let after = child.state_root();
@@ -200,7 +281,18 @@ pub(super) fn check_exec_settlement_rewind(
     assert_eq!(revert_delta_v2(&child, &award_delta, params).unwrap().state_root(), reserved.state_root());
     assert!(child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).is_err());
     let (repaid, _) = child
-        .settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, coinbase_workers)
+        .settle_private_moe2_exec_slot(
+            config,
+            &mut book,
+            &mut award_delta,
+            claim,
+            position,
+            release,
+            &slot,
+            payees,
+            &award_block,
+            worker_start,
+        )
         .unwrap();
     assert_eq!((repaid, child.state_root(), book), (payment, after, paid_book));
     let market = payment.allocation.market.unwrap();
