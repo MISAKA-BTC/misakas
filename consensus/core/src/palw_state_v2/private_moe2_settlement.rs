@@ -34,6 +34,9 @@ pub(super) fn check_exec_settlement_debit_v1(
     if record.position.point != point {
         return Err(mismatch());
     }
+    if !record.has_matching_reservation_key() {
+        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC slot does not bind the consumed reservation"));
+    }
     let allocation = &record.reward.allocation;
     let total = record.total_reward().ok_or_else(mismatch)?;
     let (debit, before_market) = match allocation.market {

@@ -3924,17 +3924,21 @@ impl PalwChainStateV2 {
         self.assert_verifier_watch_consistency_v1(params)?;
         self.assert_verifier_watch_draw_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
-        if !self.private_moe2_exec_settlements.is_empty()
-            && (self.bond_budget.is_none()
+        if !self.private_moe2_exec_settlements.is_empty() {
+            let mut reservations = BTreeSet::new();
+            if self.bond_budget.is_none()
                 || self.private_moe2_exec_settlements.iter().any(|(claim, row)| {
                     *claim != row.claim
+                        || !row.has_matching_reservation_key()
+                        || !reservations.insert(row.reservation)
                         || self.last_point.is_none_or(|tip| {
                             row.position.point.blue_score > tip.blue_score || row.position.point.daa_score > tip.daa_score
                         })
                         || !row.has_consistent_reward()
-                }))
-        {
-            return Err(PalwStateV2Error::CarriageInconsistent("inconsistent private MOE2 EXEC settlement".into()));
+                })
+            {
+                return Err(PalwStateV2Error::CarriageInconsistent("inconsistent private MOE2 EXEC settlement".into()));
+            }
         }
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.

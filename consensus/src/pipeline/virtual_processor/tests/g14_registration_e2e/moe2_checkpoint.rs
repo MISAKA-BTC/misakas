@@ -231,10 +231,31 @@ pub(super) fn check_exec_settlement_rewind(
     ));
     assert!(revert_delta_v2(&child, &false_purchase, params).is_err());
 
+    let mut substituted_slot = award_delta.clone();
+    let Some(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }) = substituted_slot.entries.last_mut() else {
+        panic!("missing EXEC settlement after the market write");
+    };
+    record.signed_slot = Hash64::from_u64_word(648);
+    for result in [apply_delta_v2(&reserved, &substituted_slot, params), revert_delta_v2(&child, &substituted_slot, params)] {
+        assert!(matches!(
+            result,
+            Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC slot does not bind the consumed reservation"))
+        ));
+    }
+
     let mut carried = PalwStateCarriageV2::from_state(&child);
     let mut false_release = carried.clone();
     false_release.private_moe2_exec_settlements.get_mut(&claim).unwrap().reward.miner_now += 1;
     assert!(matches!(false_release.into_state(params, None), Err(PalwStateV2Error::CarriageInconsistent(_))));
+    let mut duplicate_slot = carried.clone();
+    let mut duplicate = duplicate_slot.private_moe2_exec_settlements[&claim].clone();
+    duplicate.claim = Hash64::from_u64_word(649);
+    duplicate.permanent_liquidity.as_mut().unwrap().claim = duplicate.claim;
+    duplicate_slot.private_moe2_exec_settlements.insert(duplicate.claim, duplicate);
+    assert!(matches!(
+        duplicate_slot.into_state(params, None),
+        Err(PalwStateV2Error::CarriageInconsistent(ref why)) if why == "inconsistent private MOE2 EXEC settlement"
+    ));
     let carried_bytes = borsh::to_vec(&carried).unwrap();
     kaspa_consensus_core::palw_native_resource_v1::preflight_native_carriage_v1(carried_bytes.as_slice(), carried_bytes.len() as u64)
         .unwrap();

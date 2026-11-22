@@ -92,7 +92,11 @@ impl Moe2ExecSlot {
     /// A native reservation belongs to this exact close and quote. The funder's
     /// consent is still identified by the registration and slot before close.
     pub fn reservation_key(&self) -> Hash64 {
-        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/native-exec-reservation/v1", self.slot_digest().as_byte_slice())
+        Self::reservation_key_for_digest(self.slot_digest())
+    }
+
+    fn reservation_key_for_digest(signed_slot: Hash64) -> Hash64 {
+        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/native-exec-reservation/v1", signed_slot.as_byte_slice())
     }
 
     fn slot_digest(&self) -> Hash64 {
@@ -372,6 +376,10 @@ pub struct Moe2NativeExecSettlement {
 }
 
 impl Moe2NativeExecSettlement {
+    pub(crate) fn has_matching_reservation_key(&self) -> bool {
+        Moe2ExecSlot::reservation_key_for_digest(self.signed_slot) == self.reservation
+    }
+
     pub(crate) fn total_reward(&self) -> Option<u64> {
         let allocation = &self.reward.allocation;
         let market = allocation.market.map_or(Some(0), |q| q.split.purchase.checked_add(q.split.liquidity))?;
