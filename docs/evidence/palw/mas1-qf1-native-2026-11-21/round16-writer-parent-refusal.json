@@ -24,7 +24,10 @@
     "frontier_observed_at_original_publication_base": {
       "sink_daa": 37758,
       "frontier_blue": 12984,
-      "frontier": "3f2aca471ce4afbb563c12834454a234642253787b58e99cc8fbe9a83fb5de277a4d86eced10a0dfc173dfa58b2ef1bbe753f0b146bd63776b6b12b7065ad67d"
+      "frontier": "3f2aca471ce4afbb563c12834454a234642253787b58e99cc8fbe9a83fb5de277a4d86eced10a0dfc173dfa58b2ef1bbe753f0b146bd63776b6b12b7065ad67d",
+      "accepted_claim": "de2c19ea2895e4756dafd5c2ce7520a922ec76897b0544e2529e123a7a6bc0456858ce1b404c2ecfe68c0423952ad6e1c89e2aea846c8b90c1fc2630e828e07c",
+      "acceptance_evidence": "qf1-arithmetic-8k-final.json",
+      "certification_evidence": "qf1-arithmetic-8k-certificate-writer.json"
     },
     "pruning_checkpoint_captured_at_previous_block": {
       "blue": 88120,
