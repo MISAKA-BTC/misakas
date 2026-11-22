@@ -1258,12 +1258,12 @@ uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_arit
 
 ### 算術評価の登録直後に読める検証者集合
 
-同じ試験バイナリ（SHA-256 `e04de482d22478676a55e97920e5047889ebf69945f8136caa417be5cf6949bf`）を別々の空のDBで3回起動した。元の登録履歴を再生し、closeヘッダに固定された親の状態（DAA 1）から既存規則で読めるbase classのbondは3回とも0件だった。これは登録時点の観測であり、Round 16の選出は後の親状態で判定する。検査器は元の取引から登録者のbondを読み、登録者を混入させたログを拒否する。
+同じ試験バイナリ（SHA-256 `e04de482d22478676a55e97920e5047889ebf69945f8136caa417be5cf6949bf`）を別々の空のDBで3回起動した。元の登録履歴を再生し、closeヘッダに固定された親の状態（DAA 1）から既存規則で読めるbase classのbondは3回とも0件だった。これは登録時点の観測であり、Round 16の選出は後の親状態で判定する。検査器は元の取引から登録者のbondを読み、登録者を混入させたログを拒否する。登録取引の元バイト列から署名対象を復元し、card 2 の公開鍵で ML-DSA-87 署名も確認した。登録取引の担保 outpoint または署名を1ビット変えた対照では署名検証に失敗した。
 
 ```sh
 out=$(mktemp -d)
 tar -xf qf1-arithmetic-registration-population.tar.zst -C "$out"
-python3 -B check_arithmetic_control_population.py "$out" | diff - qf1-arithmetic-registration-population.json
+python3 -B check_arithmetic_control_population.py "$out" --openssl "$(brew --prefix openssl@3)/bin/openssl" | diff - qf1-arithmetic-registration-population.json
 ```
 
 ### Round 15 の算術評価を別の2プロセスで再実行

@@ -6,12 +6,40 @@ import subprocess
 from pathlib import Path
 
 from check_fresh_audit import records
-from check_genesis_draw import header_hash
+from check_fresh_qualification import verify_card
+from check_genesis_draw import header_hash, keyed, le64
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
 
 
-def verify(directory):
+def verify_registration_signature(payload, genesis, openssl):
+    # The fixed prefix is the ClassRegisteredTirV1 envelope, up to its TIR class.
+    cls, inventory, slash, rule = payload[3:67], payload[67:131], payload[131:139], payload[139:148]
+    target, share, activation = payload[148:164], payload[164:166], payload[166:174]
+    start = 174
+    require(payload[start:start+2] == b"\x01\x00", "unknown TIR class version")
+    def count(offset):
+        require(offset + 4 <= len(payload), "truncated TIR registration")
+        return int.from_bytes(payload[offset:offset+4], "little")
+    # Class version and program vector, then layout version/geometry and two u32 vectors.
+    offset = start + 6 + count(start+2)
+    require(payload[offset:offset+2] == b"\x01\x00", "unknown TIR layout version")
+    offset += 14
+    for _ in range(2):
+        offset += 4 + 4 * count(offset)
+    end = offset + 64  # tokenizer id
+    bond_start = len(payload) - 4699
+    require(end < bond_start and count(bond_start+68) == 4627, "invalid signed TIR registration bounds")
+    bond = payload[bond_start:bond_start+68]
+    network = b"testnet-12"
+    domain = keyed("misaka-palw/attempt-v2/network-domain/v1", le64(len(network)), network, bytes.fromhex(genesis))
+    message = keyed("misaka-palw/tir/class-registration/message/v1", domain, cls, share, activation, bond,
+                    inventory, slash, target, rule, payload[end:bond_start], payload[start:end])
+    verify_card(openssl, 2, message, payload[-4627:], "misaka-palw/tir/class-registration/mldsa87/v1")
+    return message.hex()
+
+
+def verify(directory, openssl):
     audit = json.loads((HERE / "qf1-arithmetic-audit-close.json").read_bytes())["audit"]
     archive = HERE / "qf1-arithmetic-audit-close-public.tar.zst"
     wire = subprocess.check_output(["tar", "-xOf", archive, "public.jsonl"])
@@ -56,10 +84,13 @@ def verify(directory):
         observed.append(row)
         pids.append(pid)
     require(len(set(pids)) == 3 and observed[0] == observed[1] == observed[2], "different population or duplicate process")
-    return dict(processes=pids, snapshot=observed[0])
+    message = verify_registration_signature(registration, meta["genesis"], openssl)
+    return dict(processes=pids, snapshot=observed[0], registration_signing_message=message)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
-    print(json.dumps(verify(parser.parse_args().directory), indent=2))
+    parser.add_argument("--openssl", required=True, help="verify the original registration signature with an ML-DSA-87 capable OpenSSL")
+    args = parser.parse_args()
+    print(json.dumps(verify(args.directory, args.openssl), indent=2))

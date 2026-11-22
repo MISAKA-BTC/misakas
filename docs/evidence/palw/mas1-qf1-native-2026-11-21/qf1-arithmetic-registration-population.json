@@ -20,5 +20,6 @@
     "source_daa": 1,
     "span": 1,
     "state": "948e5069480aa70610a9fdf410a1d0bcb3fc280f76fc82e3b79e0e2ce08749eaa8f3ca1e9ecb28c4c6ac1b16c51f32e2fd29d167de761d1618847c742b5d198f"
-  }
+  },
+  "registration_signing_message": "27f0e6181f57ddd6931c6e93bcd28849d714b613821d3da58c8022abca4a3a17aad65d7390c5df19a17bc881db2b0e668cac6745f370b10d65edede3b795d1f0"
 }
