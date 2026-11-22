@@ -37,6 +37,25 @@ impl CostPlan<'_> {
         }
         hash.finalize().into()
     }
+
+    /// Admission resolves the applicable prior failures from its own case history.
+    /// Keep original measurement IDs stable when binding a review to that history.
+    pub fn review_scope(&self, prior_failures: &[(Digest, Digest)]) -> Digest {
+        let measurement = self.measurement_scope();
+        if prior_failures.is_empty() {
+            return measurement;
+        }
+        let cases: BTreeSet<_> = prior_failures.iter().collect();
+        let mut hash = Sha3_512::new();
+        hash.update(b"MISAKA/private/MAS1/cost-regression-review/v1");
+        hash.update(measurement);
+        hash.update((cases.len() as u64).to_be_bytes());
+        for (input, route) in cases {
+            hash.update(input);
+            hash.update(route);
+        }
+        hash.finalize().into()
+    }
 }
 
 pub struct CostRun {
@@ -121,9 +140,9 @@ impl CostReview {
             }
         }
         if cheap {
-            Self(Some((scope, Verdict::Fail)))
+            Self(Some((plan.review_scope(prior_failures), Verdict::Fail)))
         } else if !uncertain && covers_history && inputs.len().checked_mul(routes.len()) == Some(seen.len()) {
-            Self(Some((scope, Verdict::Pass)))
+            Self(Some((plan.review_scope(prior_failures), Verdict::Pass)))
         } else {
             Self::default()
         }
@@ -217,5 +236,15 @@ mod tests {
         assert_eq!(review(&[([7; 64], routes[0])]), Verdict::Unknown);
         assert_eq!(review(&[(inputs[0], [7; 64])]), Verdict::Unknown);
         assert_eq!(review(&[(inputs[0], routes[0]), (inputs[1], routes[0])]), Verdict::Unknown);
+
+        let prior = [(inputs[0], routes[0])];
+        let clean = CostReview::assess(&plan, &references, &candidates, &[]);
+        let repaired = CostReview::assess(&plan, &references, &candidates, &prior);
+        assert_eq!(clean.verdict_for(Some(plan.review_scope(&prior))), Verdict::Unknown);
+        assert_eq!(repaired.verdict_for(Some(plan.review_scope(&prior))), Verdict::Pass);
+        assert_eq!(repaired.verdict_for(Some(scope)), Verdict::Unknown);
+        assert_eq!(repaired.verdict_for(Some(plan.review_scope(&[(inputs[0], [7; 64])]))), Verdict::Unknown);
+        let other = (inputs[1], routes[0]);
+        assert_eq!(plan.review_scope(&[prior[0], other, prior[0]]), plan.review_scope(&[other, prior[0]]));
     }
 }

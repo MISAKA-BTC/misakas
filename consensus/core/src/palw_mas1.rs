@@ -23,7 +23,7 @@ pub enum Admission {
 pub struct Assessment {
     pub execution: Verdict,
     pub collision: Verdict,
-    /// Resolved by the owner from the frozen candidate/suite and its scheduled audit inputs.
+    /// Resolved by the owner from the frozen plan, scheduled inputs and applicable failure history via CostPlan::review_scope.
     pub required_cost_scope: Option<[u8; 64]>,
     pub cost: CostReview,
     pub usefulness: Verdict,
@@ -100,21 +100,21 @@ pub fn new_mining_allowed(
 mod tests {
     use super::*;
 
-    fn checked_cost() -> ([u8; 64], CostReview) {
+    fn checked_cost(failures: &[([u8; 64], [u8; 64])]) -> ([u8; 64], CostReview) {
         use cost::{CostPlan, CostRun, RouteRun};
-        let inputs = [[1; 64], [2; 64]];
+        let inputs = [[1; 64], [2; 64], [5; 64]];
         let routes = [[3; 64]];
         let plan = CostPlan { scope: [4; 64], inputs: &inputs, routes: &routes, cutoff_permille: 500 };
         let scope = plan.measurement_scope();
         let run = |input| CostRun { scope, input, ticket_input: input, units: 10..=10 };
         let references = inputs.map(run);
         let candidates = inputs.map(|input| RouteRun { route: routes[0], run: run(input) });
-        (scope, CostReview::assess(&plan, &references, &candidates, &[]))
+        (plan.review_scope(failures), CostReview::assess(&plan, &references, &candidates, failures))
     }
 
     #[test]
     fn mas1_new_mining_checks_every_gate_and_keeps_timeout_closed() {
-        let (scope, cost) = checked_cost();
+        let (scope, cost) = checked_cost(&[]);
         let mut a = Assessment {
             execution: Verdict::Pass,
             collision: Verdict::Pass,
@@ -130,7 +130,12 @@ mod tests {
             assert_eq!(a.decision(), Admission::ReviewHold);
             assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], true));
         }
-        a.required_cost_scope = Some(scope);
+        let (repair_scope, repaired) = checked_cost(&[([1; 64], [3; 64])]);
+        a.required_cost_scope = Some(repair_scope);
+        assert_eq!(a.decision(), Admission::ReviewHold);
+        assert!(!new_mining_allowed(true, Admission::Passed, &a, &[], true));
+        a.cost = repaired;
+        assert!(new_mining_allowed(true, a.decision(), &a, &[], true));
         for stop in [
             StopReason::AdmissionHold,
             StopReason::StructuralFailure,

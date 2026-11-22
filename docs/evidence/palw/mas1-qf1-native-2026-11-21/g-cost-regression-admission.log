@@ -1,0 +1,11 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 11m 27s
+     Running unittests src/lib.rs (target/protected-core-tests/debug/deps/kaspa_consensus_core-a02e024942e5f587)
+
+running 4 tests
+test palw_mas1::cost::tests::repeated_cost_screen_uses_every_planned_input_and_route ... ok
+test palw_mas1::tests::mas1_new_mining_checks_every_gate_and_keeps_timeout_closed ... ok
+test palw_mas1::cost::tests::measurements_cannot_be_regraded_with_a_different_cutoff_or_schedule ... ok
+test palw_mas1::cost::tests::repaired_suite_keeps_the_failure_and_two_fresh_inputs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6114 filtered out; finished in 0.00s

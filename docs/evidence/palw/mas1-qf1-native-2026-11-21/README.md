@@ -1236,3 +1236,5 @@ zstd -dc "$p/qf1-arithmetic-release-window-blocks.jsonl.zst" > "$out/combined.js
 cat "$out/extension.jsonl" >> "$out/combined.jsonl"
 python3 -B "$p/check_fresh_holder_release.py" "$out" --arithmetic --holder 0 --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-holder-0.json"
 ```
+
+G-COSTのローカル判定では、元の計測IDと、現在のcase履歴から求めた回帰対象（入力・経路）の集合を照合する。集合が変わると以前のPASSでは新規採掘は保留となる。修正後の元経路と新しい2入力を含む測定で再判定したときに、当該の費用条件を満たせる。集合の順序と重複は判定を変えない。MAS1の採掘入口を含む対象テスト4件が成功。実機Qwen3の費用閾値は未採択で、実モデルの判定はUNKNOWN。[対象テストの実行記録](g-cost-regression-admission.log)
