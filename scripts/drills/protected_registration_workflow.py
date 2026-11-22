@@ -112,6 +112,34 @@ def registration_status(rpc, expected, open_id, open_hex, previous=None):
     return view
 
 
+def completed_registration_on_peers(clients, expected, prior):
+    """Read one completed registration at the same selected parent on each peer."""
+    row = prior['registration']
+    require(row['status'] == 'complete', 'registration is still pending')
+    try:
+        before = [chain_identity(client, expected)[1] for client in clients]
+        if len({(stamp[0], stamp[2]) for stamp in before}) != 1:
+            return None
+        try:
+            views = [registration_status(client, expected, prior['openId'], row['openBodyHex'], prior)
+                     for client in clients]
+        except (ValueError, AcceptancePending):
+            if before != [chain_identity(client, expected)[1] for client in clients]:
+                return None
+            raise
+        after = [chain_identity(client, expected)[1] for client in clients]
+    except ContextMoved:
+        return None
+    if before != after or any(view['acceptedParent']['block'] != stamp[0]
+                              or view['prospectiveDaa'] != stamp[2] for view, stamp in zip(views, before)):
+        return None
+    require(all(view['registration'] == row for view in views),
+            'peers did not recover the completed tokenizer registration')
+    require(len({view['acceptedParentRoot'] for view in views}) == 1,
+            'peers disagree on tokenizer state root at the same selected parent')
+    return views
+
+
 def next_control(view):
     """Never derive a replacement slot. Return an existing slot or completion."""
     row, now = view['registration'], unsigned(view['prospectiveDaa'])

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from protected_registration_workflow import RegistrationWorkflow, chain_identity, registration_status, next_control
+from protected_registration_workflow import RegistrationWorkflow, chain_identity, completed_registration_on_peers, registration_status, next_control
 from protected_private_registration_run import fund_private_carriers, registration_peer, relay_registered_control, require_independent_funding, warmup_checkpoint
 from protected_inventory_acceptance import AcceptancePending
 from rfc12_acceptance_observe import ContextMoved
@@ -415,6 +415,31 @@ class RegistrationTests(unittest.TestCase):
         row['parts'][1].update(received=False, accepted=None)
         with self.assertRaisesRegex(ValueError, 'lacks accepted'):
             rpc.observe()
+
+    def test_registration_agreement_pins_parent_generation_and_native_root(self):
+        peers = [Rpc() for _ in range(3)]
+        for peer in peers:
+            row = peer.view['registration']
+            for part in row['parts']:
+                part.update(received=True, accepted=dict(block=h(30 + part['index']), daa=part['reservedDaa']))
+            row['finishes'][0]['attempted'] = True
+            row.update(status='complete', registrationId=h(40), terminal=dict(block=h(41), daa=202))
+        prior = peers[0].observe()
+        check = lambda: completed_registration_on_peers(peers, peers[0].expected, prior)
+        self.assertEqual(len(check()), 3)
+        peers[2].view['acceptedParentRoot'] = h(50)
+        with self.assertRaisesRegex(ValueError, 'state root'):
+            check()
+        peers[2].dag['sink'] = h(51)
+        self.assertIsNone(check())
+        peers[2].dag['sink'] = h(10)
+
+        def move_first(_, method, request):
+            if method == 'getPalwTokenizerRegistrationStatus':
+                peers[0].dag['sink'] = h(52)
+
+        peers[2].mutate = move_first
+        self.assertIsNone(check())
 
     def test_uncertain_command_is_logged_once_and_never_retried(self):
         with tempfile.TemporaryDirectory() as directory:
