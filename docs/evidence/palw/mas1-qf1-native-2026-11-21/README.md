@@ -1207,3 +1207,12 @@ uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_g_co
 tar -xf "$p/qf1-arithmetic-8k-certification-reader-0.tar.zst" -C "$out"
 python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --first-reader --openssl "$(brew --prefix openssl@3)/bin/openssl" | cmp - "$p/qf1-arithmetic-8k-certification-reader-0.json"
 ```
+
+3台目（PID 39253）も元のブロック列から同じ8K認証を復元した。2台の再読込結果はclaim、再実行結果、frontier、認証DAA 11673、75枠の賛成、認証時の監査状態で一致した。両者が計算した認証後の状態root `15417af4…` は、3台目が生成した直後のブロック `b18b5444…`（blue score 23351）の親状態commitmentとも一致した。子ブロックの親、親状態root、取引Rootを個別に置換した対照はすべて拒否された。認証時には3台目でも監査公開は保留だった。保存したログはその時点までの抜粋である。[3プロセスの照合結果](qf1-arithmetic-8k-certified-parent.json)・[子ブロックと3台目のログ](qf1-arithmetic-8k-certified-parent.tar.zst)
+
+1台目の再読込記録まで展開したディレクトリで照合する。
+
+```sh
+tar -xf "$p/qf1-arithmetic-8k-certified-parent.tar.zst" -C "$out"
+python3 -B "$p/check_fresh_certificate.py" "$out" "$out/accepted/winning.json" --arithmetic-work --openssl "$(brew --prefix openssl@3)/bin/openssl" --certified-successor "$out/first-child.json" | cmp - "$p/qf1-arithmetic-8k-certified-parent.json"
+```

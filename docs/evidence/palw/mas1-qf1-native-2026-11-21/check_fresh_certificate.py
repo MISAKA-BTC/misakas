@@ -8,8 +8,9 @@ from pathlib import Path
 from check_fresh_audit import records, verify as verify_audit
 from check_fresh_final import panel, walk
 from check_funded_certificate import verify as verify_certificate
-from check_genesis_draw import attempt_identity, verify_readers
+from check_genesis_draw import attempt_identity, header_hash, verify_readers
 from check_legacy_work import HERE, require
+from check_transaction_root import verify_block_transactions
 
 
 def studio_economics(path, binary):
@@ -128,6 +129,36 @@ def verify(root, winning, arithmetic_work=False, draw_only=False, openssl=None, 
                 separate_studio_moe2=studio_economics(root / "moe2-studio.log", cert["binary_sha256"]))
 
 
+def certified_successor(log, block, first, writer):
+    """Check the next peer's certification and the first child committing its parent state."""
+    [(pid, native)] = records(log, "legacy genesis certification")
+    [(audit_pid, audit)] = records(log, "signed audit after nonfloor")
+    windows = records(log, "signed audit release window")
+    require(windows and windows[0][0] == audit_pid == pid, "missing initial release observation")
+    initial = windows[0][1]
+    cert = writer["certificate"]
+    binaries = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", log, re.M)
+    require(len({pid, first["reader"], cert["writer"]}) == 3 and binaries == [first["binary_sha256"]] == [cert["binary_sha256"]],
+            "expected a third native process on the original build")
+    require(native == first["native"] and audit == first["audit"] and native["tip"] == cert["tip"] and
+            native["claim"] == cert["claim"] and native["replay"] == cert["transcript"], "different certified claim or cold state")
+    require(initial["blocks"] == 0 and initial["base"] == initial["tip"] == native["tip"] and initial["close"] == audit["close"] and
+            initial["publication"] == audit["publication"] == "held" and initial["deadline"] == audit["deadline"] and
+            initial["readiness"] == audit["readiness"] and initial["daa"] == cert["certified_daa"] and
+            initial["blue"] == audit["readiness"]["sinkBlue"], "different release window at certification")
+    header = block["header"]
+    verify_block_transactions(block)
+    require(header["parentsByLevel"][0] == [native["tip"]] and header["blueScore"] == initial["blue"] + 1 and
+            initial["daa"] <= header["daaScore"] < audit["deadline"] and header["palwStateRoot"] == native["state"],
+            "successor does not commit the certified parent state")
+    require(header["version"] == 2 and header["powAlgoId"] == 8 and len(block["transactions"]) == 1 and
+            block["transactions"][0]["subnetworkId"] == "01" + "00" * 19, "unexpected certification successor")
+    return dict(claim=native["claim"], certificate=native["tip"], certified_daa=initial["daa"], approvals=native["approvals"],
+                state=native["state"], successor=header_hash(header, bytes(header["palwCommitment"]), False).hex(),
+                successor_blue=header["blueScore"], audit_close=audit["close"], publication_at_certificate=initial["publication"],
+                processes=[cert["writer"], first["reader"], pid], binary_sha256=cert["binary_sha256"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -135,8 +166,15 @@ if __name__ == "__main__":
     parser.add_argument("--arithmetic-work", action="store_true")
     stage = parser.add_mutually_exclusive_group()
     stage.add_argument("--writer-only", action="store_true", help="verify the certificate before cold replica checks")
+    stage.add_argument("--certified-successor", type=Path, metavar="FIRST_BLOCK", help="compare both replicas and the first parent-state commitment")
     stage.add_argument("--first-reader", action="store_true", help="check the first completed cold replica against the archived certification")
     stage.add_argument("--draw-only", action="store_true", help="verify only through the first funded Gate C draw")
     parser.add_argument("--openssl", help="verify the isolated Panel and Gate C card signatures")
     args = parser.parse_args()
-    print(json.dumps(verify(args.root, args.winning, args.arithmetic_work, args.draw_only, args.openssl, args.writer_only, args.first_reader), indent=2))
+    if args.certified_successor:
+        first = verify(args.root, args.winning, args.arithmetic_work, openssl=args.openssl, first_reader=True)
+        writer = verify(args.root, args.winning, args.arithmetic_work, openssl=args.openssl, writer_only=True)
+        result = certified_successor((args.root / "read-cert-2.log").read_text(), json.loads(args.certified_successor.read_bytes()), first, writer)
+    else:
+        result = verify(args.root, args.winning, args.arithmetic_work, args.draw_only, args.openssl, args.writer_only, args.first_reader)
+    print(json.dumps(result, indent=2))
