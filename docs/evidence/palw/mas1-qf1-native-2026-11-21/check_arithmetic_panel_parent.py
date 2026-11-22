@@ -164,13 +164,31 @@ def control_observations(report, log):
                 known_cards_at_parent=identify_control_cards(parent, identities))
 
 
+def prefix_run(log):
+    text = log.read_text()
+    [pid] = re.findall(r"^arithmetic PANEL prefix pid=(\d+) ", text, re.M)
+    [binary] = re.findall(r"^test_binary_sha256=([a-f0-9]{64})$", text, re.M)
+    return dict(pid=int(pid), binary_sha256=binary)
+
+
+def agree_on_parent(prefix, writer_log, reader_log):
+    writer = prefix_run(writer_log)
+    reader = prefix_run(reader_log)
+    require(writer["pid"] != reader["pid"], "writer and reader report the same process")
+    report = verify(prefix, reader_log)
+    require(verify(prefix, writer_log) == report, "writer and reader reproduced different prefixes")
+    return dict(**report, writer=writer, reader=reader)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prefix", type=Path)
     parser.add_argument("native_log", type=Path)
     parser.add_argument("--control-population", action="store_true", help="also verify the cold reader’s live parent population observation")
+    parser.add_argument("--writer-log", type=Path, help="also require agreement with a separate native writer")
     args = parser.parse_args()
-    result = verify(args.prefix, args.native_log)
+    result = (agree_on_parent(args.prefix, args.writer_log, args.native_log) if args.writer_log
+              else verify(args.prefix, args.native_log))
     if args.control_population:
         result = control_observations(result, args.native_log)
     print(json.dumps(result, indent=2))
