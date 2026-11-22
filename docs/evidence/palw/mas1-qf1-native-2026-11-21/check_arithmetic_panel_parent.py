@@ -32,17 +32,17 @@ def walk_prefix(stream, tip, position):
         tip = header_hash(h, bytes(h["palwCommitment"]), False).hex()
         blue, daa = h["blueScore"], h["daaScore"]
         require(daa < release_from, "parent already at or beyond the first permissible share release")
-        yield tip, blue, daa, digest
+        yield tip, blue, daa, digest.hexdigest()
 
 
 def check_prefix(stream, tip, position, expected_parent):
     blue, daa = position["submission_blue"], position["submission_daa"]
-    digest = hashlib.sha256()
-    for tip, blue, daa, digest in walk_prefix(stream, tip, position):
+    archive_sha256 = hashlib.sha256().hexdigest()
+    for tip, blue, daa, archive_sha256 in walk_prefix(stream, tip, position):
         pass
     require(blue == position["panel_close_blue"] - 1 and tip == expected_parent, "missing or different PANEL parent")
     require(daa < position["panel_release_from_daa"], "parent already at or beyond the first permissible share release")
-    return dict(parent=tip, blue=blue, daa=daa, blocks=blue-position["submission_blue"], archive_sha256=digest.hexdigest())
+    return dict(parent=tip, blue=blue, daa=daa, blocks=blue-position["submission_blue"], archive_sha256=archive_sha256)
 
 
 def verify(prefix, log):
