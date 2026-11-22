@@ -438,6 +438,8 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 
 2026-11-22の隔離試験では、登録済みQwen3候補の非報酬MODEL_AUDITで、3 holderが元の監査closeに署名した。3件の公開行から復元したseedと、固定した1候補・2ケースのchallengeは、公開したpeerと、別々の新しいDBで再生した2 peerの結果に一致した。3 peerの受理後の状態Rootも一致した。ここで確認したのは監査の抽選までである。PracticalSuiteの採点、新規採掘資格、受賞は引き続き未確認である。[署名者・certificate・3 peerの照合結果](../evidence/palw/mas1-qf1-native-2026-11-21/fresh-audit-readback.json)
 
+別の非報酬算術監査（Round 15）では、3台のholderが元のshareを公開した。復元したseedから生成した「1 + 3」と「2 − 1」に対し、登録済みQwen3-8Bの提出はそれぞれ「4」と「1」の直後にEOSとなり、事前に固定した正答条件を2件とも満たした。提出ブロックと正規Ticketを公開資料から照合した。独立したRound 16で選出するPanelの採点とG-USEの判定は残る。[提出結果](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-arithmetic-publisher.json)・[seedの復元](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-arithmetic-publisher-seed.json)
+
 有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、G-COLLの適合定理、G-COSTの反復費用検査、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
 
 ## 13. 一次資料と今回の確認範囲
