@@ -981,6 +981,42 @@ struct RecoveryWorkPlan {
     output: PathBuf,
 }
 
+#[derive(Serialize, Deserialize)]
+struct RecoveryCheckpoint {
+    original_tip: Hash64,
+    branch_parent: Hash64,
+    tip: Hash64,
+    blue: u64,
+    daa: u64,
+    state_root: Hash64,
+}
+
+impl RecoveryCheckpoint {
+    fn read(dir: &Path) -> Self {
+        serde_json::from_reader(File::open(dir.join("position.json")).unwrap()).unwrap()
+    }
+
+    fn write(node: &Rig, dir: &Path, original_tip: Hash64, branch_parent: Hash64) {
+        use std::io::Write;
+        let (tip, state) = node.chain.tip_state();
+        let header = node.api().get_header(tip).unwrap();
+        let record =
+            Self { original_tip, branch_parent, tip, blue: header.blue_score, daa: header.daa_score, state_root: state.state_root() };
+        assert_eq!(node.chain.sink(), tip);
+        private_dir(dir);
+        node.api().checkpoint_database(&dir.join("db"));
+        assert_eq!(node.chain.sink(), tip);
+        let pending = dir.join("position.pending");
+        let mut file = File::create_new(&pending).unwrap();
+        serde_json::to_writer(&mut file, &record).unwrap();
+        file.write_all(b"\n").unwrap();
+        file.sync_all().unwrap();
+        fs::rename(pending, dir.join("position.json")).unwrap();
+        File::open(dir).unwrap().sync_all().unwrap();
+        peer_log!("retained Round 16 recovery {}", serde_json::to_string(&record).unwrap());
+    }
+}
+
 enum PrefixParent {
     Known(Hash64),
     // A streaming reader can start before its parent exists. Its feed must
@@ -1038,7 +1074,16 @@ async fn run_saved_recovery(cursor_only: bool) {
     };
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-    let source = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap());
+    let checkpoint_dir = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_CHECKPOINT_READ").map(PathBuf::from);
+    let checkpoint = checkpoint_dir.as_deref().map(RecoveryCheckpoint::read);
+    let source = checkpoint_dir
+        .as_deref()
+        .map(|dir| dir.join("db"))
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("MISAKA_PRIVATE_GENESIS_SUFFIX_DB").unwrap()));
+    let checkpoint_output = std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_CHECKPOINT_WRITE").map(PathBuf::from);
+    let stop_blue = std::env::var("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_STOP_BLUE").ok().map(|v| v.parse::<u64>().unwrap());
+    assert!(!cursor_only || (checkpoint.is_none() && stop_blue.is_none() && checkpoint_output.is_none()));
+    assert_eq!(stop_blue.is_some(), checkpoint_output.is_some(), "a bounded recovery must retain its resulting database");
     let plan: RecoveryWorkPlan =
         serde_json::from_reader(File::open(std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_RECOVERY_WORK_PLAN").unwrap()).unwrap())
             .unwrap();
@@ -1068,27 +1113,43 @@ async fn run_saved_recovery(cursor_only: bool) {
     let consensus = stable_panel::reopen_checkpoint(&config, &copy);
     let tip = consensus.get_block(consensus.get_sink()).unwrap();
     let expected = &saved["read_only_reopen"];
-    assert_eq!(serde_json::json!(tip.hash()), expected["materialized_tip"]);
-    let mut archive = recovery_suffix(&plan.prefix, &tip, plan.parent);
+    let original_tip: Hash64 = expected["materialized_tip"].as_str().unwrap().parse().unwrap();
     let chain = t12_reopened_chain(consensus, &config, bundle, tip.header.timestamp, tip.header.nonce);
-    assert_eq!(serde_json::json!(chain.tip_state().1.state_root()), expected["palw_state_root"]);
+    let state_root = chain.tip_state().1.state_root();
+    if let Some(checkpoint) = &checkpoint {
+        assert_eq!((checkpoint.original_tip, checkpoint.branch_parent), (original_tip, plan.parent));
+        assert_eq!(
+            (tip.hash(), tip.header.blue_score, tip.header.daa_score, state_root),
+            (checkpoint.tip, checkpoint.blue, checkpoint.daa, checkpoint.state_root)
+        );
+        assert!(
+            chain.ctx.consensus.is_chain_ancestor_of(original_tip, tip.hash()).unwrap(),
+            "checkpoint came from a different branch"
+        );
+    } else {
+        assert_eq!(tip.hash(), original_tip);
+        assert_eq!(serde_json::json!(state_root), expected["palw_state_root"]);
+    }
+    let mut archive = recovery_suffix(&plan.prefix, &tip, plan.parent);
     let mut node = Rig::resumed(chain, &parts, Default::default(), tip.header.nonce);
     stable_panel::arm(&mut node);
-    if cursor_only {
+    let cursor = &saved["frozen_replay_input_position"];
+    if let Some(target) = stop_blue.or_else(|| cursor_only.then(|| cursor["blue"].as_u64().unwrap())) {
         let PrefixArchive::Read(lines, _) = &mut archive else { unreachable!() };
-        let cursor = &saved["frozen_replay_input_position"];
-        let cursor_blue = cursor["blue"].as_u64().unwrap();
-        assert!(tip.header.blue_score < cursor_blue && cursor_blue <= plan.parent_blue);
-        for blue in tip.header.blue_score + 1..=cursor_blue {
-            let parent = node.chain.sink();
-            let next = accept_prefix_line(&mut node, parent, lines.next().expect("missing archived successor").unwrap()).await;
-            assert_eq!(next.header.blue_score, blue);
-            assert_eq!(node.chain.tip_state().0, next.hash());
-            assert_eq!(node.chain.sink(), next.hash());
-        }
+        assert!(tip.header.blue_score < target && target <= plan.parent_blue);
+        advance_recovery_prefix(&mut node, &tip, target, release, lines).await;
         let (last, state) = node.chain.tip_state();
-        assert_eq!(cursor["daa"], node.chain.daa_of(last));
-        eprintln!("recovered through cursor blue={cursor_blue} tip={last} root={}", state.state_root());
+        if target == plan.parent_blue {
+            assert_eq!(last, plan.parent);
+            assert!(lines.next().is_none(), "extra recovery prefix blocks");
+        }
+        if cursor_only {
+            assert_eq!(cursor["daa"], node.chain.daa_of(last));
+            eprintln!("recovered through cursor blue={target} tip={last} root={}", state.state_root());
+        }
+        if let Some(path) = checkpoint_output {
+            RecoveryCheckpoint::write(&node, &path, original_tip, plan.parent);
+        }
         return;
     }
     let held = PathBuf::from(std::env::var_os("MISAKA_PRIVATE_TB1_GENESIS8K").unwrap());
@@ -1105,6 +1166,36 @@ async fn accept_prefix_line(node: &mut Rig, parent: Hash64, line: String) -> Blo
     let status = node.api().validate_and_insert_block(block.clone()).virtual_state_task.await.unwrap();
     assert!(status.has_block_body());
     block
+}
+
+async fn advance_recovery_prefix(
+    node: &mut Rig,
+    tip: &Block,
+    target_blue: u64,
+    release_from: u64,
+    lines: &mut std::io::Lines<std::io::BufReader<File>>,
+) {
+    let mut parent = tip.hash();
+    let mut pruning_point = tip.header.pruning_point;
+    assert!(tip.header.daa_score < release_from);
+    for blue in tip.header.blue_score + 1..=target_blue {
+        let block = accept_prefix_line(node, parent, lines.next().expect("missing archived successor").unwrap()).await;
+        check_panel_prefix_step(node, &block, parent, blue, release_from);
+        parent = block.hash();
+        if block.header.pruning_point != pruning_point {
+            pruning_point = block.header.pruning_point;
+            legacy_work::await_pruning_capture(node, pruning_point).await;
+        }
+    }
+}
+
+fn check_panel_prefix_step(node: &Rig, block: &Block, parent: Hash64, blue: u64, release_from: u64) {
+    assert_eq!(block.header.direct_parents(), &[parent]);
+    assert_eq!(block.header.blue_score, blue);
+    assert!(block.header.daa_score < release_from, "PANEL prefix reached the share release window");
+    assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID);
+    assert_eq!(block.transactions.len(), 1);
+    assert_eq!(node.chain.sink(), block.hash());
 }
 
 /// Retain or validate ordinary accepted blocks up to the parent of the PANEL close.
@@ -1125,13 +1216,8 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, relea
                 accept_prefix_line(node, tip, lines.next().expect("truncated PANEL prefix").unwrap()).await
             }
         };
-        assert_eq!(block.header.direct_parents(), &[tip]);
-        assert_eq!(block.header.blue_score, blue);
-        assert!(block.header.daa_score < release_from, "PANEL prefix reached the share release window");
-        assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID);
-        assert_eq!(block.transactions.len(), 1);
+        check_panel_prefix_step(node, &block, tip, blue, release_from);
         tip = block.hash();
-        assert_eq!(node.chain.sink(), tip);
         if block.header.pruning_point != pruning_point {
             pruning_point = block.header.pruning_point;
             legacy_work::await_pruning_capture(node, pruning_point).await;
