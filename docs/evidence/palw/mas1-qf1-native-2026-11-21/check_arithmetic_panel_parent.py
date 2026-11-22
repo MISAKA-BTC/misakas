@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 
+from check_fresh_audit import records
 from check_genesis_draw import header_hash
 from check_legacy_work import HERE, require
 from check_transaction_root import verify_block_transactions
@@ -52,9 +53,42 @@ def verify(prefix, log):
     return dict(submission=submission, native_round=panel_round, **report)
 
 
+def check_control_identity(row, registered):
+    for field in ("class", "base_class", "registrant", "registrant_key", "registrant_operator"):
+        require(row[field] == registered[field], "control population differs from the signed registration")
+    bonds = row["bonds"]
+    outpoints = {(b["txid"], b["index"]) for b in bonds}
+    require(len(bonds) == len(outpoints) and tuple(registered["registrant"]) not in outpoints
+            and all(b["operator"] != registered["registrant_operator"] and b["key_id"] != registered["registrant_key"]
+                    and type(b["collateral"]) is int and b["collateral"] > 0 for b in bonds)
+            and row["operator_count"] == len({b["operator"] for b in bonds}), "invalid or self-selected control bond")
+
+
+def control_observations(report, log):
+    text = log.read_text()
+    [(pid, submission)] = records(text, "arithmetic control population")
+    [(parent_pid, parent)] = records(text, "arithmetic assessment parent state")
+    require(pid == parent_pid and f"arithmetic PANEL prefix pid={pid} submission={report['submission']} " in text,
+            "population observation belongs to another process")
+    seed = json.loads((HERE / "qf1-arithmetic-publisher-seed.json").read_bytes())
+    registered = json.loads((HERE / "qf1-arithmetic-registration-population.json").read_bytes())["snapshot"]
+    for row in (submission, parent):
+        check_control_identity(row, registered)
+    require(submission["block"] == report["submission"] and submission["source"] == seed["certificate"]
+            and submission["state"] == seed["state"], "population observed before a different submission")
+    require(parent["source"] == report["parent"] and parent["source_daa"] == report["daa"]
+            and "block" not in parent and re.fullmatch(r"[0-9a-f]{128}", parent["state"]),
+            "different live pre-close state observation")
+    return dict(**report, process=pid, at_submission=submission, at_parent=parent)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("prefix", type=Path)
     parser.add_argument("native_log", type=Path)
+    parser.add_argument("--control-population", action="store_true", help="also verify the cold reader’s live parent population observation")
     args = parser.parse_args()
-    print(json.dumps(verify(args.prefix, args.native_log), indent=2))
+    result = verify(args.prefix, args.native_log)
+    if args.control_population:
+        result = control_observations(result, args.native_log)
+    print(json.dumps(result, indent=2))
