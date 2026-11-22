@@ -6,13 +6,13 @@ use crate::tb1_exposure::Tb1HolderFreeze;
 use kaspa_consensus_core::palw_state_proof_v1::{
     PALW_PROOF_LABEL_BONDS, PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_bond_v1, verify_class_v1,
 };
+use kaspa_consensus_core::palw_tb1::exec_registration::verify_quote_consent;
 use kaspa_consensus_core::{
     config::params::Params,
     palw_attempt_v2::palw_network_domain_v2_for,
     palw_mode_v2::PalwConsensusMode,
     palw_state_v2::{Moe2ExecCloseV1, PalwBlockContextV2, PalwChainStateV2, PalwStateDeltaV2, apply_delta_v2},
 };
-use libcrux_ml_dsa::ml_dsa_87::{self, MLDSA87VerificationKey};
 
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot;
 
@@ -61,8 +61,11 @@ impl<'a> QuotePreparation<'a> {
             return Err(invalid("MOE2 quote outside original window at preparation"));
         }
         let verify_funder = |pubkey: &[u8]| {
-            let vk = MLDSA87VerificationKey::new(pubkey.try_into().map_err(|_| invalid("invalid MOE2 bond key"))?);
-            ml_dsa_87::verify(&vk, &authorization, QUOTE_DOMAIN, consent).map_err(|_| invalid("invalid MOE2 funder consent"))
+            use kaspa_consensus_core::palw_tb1::exec_registration::ExecRegistrationError;
+            verify_quote_consent(key, row.slot, row.funding_ref, pubkey, consent).map_err(|why| match why {
+                ExecRegistrationError::FunderKey => invalid("invalid MOE2 bond key"),
+                _ => invalid("invalid MOE2 funder consent"),
+            })
         };
         let (artifact, registered_daa) = if let Some(state) = self.state {
             let bond = state.bond(&quote.funding_bond).ok_or_else(|| invalid("missing MOE2 funding bond"))?;

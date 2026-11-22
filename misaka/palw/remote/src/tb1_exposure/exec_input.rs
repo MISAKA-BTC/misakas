@@ -10,11 +10,17 @@ use kaspa_consensus_core::{
     header::Header,
     palw_prompt_ids_v1::prompt_token_ids_root_v1,
     palw_tb1::{
+        exec_registration::{
+            ExecRegistration, MOE2_QUOTE_DOMAIN, QF1_LOCAL_CONTEXT_DOMAIN, TIR_CONTEXT_DOMAIN, input_set_root,
+            registration_key as reg_key,
+        },
         freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
         qualification::Tb1Qualification,
     },
 };
-use libcrux_ml_dsa::ml_dsa_65::{self, MLDSA65Signature, MLDSA65VerificationKey};
+#[cfg(feature = "private-tb1-tir")]
+use libcrux_ml_dsa::ml_dsa_65;
+use libcrux_ml_dsa::ml_dsa_65::{MLDSA65Signature, MLDSA65VerificationKey};
 use sha3::{Digest, Sha3_256, Sha3_512};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -26,7 +32,7 @@ pub mod moe2;
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote;
 use libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature;
 
-pub const REGISTRATION_DOMAIN: &[u8] = b"MISAKA/private/FOW1/input-owner/v2";
+pub use kaspa_consensus_core::palw_tb1::exec_registration::REGISTRATION_DOMAIN;
 
 /// The legacy input uses BOS=0, POW=1, SEP=2 and ByteToken[b]=3+b. QF1 uses
 /// its separately registered HEX64 frame. Both bind the model, class and tokenizer.
@@ -67,7 +73,8 @@ impl ExecInputTerms<'_> {
         }
     }
 
-    fn context(
+    /// Canonical owner-signed preimage committed by the EXEC registration key.
+    pub fn registration_preimage(
         &self,
         preparation: Hash64,
         rounds: &QualifiedExecPanel,
@@ -106,11 +113,11 @@ impl ExecInputTerms<'_> {
         let job = prompt_token_ids_root_v1(self.job_tokens).map_err(|_| invalid("invalid job token commitment"))?;
         let mut c = Vec::new();
         if let Some(frame) = frame {
-            c.extend_from_slice(b"MISAKA/private/FOW1/QF1-Q3-8B-A16-8K-v1/local-inference/context/v1");
+            c.extend_from_slice(QF1_LOCAL_CONTEXT_DOMAIN);
             c.extend_from_slice(frame.instance_descriptor.as_byte_slice());
             c.extend_from_slice(&frame.source_digest);
         } else {
-            c.extend_from_slice(b"MISAKA/private/FOW1/TIR-input/012-byte3/v2");
+            c.extend_from_slice(TIR_CONTEXT_DOMAIN);
         }
         for field in [
             preparation.as_bytes(),
@@ -147,7 +154,7 @@ impl ExecInputTerms<'_> {
             {
                 return Err(invalid("invalid MOE2 quote for signed EXEC model"));
             }
-            c.extend_from_slice(b"MISAKA/private/FOW1/MOE2/pre-draw-quote/v1");
+            c.extend_from_slice(MOE2_QUOTE_DOMAIN);
             c.extend_from_slice(&borsh::to_vec(&quote)?);
         }
         Ok(c)
@@ -160,12 +167,8 @@ impl ExecInputTerms<'_> {
         owner: &MLDSA65VerificationKey,
         max_tokens: usize,
     ) -> io::Result<[u8; 64]> {
-        Ok(reg_key(&self.context(preparation, rounds, owner, max_tokens)?))
+        Ok(reg_key(&self.registration_preimage(preparation, rounds, owner, max_tokens)?))
     }
-}
-
-fn reg_key(c: &[u8]) -> [u8; 64] {
-    Sha3_512::new().chain_update(b"MISAKA/private/FOW1/reg-key/v1").chain_update(c).finalize().into()
 }
 
 /// Slot and funding reference belong to the allocation envelope, outside C.
@@ -309,7 +312,6 @@ impl<'a> ExecInputBatch<'a> {
             .any(|row| row.terms.moe2_quote.is_some())
             .then(|| moe2::QuotePreparation::resolve(native, &header, preparation, preparation_parent_state))
             .transpose()?;
-        let count = u32::try_from(rows.len()).map_err(|_| invalid("EXEC registration count overflow"))?;
         let mut entries = BTreeMap::new();
         let mut keys = BTreeSet::new();
         let mut allocations = BTreeMap::new();
@@ -320,8 +322,10 @@ impl<'a> ExecInputBatch<'a> {
             {
                 return Err(invalid("registration anchor outside prepared selected history"));
             }
-            let c = row.terms.context(preparation, rounds, row.owner, max_job_tokens)?;
-            let key = reg_key(&c);
+            let c = row.terms.registration_preimage(preparation, rounds, row.owner, max_job_tokens)?;
+            let (signed, key) = ExecRegistration::verify(&c, row.signature)
+                .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("invalid EXEC signed registration: {why:?}")))?;
+            let quote = signed.quote;
             let registered = RegisteredInput {
                 context: c,
                 terms: row.terms,
@@ -333,9 +337,7 @@ impl<'a> ExecInputBatch<'a> {
             if !keys.insert(key) || entries.insert(row.slot, registered).is_some() {
                 return Err(invalid("duplicate EXEC slot or RegKey"));
             }
-            ml_dsa_65::verify(row.owner, &key, REGISTRATION_DOMAIN, row.signature)
-                .map_err(|_| invalid("invalid EXEC owner signature"))?;
-            match (&row.terms.moe2_quote, row.quote_consent) {
+            match (&quote, row.quote_consent) {
                 (Some(quote), Some(consent)) => quote_preparation
                     .as_ref()
                     .ok_or_else(|| invalid("missing MOE2 preparation context"))?
@@ -345,17 +347,9 @@ impl<'a> ExecInputBatch<'a> {
             }
             allocations.insert(row.slot, (key, row.funding_ref));
         }
-        let mut h = Sha3_512::new()
-            .chain_update(b"MISAKA/private/FOW1/exec-input-set/v2")
-            .chain_update(rounds.marker)
-            .chain_update(preparation.as_bytes())
-            .chain_update(count.to_be_bytes());
-        for (slot, (key, funding)) in allocations {
-            h.update(slot.to_be_bytes());
-            h.update(key);
-            h.update(funding);
-        }
-        Ok(Self { preparation, rounds: *rounds, root: h.finalize().into(), entries })
+        let root =
+            input_set_root(preparation, rounds.marker, &allocations).map_err(|_| invalid("EXEC registration count overflow"))?;
+        Ok(Self { preparation, rounds: *rounds, root, entries })
     }
 
     pub fn root(&self) -> [u8; 64] {

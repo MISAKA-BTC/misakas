@@ -51,7 +51,7 @@ pub struct Moe2SettlementTerms {
 }
 
 /// The finite terms an EXEC owner can fix before the Original or mining claim exists.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct Moe2PreDrawQuote {
     pub funding_bond: PalwBondKeyV2,
     pub model: Hash64,

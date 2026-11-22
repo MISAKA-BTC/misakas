@@ -755,6 +755,44 @@ async fn run(stable: bool, registered: bool) {
             assert!(batch_at(original_state.last_point().unwrap().block, original_state).is_err());
             let candidate_batch = batch_at(parent, original_state).unwrap();
             assert_eq!(candidate_batch.root(), inputs.root());
+            {
+                use kaspa_consensus_core::palw_tb1::exec_registration::{
+                    ExecInputSetBinding, ExecRegistration, ExecRegistrationError, ExecRegistrationProfile, REGISTRATION_DOMAIN,
+                    SignedExecRegistration, registration_key,
+                };
+                let preimages: Vec<_> = entries
+                    .iter()
+                    .map(|entry| entry.terms.registration_preimage(parent, &rounds, entry.owner, 16).unwrap())
+                    .collect();
+                let rows: Vec<_> = entries
+                    .iter()
+                    .zip(&preimages)
+                    .map(|(entry, context)| SignedExecRegistration {
+                        context,
+                        owner_signature: entry.signature,
+                        slot: entry.slot,
+                        funding_ref: entry.funding_ref,
+                        quote_consent: entry.quote_consent,
+                    })
+                    .collect();
+                let binding = ExecInputSetBinding {
+                    preparation: parent,
+                    qualified_rounds: Hash64::from_bytes(rounds.commitment()),
+                    consumer_set_root: closure.consumer_set_root,
+                };
+                let funder = |quote: &kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote| {
+                    original_state.bond(&quote.funding_bond).map(|row| row.pubkey.as_slice())
+                };
+                let decoded = binding.verify(&rows, 4, funder).unwrap();
+                assert!(matches!(decoded[&9].profile, ExecRegistrationProfile::Qf1Local { .. }));
+                assert_eq!(decoded[&9].quote, registered_quote);
+                assert_eq!(decoded[&10].quote, long_terms.as_ref().unwrap().moe2_quote);
+                assert!(matches!(binding.verify(&rows[..2], 4, funder), Err(ExecRegistrationError::InputSetRoot)));
+                let mut malleated = preimages[1].clone();
+                malleated.push(0);
+                let signature = ml_dsa_65::sign(&owner.signing_key, &registration_key(&malleated), REGISTRATION_DOMAIN, [91; 32]).unwrap();
+                assert!(matches!(ExecRegistration::verify(&malleated, &signature), Err(ExecRegistrationError::Encoding)));
+            }
             use kaspa_consensus_core::palw_state_v2::apply_delta_v2;
             let params = &node.bundle.state;
             let (published, mut delta) = node.vp().palw_state_v2_store.read().delta_of(anchor).unwrap();
