@@ -74,6 +74,7 @@ impl PalwChainStateV2 {
             epoch_counters: BTreeMap::new(),
             receipt_epoch_counters: BTreeMap::new(),
             model_markets: BTreeMap::new(),
+            private_moe2_exec_settlements: BTreeMap::new(),
             model_positions: BTreeMap::new(),
             model_lines: BTreeMap::new(),
             model_versions: BTreeMap::new(),
@@ -3733,6 +3734,14 @@ impl PalwChainStateV2 {
                 collection_root(b"exec_v2_job_uses", &self.exec_v2_job_uses)
             );
         }
+        if !self.private_moe2_exec_settlements.is_empty() {
+            state.update(b"private_moe2_exec_settlements/v1");
+            direct_collection!(
+                b"private_moe2_exec_settlements",
+                &self.private_moe2_exec_settlements,
+                collection_root(b"private_moe2_exec_settlements", &self.private_moe2_exec_settlements)
+            );
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -3915,6 +3924,18 @@ impl PalwChainStateV2 {
         self.assert_verifier_watch_consistency_v1(params)?;
         self.assert_verifier_watch_draw_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
+        if !self.private_moe2_exec_settlements.is_empty()
+            && (self.bond_budget.is_none()
+                || self.private_moe2_exec_settlements.iter().any(|(claim, row)| {
+                    *claim != row.claim
+                        || self.last_point.is_none_or(|tip| {
+                            row.position.point.blue_score > tip.blue_score || row.position.point.daa_score > tip.daa_score
+                        })
+                        || !row.has_consistent_liquidity()
+                }))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("inconsistent private MOE2 EXEC settlement".into()));
+        }
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
         if let Some(budget) = &self.bond_budget {

@@ -190,3 +190,15 @@ private Linux ARM64ノードの再ビルドは終了コード0、24.86秒。SHA-
 テストビルドは終了コード0（2分51秒）。初回は指定featureが対象crateになく終了コード101。続くビルドはテスト内の一時参照が短く終了コード101。対象crateの `evm` featureでビルドし、テスト内の参照を修正して上記を取得した。
 
 同じビルドで既存のT12当選・落選とPFS3/PFS4同一量子の二重消費拒否を再実行し、いずれも終了コード0を取得した。
+
+### EXEC決済のnative receipt
+
+隔離MOE2用のEXEC決済は、予約行の消費と市場更新と同じ差分に、claim、署名済みslotのdigest、モデル、Miner・Panelの配分、永久LP記録を持つ行を追加する。行はnative state rootに含まれ、決済位置と消費済み予約が一致する場合に差分の再生で復元できる。取り消しでは同じ差分から行を取り除く。空の履歴にはstate rootとsnapshotの追加データがない。追加した識別子は隔離profileの内部差分253とsnapshot tail `0xFC`。
+
+ここで記録するworker配分は決済の会計結果。新profileの採掘受付と、当選・Gate Cを経た実ブロックの通常処理からの呼び出し、workerへの支払出力は未接続。
+
+`private_moe2_three_process_registration` は終了コード0（試験1.14秒、最終ビルド7分12秒）。3プロセスが試験用EXEC決済を同じnativeブロック `47013bb1…` の差分に加え、native決済後root `5872ffeb…` と決済台帳root `873f88be…` で一致した。snapshotのnative preflight・復元を通し、受賞行を削ったsnapshotを元のrootで拒否した。通常の差分取り消しで行が消え、元の決済前rootと再適用後rootも一致した。
+
+初回ビルドはnative資源見積もりの型一覧が未更新で終了コード101。最初のcodec生成は手書きsnapshot形式のreview pin更新が必要で終了コード1。追加tailを確認してpinを更新し、資源見積もりとwire scannerを再生成してから最終結果を取得した。
+
+同じ最終ビルドで既存のT12当選、落選、PFS3/PFS4同一量子の二重消費拒否はすべて終了コード0。

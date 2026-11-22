@@ -11321,6 +11321,7 @@ pub struct PalwChainStateV2 {
     /// activation. Enters the state root only when non-empty, so a chain on which the rule is
     /// dormant commits byte-identical roots to a build without the field (M7).
     model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    private_moe2_exec_settlements: BTreeMap<Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
     /// ADR-0087 Decision 1: units held, by `(line, holder)`; a row is removed at zero. (ADR-0088
     /// Decision 9: the key is a LINE id; a class's founding line has the class id.)
     model_positions: BTreeMap<(Hash64, Hash64), u64>,
@@ -13119,6 +13120,10 @@ pub enum PalwDeltaEntryV2 {
         carrier: Hash64,
         code: u8,
     } = 181,
+    /// Immutable receipt of an EXEC settlement on an isolated MOE2 genesis.
+    PrivateMoe2ExecSettlement {
+        record: Box<crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
+    } = 253,
 }
 
 /// RFC-0008 v2: the table ids of [`PalwDeltaEntryV2::ExecV2Row`].
@@ -24804,6 +24809,30 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             state.last_point = *install;
         }
         PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
+        PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } => {
+            if state.last_point != Some(record.position.point) || !record.has_consistent_liquidity() {
+                return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement has the wrong block or liquidity data"));
+            }
+            let reserved = state.bond_budget.as_ref().and_then(|budget| budget.claim_row(&record.reservation));
+            if reserved.is_none_or(|row| {
+                row.consumed.claims != 1
+                    || row.model.map(|(model, _)| model) != Some(record.model)
+                    || Some(row.consumed.reward_sompi) != record.total_reward()
+            }) {
+                return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its consumed reservation"));
+            }
+            if revert {
+                if state.private_moe2_exec_settlements.get(&record.claim) != Some(record.as_ref()) {
+                    return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement differs from its journal"));
+                }
+                state.private_moe2_exec_settlements.remove(&record.claim);
+            } else {
+                if state.private_moe2_exec_settlements.contains_key(&record.claim) {
+                    return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 EXEC settlement"));
+                }
+                state.private_moe2_exec_settlements.insert(record.claim, record.as_ref().clone());
+            }
+        }
         PalwDeltaEntryV2::ModelPosition { key, old, new } => swap_write!(state.model_positions, key, old, new),
         PalwDeltaEntryV2::ModelBenefits { key, old, new } => swap_write!(state.model_benefits, key, old, new),
         PalwDeltaEntryV2::ModelPositionSince { key, old, new } => {
@@ -25148,6 +25177,7 @@ pub struct PalwStateCarriageV2 {
     /// the first move the tail is present, and a build without the rule is on another chain
     /// anyway (its state root differs from the header's).
     pub model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    pub private_moe2_exec_settlements: BTreeMap<Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
     pub model_positions: BTreeMap<(Hash64, Hash64), u64>,
     /// ADR-0088 Decision 10. A second tagged tail after ADR-0087's, encoded only when non-empty,
     /// for the same reason.
@@ -25590,6 +25620,7 @@ const PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1: u8 = 0xE6;
 const PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1: u8 = 0xEB;
 /// RFC-0010: the permissionless Panel's engine tail (RFC-0010's allocation `0xED`; `0xEC` is the kernel route's).
 const PALW_CARRIAGE_PANEL_V3_TAIL_V1: u8 = 0xED;
+const PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL: u8 = 0xFC;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -25998,6 +26029,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_EXEC_V2_JOB_USES_TAIL_V1.serialize(writer)?;
             self.exec_v2_job_uses.serialize(writer)?;
         }
+        if !self.private_moe2_exec_settlements.is_empty() {
+            PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL.serialize(writer)?;
+            self.private_moe2_exec_settlements.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -26035,6 +26070,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         // The tails, in order: ADR-0087's (`0x87`) then ADR-0088's (`0x88`), each optional. A
         // tag out of order or unknown is refused rather than misread.
         let mut model_markets = BTreeMap::new();
+        let mut private_moe2_exec_settlements = BTreeMap::new();
         let mut model_positions = BTreeMap::new();
         let mut model_lines = BTreeMap::new();
         let mut model_versions = BTreeMap::new();
@@ -26620,6 +26656,15 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_bond_budget = true;
                     bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::deserialize_reader(reader)?);
                 }
+                PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL if private_moe2_exec_settlements.is_empty() => {
+                    private_moe2_exec_settlements = BTreeMap::deserialize_reader(reader)?;
+                    if private_moe2_exec_settlements.is_empty() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "an empty private MOE2 EXEC settlements tail",
+                        ));
+                    }
+                }
                 PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 if !seen_seat_availability => {
                     seen_seat_availability = true;
                     seat_availability = BTreeMap::deserialize_reader(reader)?;
@@ -26670,6 +26715,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             safe_frontier: legacy.safe_frontier,
             last_point: legacy.last_point,
             model_markets,
+            private_moe2_exec_settlements,
             model_positions,
             model_lines,
             model_versions,
@@ -26821,6 +26867,7 @@ impl PalwStateCarriageV2 {
             epoch_counters: state.epoch_counters.clone(),
             receipt_epoch_counters: state.receipt_epoch_counters.clone(),
             model_markets: state.model_markets.clone(),
+            private_moe2_exec_settlements: state.private_moe2_exec_settlements.clone(),
             model_positions: state.model_positions.clone(),
             model_lines: state.model_lines.clone(),
             model_benefits: state.model_benefits.clone(),
@@ -27102,6 +27149,7 @@ impl PalwStateCarriageV2 {
             epoch_counters: self.epoch_counters,
             receipt_epoch_counters: self.receipt_epoch_counters,
             model_markets: self.model_markets,
+            private_moe2_exec_settlements: self.private_moe2_exec_settlements,
             model_positions: self.model_positions,
             model_lines: self.model_lines,
             model_benefits: self.model_benefits,

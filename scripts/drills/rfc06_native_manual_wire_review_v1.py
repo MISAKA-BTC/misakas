@@ -91,7 +91,7 @@ PINNED = {
 'crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1': ('reviewed-field-layout','b92b6935c58487df4bdf9f5e254db9a43e018a57463827d3cf49b1bc0c01270a'),
 # Claude 2026-10-22: + funded-escrow tail 0xFB (unique among 74 tails), written only when non-empty; empty == old bytes.
 # Claude 2026-10-22 (2): + D2 readiness tail 0xE5 (non-empty only; 75 tails unique).
-'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','b6fa1d79680739d01728670a41a3d14685df52e6a553abbc37688050f8b1cac0'),
+'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','b4c542459147b45f64f69c9e78251a738d42269da395f10043312adc226b01ce'),
 'crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1': ('reviewed-field-layout','1aa6332539dd6d430025fdd6d15e1737c9ccd0fad6ced34bc4798e4dcbfad422'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),

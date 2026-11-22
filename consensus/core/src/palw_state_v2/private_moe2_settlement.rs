@@ -7,13 +7,17 @@ use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2RewardSplit,
     settlement::{
-        Moe2ExecSlot, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError, Moe2SettlementFunding,
-        Moe2SettlementUndo, Moe2WorkerRelease,
+        Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementError,
+        Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
     },
 };
 use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
 
 impl PalwChainStateV2 {
+    pub fn private_moe2_exec_settlement(&self, claim: &Hash64) -> Option<&Moe2NativeExecSettlement> {
+        self.private_moe2_exec_settlements.get(claim)
+    }
+
     /// Append both monetary legs at the end of this block's current delta.
     /// The budget engine sources its own funds and liability from the post-state
     /// at this position, including other activity earlier in the same block.
@@ -63,7 +67,7 @@ impl PalwChainStateV2 {
         {
             return Err(UndoMismatch);
         }
-        let reward = book.entitlement(&undo.claim()).ok_or(UndoMismatch)?;
+        let reward = *book.entitlement(&undo.claim()).ok_or(UndoMismatch)?;
         let model = slot.quote.model;
         let before = undo.market_before();
         let after = reward.allocation.market.map(|quote| quote.after);
@@ -74,6 +78,11 @@ impl PalwChainStateV2 {
         if before != after {
             suffix.push(PalwDeltaEntryV2::ModelMarket { key: model, old: before, new: after });
         }
+        let record = Moe2NativeExecSettlement::from_settlement(slot, book, undo, reward);
+        if self.private_moe2_exec_settlement(&undo.claim()) != Some(&record) {
+            return Err(UndoMismatch);
+        }
+        suffix.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) });
         if !delta.entries.ends_with(&suffix) {
             return Err(UndoMismatch);
         }
@@ -83,6 +92,7 @@ impl PalwChainStateV2 {
         if let Some(market) = before {
             self.model_markets.insert(model, market);
         }
+        self.private_moe2_exec_settlements.remove(&undo.claim());
         delta.entries.truncate(delta.entries.len() - suffix.len());
         Ok(())
     }
@@ -106,7 +116,7 @@ impl PalwChainStateV2 {
         {
             return Err(UnknownClaimContext);
         }
-        if book.entitlement(&claim).is_some() {
+        if book.entitlement(&claim).is_some() || (slot.is_some() && self.private_moe2_exec_settlement(&claim).is_some()) {
             return Err(AlreadySettled);
         }
         let terms = *book.admitted_terms(&claim).ok_or(UnknownClaimContext)?;
@@ -176,6 +186,11 @@ impl PalwChainStateV2 {
                 self.model_markets.insert(terms.model, q.after);
                 delta.entries.push(PalwDeltaEntryV2::ModelMarket { key: terms.model, old: before, new: Some(q.after) });
             }
+        }
+        if let Some(slot) = slot {
+            let record = Moe2NativeExecSettlement::from_settlement(slot, book, &undo, reward);
+            self.private_moe2_exec_settlements.insert(claim, record.clone());
+            delta.entries.push(PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) });
         }
         Ok((reward, undo))
     }

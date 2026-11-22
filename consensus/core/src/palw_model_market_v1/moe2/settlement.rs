@@ -351,6 +351,61 @@ pub struct Moe2SettledReward {
     pub vest_until: Option<u64>,
 }
 
+/// Settlement data retained by the isolated native state even if its
+/// accounting checkpoint is unavailable. Every row is inserted once.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Moe2NativeExecSettlement {
+    pub claim: Hash64,
+    pub position: Moe2Position,
+    pub model: Hash64,
+    pub artifact_root: Hash64,
+    pub reservation: Hash64,
+    pub signed_slot: Hash64,
+    pub reward: Moe2SettledReward,
+    pub permanent_liquidity: Option<LockedLiquidityReceipt>,
+}
+
+impl Moe2NativeExecSettlement {
+    pub(crate) fn total_reward(&self) -> Option<u64> {
+        let allocation = &self.reward.allocation;
+        let market = allocation.market.map_or(Some(0), |q| q.split.purchase.checked_add(q.split.liquidity))?;
+        allocation.miner.checked_add(allocation.panel_pool)?.checked_add(market)
+    }
+
+    pub(crate) fn has_consistent_liquidity(&self) -> bool {
+        match (self.reward.allocation.market, self.permanent_liquidity) {
+            (Some(q), Some(lp)) => {
+                q.split.liquidity > 0
+                    && (lp.claim, lp.model, lp.artifact_root, lp.position)
+                        == (self.claim, self.model, self.artifact_root, self.position)
+                    && (lp.after, lp.purchase, lp.liquidity, lp.purchased_units, lp.liquidity_units, lp.retired_units)
+                        == (q.after, q.split.purchase, q.split.liquidity, q.purchased_units, q.liquidity_units, q.retired_units)
+            }
+            (market, None) => market.is_none_or(|q| q.split.liquidity == 0),
+            (None, Some(_)) => false,
+        }
+    }
+
+    pub(crate) fn from_settlement(
+        slot: &Moe2ExecSlot,
+        book: &Moe2SettlementBook,
+        undo: &Moe2SettlementUndo,
+        reward: Moe2SettledReward,
+    ) -> Self {
+        let (reservation, signed_slot) = slot.binding();
+        Self {
+            claim: undo.claim(),
+            position: undo.position,
+            model: slot.quote.model,
+            artifact_root: slot.quote.artifact_root,
+            reservation,
+            signed_slot,
+            reward,
+            permanent_liquidity: book.receipt(&undo.claim()).copied(),
+        }
+    }
+}
+
 /// Release from an independently authorized mining claim. Its owner authenticates
 /// the reward, worker plan, vesting and obligation horizons before accounting.
 #[derive(Clone, Copy, Debug)]

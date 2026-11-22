@@ -655,6 +655,11 @@ pub(crate) fn scan_carriage_native_wire_v1<R: std::io::Read>(
                 sum = sum.merge(shape)?;
                 counts.push(("bond_budget", shape.outer_entries, shape.collection_entries));
             }
+            PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL => {
+                let shape=<BTreeMap<crate::Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                sum = sum.merge(shape)?;
+                counts.push(("private_moe2_exec_settlements", shape.outer_entries, shape.collection_entries));
+            }
             PALW_CARRIAGE_SEAT_AVAILABILITY_TAIL_V1 => {
                 let shape=<BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 sum = sum.merge(shape)?;
@@ -1353,6 +1358,12 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     >() as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            crate::Hash64,
+            crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement,
+        >,
     >() as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<

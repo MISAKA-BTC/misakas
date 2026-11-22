@@ -17567,6 +17567,7 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 PalwDeltaEntryV2::DerivedArtifact { .. } => "derived_artifact",
                 PalwDeltaEntryV2::CourtCloseChunkArrived { .. } => "court_close_chunk_arrived",
                 PalwDeltaEntryV2::ModelMarket { .. } => "model_market",
+                PalwDeltaEntryV2::PrivateMoe2ExecSettlement { .. } => "private_moe2_exec_settlement",
                 PalwDeltaEntryV2::ModelPosition { .. } => "model_position",
                 PalwDeltaEntryV2::ModelBenefits { .. } => "model_benefits",
                 PalwDeltaEntryV2::ModelPositionSince { .. } => "model_position_since",

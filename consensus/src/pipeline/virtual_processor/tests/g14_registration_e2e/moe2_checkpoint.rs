@@ -69,6 +69,21 @@ pub(super) fn check_exec_settlement_rewind(
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let after = child.state_root();
     assert_eq!(apply_delta_v2(&reserved, &award_delta, params).unwrap().state_root(), after);
+    let mut carried = PalwStateCarriageV2::from_state(&child);
+    let carried_bytes = borsh::to_vec(&carried).unwrap();
+    kaspa_consensus_core::palw_native_resource_v1::preflight_native_carriage_v1(carried_bytes.as_slice(), carried_bytes.len() as u64)
+        .unwrap();
+    let reopened: PalwStateCarriageV2 = borsh::from_slice(&carried_bytes).unwrap();
+    child = reopened.into_state(params, Some(after)).unwrap();
+    let receipt = child.private_moe2_exec_settlement(&claim).unwrap();
+    assert_eq!((receipt.reservation, receipt.reward, receipt.position), (slot.reservation_key(), payment, position));
+    assert_eq!(receipt.permanent_liquidity.as_ref(), book.receipt(&claim));
+    carried.private_moe2_exec_settlements.clear();
+    assert!(carried.into_state(params, Some(after)).is_err(), "omitting a settled worker and LP receipt changes the root");
+    assert!(
+        revert_delta_v2(&child, &award_delta, params).unwrap().private_moe2_exec_settlement(&claim).is_none(),
+        "the normal native journal also clears the row on a disconnect",
+    );
     let (book_root, bytes) = book.checkpoint(after);
     book = Moe2SettlementBook::from_checkpoint(after, book_root, &bytes, bytes.len()).unwrap();
     let paid_book = book.clone();
