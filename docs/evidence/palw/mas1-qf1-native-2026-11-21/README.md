@@ -1238,3 +1238,7 @@ python3 -B "$p/check_fresh_holder_release.py" "$out" --arithmetic --holder 0 --o
 ```
 
 G-COSTのローカル判定では、元の計測IDと、現在のcase履歴から求めた回帰対象（入力・経路）の集合を照合する。集合が変わると以前のPASSでは新規採掘は保留となる。修正後の元経路と新しい2入力を含む測定で再判定したときに、当該の費用条件を満たせる。集合の順序と重複は判定を変えない。MAS1の採掘入口を含む対象テスト4件が成功。実機Qwen3の費用閾値は未採択で、実モデルの判定はUNKNOWN。[対象テストの実行記録](g-cost-regression-admission.log)
+
+holder 1も別プロセスで元の枝を再読込し、同じ仕事IDがDAA 17,931で成熟した後、DAA 37,758の同じ確定位置で自身のshareに署名した。holder 0と照合すると、先端・close・finalized・再生ブロック数は一致し、slot・登録時のseal・署名メッセージ・署名値は個別だった。署名を登録済みのholder 1の公開鍵で検証した。[holder 1の照合結果](qf1-arithmetic-holder-1.json)・[署名済みreleaseと完走ログ](qf1-arithmetic-holder-1.tar.zst)
+
+holder 0の再現用ディレクトリにholder 1のアーカイブを展開し、同じコマンドの `--holder` を `1` にすると照合できる。
