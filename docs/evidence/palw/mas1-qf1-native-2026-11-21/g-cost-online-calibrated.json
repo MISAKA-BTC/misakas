@@ -1,0 +1,53 @@
+{
+  "plan_sha256": "0a0dda2427717e37ef987495e02b4f4d4599e15c9600e7e9ad5c0c117752e62a",
+  "descriptor": "c1f12903e1ca7b611d2285fdba39bc45d0d6ff95c7b4ae83135540c21cff47155c461675545de13c5149ba13ccc3be021405b1a1cfc829de0168301c7914edb6",
+  "job": "2 + 2?",
+  "first_ticket": "64eb136e34ed36bcd79ece3d38643d101bf5edc17de3cf293c0e93ad64fbdf18",
+  "setup_ms": 25978,
+  "first_ticket_generation_us": 42583026,
+  "observed_length": 9,
+  "targets": [
+    {
+      "attempt": "b608ae890faf4d3df8fccb506a3b7217b927c7c219d0a9f3035dfb2648d8a92b",
+      "ticket": "b4e9c2f02c6920f3c7130c2b695780fb7855c170100776b9275e2c963b0c0677",
+      "online_us": 42019418,
+      "mixed_us": 43221655,
+      "retry_reason": null
+    },
+    {
+      "attempt": "f25169a7aa174bf8973932a5550efd9b32ab453d98c8a74fd5ab98b5bda76f1c",
+      "ticket": "020d500c8e381d6ec6c842c3b51aa09c26a2c0e8d3998ac948741217859d28ed",
+      "online_us": 42001704,
+      "mixed_us": 41852169,
+      "retry_reason": null
+    },
+    {
+      "attempt": "839532d79398986548c0f002af7a4ac13c85eb49d19eb9780343dc9496e661fd",
+      "ticket": "7960c0f539950fd72caab71034a3a99bf3cfb98ff16e33dbe1db93d9747e58df",
+      "online_us": 42066700,
+      "mixed_us": 41965854,
+      "retry_reason": null
+    },
+    {
+      "attempt": "5c70f319071d6a3d5b9bd5b4bbff5bfd599940c33d85447c47bc02e997f5c800",
+      "ticket": "ceb4bedb056b7d256d52bf42dfd37a9ed7a900a948011215f896a5615cad130f",
+      "online_us": 42013973,
+      "mixed_us": 41891818,
+      "retry_reason": null
+    },
+    {
+      "attempt": "35c89e6a4c01a72d02cb857257411873172228d1893d70731eecbf3030522d0a",
+      "ticket": "703f0b8a85bb84abfa4087bb29cbf4e7d79a63bf463ed55f2995a186a36eece3",
+      "online_us": 42039926,
+      "mixed_us": 41874099,
+      "retry_reason": null
+    }
+  ],
+  "six_tickets_including_setup": {
+    "online_us": 278702747,
+    "mixed_us": 279366621
+  },
+  "forced_miss_including_retry_us": 122146562,
+  "forced_miss_reason": "Operand: QF1 extra leaf",
+  "g_cost": "UNKNOWN"
+}
