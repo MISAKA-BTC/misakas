@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from check_fresh_audit import records
@@ -64,6 +65,23 @@ def check_control_identity(row, registered):
             and row["operator_count"] == len({b["operator"] for b in bonds}), "invalid or self-selected control bond")
 
 
+def check_submission_state(row, submitted, seed):
+    archive = HERE / "qf1-arithmetic-publisher.tar.zst"
+    publication = json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.json"]))
+    block, _ = json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.submission.json"]))
+    certificate = publication["certificate"]
+    for raw, expected in ((certificate, seed["certificate"]), (block, submitted)):
+        verify_block_transactions(raw)
+        h = raw["header"]
+        require(header_hash(h, bytes(h["palwCommitment"]), False).hex() == expected,
+                "archive differs from the original evaluation branch")
+    h = block["header"]
+    require(row["block"] == submitted and h["parentsByLevel"][0] == [row["source"]] == [seed["certificate"]]
+            and row["source_daa"] == certificate["header"]["daaScore"]
+            and row["state"] == h["palwStateRoot"] == seed["state"],
+            "population differs from the state committed by the submitted block")
+
+
 def control_observations(report, log):
     text = log.read_text()
     [(pid, submission)] = records(text, "arithmetic control population")
@@ -74,8 +92,7 @@ def control_observations(report, log):
     registered = json.loads((HERE / "qf1-arithmetic-registration-population.json").read_bytes())["snapshot"]
     for row in (submission, parent):
         check_control_identity(row, registered)
-    require(submission["block"] == report["submission"] and submission["source"] == seed["certificate"]
-            and submission["state"] == seed["state"], "population observed before a different submission")
+    check_submission_state(submission, report["submission"], seed)
     require(parent["source"] == report["parent"] and parent["source_daa"] == report["daa"]
             and "block" not in parent and re.fullmatch(r"[0-9a-f]{128}", parent["state"]),
             "different live pre-close state observation")
