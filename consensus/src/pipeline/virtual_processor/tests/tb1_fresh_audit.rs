@@ -397,7 +397,14 @@ pub(super) async fn replay_window(
             (None, None) => None,
             (Some(path), None) => Some(PrefixArchive::create(Path::new(&path))),
             (None, Some(path)) => {
-                let expected = std::env::var("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT").unwrap().parse().unwrap();
+                let expected = match (
+                    std::env::var("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT").ok(),
+                    std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT_REPORT"),
+                ) {
+                    (Some(hash), None) => PrefixParent::Known(hash.parse().unwrap()),
+                    (None, Some(report)) => PrefixParent::VerifiedReport(PathBuf::from(report)),
+                    _ => panic!("choose one expected PANEL parent source"),
+                };
                 Some(PrefixArchive::open(Path::new(&path), expected))
             }
             _ => panic!("choose one PANEL prefix source"),
@@ -483,9 +490,16 @@ fn control_population_at(node: &Rig, source: Hash64, class: Hash64) -> serde_jso
                        "base_class":node.bundle.state.base_class_id(),"span":span,"operator_count":operators.len(),"bonds":bonds})
 }
 
+enum PrefixParent {
+    Known(Hash64),
+    // A streaming reader can start before its parent exists. Its feed must
+    // close only after the complete writer archive has been verified.
+    VerifiedReport(PathBuf),
+}
+
 enum PrefixArchive {
     Write(std::io::BufWriter<File>),
-    Read(std::io::Lines<std::io::BufReader<File>>, Hash64),
+    Read(std::io::Lines<std::io::BufReader<File>>, PrefixParent),
 }
 
 impl PrefixArchive {
@@ -493,7 +507,7 @@ impl PrefixArchive {
         Self::Write(std::io::BufWriter::new(File::create_new(path).unwrap()))
     }
 
-    fn open(path: &Path, parent: Hash64) -> Self {
+    fn open(path: &Path, parent: PrefixParent) -> Self {
         use std::io::BufRead;
         Self::Read(std::io::BufReader::new(File::open(path).unwrap()).lines(), parent)
     }
@@ -540,6 +554,7 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, relea
             writer.write_all(b"\n").unwrap();
         }
     }
+    let daa = node.chain.daa_of(tip);
     match archive {
         PrefixArchive::Write(mut writer) => {
             writer.flush().unwrap();
@@ -547,6 +562,16 @@ async fn panel_prefix(node: &mut Rig, submission: Hash64, close_blue: u64, relea
         }
         PrefixArchive::Read(mut lines, expected) => {
             assert!(lines.next().is_none(), "extra PANEL prefix blocks");
+            let expected = match expected {
+                PrefixParent::Known(hash) => hash,
+                PrefixParent::VerifiedReport(path) => {
+                    let report: serde_json::Value = serde_json::from_reader(File::open(path).unwrap()).unwrap();
+                    assert_eq!(report["submission"], serde_json::json!(submission));
+                    assert_eq!(report["blue"], target);
+                    assert_eq!(report["daa"], daa);
+                    report["parent"].as_str().unwrap().parse().unwrap()
+                }
+            };
             assert_eq!(tip, expected);
         }
     }
@@ -562,8 +587,14 @@ async fn replay_to_original_panel_parent() {
     let start = writer.chain.sink();
     stable_panel::arm(&mut writer);
     let parent = panel_prefix(&mut writer, start, 5, 50, PrefixArchive::create(&path)).await;
+    let report = dir.path().join("expected-parent.json");
+    serde_json::to_writer(
+        File::create_new(&report).unwrap(),
+        &serde_json::json!({"submission":start, "parent":parent, "blue":4, "daa":writer.chain.daa_of(parent)}),
+    )
+    .unwrap();
     let mut reader = Rig::new(&parts, 2);
-    let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, parent)).await;
+    let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, PrefixParent::VerifiedReport(report))).await;
     assert_eq!(reader.api().get_header(restored).unwrap().blue_score, 4);
     assert_eq!(reader.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
     let class = writer.bundle.state.base_class_id();
@@ -585,7 +616,7 @@ async fn reject_panel_parent_at_share_release() {
     let release = writer.chain.daa_of(parent);
     assert!(release > writer.chain.daa_of(start));
     let mut reader = Rig::new(&parts, 2);
-    panel_prefix(&mut reader, start, 9, release, PrefixArchive::open(&path, parent)).await;
+    panel_prefix(&mut reader, start, 9, release, PrefixArchive::open(&path, PrefixParent::Known(parent))).await;
 }
 
 /// Reopen the original short registration history without running the candidate

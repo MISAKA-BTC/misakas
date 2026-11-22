@@ -1318,3 +1318,12 @@ Round 16 の close は share 公開開始（DAA 90741）より前のブロック
 実行ファイル 5a294da8ad8c7afe2e770cf277caf7c3243e73ea53bf492d8f3bf3f53b90a541 で、予定 close より前の履歴の再読込、share 公開開始に達した親の拒否、元の登録履歴を3プロセスで再読込した際の状態一致を確認した。同じビルドで、finality 撤回時の holder 停止と、Studio モデルを使った隔離3プロセスの MOE2 市場登録・再編成も通過した。各試験は固有の隔離台帳で実行した。[実行ログと照合結果](native-release-boundary-regressions.tar.zst)
 
 同じビルドで Qwen3-8B の追加モデル登録と EXEC close も再検査した。元の算術監査の記録から実 artifact の class・inventory を照合し、3ピアとも DAA 5、公開期限 DAA 33 で、公開と署名を WouldBlock と記録した。別の隔離台帳で実行した native funded job の回帰試験では、必要な承認を欠く Final の後も計算 credit が作られなかった。正規の finality、支払い可能な FOW1 claim と決済を同じ枝で通すことが残っている。[ログと照合結果](registered-qf1-finality-hold.tar.zst)
+
+### 生成中の履歴を独立ノードで再生する場合
+
+分離した DB と同じ隔離バイナリを使う。生成ノードが最初の履歴を書き出した後、FIFO を用意し、再生側の MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_READ に FIFO、MISAKA_PRIVATE_ARITHMETIC_PANEL_PARENT_REPORT に新規の結果ファイルのパスを指定する。再生側のそれ以外の入力は元の提出と既存の履歴再生と同じ。生成ノードの PID・生ログ・履歴を渡して feeder を実行する。feeder は完全な行を送信し、生成ノードの完走ログと全履歴を照合した後で親の結果を発行し、FIFO を閉じる。再生ノードは EOF 後に、その結果の提出・blue score・DAA・親ハッシュを自分の再生結果と照合する。
+
+```sh
+mkfifo "$fifo"
+python3 -B "$p/stream_arithmetic_panel_prefix.py" "$prefix" "$writer_log" "$writer_pid" "$parent_report" > "$fifo"
+```
