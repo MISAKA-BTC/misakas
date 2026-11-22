@@ -158,10 +158,19 @@ class ObservationTests(unittest.TestCase):
         accepted = dict(report=dict(type='success'))
         for client in clients:
             client.call.return_value = accepted
-        clients[2].call.side_effect = [dict(block=child), accepted]
+        clients[0].call.side_effect = [
+            dict(report=dict(type='reject', reason='isInIBD')), accepted,
+            dict(report=dict(type='reject', reason='blockInvalid')),
+        ]
+        clients[2].call.side_effect = [dict(block=child), accepted] * 3
         self.assertTrue(retry_shared_child(clients, [parent, parent, dict(parent, tipHashes=[h(8)])]))
         for client in clients:
             client.call.assert_called_with('submitBlock', dict(block=child, allowNonDAABlocks=False))
+        # The unchanged DAG keeps the same child pending after IBD. A real
+        # validation refusal still terminates the drill.
+        self.assertTrue(retry_shared_child(clients, [parent, parent, dict(parent, tipHashes=[h(8)])]))
+        with self.assertRaisesRegex(ValueError, 'blockInvalid'):
+            retry_shared_child(clients, [parent, parent, dict(parent, tipHashes=[h(8)])])
 
     def test_resume_keeps_original_carrier_and_rechecks_each_peer_without_submission(self):
         from protected_private_registration_run import resume_admitted_studio

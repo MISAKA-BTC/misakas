@@ -60,6 +60,16 @@ def wait_until(deadline, read):
     raise TimeoutError('isolated peer readiness or DAA progression timed out')
 
 
+def submit_retained_block(client, block):
+    # A connected peer can already report the retained tip while its initial
+    # block download is still resolving. The surrounding agreement check
+    # keeps the clock on the same parent until every peer actually selects it.
+    reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
+    report = reply['report']
+    waiting_for_ibd = report['type'] == 'reject' and report.get('reason') == 'isInIBD'
+    require(report['type'] == 'success' or waiting_for_ibd, f'native retry refused the retained block: {reply}')
+
+
 def retry_retained_sink(clients, views, *, relay_missing=False):
     """Retry retained blocks and optionally relay a missing direct child to an owned peer."""
     tips = sorted(views[0]['tipHashes'])
@@ -72,8 +82,7 @@ def retry_retained_sink(clients, views, *, relay_missing=False):
         if siblings[0]['verboseData']['selectedParentHash'] == siblings[1]['verboseData']['selectedParentHash']:
             for child in siblings:
                 for client in clients:
-                    reply = client.call('submitBlock', dict(block=child, allowNonDAABlocks=False))
-                    require(reply['report']['type'] == 'success', f'native sibling resolution failed: {reply}')
+                    submit_retained_block(client, child)
             return
     for source in sorted(range(len(views)), key=lambda i: views[i]['virtualDaaScore'], reverse=True):
         best = views[source]
@@ -91,8 +100,7 @@ def retry_retained_sink(clients, views, *, relay_missing=False):
             direct_only = sink not in view['tipHashes'] or view['virtualDaaScore'] == best['virtualDaaScore']
             if direct_only and block['verboseData']['selectedParentHash'] != view['sink']:
                 continue
-            reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
-            require(reply['report']['type'] == 'success', f'native retry refused the retained block: {reply}')
+            submit_retained_block(client, block)
 
 
 def retry_shared_child(clients, views):
@@ -107,8 +115,7 @@ def retry_shared_child(clients, views):
     if child['verboseData']['selectedParentHash'] != best['sink'] or child['verboseData']['isChainBlock']:
         return False
     for client in clients:
-        reply = client.call('submitBlock', dict(block=child, allowNonDAABlocks=False))
-        require(reply['report']['type'] == 'success', f'native retry refused the retained child: {reply}')
+        submit_retained_block(client, child)
     return True
 
 
