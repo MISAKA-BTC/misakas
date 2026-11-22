@@ -897,6 +897,14 @@ async fn run(stable: bool, registered: bool) {
     }
     let context = Tb1ReleaseContext { round_ref, qual_root: q.root(), freeze_id };
     let api = node.api().as_ref();
+    let recover_intake = stable
+        && qf1.is_some()
+        && std::env::var_os("MISAKA_PRIVATE_QF1_NO_DISPUTE").is_some()
+        && std::env::var_os("MISAKA_PRIVATE_QF1_CHECKPOINT_REPLAY").is_some()
+        && std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_WRITE").is_none();
+    if recover_intake {
+        node.api().checkpoint_database(&dir.path().join("before-exec-release"));
+    }
     let jobs = inputs.observe(api, anchor, &closure, &q).unwrap();
     let gate = jobs.publication_gate();
     let freeze = gate.holder_freeze();
@@ -1146,7 +1154,7 @@ async fn run(stable: bool, registered: bool) {
         let block = local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await;
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
         peer_log!("QF1 receipt pid={} block={} original={}", std::process::id(), block.hash(), id);
-        use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{LocalPanelInputs, LocalSubmission};
+        use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{LocalPanelInputs, LocalSubmission, RecordedLocalSubmission};
         let actors = stable.then(|| stable_panel::Actors::enroll(&mut parent_socket, &mut peers));
         let candidates = actors.as_ref().map_or_else(
             || vec![(Hash64::from_u64_word(1), 1), (Hash64::from_u64_word(2), 2), (Hash64::from_u64_word(3), 4)],
@@ -1237,6 +1245,49 @@ async fn run(stable: bool, registered: bool) {
                 *id,
             )
             .await;
+            if recover_intake {
+                let observed = stable_panel::reopen_checkpoint(&node.config, &dir.path().join("before-exec-release"));
+                let observed_api = observed.as_ref();
+                let retained = ExecInputBatch::from_signed(observed_api, parent, &rounds, &entries, 4, 16).unwrap();
+                let recovered_exec = retained.observe(observed_api, anchor, &closure, &q).unwrap();
+                drop(observed);
+                let expired = stable_panel::reopen_checkpoint(&node.config, &dir.path().join("at-original-deadline"));
+                let api = expired.as_ref();
+                let recorded =
+                    RecordedLocalSubmission { slot: 9, block: block.hash(), body, signature: sig, material_reservation: reservation };
+                assert!(r.check_live(api).is_err());
+                assert!(r.read_qf1_original(api, block.hash(), body, sig).is_err());
+                assert!(
+                    jobs.local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission()], pool(draw_policy))
+                        .is_err()
+                );
+                let rebuild = |rows_at_cut: &[RecordedLocalSubmission<'_>]| {
+                    recovered_exec.recorded_panel_cut(
+                        api,
+                        batch.hash(),
+                        certificate.hash(),
+                        &rows,
+                        &q,
+                        LIMITS,
+                        rows_at_cut,
+                        pool(draw_policy),
+                    )
+                };
+                let restored = rebuild(&[recorded]).unwrap();
+                assert_eq!(restored.consumer_set_root(), cut.consumer_set_root());
+                assert!(api.palw_coinbase_commits_to(round.chain_id, closed.hash(), &restored.commitment(close_parent)).unwrap());
+                assert!(rebuild(&[RecordedLocalSubmission { slot: 7, ..recorded }]).is_err());
+                assert!(rebuild(&[RecordedLocalSubmission { block: api.get_sink(), ..recorded }]).is_err());
+                let mut changed = body.clone();
+                changed.ticket[0] ^= 1;
+                assert!(rebuild(&[RecordedLocalSubmission { body: &changed, ..recorded }]).is_err());
+                peer_log!(
+                    "QF1 reconstructed PANEL cut after deadline pid={} original={} close={}",
+                    std::process::id(),
+                    id,
+                    closed.hash()
+                );
+            }
             if let Some(root) = std::env::var_os("MISAKA_PRIVATE_COLD_PANEL_WRITE") {
                 let entry = entries
                     .iter()

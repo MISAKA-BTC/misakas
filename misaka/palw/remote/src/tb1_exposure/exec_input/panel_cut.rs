@@ -12,6 +12,17 @@ pub struct LocalSubmission<'a, 't> {
     pub material_reservation: Hash64,
 }
 
+/// Original evidence read from retained receipts, independent of a live
+/// DerivedExecInput. The slot's prompt is reconstructed from the EXEC seed.
+#[derive(Clone, Copy)]
+pub struct RecordedLocalSubmission<'a> {
+    pub slot: u64,
+    pub block: Hash64,
+    pub body: &'a LocalOriginalBody,
+    pub signature: &'a MLDSA65Signature,
+    pub material_reservation: Hash64,
+}
+
 pub struct LocalPanelInputs<'a> {
     /// Policy ID of this private draw and its duties. Eligibility is resolved
     /// outside the cut; the canonical candidate IDs and weights are frozen here.
@@ -48,6 +59,48 @@ impl FrozenExecInputs<'_> {
         submissions: &[LocalSubmission<'_, '_>],
         pool: LocalPanelInputs<'_>,
     ) -> io::Result<LocalPanelCut> {
+        if submissions.len() > self.batch.entries.len() {
+            return Err(invalid("local PANEL cut exceeds its reservation"));
+        }
+        let tip = native.get_sink();
+        let mut recorded = Vec::with_capacity(submissions.len());
+        for row in submissions {
+            let input = row.input;
+            let entry = self.batch.entries.get(&input.slot).ok_or_else(|| invalid("unknown local PANEL registration slot"))?;
+            if input.close != self.close || input.certificate != certificate || input.registration_key != reg_key(&entry.context) {
+                return Err(invalid("local PANEL Original outside frozen EXEC allocation"));
+            }
+            recorded.push(RecordedLocalSubmission {
+                slot: input.slot,
+                block: row.block,
+                body: row.body,
+                signature: row.signature,
+                material_reservation: row.material_reservation,
+            });
+        }
+        let cut = self.recorded_panel_cut(native, publication, certificate, releases, q, limits, &recorded, pool)?;
+        for row in submissions {
+            row.input.check_live(native)?;
+        }
+        self.gate.require_tip(native, tip)?;
+        Ok(cut)
+    }
+
+    /// Rebuild the committed consumer-set preimage from the original selected
+    /// receipts. Each receipt must have landed in its job's signed window.
+    /// Replay signing and new PANEL publication still use their live checks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recorded_panel_cut(
+        &self,
+        native: &dyn ConsensusApi,
+        publication: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        submissions: &[RecordedLocalSubmission<'_>],
+        pool: LocalPanelInputs<'_>,
+    ) -> io::Result<LocalPanelCut> {
         if pool.candidates.len() > pool.max_candidates || submissions.len() > self.batch.entries.len() {
             return Err(invalid("local PANEL cut exceeds its reservation"));
         }
@@ -68,25 +121,22 @@ impl FrozenExecInputs<'_> {
         let mut previous = None;
         let mut receipts = Vec::with_capacity(submissions.len());
         for row in submissions {
-            let r = row.input;
-            let entry = self.batch.entries.get(&r.slot).ok_or_else(|| invalid("unknown local PANEL registration slot"))?;
-            if previous.is_some_and(|slot| slot >= r.slot)
-                || r.close != self.close
-                || r.certificate != certificate
-                || r.registration_key != reg_key(&entry.context)
+            let entry = self.batch.entries.get(&row.slot).ok_or_else(|| invalid("unknown local PANEL registration slot"))?;
+            if previous.is_some_and(|slot| slot >= row.slot)
                 || native.get_header(row.block).map_err(io::Error::other)?.blue_score >= score
             {
                 return Err(invalid("local PANEL Original outside frozen EXEC allocation or receipt cutoff"));
             }
-            let original = r.read_qf1_original(native, row.block, row.body, row.signature)?;
-            hash.update(r.slot.to_be_bytes());
+            let r = self.derive_from_seed(row.slot, certificate, &exec_seed)?;
+            let original = r.read_recorded_qf1_original(native, row.block, row.body, row.signature)?;
+            hash.update(row.slot.to_be_bytes());
             hash.update(r.registration_key);
             hash.update(original.as_bytes());
             hash.update(row.block.as_bytes());
             hash.update(entry.funding_ref);
             hash.update(row.material_reservation.as_bytes());
             hash.update(entry.terms.deadline_exclusive_daa.to_be_bytes());
-            previous = Some(r.slot);
+            previous = Some(row.slot);
             receipts.push(FrozenReceipt {
                 original,
                 block: row.block,
@@ -110,9 +160,7 @@ impl FrozenExecInputs<'_> {
             consumer_set_root: hash.finalize().into(),
             policy_root: pool.draw_policy.as_bytes(),
         };
-        if native.get_sink() != tip {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL input view moved"));
-        }
+        self.gate.require_tip(native, tip)?;
         Ok(LocalPanelCut { closure, exec_close: self.close, certificate, receipts, candidates: pool.candidates.to_vec() })
     }
 }
@@ -154,7 +202,8 @@ impl LocalPanelCut {
             }
         }
         let freeze = Tb1HolderFreeze::resolve(native, close, &self.closure, q)?;
-        if native.get_sink() != tip {
+        let (exec_state, _, exec_tip) = anchor_state(native, self.exec_close)?;
+        if exec_tip != tip || !matches!(exec_state, AnchorState::Finalized) {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL close view moved"));
         }
         Ok((freeze, daa))

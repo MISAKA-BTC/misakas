@@ -256,3 +256,11 @@ Gate Cの検証義務を、選択sinkとvirtual DAAの組で管理する。コ�
 `private_moe2_three_process_registration` は終了コード0（ビルド17分32秒、試験1.18秒）。スナップショット復元後、同じ予約を参照する別ブロックの決済行を拒否。正しい差分では3プロセスの決済後root `e55094cc0516922f…` と決済台帳root `5491edb96b0183f6…` が一致し、取り消しと再適用で同じ状態を復元した。これは隔離fixtureの経済差分の検証。適格FOW1 claimの当選・仕事キー消費から通常ブロックの決済へ渡す経路は未接続。
 
 同じテストバイナリのT12当選・3ピア受理（3.79秒）、落選（1.72秒）、V3/V4の同一量子の二重消費拒否（1.04秒）はそれぞれ終了コード0。
+
+### 期限後のTB1 PANEL入力集合の再構築
+
+隔離profileのPANEL入力集合を、署名済みEXEC登録、元の公開済みseed、収録済みのOriginalと所有者署名から再構築できるようにした。各Originalについて登録slotから実入力を再導出し、元の受付期間、EXEC certificate以後の選択鎖への収録、PANEL closeのblue cutoff、Ticketと署名を照合する。読戻し中のEXEC finalityも再確認する。通常の新規受付・再実行・署名には元の現在期限が適用される。
+
+短い非報酬fixture `private_tb1_stable_panel` の最終実行は終了コード0（ビルド2分49秒、試験4.96秒）。3プロセスはEXEC公開前のDBとDAA 60の期限時点のDBをそれぞれ開き直し、Original `0b4e2217…` からPANEL close `c991e707…` と一致する集合を再構築した。承認はDAA 27に収録されていた。期限後の新規受付、slotの変更、別の収録ブロック、改変Ticketを拒否した。初回の期限後読戻しは終了コード0。EXEC観測の復元まで広げた試験の最初のビルドは、チェックポイントAPIを間違った型から呼び出してコンパイルに失敗した。runnerも終了コード取得用のシェル変数で停止し、終了コード1。双方を修正して上記の最終結果を取得した。
+
+同じビルドの `native_withdrawal_halts_an_exposed_holder_while_its_block_is_still_selected` は終了コード0（2.26秒）。今回の検証は非報酬の短いroundで、Round 16の実close、P200の受賞、およびFOW1のGate C・MOE2決済は未実証。

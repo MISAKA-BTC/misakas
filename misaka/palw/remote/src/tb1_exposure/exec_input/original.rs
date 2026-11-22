@@ -75,6 +75,12 @@ impl DerivedExecInput<'_> {
     /// The signature commits Y/Z/TRACE; their numerical origin is checked by replay.
     pub fn verify_qf1_body(&self, native: &dyn ConsensusApi, body: &LocalOriginalBody, sig: &MLDSA65Signature) -> io::Result<Hash64> {
         self.check_live(native)?;
+        let id = self.verify_original_body(body, sig)?;
+        self.check_live(native)?;
+        Ok(id)
+    }
+
+    fn verify_original_body(&self, body: &LocalOriginalBody, sig: &MLDSA65Signature) -> io::Result<Hash64> {
         self.terms.qf1.ok_or_else(|| invalid("registration has no QF1 frame"))?.admitted()?;
         let [x, t, z, records] = body.counts;
         if x != self.tokens.len() as u64
@@ -104,7 +110,6 @@ impl DerivedExecInput<'_> {
         let original = body.signing_id(self);
         ml_dsa_65::verify(self.owner, original.as_byte_slice(), LOCAL_ORIGINAL_DOMAIN, sig)
             .map_err(|_| invalid("invalid local Original owner signature"))?;
-        self.check_live(native)?;
         Ok(original)
     }
 
@@ -117,8 +122,21 @@ impl DerivedExecInput<'_> {
         body: &LocalOriginalBody,
         sig: &MLDSA65Signature,
     ) -> io::Result<Hash64> {
-        let tip = native.get_sink();
-        let original = self.verify_qf1_body(native, body, sig)?;
+        self.check_live(native)?;
+        let id = self.read_recorded_qf1_original(native, block, body, sig)?;
+        self.check_live(native)?;
+        Ok(id)
+    }
+
+    pub(super) fn read_recorded_qf1_original(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        body: &LocalOriginalBody,
+        sig: &MLDSA65Signature,
+    ) -> io::Result<Hash64> {
+        let (_, tip) = self.check_selected(native)?;
+        let original = self.verify_original_body(body, sig)?;
         let header = native.get_header(block).map_err(io::Error::other)?;
         let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
         if !(self.terms.open_daa..self.terms.deadline_exclusive_daa).contains(&header.daa_score)
@@ -128,7 +146,7 @@ impl DerivedExecInput<'_> {
         {
             return Err(invalid("local Original outside committed EXEC history"));
         }
-        if native.get_sink() != tip {
+        if self.check_selected(native)?.1 != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "local Original view moved"));
         }
         Ok(original)

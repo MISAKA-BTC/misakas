@@ -180,7 +180,7 @@ impl NativePublicationGate {
         Ok((tip, marker, seed))
     }
 
-    fn require_tip(&self, native: &dyn ConsensusApi, expected: Hash64) -> io::Result<()> {
+    pub(super) fn require_tip(&self, native: &dyn ConsensusApi, expected: Hash64) -> io::Result<()> {
         let (state, _, tip) = anchor_state(native, self.freeze.accepting_block)?;
         if !matches!(state, AnchorState::Finalized) || tip != expected {
             return Err(Error::new(ErrorKind::WouldBlock, "TB1 publication view moved"));

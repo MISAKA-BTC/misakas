@@ -379,17 +379,23 @@ impl DerivedExecInput<'_> {
     /// Recheck the original certificate on the current selected history and the
     /// job deadline when resuming work or returning a result from a long run.
     pub fn check_live(&self, native: &dyn ConsensusApi) -> io::Result<()> {
-        let (state, daa, tip) = anchor_state(native, self.close)?;
-        if !matches!(state, AnchorState::Finalized)
-            || !(self.terms.open_daa..self.terms.deadline_exclusive_daa).contains(&daa)
-            || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)?
-        {
+        let (daa, _) = self.check_selected(native)?;
+        if !(self.terms.open_daa..self.terms.deadline_exclusive_daa).contains(&daa) {
             return Err(invalid("derived EXEC input lost its live certificate or original window"));
         }
-        if native.get_sink() != tip {
+        Ok(())
+    }
+
+    fn check_selected(&self, native: &dyn ConsensusApi) -> io::Result<(u64, Hash64)> {
+        let (state, daa, tip) = anchor_state(native, self.close)?;
+        if !matches!(state, AnchorState::Finalized) || !native.is_chain_ancestor_of(self.certificate, tip).map_err(io::Error::other)? {
+            return Err(invalid("derived EXEC input lost its live certificate"));
+        }
+        let (current, _, current_tip) = anchor_state(native, self.close)?;
+        if current_tip != tip || !matches!(current, AnchorState::Finalized) {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC input generation moved"));
         }
-        Ok(())
+        Ok((daa, tip))
     }
     pub fn attempt(&self) -> &[u8; 32] {
         &self.attempt
@@ -421,17 +427,25 @@ impl<'a> FrozenExecInputs<'a> {
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
     ) -> io::Result<DerivedExecInput<'a>> {
+        let tip = native.get_sink();
+        let seed = self.gate.read_seed(native, publication, certificate, rows, q, limits)?;
+        let input = self.derive_from_seed(slot, certificate, &seed)?;
+        input.check_live(native)?;
+        self.gate.require_tip(native, tip)?;
+        Ok(input)
+    }
+
+    fn derive_from_seed(
+        &self,
+        slot: u64,
+        certificate: Hash64,
+        seed: &kaspa_consensus_core::palw_tb1::releases::Tb1BeaconSeed,
+    ) -> io::Result<DerivedExecInput<'a>> {
         let entry = self.batch.entries.get(&slot).ok_or_else(|| invalid("unknown closed EXEC slot"))?;
         let (c, terms) = (&entry.context, entry.terms);
-        let tip = native.get_sink();
-        let header = native.get_header(tip).map_err(io::Error::other)?;
-        if !(terms.open_daa..terms.deadline_exclusive_daa).contains(&header.daa_score) {
-            return Err(invalid("EXEC job is outside its original window"));
-        }
-        let seed = self.gate.read_seed(native, publication, certificate, rows, q, limits)?;
         let (attempt, tokens) = if let Some(mode) = terms.qf1 {
             let frame = mode.admitted()?;
-            let attempt = kaspa_consensus_core::palw_qf1::attempt(c, &seed).map_err(invalid)?;
+            let attempt = kaspa_consensus_core::palw_qf1::attempt(c, seed).map_err(invalid)?;
             (attempt, frame.frame(&attempt))
         } else {
             let attempt: [u8; 32] = Sha3_256::new()
@@ -447,9 +461,6 @@ impl<'a> FrozenExecInputs<'a> {
             tokens.extend_from_slice(terms.job_tokens);
             (attempt, tokens)
         };
-        if native.get_sink() != tip {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "EXEC job generation moved"));
-        }
         Ok(DerivedExecInput {
             close: self.close,
             certificate,
