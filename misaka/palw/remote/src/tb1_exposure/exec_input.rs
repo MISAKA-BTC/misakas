@@ -586,6 +586,19 @@ impl DerivedExecInput<'_> {
         Ok(())
     }
 
+    /// Derive the work identity for these authenticated EXEC inputs. The
+    /// result alone grants no claim eligibility, credit or award.
+    pub fn qf1_computational_work_key(
+        &self,
+        native: &dyn ConsensusApi,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> Result<Hash64, String> {
+        self.check_qf1_instance(native, instance)?;
+        let key = instance.computational_work_key(&self.tokens, self.terms.decode_tokens)?;
+        self.check_live(native).map_err(|e| e.to_string())?;
+        Ok(key)
+    }
+
     /// Produce from the signed registration and live EXEC without a declared T.
     pub fn produce_qf1_original(
         &self,

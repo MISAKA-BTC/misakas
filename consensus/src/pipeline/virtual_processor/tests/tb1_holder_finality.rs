@@ -1014,6 +1014,19 @@ async fn run(stable: bool, registered: bool) {
         let (artifact, norm) = exercise.as_ref().unwrap();
         let substituted = prediction::bind_scale(artifact, *norm, b"other scale");
         assert!(matches!(r.replay_qf1_local(api, &substituted), Err(e) if e.contains("owner-signed registration")));
+        let work = r.qf1_computational_work_key(api, bound).unwrap();
+        assert!(r.qf1_computational_work_key(api, &substituted).is_err());
+        assert!(request.qf1_computational_work_key(api, bound).is_err());
+        if full.is_none() {
+            assert_ne!(bound.identity().descriptor, substituted.identity().descriptor);
+            let limit = r.terms().decode_tokens;
+            assert_eq!(substituted.computational_work_key(r.tokens(), limit).unwrap(), work);
+            assert_ne!(bound.computational_work_key(r.tokens(), limit + 1).unwrap(), work);
+            let mut different = r.tokens().to_vec();
+            different[0] = 0;
+            assert_ne!(bound.computational_work_key(&different, limit).unwrap(), work);
+        }
+        peer_log!("QF1 numerical work key pid={} key={work}", std::process::id());
         assert!(request.replay_qf1_local(api, bound).is_err());
         let (replay, opened) = if let Some(s) = parent_socket.as_mut() {
             let declared = receive::<u32>(s);

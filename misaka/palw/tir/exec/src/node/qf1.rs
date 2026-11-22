@@ -12,6 +12,7 @@ use kaspa_consensus_core::{
     palw_tir_step_v1::PalwTirStepSpaceV1,
 };
 use misaka_palw_tir::{Block, DType, Dim, Prim, Ref, TensorType};
+use std::sync::OnceLock;
 use trace::Trace;
 pub use trace::{LocalTrace, TraceOpening, TraceRequest};
 
@@ -22,6 +23,7 @@ pub struct LocalInstance<'a> {
     space: PalwTirStepSpaceV1,
     producers: [(u8, u16); ROLES],
     identity: Identity,
+    work_model: OnceLock<Result<Hash64, String>>,
     argmax: (u8, u16),
 }
 
@@ -52,6 +54,15 @@ fn depends(block: &Block, output: u16, source: Ref, cut: Option<u16>) -> bool {
 }
 
 impl<'a> LocalInstance<'a> {
+    fn work_model_id(graph: Hash64, inventory: Hash64, producers: &[(u8, u16); ROLES]) -> Hash64 {
+        let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
+        hash.update(b"MISAKA/private/QF1/work-model/v1\0").update(graph.as_byte_slice()).update(inventory.as_byte_slice());
+        for &(block, node) in producers {
+            hash.update(&[block]).update(&node.to_le_bytes());
+        }
+        Hash64::from_bytes(*hash.finalize().as_array())
+    }
+
     pub fn bind(artifact: &'a TirArtifactV1, manifest: Hash64, final_norm: u16, scales: &[Hash64; ROLES]) -> Result<Self, String> {
         Self::bind_inventory(artifact, manifest, final_norm, scales, false)
     }
@@ -130,17 +141,51 @@ impl<'a> LocalInstance<'a> {
             hash.update(&[role as u8, block]).update(&node.to_le_bytes()).update(scale.as_byte_slice());
         }
         let descriptor = Hash64::from_bytes(*hash.finalize().as_array());
+        let work_model = OnceLock::new();
+        if full_weights || artifact.composite_ref().is_none() {
+            work_model.get_or_init(|| Ok(Self::work_model_id(class.graph_ir_root(), inventory, &producers)));
+        }
         Ok(Self {
             artifact,
             argmax: (p.schedule.post, argmax as u16),
             space,
             producers,
             identity: Identity { descriptor, inventory, class: class_id, tokenizer: class.tokenizer_id },
+            work_model,
         })
     }
 
     pub fn identity(&self) -> Identity {
         self.identity
+    }
+
+    /// Identify the numerical QF1 computation using its actual input IDs and
+    /// decode limit. Trace metadata, packaging and registration identity do
+    /// not enter this digest. Callers authenticate the input before using it.
+    pub fn computational_work_key(&self, prompt: &[u32], limit: u32) -> Result<Hash64, String> {
+        let len = u32::try_from(prompt.len()).map_err(|_| "QF1 input length")?;
+        palw_qf1::check_capacity(len, limit)?;
+        if prompt.iter().any(|&id| id >= VOCAB) {
+            return Err("QF1 input ID out of range".into());
+        }
+        self.artifact.check_weights_unmodified()?;
+        let model = self.work_model.get_or_init(|| {
+            // Composite registrations commit section roots. This computation
+            // key uses the same ordinary inventory as a single full file.
+            let (inventory, _) =
+                kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_root_v1(&self.space.program, self.artifact)
+                    .map_err(|e| e.to_string())?;
+            Ok(Self::work_model_id(self.artifact.class()?.graph_ir_root(), inventory, &self.producers))
+        });
+        self.artifact.check_weights_unmodified()?;
+        let model = model.as_ref().map_err(Clone::clone)?;
+        let ids = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_root_v1(prompt).map_err(|e| e.to_string())?;
+        let mut hash = blake2b_simd::Params::new().hash_length(64).to_state();
+        hash.update(b"MISAKA/private/QF1/computational-work/v1\0")
+            .update(model.as_byte_slice())
+            .update(ids.as_byte_slice())
+            .update(&limit.to_le_bytes());
+        Ok(Hash64::from_bytes(*hash.finalize().as_array()))
     }
 
     /// Non-paying replay from an empty KV history. The context supplies the

@@ -344,3 +344,11 @@ DAA 7754の隔離P200作業コピーには今回のバイナリを適用して�
 この検査は元の署名済みslotの予約消費を対象とする。FOW1の認証済み実入力から得るcanonical `ComputationalWorkKey`、旧・新profileのaliasを含む一回消費、これを通常ブロック処理からMOE2決済に渡す接続は未実装。
 
 `private_moe2_three_process_registration` は終了コード0（ビルド7分09秒、試験1.11秒）。予約消費を保持したままslot digestだけを変更した差分を、適用・巻き戻しの双方で拒否した。同じ予約を別claimと対応するLP行で複製したsnapshotは、期待rootを与えない状態整合性検査でも拒否した。正しい隔離候補の適用・復元では3プロセスの候補hash `4b10b64659a18de0…`、決済後root `b408f4a9fb3514ac…`、決済台帳root `803080942440cfc5…` が一致した。既存T12の当選・3ピア受理（3.98秒）、落選（1.89秒）、V3/V4同一量子の二重消費拒否（1.07秒）も終了コード0。
+
+### 認証済みQF1入力の数値実行キー
+
+隔離QF1の数値実行キーはcanonical TIR program、実weightの通常inventory root、順序付きReadout参照、実際のtoken ID列、署名済み生成上限から導出する。分割保存されたweightでも、通常inventoryを導出してキーに結合する。同じ数値実行を指す限り、登録manifest、資料の包装、claim ID、役割、署名値、資金参照は直接キーに入らない。TB1入口では、先に選択鎖上のEXEC証明と登録済みinstance descriptor・class・tokenizerを照合し、元の受付期間を確認する。
+
+現行の採掘適格性判定と `REVIEW_HOLD` を適用したまま、非報酬QF1でキーを検証する。通常ブロック処理における同じキーの原子的消費、旧profileとのalias対応、認証済み当選からMOE2への接続は残る。
+
+`private_tb1_stable_panel` は終了コード0（ビルド3分25秒、試験4.67秒）。3つの独立したプロセスが同じ実入力から `5e10763204ee06bb…` を導出した。fixtureのReadout scale参照メタデータを変えると登録照合では拒否し、同じ実weight・実入力の数値キーは一致した。token IDまたは生成上限を変えた場合は異なるキーになった。実登録済みQF1の `private_registered_tb1_pending_freeze` は終了コード0（28.08秒）で、非報酬の見積もりと採掘予約の拒否を確認した。隔離MOE2の3プロセス決済fixtureも終了コード0（1.19秒）。full fileと分割weightを使ったキーの直接比較、P200の実当選と受賞決済は今回の試験範囲に含めていない。
