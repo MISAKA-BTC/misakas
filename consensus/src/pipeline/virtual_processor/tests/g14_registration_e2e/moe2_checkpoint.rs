@@ -5,7 +5,9 @@ use kaspa_consensus_core::palw_bond_budget_v1::PalwBondBudgetStateV1;
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
+use kaspa_consensus_core::palw_state_v2::{
+    Moe2ExecWorkerPayees, PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2,
+};
 use std::path::Path;
 
 pub(super) fn check_exec_settlement_rewind(
@@ -64,8 +66,54 @@ pub(super) fn check_exec_settlement_rewind(
         vest_until: None,
         retire_not_before: quote.deadline,
     };
-    let (payment, undo) =
-        child.settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot).unwrap();
+    let panel = [(env.chain.bonds[1], release.panel_now)];
+    let payees = Moe2ExecWorkerPayees { miner: env.chain.bonds[0], panel: &panel };
+    assert_eq!(
+        child.private_moe2_exec_worker_outputs(
+            &kaspa_consensus_core::config::params::palw_t12_shipped_params(),
+            position.point.daa_score,
+            release,
+            payees,
+        ),
+        Err(Moe2SettlementError::UnknownClaimContext),
+    );
+    let outputs = child.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees).unwrap();
+    for (output, (bond, amount)) in outputs.iter().zip([(payees.miner, release.miner_now), panel[0]]) {
+        let payload = child.bond(&bond).unwrap().payout_payload;
+        assert_eq!(output.value, amount);
+        assert_eq!(output.script_public_key, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes()));
+    }
+    assert_eq!(outputs.len(), 2);
+    let execution = env.chain.ctx.consensus.get_block(position.point.block).unwrap();
+    let mut projected_coinbase = execution.transactions[0].clone();
+    assert!(projected_coinbase.is_coinbase());
+    let worker_start = projected_coinbase.outputs.len();
+    projected_coinbase.outputs.extend(outputs.iter().cloned());
+    projected_coinbase.finalize();
+    let decoded: kaspa_consensus_core::tx::Transaction = borsh::from_slice(&borsh::to_vec(&projected_coinbase).unwrap()).unwrap();
+    let coinbase_workers = &decoded.outputs[worker_start..];
+    assert_eq!(coinbase_workers, outputs.as_slice());
+    let duplicate = [panel[0], panel[0]];
+    assert_eq!(
+        child.private_moe2_exec_worker_outputs(
+            config,
+            position.point.daa_score,
+            release,
+            Moe2ExecWorkerPayees { panel: &duplicate, ..payees }
+        ),
+        Err(Moe2SettlementError::WorkerOutputsMismatch),
+    );
+    let altered = [outputs[1].clone(), outputs[0].clone()];
+    for wrong in [&[][..], &altered] {
+        assert_eq!(
+            child.settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, wrong),
+            Err(Moe2SettlementError::WorkerOutputsMismatch),
+        );
+        assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &admitted, &original_delta.entries));
+    }
+    let (payment, undo) = child
+        .settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, coinbase_workers)
+        .unwrap();
     let undo: Moe2SettlementUndo = borsh::from_slice(&borsh::to_vec(&undo).unwrap()).unwrap();
     let after = child.state_root();
     assert_eq!(apply_delta_v2(&reserved, &award_delta, params).unwrap().state_root(), after);
@@ -109,8 +157,9 @@ pub(super) fn check_exec_settlement_rewind(
     assert_eq!((child.state_root(), &book, &award_delta.entries), (before, &admitted, &original_delta.entries));
     assert_eq!(revert_delta_v2(&child, &award_delta, params).unwrap().state_root(), reserved.state_root());
     assert!(child.revert_private_moe2_exec_slot(config, &mut book, &mut award_delta, &slot, &undo).is_err());
-    let (repaid, _) =
-        child.settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot).unwrap();
+    let (repaid, _) = child
+        .settle_private_moe2_exec_slot(config, &mut book, &mut award_delta, claim, position, release, &slot, payees, coinbase_workers)
+        .unwrap();
     assert_eq!((repaid, child.state_root(), book), (payment, after, paid_book));
     let market = payment.allocation.market.unwrap();
     println!(

@@ -11993,6 +11993,7 @@ pub struct PalwChainStateV2 {
 
 mod chain_state;
 mod private_moe2_settlement;
+pub use private_moe2_settlement::Moe2ExecWorkerPayees;
 mod evm_replay_settlements_owned_v2;
 mod evm_view_owned_v2;
 pub mod included_replay;

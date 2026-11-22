@@ -12,10 +12,53 @@ use crate::palw_model_market_v1::moe2::{
     },
 };
 use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
+use crate::tx::TransactionOutput;
+
+/// Recipient bonds and amounts selected by the accepted claim's worker plan.
+/// The block owner supplies the authenticated Miner and Panel legs in plan order.
+#[derive(Clone, Copy)]
+pub struct Moe2ExecWorkerPayees<'a> {
+    pub miner: PalwBondKeyV2,
+    pub panel: &'a [(PalwBondKeyV2, u64)],
+}
 
 impl PalwChainStateV2 {
     pub fn private_moe2_exec_settlement(&self, claim: &Hash64) -> Option<&Moe2NativeExecSettlement> {
         self.private_moe2_exec_settlements.get(claim)
+    }
+
+    /// Render the immediately payable worker section of the award coinbase.
+    /// Construction and settlement compare use the same native payout payloads.
+    pub fn private_moe2_exec_worker_outputs(
+        &self,
+        config: &Params,
+        award_daa: u64,
+        release: Moe2WorkerRelease,
+        payees: Moe2ExecWorkerPayees<'_>,
+    ) -> Result<Vec<TransactionOutput>, Moe2SettlementError> {
+        use Moe2SettlementError::{UnknownClaimContext, WorkerOutputsMismatch};
+        if config.private_moe2_registration_from().is_none_or(|from| award_daa < from) {
+            return Err(UnknownClaimContext);
+        }
+        let count = usize::from(release.miner_now > 0).saturating_add(payees.panel.len());
+        let mut recipients = BTreeSet::from([payees.miner]);
+        if count > PALW_V2_MAX_PAYOUTS_PER_BLOCK
+            || payees.panel.iter().any(|(bond, amount)| !recipients.insert(*bond) || *amount == 0)
+            || payees.panel.iter().try_fold(0u64, |sum, (_, amount)| sum.checked_add(*amount)) != Some(release.panel_now)
+        {
+            return Err(WorkerOutputsMismatch);
+        }
+        let mut outputs = Vec::with_capacity(count);
+        for (bond, amount) in std::iter::once((payees.miner, release.miner_now)).chain(payees.panel.iter().copied()) {
+            let row = self.bond(&bond).ok_or(WorkerOutputsMismatch)?;
+            if amount != 0 {
+                outputs.push(TransactionOutput::new(
+                    amount,
+                    crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.payout_payload.as_bytes()),
+                ));
+            }
+        }
+        Ok(outputs)
     }
 
     /// Append both monetary legs at the end of this block's current delta.
@@ -35,6 +78,8 @@ impl PalwChainStateV2 {
 
     /// Accounting entry point for the private block owner after validating the
     /// new-profile claim, its unique EXEC slot and its award in this delta.
+    /// The worker section is taken from the same block's coinbase. The owning
+    /// block validates its other outputs and authenticates the recipient plan.
     pub fn settle_private_moe2_exec_slot(
         &mut self,
         config: &Params,
@@ -44,7 +89,12 @@ impl PalwChainStateV2 {
         position: Moe2Position,
         release: Moe2WorkerRelease,
         slot: &Moe2ExecSlot,
+        payees: Moe2ExecWorkerPayees<'_>,
+        coinbase_worker_outputs: &[TransactionOutput],
     ) -> Result<(Moe2SettledReward, Moe2SettlementUndo), Moe2SettlementError> {
+        if self.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees)? != coinbase_worker_outputs {
+            return Err(Moe2SettlementError::WorkerOutputsMismatch);
+        }
         self.settle_private_moe2_funding(config, book, delta, claim, position, release, Some(slot))
     }
 

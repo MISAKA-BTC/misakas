@@ -446,6 +446,7 @@ pub enum Moe2SettlementError {
     AlreadyAdmitted,
     AlreadySettled,
     ReservationMismatch,
+    WorkerOutputsMismatch,
     PositionOutOfOrder,
     UndoMismatch,
     CheckpointMismatch,
