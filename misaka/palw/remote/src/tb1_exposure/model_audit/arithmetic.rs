@@ -436,7 +436,7 @@ impl ArithmeticPanelDraw {
             return Err(io::ErrorKind::TimedOut.into());
         }
         let marker = self.replies_marker(replies)?;
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(marker)
@@ -462,7 +462,7 @@ impl ArithmeticPanelDraw {
         {
             return Err(invalid("arithmetic PANEL replies outside their committed branch"));
         }
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(ArithmeticAssessmentScore { correct: self.correct, cases: CASES })
@@ -776,16 +776,20 @@ mod tests {
             palw_native_settlement_v1::NativeSettlementSnapshotV1, trusted::ExternalGhostdagData,
         };
         use libcrux_ml_dsa::ml_dsa_87;
-        use std::sync::Arc;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
 
         #[derive(Clone, Copy)]
-        struct Chain {
+        struct Chain<'a> {
+            withdraw_on_commitment: Option<&'a AtomicBool>,
             finalized: Hash64,
             daa: u64,
             carrier_daa: u64,
             committed: Option<[u8; 64]>,
         }
-        impl ConsensusApi for Chain {
+        impl ConsensusApi for Chain<'_> {
             fn get_header(&self, hash: Hash64) -> ConsensusResult<Arc<Header>> {
                 let mut h = Header::from(&SIMNET_GENESIS);
                 h.hash = hash;
@@ -807,6 +811,9 @@ mod tests {
                 })
             }
             fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, marker: &[u8; 64]) -> ConsensusResult<bool> {
+                if let Some(withdrawn) = self.withdraw_on_commitment {
+                    withdrawn.store(true, Ordering::SeqCst);
+                }
                 Ok(chain == [0; 64] && block == Hash64::from_u64_word(5) && self.committed.as_ref() == Some(marker))
             }
             fn is_chain_ancestor_of(&self, lower: Hash64, higher: Hash64) -> ConsensusResult<bool> {
@@ -823,7 +830,11 @@ mod tests {
                     frontier: Some(tip),
                     latest: Some(tip),
                     safe: Some(self.finalized),
-                    finalized: Some(self.finalized),
+                    finalized: Some(if self.withdraw_on_commitment.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                        Hash64::from_u64_word(2)
+                    } else {
+                        self.finalized
+                    }),
                     depth: 1,
                     unique_work: "1".into(),
                     stop: None,
@@ -847,7 +858,7 @@ mod tests {
             selected: vec![a, b],
             keys: BTreeMap::from([(a, BTreeSet::from([mldsa87_key_id(ak)])), (b, BTreeSet::from([mldsa87_key_id(bk)]))]),
         };
-        let native = Chain { finalized: draw.close, daa: 10, carrier_daa: 10, committed: None };
+        let native = Chain { withdraw_on_commitment: None, finalized: draw.close, daa: 10, carrier_daa: 10, committed: None };
         let sign = |key: &ml_dsa_87::MLDSA87KeyPair, node: &ArithmeticPanelDraw, operator| {
             let msg = node.reply_message(&native, operator, key.verification_key.as_slice()).unwrap();
             ml_dsa_87::sign(&key.signing_key, &msg, ASSESSMENT_REPLAY_SIGNATURE_DOMAIN, [23; 32]).unwrap()
@@ -859,6 +870,10 @@ mod tests {
         let carrier = Hash64::from_u64_word(5);
         let after = Chain { daa: 12, committed: Some(commitment), ..native };
         assert_eq!(draw.read_replies(&after, carrier, &replies).unwrap(), ArithmeticAssessmentScore { correct: 1, cases: CASES });
+        let withdrawn = AtomicBool::new(false);
+        let moving = Chain { withdraw_on_commitment: Some(&withdrawn), ..after };
+        assert!(draw.read_replies(&moving, carrier, &replies).is_err());
+        assert!(withdrawn.load(Ordering::SeqCst));
         draw.correct = 2;
         assert!(draw.read_replies(&after, carrier, &replies).is_err());
         draw.correct = 1;

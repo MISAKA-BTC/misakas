@@ -278,7 +278,7 @@ impl LocalReplayDraw {
             return Err(io::ErrorKind::TimedOut.into());
         }
         let marker = self.replies_marker(replies);
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         marker
@@ -320,7 +320,7 @@ impl LocalReplayDraw {
         {
             return Err(invalid("local PANEL replies outside committed branch"));
         }
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(())
@@ -355,7 +355,7 @@ impl LocalReplayDraw {
             }
             cursor = parent(cursor)?;
         }
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(Sha3_512::new()
@@ -385,7 +385,7 @@ impl LocalReplayDraw {
         {
             return Err(invalid("unverified expiry outside committed PANEL history"));
         }
-        if native.get_sink() != tip {
+        if self.branch(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(())
