@@ -1,0 +1,27 @@
+{
+  "reader": {
+    "pid": 71028,
+    "binary_sha256": "160855ce156ec72112b83c33df03016a12a2bce93d109bccbb51fe315855fcad",
+    "slot": 1
+  },
+  "original_writer": {
+    "pid": 54643,
+    "binary_sha256": "96818852a7fe41cbefd6ec054e7a809152f976b3211fda00ea4fcee0e8c73a02",
+    "slot": 0
+  },
+  "claim": "de2c19ea2895e4756dafd5c2ce7520a922ec76897b0544e2529e123a7a6bc0456858ce1b404c2ecfe68c0423952ad6e1c89e2aea846c8b90c1fc2630e828e07c",
+  "accepted": "3f2aca471ce4afbb563c12834454a234642253787b58e99cc8fbe9a83fb5de277a4d86eced10a0dfc173dfa58b2ef1bbe753f0b146bd63776b6b12b7065ad67d",
+  "final_daa": 6633,
+  "certified_daa": 11673,
+  "approvals": 75,
+  "drawn": 75,
+  "certification_tip": "0225310e292164a365e49fcc781d23a3061ee487ac02ccfc5716106a8ca3499ae62cf17660566d7fbc6c19fdfeb13dce5804e408d5b11312acedc4a258aea067",
+  "maturity": {
+    "work": "07d21a9fa12bb37e09af1c679f1e319e5f1661b2bae32cb9fcf8c9894fe9ddeb77b7f47911945ef435deadd4a4a14143758223403c88b4010ada7aa24184df61",
+    "daa": 17931,
+    "tip": "156bfff469a0a19cf3760218363e532771a750ac65eddb9fe6a4e7c27488e6ef704f150f9f7a849ea5dda54ea5d29f70b540db96ef7f4a2048e13ad1abc7e0d6",
+    "state": "84ce51fd8465f65771897fc0f2473443f7b5b02b591030e45aaca5bac0a6fb232ddfdde40f2943b3bdd426fd8a0271d7306034af9077d5c4eb711f3162de2ffd",
+    "publication": "held",
+    "blocks": 12516
+  }
+}
