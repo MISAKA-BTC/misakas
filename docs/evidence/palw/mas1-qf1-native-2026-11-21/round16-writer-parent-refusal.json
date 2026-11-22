@@ -13,11 +13,20 @@
     "daa": 44058,
     "sink": "36cc25382738626297f6fcb2310e937850053fa6c222e6131021b2758fbd636baa6bf8c095c8582357d8b5c9f97bafe5d4a62c29e31274e35ca556043dbb72dc",
     "withdrawn_finalized": "73da634856c52c7bd71ba95d0025a700decb5750bdc82b4b51f1ed789a04a836e23f9a3aa00451d3abbd669286ba4c68e4b952373282413f3b03af529537c1bb",
+    "withdrawn_finalized_blue": 12600,
+    "withdrawn_finalized_daa": 6299,
+    "frontier_observed_at_original_publication_base": {
+      "sink_daa": 37758,
+      "frontier_blue": 12984,
+      "frontier": "3f2aca471ce4afbb563c12834454a234642253787b58e99cc8fbe9a83fb5de277a4d86eced10a0dfc173dfa58b2ef1bbe753f0b146bd63776b6b12b7065ad67d"
+    },
     "pruning_checkpoint_captured_at_previous_block": {
       "blue": 88120,
       "daa": 44058,
       "sink": "4e2f9d86bffc6dcf14102c1a991ff3294ba38f762e9b76648ce6faacd46151a1b9677317293eb0f2480d9c15e9cffbbd7baf075e53a6dcede4363bf8367e6690",
-      "pruning_point": "83cd72498abd4f472df5b3e05cd9f79cf3c006163c1e65912f6085e7da3066db910c1715ec3b4829be9c65566d884c1e063f5611af214303fbaade6840463f61"
+      "pruning_point": "83cd72498abd4f472df5b3e05cd9f79cf3c006163c1e65912f6085e7da3066db910c1715ec3b4829be9c65566d884c1e063f5611af214303fbaade6840463f61",
+      "pruning_point_blue": 13200,
+      "pruning_point_daa": 6598
     },
     "stop": "FrontierNotCovered",
     "withdrawn_head_still_canonical": true
