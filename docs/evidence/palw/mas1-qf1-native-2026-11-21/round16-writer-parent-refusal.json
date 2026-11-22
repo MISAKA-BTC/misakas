@@ -5,6 +5,12 @@
   "blocks": 105857,
   "archive_sha256": "5ca368626f09b23be45d2344053b25ecb45a0864eb9d6548eb55bc200b9fd26d",
   "submission": "050f2fd1b1d9fec94c03476e5301162207fd105daddd4ca84586279369f066e29185d77cd4d459cb0eb69a0a75faef6dab67173146911f97eeb17ecf71f4970b",
+  "scheduled_parent_header_pruning_point": {
+    "block": "3eb58b1e5fcd9a6fe222c3ea13257e5d6f7adcc03d5113c20cd6d343ce69277f8fc3ffdd0574b449c97db852dbed19dee8077305f68cf9cc2b2bab61ce5e8512",
+    "blue": 106200,
+    "daa": 53098,
+    "prefix_block": 30676
+  },
   "native_test": "FAILED",
   "native_error": "TB1 publication outside stabilized selected history",
   "observed_finality_withdrawal": {
