@@ -1385,6 +1385,19 @@ async fn t12_a_floor_final_becomes_a_permitted_round_block_whose_fee_pays_its_bo
     let sink = at.chain.sink();
     let blocks = super::rfc9_v4_chain_e2e::past_in_order(&at.chain, sink);
     let root = state.state_root();
+    let fee_index = merged.merging.transactions[0]
+        .outputs
+        .iter()
+        .position(|output| output.value == ROUND_FEE && output.script_public_key == card_payout_spk(0))
+        .expect("the award fee output");
+    let fee_outpoint = TransactionOutpoint::new(merged.merging.transactions[0].id(), fee_index as u32);
+    let economic_state = |chain: &T12Chain| {
+        let entries: std::collections::HashMap<_, _> =
+            chain.ctx.consensus.get_virtual_utxos(None, 1_000_000, false).into_iter().collect();
+        assert_eq!(entries.get(&fee_outpoint).expect("unspent award fee").amount, ROUND_FEE);
+        entries
+    };
+    let expected_utxos = economic_state(&at.chain);
     for _ in 0..2 {
         use kaspa_database::{create_temp_db, prelude::ConnBuilder};
         let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
@@ -1411,6 +1424,7 @@ async fn t12_a_floor_final_becomes_a_permitted_round_block_whose_fee_pays_its_bo
         let restored = peer.tip_state().1;
         assert_eq!((peer.sink(), restored.state_root()), (sink, root));
         let restored_row = kaspa_consensus_core::palw_producer_v2::palw_claim_exec_lane_v1(&restored, &at.claim_id).unwrap();
+        assert_eq!(economic_state(&peer), expected_utxos);
         assert_eq!(restored_row.tickets_spent, 1);
         assert!(restored.round_permit_used(at.target, round, permit.index));
         assert_eq!(restored.round_permits_accepted(at.target), 1);
