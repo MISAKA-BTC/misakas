@@ -65,6 +65,29 @@ def check_control_identity(row, registered):
             and row["operator_count"] == len({b["operator"] for b in bonds}), "invalid or self-selected control bond")
 
 
+def isolated_card_keys():
+    keys = (HERE / "isolated-card-public-keys.bin").read_bytes()
+    width = 2592  # ML-DSA-87 verification key
+    require(len(keys) == 8 * width, "incomplete isolated verification keys")
+    identities = {}
+    for card in range(8):
+        key = keys[card*width:(card+1)*width]
+        key_id = hashlib.blake2b(key).hexdigest()
+        identities[key_id] = card
+    require(len(identities) == 8, "duplicate isolated key")
+    return identities
+
+
+def identify_control_cards(snapshot, identities):
+    # A bond may use a key outside this fixture. Preserve those rows in the native snapshot.
+    known = []
+    for bond in snapshot["bonds"]:
+        card = identities.get(bond["key_id"])
+        if card is not None:
+            known.append(dict(txid=bond["txid"], index=bond["index"], operator=bond["operator"], card=card))
+    return known
+
+
 def check_submission_state(row, submitted, seed):
     archive = HERE / "qf1-arithmetic-publisher.tar.zst"
     publication = json.loads(subprocess.check_output(["tar", "-xOf", archive, "publication.json"]))
@@ -96,7 +119,11 @@ def control_observations(report, log):
     require(parent["source"] == report["parent"] and parent["source_daa"] == report["daa"]
             and "block" not in parent and re.fullmatch(r"[0-9a-f]{128}", parent["state"]),
             "different live pre-close state observation")
-    return dict(**report, process=pid, at_submission=submission, at_parent=parent)
+    identities = isolated_card_keys()
+    require(identities.get(registered["registrant_key"]) == 2, "different signing card for the original registration")
+    return dict(**report, process=pid, at_submission=submission, at_parent=parent,
+                known_cards_at_submission=identify_control_cards(submission, identities),
+                known_cards_at_parent=identify_control_cards(parent, identities))
 
 
 if __name__ == "__main__":
