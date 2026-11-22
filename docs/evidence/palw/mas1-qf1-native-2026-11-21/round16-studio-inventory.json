@@ -1,0 +1,60 @@
+{
+  "blue": 102520,
+  "classes": [
+    {
+      "class": "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
+      "free_prompt_lane": true,
+      "registered_daa": 0,
+      "root": "f63af2c46b3816f6a16c168a130d28ec95b0ca5107da76d4abe24e4d9396e65c80d6d83014c47855e2394af20ce3333a59359fd3eb06090fdc7bfd502f75c7c2",
+      "status": "Active",
+      "tir_context": null,
+      "tir_held": null,
+      "tokenizer": null
+    },
+    {
+      "class": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+      "free_prompt_lane": false,
+      "registered_daa": 7,
+      "root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+      "status": "Active",
+      "tir_context": 8192,
+      "tir_held": false,
+      "tokenizer": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2"
+    },
+    {
+      "class": "b1da96d186242c16b4015a8a608f31de5be115db4d151bd284c7f1a30c003f03cbb2e0f8af4f8c59a8e39bba23410bedb2af261430823c1ffac1220fd987f905",
+      "free_prompt_lane": false,
+      "registered_daa": 1,
+      "root": "98ef4077c2d83fb415ac6820ce9433961781e1783226ba40c2392e0e99567de38e53e95140909ff89757c04ff056d3fd142e9162119327f2df3fea48e860e061",
+      "status": "Active",
+      "tir_context": 8192,
+      "tir_held": false,
+      "tokenizer": "10ed14bc48937bd836b309447040a8d43d38f103fde39682f7f9f2c4cbb6b4b4666658ab71ed3d90de7c6e2e00cce21c01863b4403ae41dab361b099fdfe2ec5"
+    },
+    {
+      "class": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "free_prompt_lane": true,
+      "registered_daa": 0,
+      "root": "88096dc177826d880c1c5fca4ec93cffe5ab51af108ed169a8e03cd4726308f91263f79f81904b043327bfa277e3558b1656f14259f6dd33603a9f91871aae20",
+      "status": "Active",
+      "tir_context": null,
+      "tir_held": null,
+      "tokenizer": null
+    },
+    {
+      "class": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "free_prompt_lane": true,
+      "registered_daa": 0,
+      "root": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df",
+      "status": "Active",
+      "tir_context": null,
+      "tir_held": null,
+      "tokenizer": null
+    }
+  ],
+  "daa": 51258,
+  "funded_tir_from_daa": null,
+  "genesis": "20482be2d6431c68931bcc7e6a712b9bdd40692fb3cfa78ba612080fca3fe7dd8a360f9991a2b8c26d5756656c647a4ae2ada86dc8c9083c957303939063dd69",
+  "state_root": "964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1",
+  "tip": "375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604"
+}

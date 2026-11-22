@@ -74,3 +74,11 @@ blue 102522 の tip は `07d42def9040cf1f0b57e52682eb11e93810cde8f9b9fda50189d7b
 3プロセスが同じ実ブロックから読み出した差分に各自で予約を適用した。closeは `f1521c911aa04360fe4f3927f2d22d7b8d32a2b8cab69111acabafb3134cf4c4cf11cdf4ffc52245433faa27fdc785a7ab82a59a1258310cdb94511fa2e29cde`、予約前の親rootは `1c5257e0624ac46f0d7ff953dec7573367808842cd9c65308a73f144e5c30dc4113f9074d48655d65374097e698c435d7363e3e961dae3e0a82093280b7f82a6`、2件の予約を含む試験上のpost-state rootは `1640360f280f63d79341adcf64680d086d34d436fffbe5ce192036be849bef263049ad0696458d106774ebc9f5b78516fb7851376c29a3e43659dbebf9c71e56` で一致した。重複予約の拒否、差分取り消しによる親rootの復元、再適用によるpost-state rootの再現を各プロセスで検査した。
 
 今回のnativeビルドは終了コード0。 `private_registered_tb1_pending_freeze` は25.95秒、`private_moe2_three_process_registration` は22.19秒、`private_tb1_stable_panel` は4.58秒で、いずれも終了コード0。上記rootは試験で予約を加えた分岐状態の値であり、ネットワークの選択済みブロックヘッダーへのcommitは未実証。通常のblock ownerからの呼出しと、当選claimに結び付けた一度限りの予算消費・決済が残る。
+
+## 保存台帳での新規Studio 8K受付
+
+DAA 51258・blue 102520のDBを読み取り専用で開き、保存ブロックとPALW rootが一致する先端で登録状態を列挙した。再現には引き継ぎ記録の `verify_recovery_snapshot_tip` を使う。nativeビルドとこの試験の終了コードは0、試験は1.08秒。[5クラスの全記録](round16-studio-inventory.json)
+
+登録5件はすべてActive。TIRの最大コンテキスト8192の2件（DAA 1、7で登録）は、この状態で `palw_fp_lane_available_v1` がともにfalse。さらに、保存系統の元の設定で `palw_tir_public_conviction_v1_fence()` はNone。DAAを進めても発効予定はない。通常の `palw_accept.rs` のfunded original処理はこの場合carrierを拒否する。したがって保存台帳の規則では、どの登録モデルにも新規Studio TFO3を受け付ける経路がない。旧Studio claimを受理した隔離系統のgenesis（3b4233ae…）と保存台帳（20482be2…）も異なる。新規nonceによる推論・抽選・受賞は未実行。
+
+`b43fb4ebc` はPFS3/PFS4の候補一覧から署名直前まで、適格性を評価した親とDAAの組を使う。consensusとkaspadのテストビルドはともに終了コード0。同じ親で期限をまたぐ候補・二重消費（1.02秒）、3 DBのfloor受賞（4.50秒）、funded originalの不完全受付拒否（0.83秒）、kaspadのT12 producer 2件（計0.10秒）はすべて終了コード0。

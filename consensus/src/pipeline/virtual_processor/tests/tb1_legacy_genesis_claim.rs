@@ -348,6 +348,30 @@ fn verify_recovery_snapshot_tip() {
         if block.hash() == tip {
             assert_eq!(block.header.daa_score, header.daa_score);
             println!("snapshot tip={tip} daa={} blue={} state_root={}", header.daa_score, header.blue_score, point.state_root);
+            let conviction = config.params.palw_tir_public_conviction_v1_fence();
+            let active = conviction.is_some_and(|fence| fence.is_active(header.daa_score));
+            let classes: Vec<_> = state
+                .classes_iter()
+                .map(|(id, class)| {
+                    let tir = state.tir_class_v1(id);
+                    serde_json::json!({
+                        "class": id, "root": class.artifact_root, "registered_daa": class.registered_daa,
+                        "status": format!("{:?}", class.status), "tokenizer": state.class_tokenizer_listing_v1(id),
+                        "tir_context": tir.map(|record| record.facts.max_context),
+                        "tir_held": tir.map(|record| record.facts.held),
+                        "free_prompt_lane": kaspa_consensus_core::palw_state_v2::palw_fp_lane_available_v1(
+                            &state, &bundle.state, id, active),
+                    })
+                })
+                .collect();
+            println!(
+                "snapshot_studio_inventory={}",
+                serde_json::json!({
+                    "genesis": config.params.genesis.hash, "tip": tip, "state_root": point.state_root,
+                    "daa": header.daa_score, "blue": header.blue_score,
+                    "funded_tir_from_daa": conviction.map(|fence| fence.daa_score()), "classes": classes,
+                })
+            );
             return;
         }
     }
