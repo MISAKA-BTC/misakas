@@ -122,7 +122,7 @@ mod palw_gen_claim_fold_v1;
 #[path = "palw_class_seating_v1.rs"]
 mod palw_class_seating_v1;
 pub use palw_class_seating_v1::{
-    PalwClassNotSeatedV1, PalwClassSeatingTermsV1, PalwClassSeatingV1, PalwSeatingFloorV1, palw_class_seating_v1,
+    PalwClassNotSeatedV1, PalwClassSeatingTermsV1, PalwClassSeatingV1, PalwSeatingFloorV1, palw_base_population_v1, palw_class_seating_v1,
 };
 // RFC-0003 decision 22: the held leaf challenge's fold arm — a child module for the same reason.
 #[path = "palw_held_close_fold_v1.rs"]

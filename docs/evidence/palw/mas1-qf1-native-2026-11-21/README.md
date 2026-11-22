@@ -1255,3 +1255,13 @@ holder 0・1の再現に使用したディレクトリで、以下の手順に�
 tar -xf "$p/qf1-arithmetic-publisher.tar.zst" -C "$out"
 uv run --offline --no-project --with tokenizers==0.23.3 python -B "$p/check_arithmetic_submission.py" "$out" "$MISAKA_PRIVATE_QF1_TOKENIZER" --openssl "$(brew --prefix openssl@3)/bin/openssl" --publisher-only | cmp - "$p/qf1-arithmetic-publisher.json"
 ```
+
+### 算術評価の登録直後に読める検証者集合
+
+同じ試験バイナリ（SHA-256 `e04de482d22478676a55e97920e5047889ebf69945f8136caa417be5cf6949bf`）を別々の空のDBで3回起動した。元の登録履歴を再生し、closeヘッダに固定された親の状態（DAA 1）から既存規則で読めるbase classのbondは3回とも0件だった。これは登録時点の観測であり、Round 16の選出は後の親状態で判定する。検査器は元の取引から登録者のbondを読み、登録者を混入させたログを拒否する。
+
+```sh
+out=$(mktemp -d)
+tar -xf qf1-arithmetic-registration-population.tar.zst -C "$out"
+python3 -B check_arithmetic_control_population.py "$out" | diff - qf1-arithmetic-registration-population.json
+```

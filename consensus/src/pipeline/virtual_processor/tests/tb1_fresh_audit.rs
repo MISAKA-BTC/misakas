@@ -385,6 +385,10 @@ pub(super) async fn replay_window(
             block.hash(),
             Hash64::from_bytes(marker)
         );
+        let class = model.identity().class;
+        if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_BASE_OBSERVE").is_some() {
+            peer_log!("arithmetic control population {} {}", std::process::id(), control_population(node, block.hash(), class));
+        }
         let archive = match (
             std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_WRITE"),
             std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_PANEL_PREFIX_READ"),
@@ -405,6 +409,9 @@ pub(super) async fn replay_window(
                     .unwrap(),
                 marker
             );
+            if std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_BASE_OBSERVE").is_some() {
+                peer_log!("arithmetic control population {} {}", std::process::id(), control_population(node, parent, class));
+            }
             peer_log!(
                 "arithmetic PANEL prefix pid={} submission={} parent={} round={} blue={} daa={}",
                 std::process::id(),
@@ -416,6 +423,47 @@ pub(super) async fn replay_window(
             );
         }
     }
+}
+
+/// Observe the network's existing base population at the state committed by this
+/// selected header. This is a population observation only; it assigns no seats.
+fn control_population(node: &Rig, block: Hash64, class: Hash64) -> serde_json::Value {
+    use kaspa_consensus_core::{
+        mldsa87_primitives::mldsa87_key_id, palw_execution_lane_v1::palw_execution_span_v1,
+        palw_state_proof_v1::state_root_of_pinned_header_v1, palw_state_v2::palw_base_population_v1,
+    };
+    let native = node.api();
+    let tip = native.get_sink();
+    assert!(native.is_chain_ancestor_of(block, tip).unwrap());
+    let header = native.get_header(block).unwrap();
+    let source = native.get_ghostdag_data(block).unwrap().selected_parent;
+    let vp = node.vp();
+    let (at, state) = vp.palw_observer_state_at_cached_v1(source).unwrap();
+    let root = state_root_of_pinned_header_v1(&header, block).unwrap();
+    assert_eq!((at, state.state_root()), (source, root));
+    let daa = native.get_header(source).unwrap().daa_score;
+    let fold = vp.palw_model_registry_fold_at(daa).expect("the isolated control registry must be active");
+    let span = palw_execution_span_v1(daa, fold.span_daa);
+    let activation_pool = node.config.params.palw_activation_pool_at(daa).is_some();
+    let registrant = state.class(&class).unwrap().registrant_bond;
+    let owner = registrant.map(|key| state.bond(&key).expect("unresolved registrant bond"));
+    let mut bonds = Vec::new();
+    let mut operators = std::collections::BTreeSet::new();
+    for (key, bond) in palw_base_population_v1(&state, &node.bundle.state, &fold, &class, daa, span, activation_pool) {
+        assert_ne!(Some(*key), registrant);
+        assert_ne!(Some(bond.operator_id), owner.map(|b| b.operator_id));
+        if owner.is_some_and(|b| b.pubkey == bond.pubkey) {
+            continue;
+        }
+        operators.insert(bond.operator_id);
+        bonds.push(serde_json::json!({"txid":key.0.transaction_id,"index":key.0.index,"operator":bond.operator_id,
+                                      "key_id":mldsa87_key_id(&bond.pubkey),"collateral":bond.collateral}));
+    }
+    assert_eq!(native.get_sink(), tip);
+    serde_json::json!({"block":block,"source":source,"source_daa":daa,"state":root,"class":class,
+                       "registrant":registrant.map(|k|(k.0.transaction_id,k.0.index)), "registrant_operator":owner.map(|b|b.operator_id),
+                       "registrant_key":owner.map(|b|mldsa87_key_id(&b.pubkey)),
+                       "base_class":node.bundle.state.base_class_id(),"span":span,"operator_count":operators.len(),"bonds":bonds})
 }
 
 enum PrefixArchive {
@@ -500,4 +548,34 @@ async fn replay_to_original_panel_parent() {
     let restored = panel_prefix(&mut reader, start, 5, 50, PrefixArchive::open(&path, parent)).await;
     assert_eq!(reader.api().get_header(restored).unwrap().blue_score, 4);
     assert_eq!(reader.chain.tip_state().1.state_root(), writer.chain.tip_state().1.state_root());
+    let class = writer.bundle.state.base_class_id();
+    let observed = control_population(&writer, parent, class);
+    assert_eq!(control_population(&reader, restored, class), observed);
+    assert_eq!(observed["source"], serde_json::json!(writer.api().get_ghostdag_data(parent).unwrap().selected_parent));
+}
+
+/// Reopen the original short registration history without running the candidate
+/// model. The model's own output cannot contribute bonds to this observation.
+#[tokio::test]
+#[ignore = "uses the archived registered arithmetic audit and its close record"]
+async fn read_registered_arithmetic_control_population() {
+    use crate::pipeline::virtual_processor::tests::g14_registration_e2e::private_moe2::arm_private_registration;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let record: serde_json::Value =
+        serde_json::from_reader(File::open(std::env::var_os("MISAKA_PRIVATE_ARITHMETIC_CLOSE_RECORD").unwrap()).unwrap()).unwrap();
+    let audit = &record["audit"];
+    let id = |name: &str| audit[name].as_str().unwrap().parse::<Hash64>().unwrap();
+    let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    let mut node = Rig::new(&(config.clone(), bundle.clone(), premine, floats), 0x12_c500_0000);
+    stable_panel::arm(&mut node);
+    let mut reader = history::Reader::open(node.chain.sink()).unwrap();
+    assert_eq!(reader.header.registered, id("registered"));
+    reader.finish(&mut node).await;
+    assert_eq!(node.chain.sink(), id("tip"));
+    assert_eq!(node.chain.tip_state().1.class(&id("class")).unwrap().artifact_root, id("inventory"));
+    let observed = control_population(&node, id("close"), id("class"));
+    assert_eq!(observed["source"], serde_json::json!(id("preparation")));
+    assert!(observed["registrant"].is_array() && observed["registrant_operator"].is_string());
+    peer_log!("arithmetic control population {} {}", std::process::id(), observed);
 }

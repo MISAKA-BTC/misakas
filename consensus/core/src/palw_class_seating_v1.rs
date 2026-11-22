@@ -98,7 +98,7 @@ impl PalwClassSeatingV1 {
 /// `registrant` is the class record's `registrant_bond` (`None` for a genesis class); `activation_pool` selects the panel
 /// floor (past the Activation Pool, which `validate_palw_class_seating` requires of the seating fence) or the network
 /// floor (the jury below it).
-pub(super) fn palw_base_population_v1<'a>(
+pub fn palw_base_population_v1<'a>(
     state: &'a PalwChainStateV2,
     params: &PalwStateParamsV2,
     fold: &PalwModelRegistryFoldV1,
