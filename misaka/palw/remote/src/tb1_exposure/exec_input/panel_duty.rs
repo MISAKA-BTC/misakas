@@ -1,7 +1,7 @@
 //! Private PANEL consumers. Candidates and complete-replay duties come from
 //! the earlier native close. The dedicated certificate is the only draw input
 //! that becomes known after that close. No positive vote grants mining credit.
-use super::*;
+use super::{original::read_published_qf1_original, *};
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_DRAW_WEIGHT_MAX_MSK_V1, palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1, palw_panel_stake_ticket_v1,
 };
@@ -237,6 +237,21 @@ impl LocalReplayDraw {
         }
         Ok(Sha3_512::new().chain_update(self.duty).chain_update(actor.as_bytes()).finalize().into())
     }
+
+    /// Read the assigned Original from its source block, then independently
+    /// rerun the complete execution before producing the replay message.
+    pub fn replay_published_message(
+        &self,
+        native: &dyn ConsensusApi,
+        input: &DerivedExecInput<'_>,
+        instance: &LocalInstance<'_>,
+        key: &MLDSA65VerificationKey,
+    ) -> io::Result<[u8; 64]> {
+        self.live(native)?;
+        let (body, owner) = read_published_qf1_original(native, self.receipt)?;
+        self.replay_message(native, input, instance, &body, &owner, key)
+    }
+
     /// This producer path executes the selected Original from the registered
     /// model, even if the caller already computed a trace before the draw.
     pub fn replay_message(

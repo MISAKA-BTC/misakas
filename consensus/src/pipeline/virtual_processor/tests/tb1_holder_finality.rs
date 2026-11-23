@@ -1614,7 +1614,42 @@ async fn run(stable: bool, registered: bool) {
     }
     let original_receipt = if let Some((r, body, sig, id)) = &retained_qf1 {
         let certificate_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
-        let block = local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await;
+        let block = if !stable {
+            local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await
+        } else if let Some(socket) = &mut parent_socket {
+            let block = Block::try_from(receive::<RpcRawBlock>(socket)).unwrap();
+            stable_panel::arrive(&mut node, block.clone(), "QF1 Original publication").await;
+            block
+        } else {
+            use kaspa_consensus_core::{
+                subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+                tx::{Transaction, TransactionInput, TransactionOutput},
+            };
+            let spendable = node.api().get_virtual_utxos(None, 1_000_000, false);
+            let (card, (outpoint, utxo)) = parts
+                .3
+                .iter()
+                .enumerate()
+                .find(|(_, (outpoint, _))| spendable.iter().any(|(unspent, _)| unspent == outpoint))
+                .expect("unspent fixture fee float for the Original carrier");
+            let mut tx = Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![TransactionInput::new(*outpoint, vec![], 0, 1)],
+                vec![TransactionOutput::new(utxo.amount - 2_000_000, card_payout_spk(card))],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                body.publication_payload(sig),
+            );
+            super::super::t12_round_lane_e2e::sign_spend(&mut tx, utxo.clone(), card, node.config.params.storage_mass_parameter);
+            let miner = MinerData::new(card_payout_spk(6), id.as_bytes().to_vec());
+            let candidate = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]);
+            let block = node.take(candidate, "QF1 Original publication").await;
+            for (_, socket) in &mut peers {
+                send(socket, &RpcRawBlock::from(&block));
+            }
+            block
+        };
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
         let api = node.api().as_ref();
         let history = CandidateHistory { api, candidate: None };
@@ -1634,6 +1669,48 @@ async fn run(stable: bool, registered: bool) {
         ticket[1..].copy_from_slice(&body.ticket);
         assert_eq!(execution.ticket_meets_target(), ticket < r.terms().target);
         assert_eq!(execution.attempt(), r.attempt());
+        if stable {
+            use kaspa_consensus_core::palw_tb1::qf1_original_carrier::{Qf1OriginalCarrier, Qf1OriginalCarrierError};
+            let carrier = Qf1OriginalCarrier::from_block(&block).unwrap();
+            assert_eq!(carrier.signature.as_slice(), sig.as_slice());
+            let mut payload = carrier.encode();
+            let transaction = block.transactions.iter().find(|tx| tx.payload == payload).unwrap();
+            let mut duplicate = block.transactions.to_vec();
+            duplicate.push(transaction.clone());
+            assert!(matches!(
+                Qf1OriginalCarrier::from_block(&Block::new((*block.header).clone(), duplicate)),
+                Err(Qf1OriginalCarrierError::Multiple)
+            ));
+            payload.push(0);
+            assert!(matches!(Qf1OriginalCarrier::decode(&payload), Err(Qf1OriginalCarrierError::Encoding)));
+            payload.truncate(payload.len() - 2);
+            assert!(matches!(Qf1OriginalCarrier::decode(&payload), Err(Qf1OriginalCarrierError::Encoding)));
+            let checkpoint = dir.path().join("published-original");
+            node.api().checkpoint_database(&checkpoint);
+            let cold = stable_panel::reopen_checkpoint(&node.config, &checkpoint);
+            let cold_history = CandidateHistory { api: cold.as_ref(), candidate: None };
+            let published = recorded.read_qf1_execution_from_block(&cold_history, block.hash(), *id, bound_instance).unwrap();
+            assert_eq!((published.original(), published.original_block()), (execution.original(), execution.original_block()));
+            assert_eq!(
+                (published.work(), published.attempt(), published.ticket()),
+                (execution.work(), execution.attempt(), execution.ticket())
+            );
+            assert_eq!(published.ticket_meets_target(), execution.ticket_meets_target());
+            assert!(recorded.read_qf1_execution_from_block(&cold_history, block.hash(), Hash64::default(), bound_instance).is_err());
+            assert!(recorded.read_qf1_execution_from_block(&cold_history, certificate.hash(), *id, bound_instance).is_err());
+            assert!(
+                recorded_input(certificate.hash(), &certificate_settlement)
+                    .read_qf1_execution_from_block(&cold_history, block.hash(), *id, bound_instance)
+                    .is_err()
+            );
+            peer_log!(
+                "QF1 published Original pid={} block={} original={} work={}",
+                std::process::id(),
+                block.hash(),
+                id,
+                published.work()
+            );
+        }
         assert!(recorded.read_qf1_execution(&history, block.hash(), body, &owner_sig, bound_instance).is_err());
         let (artifact, norm) = exercise.as_ref().unwrap();
         let wrong_model = prediction::bind_scale(artifact, *norm, b"branch read substitute");
@@ -1645,7 +1722,9 @@ async fn run(stable: bool, registered: bool) {
         );
         peer_log!("QF1 branch execution pid={} original={} work={}", std::process::id(), id, execution.work());
         peer_log!("QF1 receipt pid={} block={} original={}", std::process::id(), block.hash(), id);
-        use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{LocalPanelInputs, LocalSubmission, RecordedLocalSubmission};
+        use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::{
+            LocalPanelInputs, LocalSubmission, PublishedLocalSubmission, RecordedLocalSubmission,
+        };
         let actors = stable.then(|| stable_panel::Actors::enroll(&mut parent_socket, &mut peers));
         let candidates = actors.as_ref().map_or_else(
             || vec![(Hash64::from_u64_word(1), 1), (Hash64::from_u64_word(2), 2), (Hash64::from_u64_word(3), 4)],
@@ -1659,6 +1738,21 @@ async fn run(stable: bool, registered: bool) {
         let cut = jobs
             .local_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[submission()], pool(draw_policy))
             .unwrap();
+        let cut = if stable {
+            let publication = PublishedLocalSubmission { slot: 9, block: block.hash(), material_reservation: reservation };
+            let from_block = jobs
+                .published_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[publication], pool(draw_policy))
+                .unwrap();
+            assert_eq!(from_block.consumer_set_root(), cut.consumer_set_root());
+            let missing = PublishedLocalSubmission { block: certificate.hash(), ..publication };
+            assert!(
+                jobs.published_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[missing], pool(draw_policy))
+                    .is_err()
+            );
+            from_block
+        } else {
+            cut
+        };
         let other = jobs
             .local_panel_cut(
                 api,

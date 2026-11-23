@@ -1,18 +1,34 @@
 //! Private model-free Original readback and the independent replay check.
-//! The envelope is local-only and creates no entitlement or assessment result.
+//! The isolated envelope creates no entitlement or assessment result.
 use super::*;
-use kaspa_consensus_core::palw_qf1::{TreeKind, TreeRoot, readout_chunks::record_count, ticket};
+use kaspa_consensus_core::{
+    palw_qf1::{TreeKind, TreeRoot, readout_chunks::record_count, ticket},
+    palw_tb1::qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier},
+};
 use misaka_palw_tir_exec::node::qf1::LocalTrace;
 use serde::{Deserialize, Serialize};
 
 pub const LOCAL_ORIGINAL_DOMAIN: &[u8] = b"MISAKA/private/QF1/local-original-signature/v1";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalOriginalBody {
     pub counts: [u64; 4],
     pub roots: [Hash64; 4],
     pub ticket: [u8; 32],
+}
+
+pub(super) fn read_published_qf1_original(
+    native: &dyn ConsensusApi,
+    block: Hash64,
+) -> io::Result<(LocalOriginalBody, MLDSA65Signature)> {
+    let source = native.get_block(block).map_err(io::Error::other)?;
+    if source.hash() != block {
+        return Err(invalid("QF1 Original source block hash differs"));
+    }
+    let carrier = Qf1OriginalCarrier::from_block(&source)
+        .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("QF1 Original carrier: {why:?}")))?;
+    Ok((borsh::from_slice(carrier.body)?, MLDSA65Signature::new(*carrier.signature)))
 }
 
 /// The envelope, target evaluation and numerical work identity on a
@@ -62,6 +78,22 @@ impl BranchQf1Execution {
 }
 
 impl BranchExecInput<'_> {
+    /// Recover the owner-signed Original from the source block on this branch.
+    /// The award's expected claim must equal the Original derived from EXEC.
+    pub fn read_qf1_execution_from_block(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        expected_original: Hash64,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> io::Result<BranchQf1Execution> {
+        let (body, signature) = read_published_qf1_original(native, block)?;
+        if body.signing_id(&self.input) != expected_original {
+            return Err(invalid("QF1 Original differs from the expected claim"));
+        }
+        self.read_qf1_execution(native, block, &body, &signature, instance)
+    }
+
     /// Bind a recorded Original and its numerical work. This reads the
     /// envelope and the candidate branch's commitment without model replay.
     pub fn read_qf1_execution(
@@ -94,6 +126,15 @@ impl BranchExecInput<'_> {
 }
 
 impl LocalOriginalBody {
+    /// Encode the body and its existing owner signature for a lifecycle
+    /// transaction. The header's Original ID has its existing meaning.
+    pub fn publication_payload(&self, signature: &MLDSA65Signature) -> Vec<u8> {
+        let mut body = [0; QF1_ORIGINAL_BODY_BYTES];
+        borsh::BorshSerialize::serialize(self, &mut body.as_mut_slice()).expect("fixed-size QF1 Original body");
+        Qf1OriginalCarrier { body: &body, signature: signature.as_slice().try_into().expect("fixed-size ML-DSA-65 signature") }
+            .encode()
+    }
+
     pub(crate) fn from_trace(trace: &LocalTrace) -> Self {
         Self { counts: trace.roots.map(|r| r.count()), roots: trace.roots.map(|r| Hash64::from_bytes(r.digest)), ticket: trace.ticket }
     }

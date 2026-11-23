@@ -1,7 +1,7 @@
 //! Non-paying local PANEL intake. The holder re-reads every named receipt and
 //! the later scheduled close on its selected chain. Pool eligibility and
 //! reservation references are supplied by the enclosing private policy.
-use super::*;
+use super::{original::read_published_qf1_original, *};
 use crate::tb1_exposure::Tb1HolderFreeze;
 
 pub struct LocalSubmission<'a, 't> {
@@ -22,6 +22,15 @@ pub struct RecordedLocalSubmission<'a> {
     pub signature: &'a MLDSA65Signature,
     pub material_reservation: Hash64,
 }
+
+#[derive(Clone, Copy)]
+pub struct PublishedLocalSubmission {
+    pub slot: u64,
+    pub block: Hash64,
+    pub material_reservation: Hash64,
+}
+
+type SuppliedOriginal<'a> = (&'a LocalOriginalBody, &'a MLDSA65Signature);
 
 pub struct LocalPanelInputs<'a> {
     /// Policy ID of this private draw and its duties. Eligibility is resolved
@@ -101,6 +110,52 @@ impl FrozenExecInputs<'_> {
         submissions: &[RecordedLocalSubmission<'_>],
         pool: LocalPanelInputs<'_>,
     ) -> io::Result<LocalPanelCut> {
+        let receipts = submissions.iter().map(|row| {
+            let reference =
+                PublishedLocalSubmission { slot: row.slot, block: row.block, material_reservation: row.material_reservation };
+            (reference, Some((row.body, row.signature)))
+        });
+        self.panel_cut_from_receipts(native, publication, certificate, releases, q, limits, receipts, pool)
+    }
+
+    /// Rebuild the PANEL cut from the Original carriers in its selected
+    /// branch. The caller supplies receipt coordinates and material reservations.
+    #[allow(clippy::too_many_arguments)]
+    pub fn published_panel_cut(
+        &self,
+        native: &dyn ConsensusApi,
+        publication: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        submissions: &[PublishedLocalSubmission],
+        pool: LocalPanelInputs<'_>,
+    ) -> io::Result<LocalPanelCut> {
+        self.panel_cut_from_receipts(
+            native,
+            publication,
+            certificate,
+            releases,
+            q,
+            limits,
+            submissions.iter().map(|row| (*row, None)),
+            pool,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn panel_cut_from_receipts<'a>(
+        &self,
+        native: &dyn ConsensusApi,
+        publication: Hash64,
+        certificate: Hash64,
+        releases: &[PublishedRelease<'_>],
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        submissions: impl ExactSizeIterator<Item = (PublishedLocalSubmission, Option<SuppliedOriginal<'a>>)>,
+        pool: LocalPanelInputs<'_>,
+    ) -> io::Result<LocalPanelCut> {
         if pool.candidates.len() > pool.max_candidates || submissions.len() > self.batch.entries.len() {
             return Err(invalid("local PANEL cut exceeds its reservation"));
         }
@@ -120,7 +175,7 @@ impl FrozenExecInputs<'_> {
             .chain_update(u32::try_from(submissions.len()).map_err(|_| invalid("PANEL submissions count"))?.to_be_bytes());
         let mut previous = None;
         let mut receipts = Vec::with_capacity(submissions.len());
-        for row in submissions {
+        for (row, supplied) in submissions {
             let entry = self.batch.entries.get(&row.slot).ok_or_else(|| invalid("unknown local PANEL registration slot"))?;
             if previous.is_some_and(|slot| slot >= row.slot)
                 || native.get_header(row.block).map_err(io::Error::other)?.blue_score >= score
@@ -128,7 +183,15 @@ impl FrozenExecInputs<'_> {
                 return Err(invalid("local PANEL Original outside frozen EXEC allocation or receipt cutoff"));
             }
             let r = self.derive_from_seed(row.slot, certificate, &exec_seed)?;
-            let original = r.read_recorded_qf1_original(native, row.block, row.body, row.signature)?;
+            let published;
+            let (body, signature) = match supplied {
+                Some(evidence) => evidence,
+                None => {
+                    published = read_published_qf1_original(native, row.block)?;
+                    (&published.0, &published.1)
+                }
+            };
+            let original = r.read_recorded_qf1_original(native, row.block, body, signature)?;
             hash.update(row.slot.to_be_bytes());
             hash.update(r.registration_key);
             hash.update(original.as_bytes());
@@ -140,7 +203,7 @@ impl FrozenExecInputs<'_> {
             receipts.push(FrozenReceipt {
                 original,
                 block: row.block,
-                meets_target: r.terms.threshold()?.admits_ticket_be(&row.body.ticket),
+                meets_target: r.terms.threshold()?.admits_ticket_be(&body.ticket),
                 deadline: entry.terms.deadline_exclusive_daa,
             });
         }

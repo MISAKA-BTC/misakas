@@ -619,7 +619,7 @@ pub(super) async fn release<'t>(
     let normal_trial = std::env::var_os("MISAKA_PRIVATE_QF1_NO_DISPUTE").is_some();
     assert!(!(missing_trial && normal_trial) && (!(missing_trial || normal_trial) || !inconsistent_readout_fixture()));
     let unavailable = missing_trial && draw.selected()[0] == actor;
-    let replay = |model: &LocalInstance<'_>| draw.replay_message(api, input, model, body, owner, key);
+    let replay = |model: &LocalInstance<'_>| draw.replay_published_message(api, input, model, key);
     let message = if missing_trial && selected { replay_from_store(dir, !unavailable, replay) } else { replay(instance) };
     let before_stop = if inconsistent_readout_fixture() {
         let reason = message.unwrap_err().to_string();
