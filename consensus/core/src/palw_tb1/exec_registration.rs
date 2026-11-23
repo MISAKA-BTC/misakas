@@ -72,7 +72,7 @@ fn take<'a, const N: usize>(bytes: &mut &'a [u8]) -> Result<&'a [u8; N], ExecReg
 }
 
 impl<'a> ExecRegistration<'a> {
-    fn decode(mut bytes: &'a [u8], key: [u8; 64]) -> Result<Self, ExecRegistrationError> {
+    pub(super) fn decode(mut bytes: &'a [u8], key: [u8; 64]) -> Result<Self, ExecRegistrationError> {
         use ExecRegistrationError::{Encoding, Terms};
         let profile = if let Some(rest) = bytes.strip_prefix(QF1_LOCAL_CONTEXT_DOMAIN) {
             bytes = rest;

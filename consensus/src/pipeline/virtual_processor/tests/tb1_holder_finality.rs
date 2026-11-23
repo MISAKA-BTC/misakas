@@ -1007,6 +1007,34 @@ async fn run(stable: bool, registered: bool) {
             };
             let pending = verify_candidate(close_parent, marker).unwrap();
             assert_eq!(pending.quoted_slots(), body_close.quoted_slots());
+            use kaspa_consensus_core::{
+                errors::block::RuleError, palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
+                palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+            };
+            for closed in [&closed_quote, &long] {
+                let slot = closed.exec_slot();
+                let reference = Moe2AwardReference::for_slot(Hash64::default(), [0; 32], slot);
+                // Exercise the native history reader independently of admission:
+                // these signed QF1 quotes do not create mining reservations.
+                for selected_parent in [anchor, assignment] {
+                    let (archived, price) = node.vp().read_private_moe2_reserved_terms(selected_parent, &reference).unwrap();
+                    assert_eq!(archived, *slot);
+                    assert_eq!(price, body_close.price_anchor(&history, selected_parent, slot).unwrap());
+                }
+                assert!(matches!(
+                    node.vp().read_private_moe2_reserved_terms(close_parent, &reference),
+                    Err(RuleError::PrivateMoe2AwardMalformed(_))
+                ));
+                for changed in [
+                    Moe2AwardReference { reservation: Hash64::default(), ..reference },
+                    Moe2AwardReference { slot: u64::MAX, ..reference },
+                ] {
+                    assert!(matches!(
+                        node.vp().read_private_moe2_reserved_terms(anchor, &changed),
+                        Err(RuleError::LocalNativeStateContextUnavailable(StoreUnreadable))
+                    ));
+                }
+            }
             peer_log!(
                 "TB1 EXEC candidate pid={} close={} parent={} allocations={}",
                 std::process::id(),

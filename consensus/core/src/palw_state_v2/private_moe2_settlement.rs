@@ -144,7 +144,7 @@ pub struct Moe2ExecAwardInputV1<'a> {
 }
 
 /// Price-state commitment resolved on the award candidate's own branch.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2QuoteAnchorV1 {
     parent: Hash64,
     anchor: Hash64,
@@ -161,16 +161,31 @@ impl Moe2QuoteAnchorV1 {
         preparation: Hash64,
         slot: &Moe2ExecSlot,
     ) -> std::io::Result<Self> {
-        use std::io::{Error, ErrorKind};
+        use std::io::Error;
         let header = native.get_header(preparation).map_err(Error::other)?;
         let anchor = native.get_ghostdag_data(preparation).map_err(Error::other)?.selected_parent;
-        if anchor != slot.quote.quote_anchor
-            || !native.is_chain_ancestor_of(preparation, slot.close).map_err(Error::other)?
-            || !native.is_chain_ancestor_of(slot.close, parent).map_err(Error::other)?
+        Self::resolve_on_history(parent, preparation, &header, anchor, slot, |ancestor, descendant| {
+            native.is_chain_ancestor_of(ancestor, descendant).map_err(Error::other)
+        })
+    }
+
+    /// Pin the price to the original preparation header using the caller's
+    /// local header, selected-parent data, and branch reachability reader.
+    pub fn resolve_on_history(
+        parent: Hash64,
+        preparation: Hash64,
+        header: &crate::header::Header,
+        anchor: Hash64,
+        slot: &Moe2ExecSlot,
+        mut is_chain_ancestor: impl FnMut(Hash64, Hash64) -> std::io::Result<bool>,
+    ) -> std::io::Result<Self> {
+        use std::io::{Error, ErrorKind};
+        if anchor != slot.quote.quote_anchor || !is_chain_ancestor(preparation, slot.close)? || !is_chain_ancestor(slot.close, parent)?
         {
             return Err(Error::new(ErrorKind::InvalidData, "MOE2 preparation or close outside the award's selected-parent history"));
         }
-        let root = crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&header, preparation).map_err(Error::other)?;
+        let root = crate::palw_state_proof_v1::state_root_of_pinned_header_v1(header, preparation)
+            .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
         Ok(Self { parent, anchor, root, reservation: slot.reservation_key() })
     }
 }

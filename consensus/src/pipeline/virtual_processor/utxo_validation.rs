@@ -19,10 +19,11 @@ use crate::{
             WrongHeaderPruningPoint,
         },
     },
+    model::services::reachability::ReachabilityService,
     model::stores::{
         block_transactions::BlockTransactionsStoreReader,
         daa::DaaStoreReader,
-        ghostdag::{CompactGhostdagData, GhostdagData},
+        ghostdag::{CompactGhostdagData, GhostdagData, GhostdagStoreReader},
         headers::HeaderStoreReader,
         rewarded_epochs::RewardedEpochKeys,
     },
@@ -55,6 +56,9 @@ use kaspa_consensus_core::{
     },
     header::Header,
     muhash::MuHashExtensions,
+    palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
+    palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
+    palw_state_v2::Moe2QuoteAnchorV1,
     palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
     subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
@@ -2275,7 +2279,6 @@ impl VirtualStateProcessor {
             use kaspa_consensus_core::{
                 coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, private_moe2_award_marker},
                 palw_exec_v2_anchor::{PALW_EXEC_V2_ANCHOR_MAGIC, PALW_EXEC_V2_MAX_HEADS},
-                palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
                 palw_native_resource_v1::reserve_native_requests_v1,
             };
             let extra = self.coinbase_manager.coinbase_extra_data(&txs[0].payload).map_err(BadCoinbasePayload)?;
@@ -2286,17 +2289,15 @@ impl VirtualStateProcessor {
                 } else {
                     None
                 };
-                // An award marker cannot substitute for a branch-verified
-                // winning right. No mining-active FOW1 profile supplies one yet.
                 if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
                     let reference = Moe2AwardReference::from_transactions(txs.iter())
                         .map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
                     let parent = parent_state
                         .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
-                        .ok_or(LocalNativeStateContextUnavailable(
-                            kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
-                        ))?;
+                        .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
                     reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
+                    self.read_private_moe2_reserved_terms(ctx.selected_parent(), &reference)?;
+                    // The resolved terms still require an independently certified winning right.
                     return Err(PrivateMoe2AwardUnresolved);
                 }
             }
@@ -2434,6 +2435,41 @@ impl VirtualStateProcessor {
         }
 
         Ok(())
+    }
+
+    /// The reservation row has already authenticated the exact close and slot.
+    /// A node without its stored preimages must retry from local branch history.
+    pub(super) fn read_private_moe2_reserved_terms(
+        &self,
+        parent: BlockHash,
+        reference: &Moe2AwardReference,
+    ) -> BlockProcessResult<(Moe2ExecSlot, Moe2QuoteAnchorV1)> {
+        use PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
+        let unavailable = LocalNativeStateContextUnavailable(HistoryUnavailable);
+        if !self.reachability_service.try_is_chain_ancestor_of(reference.close, parent).map_err(|_| unavailable.clone())? {
+            return Err(PrivateMoe2AwardMalformed("private MOE2 EXEC close is outside the selected-parent history"));
+        }
+        let close = self.headers_store.get_header(reference.close).map_err(|_| unavailable.clone())?;
+        let (preparation, slot) = self
+            .block_transactions_store
+            .read_private_moe2_exec_slot(&close, reference.slot, reference.reservation)
+            .map_err(|error| match error {
+                kaspa_database::prelude::StoreError::KeyNotFound(_) => unavailable.clone(),
+                _ => LocalNativeStateContextUnavailable(StoreUnreadable),
+            })?;
+        let header = self.headers_store.get_header(preparation).map_err(|_| unavailable.clone())?;
+        let anchor = self.ghostdag_store.get_selected_parent(preparation).map_err(|_| unavailable.clone())?;
+        let price = Moe2QuoteAnchorV1::resolve_on_history(parent, preparation, &header, anchor, &slot, |low, high| {
+            self.reachability_service.try_is_chain_ancestor_of(low, high).map_err(std::io::Error::other)
+        })
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                LocalNativeStateContextUnavailable(StoreUnreadable)
+            } else {
+                unavailable
+            }
+        })?;
+        Ok((slot, price))
     }
 
     pub(super) fn coinbase_inputs_for_candidate_v3(

@@ -113,6 +113,36 @@ impl DbBlockTransactionsStore {
         self.access.has(hash)
     }
 
+    /// Read only the EXEC carrier from pinned history, without decoding the
+    /// surrounding transactions or extending their lifetime in the body cache.
+    pub(crate) fn read_private_moe2_exec_slot(
+        &self,
+        close: &kaspa_consensus_core::header::Header,
+        slot: u64,
+        reservation: BlockHash,
+    ) -> Result<(BlockHash, kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot), StoreError> {
+        use kaspa_consensus_core::{
+            palw_tb1::exec_close_carrier::{EXEC_CLOSE_CARRIER_TAG, ExecCloseCarrier},
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+        let prefix = [u8::from(DatabaseStorePrefixes::BlockTransactions)];
+        let key = kaspa_database::prelude::DbKey::new(&prefix, close.hash);
+        let raw = self.db.get_pinned(&key)?.ok_or(StoreError::KeyNotFound(key))?;
+        let mut payload = None;
+        let mut multiple = false;
+        tx_id_projection::scan_transactions(&raw, |_, subnet, bytes| {
+            if subnet == AsRef::<[u8]>::as_ref(&SUBNETWORK_ID_PALW_LIFECYCLE) && bytes.starts_with(EXEC_CLOSE_CARRIER_TAG) {
+                multiple |= payload.replace(bytes).is_some();
+            }
+        })
+        .map_err(|error| StoreError::DataInconsistency(error.to_string()))?;
+        let payload = payload
+            .filter(|_| !multiple)
+            .ok_or_else(|| StoreError::DataInconsistency("expected one private EXEC carrier in the stored close".into()))?;
+        ExecCloseCarrier::read_reserved_slot(close, payload, slot, reservation)
+            .map_err(|error| StoreError::DataInconsistency(format!("stored private EXEC carrier: {error:?}")))
+    }
+
     /// Borrow the existing block body and decode only the accepted transaction
     /// after checking its typed allocation bound. Do not populate the cache.
     pub(crate) fn archive_transaction_v2(

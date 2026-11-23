@@ -55,7 +55,10 @@ impl<'a> Cursor<'a> {
 /// Hash64 uses serialize_bytes (8-byte count + 64 bytes); SubnetworkId uses a
 /// fixed 20-byte tuple; ScriptPublicKey is u16 followed by its byte sequence.
 /// TransactionMass and the cached ID are both persisted after payload.
-pub fn scan_ids<'a>(bytes: &'a [u8], mut id: impl FnMut(&'a [u8; 64])) -> Result<usize, CodecError> {
+pub(super) fn scan_transactions<'a>(
+    bytes: &'a [u8],
+    mut visit: impl FnMut(&'a [u8; 64], &'a [u8], &'a [u8]),
+) -> Result<usize, CodecError> {
     let mut row = Cursor { bytes, offset: 0 };
     let transactions = row.count(142)?;
     for _ in 0..transactions {
@@ -72,15 +75,21 @@ pub fn scan_ids<'a>(bytes: &'a [u8], mut id: impl FnMut(&'a [u8; 64])) -> Result
             row.take(8 + 2)?; // value + ScriptPublicKey version
             row.byte_vector()?;
         }
-        row.take(8 + 20 + 8)?; // lock time + subnetwork + gas
-        row.byte_vector()?; // payload stays borrowed
+        row.take(8)?; // lock time
+        let subnetwork = row.take(kaspa_consensus_core::subnets::SUBNETWORK_ID_SIZE)?;
+        row.take(8)?; // gas
+        let payload = row.byte_vector()?;
         row.take(8)?; // mass (serde AtomicU64)
-        id(row.hash()?);
+        visit(row.hash()?, subnetwork, payload);
     }
     // CachedDbAccess uses bincode 1.3.3's deserialize function, which sets
     // fixint + allow_trailing_bytes (unlike DefaultOptions::new()). Preserve
     // that accepted DB-row behavior; this projection adds no validity rule.
     Ok(transactions)
+}
+
+pub fn scan_ids<'a>(bytes: &'a [u8], mut id: impl FnMut(&'a [u8; 64])) -> Result<usize, CodecError> {
+    scan_transactions(bytes, |value, _, _| id(value))
 }
 
 /// The independently owned IDs and the reservation are dropped in that order.
