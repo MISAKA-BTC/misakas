@@ -2463,6 +2463,9 @@ impl VirtualStateProcessor {
         let missing = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         let txs = self.block_transactions_store.get(header.hash).map_err(missing)?;
         let candidate = Block::from_arcs(header.clone(), txs);
+        if let Some(certificate) = self.resolve_private_exec_certificate(&candidate, selected_parent, state)? {
+            return Ok(Some(Qf1TerminalUpdate::ExecCertificate(certificate)));
+        }
         let Some(marker) = candidate
             .transactions
             .first()

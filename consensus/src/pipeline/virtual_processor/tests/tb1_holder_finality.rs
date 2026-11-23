@@ -492,7 +492,7 @@ async fn exercise_prepared_exec_certificate(
             Qf1OriginalVerification, Qf1TerminalUpdate, apply_delta_v2, apply_palw_transition_retained_v8, revert_delta_v2,
         },
         palw_tb1::{
-            publication::{BranchPublicationGate, verify_prepared_exec_certificate},
+            publication::{BranchPublicationGate, ExecCertificateReference, verify_prepared_exec_certificate},
             qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
             qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
         },
@@ -542,7 +542,8 @@ async fn exercise_prepared_exec_certificate(
     let (marker, seed) = gate.assemble_on_branch(node.api().as_ref(), parent, parent, parent, &rows, q, LIMITS).unwrap();
     let mut miner = new_miner_data();
     miner.extra_data = marker.to_vec();
-    let template = stable_panel::heartbeat(node, miner);
+    let publication = ExecCertificateReference { close: close.hash(), batch: parent }.encode();
+    let template = stable_panel::evidence_template(node, miner, publication.clone());
     let candidate = template.clone().to_immutable();
     let history = CandidateHistory { api: node.api().as_ref(), candidate: Some(candidate.hash()) };
     let reference = verify_prepared_exec_certificate(
@@ -600,6 +601,11 @@ async fn exercise_prepared_exec_certificate(
     // Its Original descendants enter via ordinary candidate acceptance.
     let accepted = node.take(template, "EXEC certificate marker").await;
     assert_eq!(accepted.hash(), candidate.hash());
+    assert!(accepted.transactions.iter().any(|tx| tx.payload == publication));
+    assert!(
+        node.chain.tip_state().1.tb1_exec_certificate(close.hash()).is_none(),
+        "the actual selected parent did not finalize this close"
+    );
     {
         let vp = node.vp();
         let mut store = vp.palw_state_v2_store.write();

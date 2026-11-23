@@ -12,10 +12,11 @@ use crate::{
         exec_close_carrier::ExecCloseCarrier,
         freeze::{Tb1MiningClosure, Tb1MiningPurpose},
         qualification::Tb1Qualification,
-        release_batch_carrier::{encode_release_batch, release_batch_from_block},
+        release_batch_carrier::{SIGNATURE_BYTES, encode_release_batch, release_batch_from_block},
         releases::{Tb1BeaconCertificate, Tb1BeaconSeed, Tb1ReleaseContext, Tb1ReleaseCut, Tb1ReleaseSet, Tb1SignedRelease},
         signatures::release_message,
     },
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
 };
 use sha3::{Digest, Sha3_512};
 use std::{
@@ -28,6 +29,55 @@ pub struct PublicationLimits {
     pub records: usize,
     pub message_bytes: usize,
     pub matrix_cells: usize,
+}
+
+impl PublicationLimits {
+    /// Bound reconstruction by the largest supporting set that the accepted
+    /// roster and the block mass can carry.
+    pub fn for_native_batch(max_block_mass: usize, q: &Tb1Qualification<'_>) -> io::Result<Self> {
+        let records = max_block_mass / SIGNATURE_BYTES;
+        let roster = q.roster();
+        let support = records.min(roster.coordinates.len());
+        let errors =
+            support.checked_sub(roster.coordinates.len() - roster.f).ok_or_else(|| invalid("TB1 quorum exceeds block capacity"))?;
+        let matrix_cells = super::reconstruction::matrix_cells(roster.f, errors, support)
+            .ok()
+            .and_then(|cells| cells.checked_mul(q.dealers.len()))
+            .ok_or_else(|| invalid("TB1 release matrix exceeds native dimensions"))?;
+        Ok(Self { records, message_bytes: max_block_mass, matrix_cells })
+    }
+}
+
+const EXEC_CERTIFICATE_TAG: &[u8; 8] = b"TB1CRT01";
+
+/// Lookup data in an EXEC certificate candidate. Its coinbase carries the
+/// existing certificate commitment. The release batch's selected parent is
+/// the last pre-publication point at which to authenticate the freeze.
+#[derive(Clone, Copy)]
+pub struct ExecCertificateReference {
+    pub close: Hash64,
+    pub batch: Hash64,
+}
+
+impl ExecCertificateReference {
+    pub fn encode(self) -> Vec<u8> {
+        [EXEC_CERTIFICATE_TAG.as_slice(), self.close.as_byte_slice(), self.batch.as_byte_slice()].concat()
+    }
+
+    pub fn from_block(block: &Block) -> io::Result<Option<Self>> {
+        let mut candidates = block
+            .transactions
+            .iter()
+            .filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE && tx.payload.starts_with(EXEC_CERTIFICATE_TAG));
+        let Some(tx) = candidates.next() else { return Ok(None) };
+        let bytes = &tx.payload[EXEC_CERTIFICATE_TAG.len()..];
+        let (close, batch) = bytes.split_first_chunk::<64>().ok_or_else(|| invalid("short TB1 EXEC certificate reference"))?;
+        if candidates.next().is_some() {
+            return Err(invalid("multiple TB1 EXEC certificate references"));
+        }
+        let batch = batch.try_into().map_err(|_| invalid("incorrect TB1 EXEC certificate reference length"))?;
+        Ok(Some(Self { close: Hash64::from_bytes(*close), batch: Hash64::from_bytes(batch) }))
+    }
 }
 
 fn count(n: usize) -> io::Result<[u8; 4]> {

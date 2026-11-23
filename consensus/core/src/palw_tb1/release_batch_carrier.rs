@@ -10,7 +10,7 @@ use crate::{block::Block, subnets::SUBNETWORK_ID_PALW_LIFECYCLE};
 use libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature;
 
 const TAG: &[u8; 8] = b"TB1REL01";
-const SIGNATURE_BYTES: usize = 3309;
+pub(super) const SIGNATURE_BYTES: usize = 3309;
 const SHARE_BYTES: usize = 4 + 66;
 const MIN_MESSAGE_BYTES: usize = 4 + 1 + 64 + 64 + 4 + 4;
 

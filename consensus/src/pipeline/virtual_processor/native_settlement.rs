@@ -29,7 +29,7 @@
 //! and pays nothing for the explanation; the explanation is advisory, never persisted, and memoized by
 //! sink plus the pruning point used by that evaluation.
 
-use super::VirtualStateProcessor;
+use super::{VirtualStateProcessor, processor::PalwLocalTransitionFaultV1};
 use crate::model::{
     services::reachability::ReachabilityService,
     stores::{evm::EvmHeaderStoreReader, ghostdag::GhostdagStoreReader, headers::HeaderStoreReader, pruning::PruningStoreReader},
@@ -51,7 +51,7 @@ use kaspa_consensus_core::{
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
 use kaspa_consensus_core::{
-    palw_native_resource_v1::NativeDemandLeaseV1,
+    palw_native_resource_v1::{NativeChainStateV1, NativeDemandLeaseV1},
     palw_native_settlement_resources_v1::{
         NativeSettlementWalkLeaseV1, reserve_native_settlement_row_v1, reserve_native_settlement_sweep_v1,
     },
@@ -192,6 +192,11 @@ pub(super) struct NativeEvaluation {
     /// The pruning point the evaluation used.
     pub(super) pruning: BlockHash,
     pub(super) detail: NativeDetail,
+}
+
+enum NativeSettlementSource {
+    PublishedView,
+    SelectedBranch(NativeChainStateV1),
 }
 
 impl VirtualStateProcessor {
@@ -356,10 +361,44 @@ impl VirtualStateProcessor {
     /// The snapshot AND the material it was weighed from (or the reason nothing was weighed). One function, so the explanation
     /// served by `getPalwSettlement` can never be about different evidence than the certificate.
     pub(super) fn native_evaluate(&self, sink: BlockHash) -> NativeEvaluation {
+        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
+        self.native_evaluate_at_boundary(sink, pruning, NativeSettlementSource::PublishedView)
+    }
+
+    /// Recompute finality at an already accepted selected-chain point. Its
+    /// header fixes the pruning boundary and the caller supplies its state
+    /// from the same walk used in block acceptance.
+    pub(super) fn native_selected_branch_settlement(
+        &self,
+        state: NativeChainStateV1,
+    ) -> Result<Option<NativeSettlementSnapshotV1>, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
+        let missing = || PalwLocalTransitionFaultV1::Context(HistoryUnavailable);
+        let point = state.last_point().ok_or_else(missing)?;
+        if !self.palw_dns_retirement.is_some_and(|retirement| retirement.activation.is_active(point.daa_score))
+            || point.daa_score < self.evm_activation_daa_score
+        {
+            return Ok(None);
+        }
+        let header = self.headers_store.get_header(point.block).map_err(|_| missing())?;
+        if (header.daa_score, header.blue_score) != (point.daa_score, point.blue_score)
+            || !self.reachability_service.try_is_chain_ancestor_of(header.pruning_point, point.block).map_err(|_| missing())?
+        {
+            return Err(PalwLocalTransitionFaultV1::Context(StoreUnreadable));
+        }
+        let evaluation =
+            self.native_evaluate_at_boundary(point.block, header.pruning_point, NativeSettlementSource::SelectedBranch(state));
+        if evaluation.snapshot.stop == Some(SettlementStopV1::MissingHistory) || evaluation.snapshot.latest != Some(header.hash) {
+            return Err(missing());
+        }
+        Ok(evaluation.snapshot.finalized.is_some().then_some(evaluation.snapshot))
+    }
+
+    fn native_evaluate_at_boundary(&self, sink: BlockHash, pruning: BlockHash, source: NativeSettlementSource) -> NativeEvaluation {
         let retirement = self.palw_dns_retirement.expect("called only after the retirement fence");
         let sink_daa = self.headers_store.get_daa_score(sink).unwrap_or(0);
         let sink_blue = self.headers_store.get_blue_score(sink).unwrap_or(0);
-        let pruning = self.pruning_point_store.read().pruning_point().unwrap();
+        let branch_view = matches!(&source, NativeSettlementSource::SelectedBranch(_));
         let mut result = NativeSettlementSnapshotV1 {
             version: 1,
             ruleset_id: self.palw_native_ruleset_id,
@@ -380,26 +419,34 @@ impl VirtualStateProcessor {
             pruning,
             detail: NativeDetail::Stopped(wait),
         };
-        if !self.pruning_meta_stores.read().pruning_utxoset_stable_flag() {
+        if !branch_view && !self.pruning_meta_stores.read().pruning_utxoset_stable_flag() {
             return stopped(result, gap(HistoryGapV1::PruningImportIncomplete, Some(pruning)));
         }
-        let previous = match self.evm_heads_store.read().native_snapshot() {
-            Ok(Some(s))
-                if s.version == 1
-                    && s.policy_id == retirement.settlement.id()
-                    && s.ruleset_id == self.palw_native_ruleset_id
-                    && s.retirement_daa == retirement.activation.daa_score() =>
-            {
-                Some(s)
+        let previous = if branch_view {
+            None
+        } else {
+            match self.evm_heads_store.read().native_snapshot() {
+                Ok(Some(s))
+                    if s.version == 1
+                        && s.policy_id == retirement.settlement.id()
+                        && s.ruleset_id == self.palw_native_ruleset_id
+                        && s.retirement_daa == retirement.activation.daa_score() =>
+                {
+                    Some(s)
+                }
+                Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
+                // Corrupt or incompatible evidence is never silently forgotten.
+                _ => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
             }
-            Ok(None) | Err(StoreError::KeyNotFound(_)) => None,
-            // Corrupt or incompatible evidence is never silently forgotten.
-            _ => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
         };
 
-        let publication = match self.native_finalized_publication() {
-            Ok(s) => s,
-            Err(()) => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
+        let publication = if branch_view {
+            None
+        } else {
+            match self.native_finalized_publication() {
+                Ok(s) => s,
+                Err(()) => return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, None)),
+            }
         };
 
         // 1. The selected chain, newest first: executed rows only, an execution gap inside them is a stop.
@@ -473,12 +520,15 @@ impl VirtualStateProcessor {
         }
 
         // 3. The PALW state the fork choice weighs, and its frontier.
-        let state = match self.palw_candidate_state_v2_checked(sink) {
-            Ok(state) => state,
-            Err(super::processor::PalwWeighFaultV2::NativeCapacityUnavailable) => {
-                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
-            }
-            Err(_) => return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink))),
+        let state = match source {
+            NativeSettlementSource::SelectedBranch(state) => state,
+            NativeSettlementSource::PublishedView => match self.palw_candidate_state_v2_checked(sink) {
+                Ok(state) => state,
+                Err(super::processor::PalwWeighFaultV2::NativeCapacityUnavailable) => {
+                    return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+                }
+                Err(_) => return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink))),
+            },
         };
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return stopped(result, gap(HistoryGapV1::ParamsAbsent, None));
@@ -515,8 +565,15 @@ impl VirtualStateProcessor {
         // read stays the one fork choice weighs — no second, divergent settlement read here. Below the fence: unchanged.
         let (frontier_blue, frontier) = state.safe_frontier();
         result.frontier = (frontier != BlockHash::default()).then_some(frontier);
-        let frontier_on_branch =
-            frontier != BlockHash::default() && self.reachability_service.try_is_dag_ancestor_of(frontier, sink).unwrap_or(false);
+        let frontier_on_branch = if frontier == BlockHash::default() {
+            false
+        } else {
+            match self.reachability_service.try_is_dag_ancestor_of(frontier, sink) {
+                Ok(ancestor) => ancestor,
+                Err(_) if branch_view => return stopped(result, gap(HistoryGapV1::ReachabilityUnreadable, Some(frontier))),
+                Err(_) => false,
+            }
+        };
 
         // 4. The roots chain: each block's delta root is what its child's header committed to as the parent state — in the form
         //    `palw_fork_choice_commitment_v1` says (RFC-0009 L2; `native_roots_chain_v1`).
@@ -806,10 +863,19 @@ impl VirtualStateProcessor {
         }
 
         // 8. Pruning is a checkpoint safety condition, not a replacement for the PALW certificate.
-        if result.safe.is_some_and(|safe| self.reachability_service.try_is_chain_ancestor_of(pruning, safe).unwrap_or(false))
-            && self.evm_header_store.has(pruning).unwrap_or(false)
-        {
-            result.finalized = Some(pruning);
+        if let Some(safe) = result.safe {
+            match self.reachability_service.try_is_chain_ancestor_of(pruning, safe) {
+                // In a branch walk the pruning row was already read and
+                // matched to its execution header before it could be safe.
+                Ok(true)
+                    if (branch_view && rows.last().is_some_and(|row| row.hash == pruning))
+                        || (!branch_view && self.evm_header_store.has(pruning).unwrap_or(false)) =>
+                {
+                    result.finalized = Some(pruning);
+                }
+                Err(_) if branch_view => return stopped(result, gap(HistoryGapV1::ReachabilityUnreadable, Some(pruning))),
+                _ => {}
+            }
         }
 
         // 9. The cache holds the chain it just walked; drop what a reorg or a moved pruning point left behind.

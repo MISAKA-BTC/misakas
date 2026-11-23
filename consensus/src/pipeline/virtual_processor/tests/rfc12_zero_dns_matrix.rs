@@ -1108,6 +1108,53 @@ fn publish_native(rig: &Rig, snapshot: NativeSettlementSnapshotV1) {
     vp.db.write(batch).unwrap();
 }
 
+#[tokio::test]
+async fn tb1_settlement_uses_the_accepted_header_boundary() {
+    let mut parts = parts(Some(FENCE));
+    // As in the pruning-proof clock fixture, move only the header boundary
+    // in a short archival run. The claim history is retained past this cut.
+    parts.0.params.blockrate.finality_depth = 1;
+    parts.0.params.blockrate.pruning_depth = 12;
+    parts.0.is_archival = true;
+    let mut node = Rig::new(&parts, 0x12_c521_0000);
+    let prefix = prefix(&mut node).await;
+    let genesis = node.config.params.genesis.hash;
+    let mut tip = prefix.last().unwrap().clone();
+    node.chain.ctx.simulated_time = tip.header.timestamp;
+    node.chain.ctx.consensus.set_validation_time_for_test(tip.header.timestamp);
+    let interval = node.config.params.target_time_per_block();
+    for _ in 0..18 {
+        if tip.header.pruning_point != genesis {
+            break;
+        }
+        tip = node.chain.heartbeat(interval, vec![]).await;
+    }
+    let boundary = tip.header.pruning_point;
+    assert_ne!(boundary, genesis);
+    let blue = node.api().get_header(boundary).unwrap().blue_score;
+    plant_frontier(&node, blue, boundary);
+    place_fact(&node, &tip, 10);
+
+    let vp = node.vp();
+    let evaluate = || {
+        let state = vp.palw_candidate_state_v2_checked(tip.hash()).unwrap();
+        vp.native_selected_branch_settlement(state).unwrap()
+    };
+    let snapshot = evaluate().expect("the selected prefix certifies its header pruning point");
+    assert_eq!(snapshot.finalized, Some(boundary));
+    publish_native(
+        &node,
+        NativeSettlementSnapshotV1 {
+            stop: Some(SettlementStopV1::FinalizedConflict),
+            safe: None,
+            finalized: None,
+            ..snapshot.clone()
+        },
+    );
+    assert_eq!(vp.native_evaluate(tip.hash()).snapshot.stop, Some(SettlementStopV1::FinalizedConflict));
+    assert_eq!(evaluate(), Some(snapshot));
+}
+
 /// **EXPECTED.** If a branch abandons a head the node had published as `finalized`, the next snapshot says `FinalizedConflict`
 /// with no `safe` and no `finalized` (and still the sink as `latest`: execution is a fact, not a certificate), the node logs the
 /// resync requirement, and the conflict **stays** through the following blocks and through the loss of the in-memory rows. Only a

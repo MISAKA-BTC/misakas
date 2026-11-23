@@ -20,6 +20,7 @@ use kaspa_consensus_core::{
     palw_tb1::{
         exec_close_carrier::ExecCloseCarrier,
         moe2_exec_close::{VerifiedMoe2ExecClose, verify_exec_close_with_rules},
+        publication::{ExecCertificateReceipt, ExecCertificateReference, PublicationLimits, verify_prepared_exec_certificate},
         qualification::QualifiedExecPanel,
     },
     trusted::ExternalGhostdagData,
@@ -29,6 +30,12 @@ use std::sync::Arc;
 struct CloseHistory<'a>(&'a VirtualStateProcessor);
 
 impl ConsensusApi for CloseHistory<'_> {
+    fn get_block(&self, block: Hash64) -> ConsensusResult<Block> {
+        let header = self.get_header(block)?;
+        let txs = self.0.block_transactions_store.get(block).map_err(|_| ConsensusError::BlockNotFound(block))?;
+        Ok(Block::from_arcs(header, txs))
+    }
+
     fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
         self.0.headers_store.get_header(block).map_err(|_| ConsensusError::HeaderNotFound(block))
     }
@@ -52,6 +59,76 @@ impl ConsensusApi for CloseHistory<'_> {
 }
 
 impl VirtualStateProcessor {
+    pub(super) fn resolve_private_exec_certificate(
+        &self,
+        candidate: &Block,
+        parent: Hash64,
+        state: &PalwChainStateV2,
+    ) -> Result<Option<ExecCertificateReceipt>, PalwLocalTransitionFaultV1> {
+        let Some(rules) = self.private_moe2_exec_rules.filter(|rules| candidate.header.daa_score >= rules.private_from) else {
+            return Ok(None);
+        };
+        let Ok(Some(reference)) = ExecCertificateReference::from_block(candidate) else {
+            return Ok(None);
+        };
+        let Some(close) = state.tb1_exec_close_receipt(reference.close) else { return Ok(None) };
+        if state.tb1_exec_certificate(reference.close).is_some() {
+            return Ok(None);
+        }
+        let Some((exec, _)) = state.tb1_exec_panel_preparation(close.preparation, parent) else { return Ok(None) };
+        let round = exec.round();
+        if !(round.release_from_daa..round.deadline_exclusive_daa).contains(&candidate.header.daa_score) {
+            return Ok(None);
+        }
+        let close_limit = rules.max_block_mass as usize;
+        let Ok(limits) = PublicationLimits::for_native_batch(close_limit, &exec.qualification()) else { return Ok(None) };
+        let missing = || PalwLocalTransitionFaultV1::Context(HistoryUnavailable);
+        // Resolve the batch from the selected history. An arbitrary lookup
+        // hash supplied by a candidate cannot make that history unavailable.
+        let mut batch = parent;
+        let observation_point = loop {
+            self.check_shutdown_boundary()?;
+            let header = self.headers_store.get_header(batch).map_err(|_| missing())?;
+            if header.daa_score < round.release_from_daa || batch == reference.close {
+                return Ok(None);
+            }
+            let predecessor = self.ghostdag_store.get_selected_parent(batch).map_err(|_| missing())?;
+            if batch == reference.batch {
+                break predecessor;
+            }
+            batch = predecessor;
+        };
+        for point in [observation_point, parent] {
+            let pruning = self.headers_store.get_header(point).map_err(|_| missing())?.pruning_point;
+            if !self.reachability_service.try_is_chain_ancestor_of(reference.close, pruning).map_err(|_| missing())? {
+                return Ok(None);
+            }
+        }
+        let branch_state = |anchor| self.restore_private_moe2_state_at(state, anchor).map_err(private_tb1_history_fault);
+        let Some(observation) = self.native_selected_branch_settlement(branch_state(observation_point)?)? else {
+            return Ok(None);
+        };
+        let Some(settlement) = self.native_selected_branch_settlement(branch_state(parent)?)? else {
+            return Ok(None);
+        };
+        match verify_prepared_exec_certificate(
+            &CloseHistory(self),
+            parent,
+            state,
+            reference.close,
+            close_limit,
+            &observation,
+            &settlement,
+            batch,
+            candidate,
+            limits,
+        ) {
+            Ok(receipt) => Ok(Some(receipt)),
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::InvalidData | std::io::ErrorKind::TimedOut) => Ok(None),
+            Err(_) => Err(missing()),
+        }
+    }
+
     pub(super) fn resolve_private_exec_close(
         &self,
         point: &PalwBlockContextV2,
@@ -79,12 +156,7 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let quote_parent = history.get_ghostdag_data(preparation).map_err(|_| missing())?.selected_parent;
-        let price_state = self.restore_private_moe2_state_at(state, quote_parent).map_err(|error| match error {
-            RuleError::ConsensusExiting => PalwLocalTransitionFaultV1::Shutdown,
-            RuleError::LocalNativeCapacityUnavailable(why) => why.into(),
-            RuleError::LocalNativeStateContextUnavailable(why) => PalwLocalTransitionFaultV1::Context(why),
-            _ => PalwLocalTransitionFaultV1::Context(HistoryUnavailable),
-        })?;
+        let price_state = self.restore_private_moe2_state_at(state, quote_parent).map_err(private_tb1_history_fault)?;
         let marker =
             candidate.transactions.first().and_then(|tx| coinbase_payload_extra_data(&tx.payload)).and_then(palw_coinbase_marker);
         match verify_exec_close_with_rules(
@@ -104,5 +176,14 @@ impl VirtualStateProcessor {
             Err(error) if error.kind() == std::io::ErrorKind::InvalidData => Ok(None),
             Err(_) => Err(PalwLocalTransitionFaultV1::Context(HistoryUnavailable)),
         }
+    }
+}
+
+fn private_tb1_history_fault(error: RuleError) -> PalwLocalTransitionFaultV1 {
+    match error {
+        RuleError::ConsensusExiting => PalwLocalTransitionFaultV1::Shutdown,
+        RuleError::LocalNativeCapacityUnavailable(why) => why.into(),
+        RuleError::LocalNativeStateContextUnavailable(why) => PalwLocalTransitionFaultV1::Context(why),
+        _ => PalwLocalTransitionFaultV1::Context(HistoryUnavailable),
     }
 }
