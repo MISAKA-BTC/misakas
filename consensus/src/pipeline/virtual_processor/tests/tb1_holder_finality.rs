@@ -1483,6 +1483,24 @@ async fn run(stable: bool, registered: bool) {
     let mut rows = views(&decoded, context);
     assert_eq!(node.chain.sink(), batch.hash());
     let batch_settlement = node.api().get_native_settlement_snapshot().unwrap().unwrap();
+    let candidate_seed = if stable {
+        let history = CandidateHistory { api: node.api().as_ref(), candidate: Some(certificate.hash()) };
+        let branch = kaspa_consensus_core::palw_tb1::publication::BranchPublicationGate::observe(
+            &history,
+            anchor,
+            &closure,
+            &q,
+            &observed_settlement,
+        )
+        .unwrap();
+        Some(
+            branch
+                .verify_published_candidate(&history, batch.hash(), &batch_settlement, batch.hash(), &certificate, &q, LIMITS)
+                .unwrap(),
+        )
+    } else {
+        None
+    };
     stable_panel::arrive(&mut node, certificate.clone(), "native TB1 certificate").await;
     assert_eq!(node.chain.sink(), certificate.hash());
     let api = node.api().as_ref();
@@ -1490,6 +1508,7 @@ async fn run(stable: bool, registered: bool) {
     if stable {
         use kaspa_consensus_core::palw_tb1::release_batch_carrier::{ReleaseBatchCarrierError, decode_release_batch};
         assert_eq!(gate.read_published_seed(api, batch.hash(), certificate.hash(), &q, LIMITS).unwrap(), seed);
+        assert_eq!(candidate_seed, Some(seed));
         let mut payload = release_batch_payload(&rows, LIMITS).unwrap();
         assert!(matches!(decode_release_batch(&payload, rows.len() - 1, LIMITS.message_bytes), Err(ReleaseBatchCarrierError::Limit)));
         assert!(matches!(decode_release_batch(&payload, LIMITS.records, 1), Err(ReleaseBatchCarrierError::Limit)));
@@ -1534,9 +1553,7 @@ async fn run(stable: bool, registered: bool) {
         let settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
         let history = CandidateHistory { api, candidate: None };
         let restore_gate = |snapshot: &NativeSettlementSnapshotV1| {
-            misaka_palw_remote::tb1_exposure::publication::NativePublicationGate::observe_at_snapshot(
-                &history, anchor, &closure, &q, snapshot,
-            )
+            kaspa_consensus_core::palw_tb1::publication::BranchPublicationGate::observe(&history, anchor, &closure, &q, snapshot)
         };
         let restored = restore_gate(&observed_settlement).unwrap();
         assert_eq!(
@@ -1545,6 +1562,22 @@ async fn run(stable: bool, registered: bool) {
                 .unwrap(),
             seed
         );
+        if stable {
+            assert_eq!(
+                restored
+                    .read_published_seed_at_parent(
+                        &history,
+                        certificate.hash(),
+                        &settlement,
+                        batch.hash(),
+                        certificate.hash(),
+                        &q,
+                        LIMITS
+                    )
+                    .unwrap(),
+                seed
+            );
+        }
         assert!(
             restore_gate(&settlement)
                 .unwrap()

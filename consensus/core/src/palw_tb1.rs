@@ -6,6 +6,7 @@ pub mod exec_registration;
 pub mod freeze;
 pub mod moe2_exec_close;
 pub mod panel_reply_carrier;
+pub mod publication;
 pub mod qf1_original_carrier;
 pub mod qf1_terminal_carrier;
 pub mod qualification;

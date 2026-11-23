@@ -32,19 +32,20 @@ pub fn panel_reply_commitment(
     selected: &[Hash64],
     replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
 ) -> io::Result<[u8; 64]> {
-    if selected.is_empty() || replies.len() != selected.len() {
-        return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete local PANEL replies"));
-    }
+    let mut seats = selected.iter();
     let mut marker = Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/reply-set/v1").chain_update(duty);
-    for (&seat, &(key, signature)) in selected.iter().zip(replies) {
+    for &(key, signature) in replies {
         let actor = actor_id(key);
-        if actor != seat {
+        if !seats.any(|&seat| seat == actor) {
             return Err(invalid("PANEL replies outside draw order"));
         }
         ml_dsa_65::verify(key, &replay_message(duty, actor), REPLAY_SIGNATURE_DOMAIN, signature)
             .map_err(|_| invalid("invalid local PANEL reply"))?;
         marker.update(actor.as_bytes());
         marker.update(signature.as_slice());
+    }
+    if selected.is_empty() || replies.len() != selected.len() {
+        return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete local PANEL replies"));
     }
     Ok(marker.finalize().into())
 }

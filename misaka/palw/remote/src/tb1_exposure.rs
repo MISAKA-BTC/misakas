@@ -104,25 +104,8 @@ impl Tb1HolderFreeze {
         qualified: &Tb1Qualification<'_>,
     ) -> io::Result<Self> {
         let round = &closure.round;
-        if qualified.round_ref() != round.id()
-            || qualified.root() != closure.qual_root
-            || qualified.roster().root().ok() != Some(round.roster_root)
-        {
-            return Err(invalid("TB1 closure differs from the prepared round"));
-        }
-        let header = native.get_header(accepting_block).map_err(Error::other)?;
-        if header.blue_score != round.close_blue_score
-            || header.daa_score >= round.release_from_daa
-            || round.release_from_daa >= round.deadline_exclusive_daa
-        {
-            return Err(invalid("TB1 close block outside its original schedule"));
-        }
-        let parent = native.get_ghostdag_data(accepting_block).map_err(Error::other)?.selected_parent;
-        let freeze_id = closure.commitment(parent);
-        let commits = native.palw_coinbase_commits_to(round.chain_id, accepting_block, &freeze_id).map_err(Error::other)?;
-        if !commits {
-            return Err(invalid("TB1 close block does not commit to the supplied closure"));
-        }
+        let freeze_id =
+            kaspa_consensus_core::palw_tb1::publication::resolve_published_freeze(native, accepting_block, closure, qualified)?;
         Ok(Self {
             accepting_block,
             qual_root: qualified.root(),

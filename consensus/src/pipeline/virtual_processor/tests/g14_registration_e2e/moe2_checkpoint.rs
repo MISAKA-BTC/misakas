@@ -671,6 +671,14 @@ pub(super) async fn check_exec_settlement_rewind(
                     .unwrap()
                 });
                 let replies = std::array::from_fn::<_, 2, _>(|i| (&panel[i].verification_key, &signatures[i]));
+                assert_eq!(
+                    panel_reply_commitment(&duty, &selected, &replies[1..]).unwrap_err().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+                assert_eq!(
+                    panel_reply_commitment(&duty, &selected, &[(&panel[0].verification_key, &signatures[1])]).unwrap_err().kind(),
+                    std::io::ErrorKind::InvalidData
+                );
                 let marker = panel_reply_commitment(&duty, &selected, &replies).unwrap();
                 let reply = funded_carrier(encode_panel_replies(&replies), 0);
                 let certificate = court.heartbeat(interval, vec![]).await;
