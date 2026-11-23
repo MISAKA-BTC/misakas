@@ -1788,18 +1788,35 @@ async fn rfc12_import_context_is_repeatable_and_invalid_history_never_changes_th
 /// rewritten), so every later block commits to the planted state and a reorg walk reverts it exactly. This is the test's hand: a
 /// frontier is what a `Final` claim buys, and no claim can reach `Final` on this clock.
 fn plant_frontier(rig: &Rig, blue: u64, frontier: BlockHash) {
+    plant_frontier_with_floor(rig, blue, frontier, false);
+}
+
+fn plant_frontier_with_floor(rig: &Rig, blue: u64, frontier: BlockHash, certified: bool) {
     use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
-    use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2};
+    use kaspa_consensus_core::{
+        palw_security_certification_v1::{
+            PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwCertifiedFrontierFloorV1, certification_frontier_floor_key_v1,
+        },
+        palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2},
+    };
     let (sink, tip) = rig.chain.tip_state();
     let before = tip.safe_frontier();
     let mut carriage = PalwStateCarriageV2::from_state(&tip);
     carriage.safe_frontier_blue_score = blue;
     carriage.safe_frontier = frontier;
-    let planted = carriage.into_state(&rig.chain.bundle.state, None).expect("a planted frontier is a consistent state");
     let vp = rig.vp();
     let mut store = vp.palw_state_v2_store.write();
     let (_, mut delta) = store.delta_of(sink).expect("the sink's delta row");
     delta.entries.push(PalwDeltaEntryV2::Frontier { old: before, new: (blue, frontier) });
+    if certified {
+        // Gate C rebuilds the frontier from its rooted floor on the next block.
+        let table = PALW_SECURITY_CERTIFICATION_TABLE_V1;
+        let key = certification_frontier_floor_key_v1();
+        let encoded = borsh::to_vec(&PalwCertifiedFrontierFloorV1 { blue_score: blue, block: frontier.as_bytes() }).unwrap();
+        let old = carriage.kernel_route.as_mut().unwrap().aux.insert((table, key.clone()), encoded.clone());
+        delta.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(encoded) });
+    }
+    let planted = carriage.into_state(&rig.chain.bundle.state, None).expect("a planted frontier is a consistent state");
     store
         .set_delta_record_for_tests(
             sink,

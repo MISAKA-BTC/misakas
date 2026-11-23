@@ -472,6 +472,18 @@ fn inconsistent_readout_fixture() -> bool {
     std::env::var_os("MISAKA_PRIVATE_QF1_INCONSISTENT_READOUT").is_some()
 }
 
+fn native_certificate_fixture() -> bool {
+    std::env::var_os("MISAKA_PRIVATE_TB1_NATIVE_CERTIFICATE").is_some()
+}
+
+async fn await_certificate_fixture_checkpoint(node: &Rig, tip: &Header) {
+    if native_certificate_fixture() {
+        tokio::time::timeout(Duration::from_secs(5), model_audit::await_pruning_capture(node, tip.pruning_point))
+            .await
+            .expect("the isolated node captured the advertised pruning point");
+    }
+}
+
 async fn exercise_prepared_exec_certificate(
     node: &mut Rig,
     close: &Block,
@@ -499,19 +511,38 @@ async fn exercise_prepared_exec_certificate(
     };
     use sha3::{Digest, Sha3_512};
     for _ in 0..24 {
-        if node.chain.daa_of(node.chain.sink()) >= closure.round.release_from_daa {
+        let tip = node.api().get_header(node.chain.sink()).unwrap();
+        await_certificate_fixture_checkpoint(node, &tip).await;
+        if tip.daa_score >= closure.round.release_from_daa
+            && (!native_certificate_fixture() || node.api().is_chain_ancestor_of(close.hash(), tip.pruning_point).unwrap())
+        {
             break;
         }
         stable_panel::next(node, 0).await;
     }
-    // This detached receipt fixture supplies the finalized close as an
-    // owner input. The live holder path continues to read native finality.
-    let close_finalized = |snapshot: NativeSettlementSnapshotV1| NativeSettlementSnapshotV1 {
-        safe: Some(close.hash()),
-        finalized: Some(close.hash()),
-        ..snapshot
+    let settlement_at_tip = |node: &Rig, stage: &str| {
+        if native_certificate_fixture() {
+            let vp = node.vp();
+            let state = vp.palw_candidate_state_v2_checked(node.chain.sink()).unwrap();
+            vp.native_selected_branch_settlement(state).unwrap().unwrap_or_else(|| {
+                panic!(
+                    "{stage}: the selected branch did not finalize the close: {}",
+                    serde_json::to_string(&readiness_of(node)).unwrap()
+                )
+            })
+        } else {
+            // The detached fold below tests the receipt independently of
+            // normal ingress, which must refuse this unfinalized close.
+            NativeSettlementSnapshotV1 { safe: Some(close.hash()), finalized: Some(close.hash()), ..snapshot_of(node).unwrap() }
+        }
     };
-    let observation = close_finalized(snapshot_of(node).unwrap());
+    if native_certificate_fixture() {
+        let tip = node.api().get_block(node.chain.sink()).unwrap();
+        assert!(node.api().is_chain_ancestor_of(close.hash(), tip.header.pruning_point).unwrap());
+        plant_frontier_with_floor(node, tip.header.blue_score, tip.hash(), true);
+        place_maturing_fact(node, &tip, 10, 0);
+    }
+    let observation = settlement_at_tip(node, "pre-publication observation");
     assert!(node.chain.daa_of(observation.generation) >= closure.round.release_from_daa);
     let (_, state) = node.chain.tip_state();
     let retained = state.tb1_exec_close_receipt(close.hash()).unwrap();
@@ -534,8 +565,9 @@ async fn exercise_prepared_exec_certificate(
     miner.extra_data = batch_commitment(&rows, LIMITS).unwrap().to_vec();
     let block = stable_panel::evidence_template(node, miner, release_batch_payload(&rows, LIMITS).unwrap());
     let batch = node.take(block, "prepared EXEC release batch").await;
+    await_certificate_fixture_checkpoint(node, &batch.header).await;
     let parent = batch.hash();
-    let settlement = close_finalized(snapshot_of(node).unwrap());
+    let settlement = settlement_at_tip(node, "certificate parent");
     let (tip, state) = node.chain.tip_state();
     assert_eq!(tip, parent);
     let gate = BranchPublicationGate::observe(node.api().as_ref(), close.hash(), closure, q, &observation).unwrap();
@@ -597,16 +629,18 @@ async fn exercise_prepared_exec_certificate(
     assert_eq!(reverted.state_root(), state.state_root());
     assert!(reverted.tb1_exec_certificate(close.hash()).is_none());
 
-    // Install only the verified certificate fold in the isolated receiver.
-    // Its Original descendants enter via ordinary candidate acceptance.
     let accepted = node.take(template, "EXEC certificate marker").await;
+    await_certificate_fixture_checkpoint(node, &accepted.header).await;
     assert_eq!(accepted.hash(), candidate.hash());
     assert!(accepted.transactions.iter().any(|tx| tx.payload == publication));
-    assert!(
-        node.chain.tip_state().1.tb1_exec_certificate(close.hash()).is_none(),
-        "the actual selected parent did not finalize this close"
-    );
-    {
+    let admitted = node.chain.tip_state().1.tb1_exec_certificate(close.hash());
+    if native_certificate_fixture() {
+        let admitted = admitted.expect("ordinary block acceptance recorded the verified EXEC certificate");
+        assert_eq!((admitted.certificate(), admitted.seed), (accepted.hash(), *seed.as_bytes()));
+    } else {
+        assert!(admitted.is_none(), "the actual selected parent did not finalize this close");
+        // Install only the independently verified row so the same Court
+        // descendants can also run with the negative-control setup.
         let vp = node.vp();
         let mut store = vp.palw_state_v2_store.write();
         let mut actual = store.delta_of(accepted.hash()).unwrap().1;
@@ -674,6 +708,7 @@ async fn exercise_prepared_exec_certificate(
         miner.extra_data = claim.as_byte_slice().to_vec();
         let template = stable_panel::heartbeat_with_transactions(node, miner, txs);
         let block = node.take(template, "QF1 Original referencing the retained EXEC certificate").await;
+        await_certificate_fixture_checkpoint(node, &block.header).await;
         assert!(txids.iter().all(|id| block.transactions.iter().any(|tx| tx.id() == *id)));
         let (tip, state) = node.chain.tip_state();
         assert_eq!(tip, block.hash());
@@ -704,6 +739,7 @@ async fn exercise_prepared_exec_certificate(
     let txs = stable_panel::evidence_transactions(node, [case_payload, reference.encode().to_vec()]);
     let template = stable_panel::heartbeat_with_transactions(node, miner, txs);
     let case = node.take(template, "QF1 Stop case against the certified Original").await;
+    await_certificate_fixture_checkpoint(node, &case.header).await;
     let verdict: [u8; 64] = Sha3_512::new()
         .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1")
         .chain_update(case.hash().as_bytes())
@@ -721,6 +757,9 @@ async fn exercise_prepared_exec_certificate(
     assert!(!decided.qf1_terminal_verdict_pending(&verdict, decision.header.daa_score));
     assert!(decided.qf1_terminal_blocks_award(original));
     assert!(decided.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
+    if native_certificate_fixture() {
+        peer_log!("TB1 native EXEC and Court close={} certificate={} verdict={}", close.hash(), accepted.hash(), decision.hash());
+    }
 }
 
 async fn run(stable: bool, registered: bool) {
@@ -756,7 +795,12 @@ async fn run(stable: bool, registered: bool) {
         _ => prediction::bind(a, *norm),
     });
     let parts = if registered {
-        let (config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+        let (mut config, _, premine, floats) = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, true));
+        if native_certificate_fixture() {
+            config.params.blockrate.finality_depth = 1;
+            config.params.blockrate.pruning_depth = 12;
+            config.is_archival = true;
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
         let bundle = bundle.clone();
         (config, bundle, premine, floats)
@@ -1240,6 +1284,11 @@ async fn run(stable: bool, registered: bool) {
                 context,
             )
             .await;
+            if native_certificate_fixture() {
+                // The short pruning geometry is for the certificate-to-Court
+                // branch. The separate holder and audit cases use their own run.
+                return;
+            }
             let close = node.take(t, "registered EXEC close").await;
             assert!(close.transactions.iter().any(|tx| tx.id() == carrier));
             let mut blocks = vec![RpcRawBlock::from(&close)];

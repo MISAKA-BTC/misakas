@@ -10,6 +10,10 @@ mod legacy_work;
 use misaka_palw_remote::tb1_exposure::model_audit::{AuditCandidate, AuditPlan, PreparedAudit};
 use misaka_palw_tir_exec::node::qf1::Identity;
 
+pub(super) async fn await_pruning_capture(node: &Rig, point: Hash64) {
+    legacy_work::await_pruning_capture(node, point).await;
+}
+
 pub(super) async fn registered_cut(
     node: &mut Rig,
     parent: &mut Option<UnixStream>,
