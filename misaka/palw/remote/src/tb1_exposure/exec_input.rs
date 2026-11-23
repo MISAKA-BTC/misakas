@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
             ExecRegistration, MOE2_QUOTE_DOMAIN, QF1_LOCAL_CONTEXT_DOMAIN, TIR_CONTEXT_DOMAIN, input_set_root,
             registration_key as reg_key,
         },
-        freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
+        freeze::{Tb1MiningClosure, Tb1MiningPurpose},
         qualification::Tb1Qualification,
     },
 };
@@ -30,6 +30,7 @@ use std::{
 
 pub mod moe2;
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote;
+pub use kaspa_consensus_core::palw_tb1::qualification::QualifiedExecPanel;
 use libcrux_ml_dsa::ml_dsa_87::MLDSA87Signature;
 
 pub use kaspa_consensus_core::palw_tb1::exec_registration::REGISTRATION_DOMAIN;
@@ -104,7 +105,7 @@ impl ExecInputTerms<'_> {
             || self.job_tokens.len() > max_tokens
             || positions.is_none_or(|n| n > self.max_positions)
             || self.job_tokens.iter().any(|&id| id >= self.vocab)
-            || rounds.panel.release_from_daa >= self.deadline_exclusive_daa
+            || rounds.panel().release_from_daa >= self.deadline_exclusive_daa
             || self.open_daa >= self.deadline_exclusive_daa
         {
             return Err(invalid("invalid private EXEC registration context"));
@@ -181,50 +182,6 @@ pub struct SignedExecInput<'a> {
     pub quote_consent: Option<&'a MLDSA87Signature>,
 }
 
-/// The two signed qualification cuts of the private input profile. Dealer
-/// termination and resource references are inputs to qualification. The
-/// commitment authenticates those inputs as of the preparation block.
-#[derive(Clone, Copy)]
-pub struct QualifiedExecPanel {
-    exec: Tb1MiningRound,
-    panel: Tb1MiningRound,
-    exec_qual: [u8; 64],
-    #[cfg(feature = "private-tb1-tir")]
-    panel_qual: [u8; 64],
-    marker: [u8; 64],
-}
-
-impl QualifiedExecPanel {
-    pub fn new(
-        exec: Tb1MiningRound,
-        exec_q: &Tb1Qualification<'_>,
-        panel: Tb1MiningRound,
-        panel_q: &Tb1Qualification<'_>,
-    ) -> io::Result<Self> {
-        super::check_panel_schedule(Tb1MiningPurpose::Exec, &exec, exec_q, &panel, panel_q)?;
-        let marker = Sha3_512::new()
-            .chain_update(b"MISAKA/private/TB1/qualified-exec-panel/v1")
-            .chain_update(exec.id())
-            .chain_update(exec_q.root())
-            .chain_update(panel.id())
-            .chain_update(panel_q.root())
-            .finalize()
-            .into();
-        Ok(Self {
-            exec,
-            panel,
-            exec_qual: exec_q.root(),
-            #[cfg(feature = "private-tb1-tir")]
-            panel_qual: panel_q.root(),
-            marker,
-        })
-    }
-
-    pub fn commitment(&self) -> [u8; 64] {
-        self.marker
-    }
-}
-
 struct RegisteredInput<'a> {
     context: Vec<u8>,
     terms: &'a ExecInputTerms<'a>,
@@ -298,12 +255,12 @@ impl<'a> ExecInputBatch<'a> {
         if rows.len() > max_records {
             return Err(invalid("EXEC batch exceeds registration budget"));
         }
-        let exec = &rounds.exec;
+        let exec = rounds.exec();
         let header = native.get_header(preparation).map_err(io::Error::other)?;
         if header.blue_score >= exec.close_blue_score
             || header.daa_score >= exec.release_from_daa
             || !native.is_chain_ancestor_of(preparation, parent).map_err(io::Error::other)?
-            || !native.palw_coinbase_commits_to(exec.chain_id, preparation, &rounds.marker).map_err(io::Error::other)?
+            || !native.palw_coinbase_commits_to(exec.chain_id, preparation, &rounds.commitment()).map_err(io::Error::other)?
         {
             return Err(invalid("missing joint qualification before EXEC close"));
         }
@@ -348,7 +305,7 @@ impl<'a> ExecInputBatch<'a> {
             allocations.insert(row.slot, (key, row.funding_ref));
         }
         let root =
-            input_set_root(preparation, rounds.marker, &allocations).map_err(|_| invalid("EXEC registration count overflow"))?;
+            input_set_root(preparation, rounds.commitment(), &allocations).map_err(|_| invalid("EXEC registration count overflow"))?;
         Ok(Self { preparation, rounds: *rounds, root, entries })
     }
 
@@ -358,8 +315,8 @@ impl<'a> ExecInputBatch<'a> {
 
     fn check_close(&self, native: &dyn ConsensusApi, close: Hash64, closure: &Tb1MiningClosure) -> io::Result<(Arc<Header>, Hash64)> {
         if closure.round.purpose != Tb1MiningPurpose::Exec
-            || closure.round.id() != self.rounds.exec.id()
-            || closure.qual_root != self.rounds.exec_qual
+            || closure.round.id() != self.rounds.exec().id()
+            || closure.qual_root != self.rounds.exec_qual()
             || closure.consumer_set_root != self.root
         {
             return Err(invalid("EXEC input set differs from closure"));
@@ -573,7 +530,7 @@ impl<'a> FrozenExecInputs<'a> {
             tokens,
             terms,
             #[cfg(feature = "private-tb1-tir")]
-            chain: self.batch.rounds.exec.chain_id,
+            chain: self.batch.rounds.exec().chain_id,
         })
     }
 }

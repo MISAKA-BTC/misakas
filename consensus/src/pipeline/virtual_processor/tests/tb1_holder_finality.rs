@@ -64,25 +64,33 @@ use kaspa_consensus_core::{
     trusted::ExternalGhostdagData,
 };
 use std::sync::Arc;
-struct CandidateHistory<'a>(&'a dyn ConsensusApi);
+struct CandidateHistory<'a> {
+    api: &'a dyn ConsensusApi,
+    candidate: Option<Hash64>,
+}
 impl ConsensusApi for CandidateHistory<'_> {
     fn get_sink(&self) -> Hash64 {
         panic!("candidate validation must not consult the live sink");
     }
     fn get_header(&self, block: Hash64) -> ConsensusResult<Arc<Header>> {
-        self.0.get_header(block)
+        assert_ne!(self.candidate, Some(block));
+        self.api.get_header(block)
     }
     fn get_block(&self, block: Hash64) -> ConsensusResult<Block> {
-        self.0.get_block(block)
+        assert_ne!(self.candidate, Some(block));
+        self.api.get_block(block)
     }
     fn get_ghostdag_data(&self, block: Hash64) -> ConsensusResult<ExternalGhostdagData> {
-        self.0.get_ghostdag_data(block)
+        assert_ne!(self.candidate, Some(block));
+        self.api.get_ghostdag_data(block)
     }
     fn is_chain_ancestor_of(&self, low: Hash64, high: Hash64) -> ConsensusResult<bool> {
-        self.0.is_chain_ancestor_of(low, high)
+        assert!(self.candidate != Some(low) && self.candidate != Some(high));
+        self.api.is_chain_ancestor_of(low, high)
     }
     fn palw_coinbase_commits_to(&self, chain: [u8; 64], block: Hash64, id: &[u8; 64]) -> ConsensusResult<bool> {
-        self.0.palw_coinbase_commits_to(chain, block, id)
+        assert_ne!(self.candidate, Some(block));
+        self.api.palw_coinbase_commits_to(chain, block, id)
     }
 }
 
@@ -609,15 +617,8 @@ async fn run(stable: bool, registered: bool) {
             std::env::VarError::NotPresent => "2 + 2?".to_owned(),
             _ => panic!("QF1 job must be UTF-8"),
         });
-        Qf1Prompt::from_registered_tokenizer(
-            &bytes,
-            expected,
-            instance.as_ref().unwrap().identity().descriptor,
-            &job,
-            16_000_000,
-            128,
-        )
-        .unwrap()
+        Qf1Prompt::from_registered_tokenizer(&bytes, expected, instance.as_ref().unwrap().identity().descriptor, &job, 16_000_000, 128)
+            .unwrap()
     });
     let qf1_terms = qf1.as_ref().map(|prompt| misaka_palw_remote::tb1_exposure::exec_input::ExecInputTerms {
         qf1: Some(Qf1Use::LocalInference(prompt)),
@@ -748,9 +749,12 @@ async fn run(stable: bool, registered: bool) {
             let mut blocks = vec![RpcRawBlock::from(&close)];
             let mut funding = parts.3[0].clone();
             blocks.extend(offers::assign(&mut node, registered_quote.unwrap(), &mut funding).await);
-            assert!(node.api().get_virtual_utxos(None, 1_000_000, false).iter().any(|(out, _)| {
-                *out == kaspa_consensus_core::tx::TransactionOutpoint::new(carrier, 0)
-            }));
+            assert!(
+                node.api()
+                    .get_virtual_utxos(None, 1_000_000, false)
+                    .iter()
+                    .any(|(out, _)| { *out == kaspa_consensus_core::tx::TransactionOutpoint::new(carrier, 0) })
+            );
             let assignment = node.chain.sink();
             while node.chain.daa_of(node.chain.sink()) < round.release_from_daa {
                 assert!(blocks.len() < 120, "native release DAA did not advance");
@@ -795,7 +799,7 @@ async fn run(stable: bool, registered: bool) {
         let full = budget_preview(&node.config.params, &close_parent_state).unwrap();
         assert_eq!(full.keys().copied().collect::<Vec<_>>(), [9, 10]);
         {
-            let history = CandidateHistory(api);
+            let history = CandidateHistory { api, candidate: None };
             let batch_at = |candidate_parent, state| {
                 ExecInputBatch::from_signed_at_parent(&history, candidate_parent, parent, state, &rounds, &entries, 4, 16)
             };
@@ -883,6 +887,38 @@ async fn run(stable: bool, registered: bool) {
             };
             let body_close = read(original_state, &rounds, 4, 16).unwrap();
             assert_eq!(body_close.quoted_slots(), &[*closed_quote.exec_slot(), *long.exec_slot()]);
+            use kaspa_consensus_core::palw_tb1::moe2_exec_close::verify_moe2_exec_close_candidate;
+            let candidate = api.get_block(anchor).unwrap();
+            let close_parent = close_parent_state.last_point().unwrap().block;
+            let marker = node.vp().coinbase_manager.palw_coinbase_commitment(&candidate.transactions[0].payload).unwrap().unwrap();
+            let history_before_candidate = CandidateHistory { api, candidate: Some(anchor) };
+            let verify_candidate = |selected_parent, marker| {
+                verify_moe2_exec_close_candidate(
+                    &history_before_candidate,
+                    &node.config.params,
+                    &delta.point,
+                    &candidate,
+                    selected_parent,
+                    |_, expected| Ok(expected == &marker),
+                    &rounds,
+                    &close_parent_state,
+                    original_state,
+                    4,
+                    16,
+                )
+            };
+            let pending = verify_candidate(close_parent, marker).unwrap();
+            assert_eq!(pending.quoted_slots(), body_close.quoted_slots());
+            peer_log!(
+                "TB1 EXEC candidate pid={} close={} parent={} allocations={}",
+                std::process::id(),
+                pending.block(),
+                close_parent,
+                pending.quoted_slots().len(),
+            );
+            assert!(verify_candidate(close_parent, [0; 64]).err().unwrap().to_string().contains("does not commit"));
+            assert!(verify_candidate(anchor, marker).err().unwrap().to_string().contains("close parent state"));
+            assert!(pending.into_mining_reservation().unwrap_err().to_string().contains("local QF1 inference"));
             assert!(body_close.price_anchor(&history, anchor, closed_quote.exec_slot()).is_ok());
             assert!(body_close.price_anchor(&history, anchor, long.exec_slot()).is_ok());
             assert!(body_close.price_anchor(&history, parent, closed_quote.exec_slot()).is_err());
@@ -1228,7 +1264,7 @@ async fn run(stable: bool, registered: bool) {
     if let Some(terms) = &qf1_terms {
         let r = jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
         let settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
-        let history = CandidateHistory(api);
+        let history = CandidateHistory { api, candidate: None };
         let restore_gate = |snapshot: &NativeSettlementSnapshotV1| {
             misaka_palw_remote::tb1_exposure::publication::NativePublicationGate::observe_at_snapshot(
                 &history, anchor, &closure, &q, snapshot,
@@ -1430,7 +1466,7 @@ async fn run(stable: bool, registered: bool) {
         let block = local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await;
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
         let api = node.api().as_ref();
-        let history = CandidateHistory(api);
+        let history = CandidateHistory { api, candidate: None };
         let receipt_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
         let recorded_input = |parent, settlement: &NativeSettlementSnapshotV1| {
             jobs.derive_recorded_at_parent(&history, parent, settlement, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS)

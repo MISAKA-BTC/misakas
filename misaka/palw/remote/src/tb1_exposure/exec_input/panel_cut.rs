@@ -107,7 +107,7 @@ impl FrozenExecInputs<'_> {
         let tip = native.get_sink();
         let exec_seed = self.gate.read_seed(native, publication, certificate, releases, q, limits)?;
         let rounds = &self.batch.rounds;
-        let score = rounds.panel.close_blue_score;
+        let score = rounds.panel().close_blue_score;
         if native.get_header(certificate).map_err(io::Error::other)?.blue_score >= score {
             return Err(invalid("EXEC certificate after local PANEL cutoff"));
         }
@@ -155,8 +155,8 @@ impl FrozenExecInputs<'_> {
             previous = Some(actor);
         }
         let closure = Tb1MiningClosure {
-            round: rounds.panel,
-            qual_root: rounds.panel_qual,
+            round: *rounds.panel(),
+            qual_root: rounds.panel_qual(),
             consumer_set_root: hash.finalize().into(),
             policy_root: pool.draw_policy.as_bytes(),
         };

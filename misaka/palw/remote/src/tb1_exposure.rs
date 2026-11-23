@@ -31,33 +31,6 @@ fn invalid(message: &'static str) -> Error {
     Error::new(ErrorKind::InvalidData, message)
 }
 
-fn check_panel_schedule(
-    purpose: kaspa_consensus_core::palw_tb1::freeze::Tb1MiningPurpose,
-    first: &kaspa_consensus_core::palw_tb1::freeze::Tb1MiningRound,
-    first_q: &Tb1Qualification<'_>,
-    panel: &kaspa_consensus_core::palw_tb1::freeze::Tb1MiningRound,
-    panel_q: &Tb1Qualification<'_>,
-) -> io::Result<()> {
-    use kaspa_consensus_core::palw_tb1::freeze::Tb1MiningPurpose;
-    if first.purpose != purpose
-        || panel.purpose != Tb1MiningPurpose::Panel
-        || first.chain_id != panel.chain_id
-        || first.close_blue_score >= panel.close_blue_score
-        || first.release_from_daa >= panel.release_from_daa
-    {
-        return Err(invalid("invalid private TB1 round pair"));
-    }
-    for (round, q) in [(first, first_q), (panel, panel_q)] {
-        if q.round_ref() != round.id()
-            || q.roster().root().ok() != Some(round.roster_root)
-            || round.release_from_daa >= round.deadline_exclusive_daa
-        {
-            return Err(invalid("qualification does not match the scheduled round"));
-        }
-    }
-    Ok(())
-}
-
 fn binding(round: &[u8], key: &MLDSA65VerificationKey) -> io::Result<[u8; 64]> {
     let length = u32::try_from(round.len()).map_err(|_| invalid("oversized TB1 RoundRef"))?;
     if length == 0 {

@@ -2,11 +2,14 @@
 //! owning reader supplies the VSS outcomes and signed Ready rows
 //! at that cut, and resolves the reserved resources. This projection
 //! verifies the holder signatures but does not implement the private VSS protocol.
-use super::signatures;
 use super::{Tb1Field, Tb1PolynomialError, check_qualified, check_roster};
+use super::{
+    freeze::{Tb1MiningPurpose, Tb1MiningRound},
+    signatures,
+};
 use libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey;
 use sha3::{Digest, Sha3_512};
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, io};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tb1VssEnd {
@@ -172,5 +175,83 @@ impl<'a> Tb1Qualification<'a> {
 
     pub fn root(&self) -> [u8; 64] {
         self.qual_root
+    }
+}
+
+pub fn check_panel_schedule(
+    purpose: Tb1MiningPurpose,
+    first: &Tb1MiningRound,
+    first_q: &Tb1Qualification<'_>,
+    panel: &Tb1MiningRound,
+    panel_q: &Tb1Qualification<'_>,
+) -> io::Result<()> {
+    if first.purpose != purpose
+        || panel.purpose != Tb1MiningPurpose::Panel
+        || first.chain_id != panel.chain_id
+        || first.close_blue_score >= panel.close_blue_score
+        || first.release_from_daa >= panel.release_from_daa
+    {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid private TB1 round pair"));
+    }
+    for (round, q) in [(first, first_q), (panel, panel_q)] {
+        if q.round_ref() != round.id()
+            || q.roster().root().ok() != Some(round.roster_root)
+            || round.release_from_daa >= round.deadline_exclusive_daa
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "qualification does not match the scheduled round"));
+        }
+    }
+    Ok(())
+}
+
+/// The two signed qualification cuts of the private input profile. Dealer
+/// termination and resource references are inputs to qualification. The
+/// commitment authenticates those inputs as of the preparation block.
+#[derive(Clone, Copy)]
+pub struct QualifiedExecPanel {
+    exec: Tb1MiningRound,
+    panel: Tb1MiningRound,
+    exec_qual: [u8; 64],
+    panel_qual: [u8; 64],
+    marker: [u8; 64],
+}
+
+impl QualifiedExecPanel {
+    pub fn new(
+        exec: Tb1MiningRound,
+        exec_q: &Tb1Qualification<'_>,
+        panel: Tb1MiningRound,
+        panel_q: &Tb1Qualification<'_>,
+    ) -> io::Result<Self> {
+        check_panel_schedule(Tb1MiningPurpose::Exec, &exec, exec_q, &panel, panel_q)?;
+        let marker = Sha3_512::new()
+            .chain_update(b"MISAKA/private/TB1/qualified-exec-panel/v1")
+            .chain_update(exec.id())
+            .chain_update(exec_q.root())
+            .chain_update(panel.id())
+            .chain_update(panel_q.root())
+            .finalize()
+            .into();
+        Ok(Self { exec, panel, exec_qual: exec_q.root(), panel_qual: panel_q.root(), marker })
+    }
+
+    pub fn exec(&self) -> &Tb1MiningRound {
+        &self.exec
+    }
+
+    pub fn panel(&self) -> &Tb1MiningRound {
+        &self.panel
+    }
+
+    pub fn exec_qual(&self) -> [u8; 64] {
+        self.exec_qual
+    }
+
+    pub fn panel_qual(&self) -> [u8; 64] {
+        self.panel_qual
+    }
+
+    pub fn commitment(&self) -> [u8; 64] {
+        self.marker
     }
 }

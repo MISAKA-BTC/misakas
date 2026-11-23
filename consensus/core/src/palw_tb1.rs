@@ -4,6 +4,7 @@
 pub mod exec_close_carrier;
 pub mod exec_registration;
 pub mod freeze;
+pub mod moe2_exec_close;
 pub mod qualification;
 pub mod reconstruction;
 pub mod releases;

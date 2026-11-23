@@ -5,7 +5,7 @@
 pub mod arithmetic;
 
 use super::{
-    Tb1HolderFreeze, check_panel_schedule, invalid,
+    Tb1HolderFreeze, invalid,
     publication::{NativePublicationGate, PublicationLimits, PublishedRelease},
 };
 use kaspa_consensus_core::{
@@ -14,7 +14,7 @@ use kaspa_consensus_core::{
     palw_state_proof_v1::{PALW_PROOF_LABEL_CLASSES, state_root_of_pinned_header_v1, verify_class_v1},
     palw_tb1::{
         freeze::{Tb1MiningClosure, Tb1MiningPurpose, Tb1MiningRound},
-        qualification::Tb1Qualification,
+        qualification::{Tb1Qualification, check_panel_schedule},
         releases::Tb1BeaconSeed,
     },
 };

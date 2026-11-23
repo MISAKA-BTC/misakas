@@ -3826,17 +3826,10 @@ impl ConsensusApi for Consensus {
     fn palw_coinbase_commitment(&self, block: BlockHash) -> ConsensusResult<Option<[u8; 64]>> {
         let body = self.get_block(block)?;
         let coinbase = body.transactions.first().ok_or(ConsensusError::MissingData(block))?;
-        let extra = self
-            .services
+        self.services
             .coinbase_manager
-            .coinbase_extra_data(&coinbase.payload)
-            .map_err(|error| ConsensusError::GeneralOwned(error.to_string()))?;
-        if let Ok(raw) = extra.try_into() {
-            return Ok(Some(raw));
-        }
-        Ok(kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra)
-            .ok()
-            .and_then(|(prefix, _)| prefix.try_into().ok()))
+            .palw_coinbase_commitment(&coinbase.payload)
+            .map_err(|error| ConsensusError::GeneralOwned(error.to_string()))
     }
 
     fn modify_coinbase_payload(&self, payload: Vec<u8>, miner_data: &MinerData) -> CoinbaseResult<Vec<u8>> {

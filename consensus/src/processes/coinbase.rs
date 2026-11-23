@@ -863,6 +863,16 @@ impl CoinbaseManager {
         self.parse_coinbase_payload_v2(payload).map(|(_, _, _, _, extra)| extra)
     }
 
+    pub(crate) fn palw_coinbase_commitment(&self, payload: &[u8]) -> CoinbaseResult<Option<[u8; 64]>> {
+        let extra = self.coinbase_extra_data(payload)?;
+        if let Ok(raw) = extra.try_into() {
+            return Ok(Some(raw));
+        }
+        Ok(kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra)
+            .ok()
+            .and_then(|(prefix, _)| prefix.try_into().ok()))
+    }
+
     pub fn deserialize_coinbase_payload<'a>(&self, payload: &'a [u8]) -> CoinbaseResult<CoinbaseData<&'a [u8]>> {
         let (blue_score, subsidy, version, script, extra_data) = self.parse_coinbase_payload_v2(payload)?;
         let script_public_key = ScriptPublicKey::new(version, ScriptVec::from_slice(script));
