@@ -56,7 +56,7 @@ use kaspa_consensus_core::{
     },
     header::Header,
     muhash::MuHashExtensions,
-    palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
+    palw_model_market_v1::moe2::{award_reference::Moe2AwardSource, settlement::Moe2ExecSlot},
     palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
     palw_state_v2::{Moe2QuoteAnchorV1, PalwChainStateV2, PalwStateV2Error},
     palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
@@ -2290,14 +2290,15 @@ impl VirtualStateProcessor {
                     None
                 };
                 if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
-                    let reference = Moe2AwardReference::from_transactions(txs.iter())
-                        .map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
+                    let source =
+                        Moe2AwardSource::from_transactions(txs.iter()).map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
+                    let reference = &source.reference;
                     let parent = parent_state
                         .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
                         .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
                     reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
                     reference.check_parent_unspent(parent).map_err(PrivateMoe2AwardMalformed)?;
-                    let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), &reference)?;
+                    let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), source)?;
                     self.restore_private_moe2_price_state(parent, price)?;
                     // The resolved terms still require an independently certified winning right.
                     return Err(PrivateMoe2AwardUnresolved);
@@ -2440,25 +2441,30 @@ impl VirtualStateProcessor {
     }
 
     /// The reservation row has already authenticated the exact close and slot.
-    /// A node without its stored preimages must retry from local branch history.
+    /// Use the candidate's preimage when present, or the legacy close archive.
     pub(super) fn read_private_moe2_reserved_terms(
         &self,
         parent: BlockHash,
-        reference: &Moe2AwardReference,
+        source: Moe2AwardSource<'_>,
     ) -> BlockProcessResult<(Moe2ExecSlot, Moe2QuoteAnchorV1)> {
         use PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
+        let reference = &source.reference;
         let unavailable = LocalNativeStateContextUnavailable(HistoryUnavailable);
         if !self.reachability_service.try_is_chain_ancestor_of(reference.close, parent).map_err(|_| unavailable.clone())? {
             return Err(PrivateMoe2AwardMalformed("private MOE2 EXEC close is outside the selected-parent history"));
         }
         let close = self.headers_store.get_header(reference.close).map_err(|_| unavailable.clone())?;
-        let (preparation, slot) = self
-            .block_transactions_store
-            .read_private_moe2_exec_slot(&close, reference.slot, reference.reservation)
-            .map_err(|error| match error {
-                kaspa_database::prelude::StoreError::KeyNotFound(_) => unavailable.clone(),
-                _ => LocalNativeStateContextUnavailable(StoreUnreadable),
-            })?;
+        let (preparation, slot) =
+            match source.open_registration(close.daa_score).map_err(|error| PrivateMoe2AwardMalformed(error.reason()))? {
+                Some(resolved) => resolved,
+                None => self
+                    .block_transactions_store
+                    .read_private_moe2_exec_slot(&close, reference.slot, reference.reservation)
+                    .map_err(|error| match error {
+                        kaspa_database::prelude::StoreError::KeyNotFound(_) => unavailable.clone(),
+                        _ => LocalNativeStateContextUnavailable(StoreUnreadable),
+                    })?,
+            };
         let header = self.headers_store.get_header(preparation).map_err(|_| unavailable.clone())?;
         let anchor = self.ghostdag_store.get_selected_parent(preparation).map_err(|_| unavailable.clone())?;
         let price = Moe2QuoteAnchorV1::resolve_on_history(parent, preparation, &header, anchor, &slot, |low, high| {

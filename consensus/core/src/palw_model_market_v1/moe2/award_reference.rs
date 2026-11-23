@@ -6,11 +6,13 @@ use crate::{
     Hash64,
     palw_bond_budget_v1::{PalwBudgetOriginV1, PalwBudgetVectorV1},
     palw_state_v2::PalwChainStateV2,
+    palw_tb1::exec_close_carrier::{ExecCloseCarrier, MAX_CONTEXT_BYTES},
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::Transaction,
 };
 
 const TAG: &[u8; 8] = b"MOE2REF1";
+const CONTEXT_TAG: &[u8; 8] = b"MOE2REF2";
 const LENGTH: usize = 8 + 64 + 32 + 64 + 8 + 64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +29,7 @@ pub enum Moe2AwardReferenceError {
     Missing,
     Multiple,
     Encoding,
+    Context,
 }
 
 impl Moe2AwardReferenceError {
@@ -35,6 +38,7 @@ impl Moe2AwardReferenceError {
             Self::Missing => "missing private MOE2 award reference in the candidate",
             Self::Multiple => "multiple private MOE2 award references in the candidate",
             Self::Encoding => "invalid private MOE2 award reference encoding",
+            Self::Context => "private MOE2 award context does not open its EXEC reservation",
         }
     }
 }
@@ -103,23 +107,73 @@ impl Moe2AwardReference {
         if payload.len() != LENGTH || !payload.starts_with(TAG) {
             return Err(Moe2AwardReferenceError::Encoding);
         }
-        Ok(Self {
+        Ok(Self::read_fields(payload))
+    }
+
+    fn read_fields(payload: &[u8]) -> Self {
+        Self {
             claim: Hash64::from_bytes(payload[8..72].try_into().unwrap()),
             attempt: payload[72..104].try_into().unwrap(),
             close: Hash64::from_bytes(payload[104..168].try_into().unwrap()),
             slot: u64::from_be_bytes(payload[168..176].try_into().unwrap()),
-            reservation: Hash64::from_bytes(payload[176..].try_into().unwrap()),
-        })
+            reservation: Hash64::from_bytes(payload[176..LENGTH].try_into().unwrap()),
+        }
+    }
+
+    /// The original registration context can come with the candidate when
+    /// the close's body is no longer available. V1 keeps its archive lookup.
+    pub fn encode_with_registration(&self, context: &[u8]) -> Result<Vec<u8>, Moe2AwardReferenceError> {
+        if context.is_empty() || context.len() > MAX_CONTEXT_BYTES {
+            return Err(Moe2AwardReferenceError::Encoding);
+        }
+        let mut payload = self.encode().to_vec();
+        payload[..CONTEXT_TAG.len()].copy_from_slice(CONTEXT_TAG);
+        payload.extend_from_slice(context);
+        Ok(payload)
     }
 
     /// Use the candidate's transactions, in isolation from mergeset carriers.
     pub fn from_transactions<'a>(txs: impl IntoIterator<Item = &'a Transaction>) -> Result<Self, Moe2AwardReferenceError> {
-        let mut candidates =
-            txs.into_iter().filter(|tx| tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE && tx.payload.starts_with(TAG));
-        let candidate = candidates.next().ok_or(Moe2AwardReferenceError::Missing)?;
+        Ok(Moe2AwardSource::from_transactions(txs)?.reference)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moe2AwardSource<'a> {
+    pub reference: Moe2AwardReference,
+    context: Option<&'a [u8]>,
+}
+
+impl<'a> Moe2AwardSource<'a> {
+    pub fn archived(reference: Moe2AwardReference) -> Self {
+        Self { reference, context: None }
+    }
+
+    pub fn from_transactions(txs: impl IntoIterator<Item = &'a Transaction>) -> Result<Self, Moe2AwardReferenceError> {
+        use Moe2AwardReferenceError::*;
+        let mut candidates = txs.into_iter().filter(|tx| {
+            tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE && (tx.payload.starts_with(TAG) || tx.payload.starts_with(CONTEXT_TAG))
+        });
+        let payload = &candidates.next().ok_or(Missing)?.payload;
         if candidates.next().is_some() {
-            return Err(Moe2AwardReferenceError::Multiple);
+            return Err(Multiple);
         }
-        Self::decode(&candidate.payload)
+        if payload.starts_with(TAG) {
+            return Moe2AwardReference::decode(payload).map(Self::archived);
+        }
+        let context = payload.get(LENGTH..).filter(|bytes| !bytes.is_empty() && bytes.len() <= MAX_CONTEXT_BYTES).ok_or(Encoding)?;
+        Ok(Self { reference: Moe2AwardReference::read_fields(payload), context: Some(context) })
+    }
+
+    /// Caller first checks the reservation in the selected parent. An invalid
+    /// supplied preimage is refused without retrying through the close archive.
+    pub fn open_registration(&self, close_daa: u64) -> Result<Option<(Hash64, Moe2ExecSlot)>, Moe2AwardReferenceError> {
+        let r = self.reference;
+        self.context
+            .map(|context| {
+                ExecCloseCarrier::open_reserved_context(r.close, close_daa, r.slot, r.reservation, context)
+                    .map_err(|_| Moe2AwardReferenceError::Context)
+            })
+            .transpose()
     }
 }

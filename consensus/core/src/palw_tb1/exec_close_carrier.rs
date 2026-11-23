@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 pub const EXEC_CLOSE_CARRIER_TAG: &[u8; 8] = b"TB1EXC01";
 const OWNER_SIGNATURE_BYTES: usize = 3309;
 const FUNDER_SIGNATURE_BYTES: usize = 4627;
-const MAX_CONTEXT_BYTES: usize = 4096;
+pub(crate) const MAX_CONTEXT_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecCloseCarrierError {
@@ -178,21 +178,50 @@ impl<'a> ExecCloseCarrier<'a> {
                 if (registration.preparation, registration.qualified_rounds) != (carrier.preparation, carrier.qualified_rounds) {
                     return Err(Registration(ExecRegistrationError::Context));
                 }
-                let quote = registration.quote.ok_or(Registration(ExecRegistrationError::FundingReference))?;
                 if row.quote_consent.is_none() || row.funding_ref != Moe2ExecSlot::consent_ref(key, row.slot) {
                     return Err(Registration(ExecRegistrationError::FundingReference));
                 }
-                let slot = Moe2ExecSlot { registration: key, slot: row.slot, close: close.hash, close_daa: close.daa_score, quote };
-                if slot.reservation_key() != reservation {
-                    return Err(Registration(ExecRegistrationError::Context));
-                }
-                result = Some((registration.preparation, slot));
+                result = Some(Self::bind_reserved_registration(close.hash, close.daa_score, row.slot, reservation, registration)?);
             }
         }
         if !bytes.is_empty() {
             return Err(Encoding);
         }
         result.ok_or(Missing)
+    }
+
+    /// Open the already committed reservation with the owner's original
+    /// registration preimage. The native parent reservation, not this
+    /// transport, is the authority that the close accepted the signatures.
+    pub(crate) fn open_reserved_context(
+        close: Hash64,
+        close_daa: u64,
+        slot: u64,
+        reservation: Hash64,
+        context: &[u8],
+    ) -> Result<(Hash64, Moe2ExecSlot), ExecCloseCarrierError> {
+        use ExecCloseCarrierError::*;
+        if context.is_empty() || context.len() > MAX_CONTEXT_BYTES {
+            return Err(Limit);
+        }
+        let registration = ExecRegistration::decode(context, registration_key(context)).map_err(Registration)?;
+        Self::bind_reserved_registration(close, close_daa, slot, reservation, registration)
+    }
+
+    fn bind_reserved_registration(
+        close: Hash64,
+        close_daa: u64,
+        slot: u64,
+        reservation: Hash64,
+        registration: ExecRegistration<'_>,
+    ) -> Result<(Hash64, Moe2ExecSlot), ExecCloseCarrierError> {
+        use ExecCloseCarrierError::Registration;
+        let quote = registration.quote.ok_or(Registration(ExecRegistrationError::FundingReference))?;
+        let resolved = Moe2ExecSlot { registration: registration.key, slot, close, close_daa, quote };
+        if resolved.reservation_key() != reservation {
+            return Err(Registration(ExecRegistrationError::Context));
+        }
+        Ok((registration.preparation, resolved))
     }
 
     pub fn encode(

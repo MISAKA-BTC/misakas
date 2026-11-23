@@ -377,7 +377,7 @@ pub(super) fn check_exec_settlement_rewind(
         reference.check_parent_reservation(&reserved, slot.quote.deadline + 1),
         Err("private MOE2 reservation is no longer available at this DAA")
     );
-    let reference_tx = |reference: Moe2AwardReference| {
+    let reference_tx = |payload| {
         let funding = &env.floats[3];
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
@@ -386,12 +386,12 @@ pub(super) fn check_exec_settlement_rewind(
             0,
             kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
             0,
-            reference.encode().to_vec(),
+            payload,
         );
         sign_spend(&mut tx, funding.1.clone(), 3, config.storage_mass_parameter);
         tx
     };
-    let carrier = reference_tx(reference);
+    let carrier = reference_tx(reference.encode().to_vec());
     let candidate_with_references = |workers: &[TransactionOutput], marker: &[u8], references: &[Transaction]| {
         let mut transactions: Vec<_> = execution.transactions.iter().cloned().collect();
         transactions.extend_from_slice(references);
@@ -768,12 +768,20 @@ pub(super) fn check_exec_settlement_rewind(
         retained(&restored, &missing_ref, native_award(claim, &slot, work, missing_ref_at), true),
         Err(PalwStateV2Error::DeltaMismatch("missing private MOE2 award reference in the candidate"))
     ));
-    let replaced = reference_tx(Moe2AwardReference::for_slot(claim, attempt, &alias_slot));
+    let replaced = reference_tx(Moe2AwardReference::for_slot(claim, attempt, &alias_slot).encode().to_vec());
     let wrong_ref = candidate_with_references(&outputs, &marker, std::slice::from_ref(&replaced));
     let (_, _, wrong_ref_at) = fold(&wrong_ref);
     assert!(matches!(
         retained(&restored, &wrong_ref, native_award(claim, &slot, work, wrong_ref_at), true),
         Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"))
+    ));
+    let wrong_context = reference_tx(reference.encode_with_registration(&[1]).unwrap());
+    let invalid_context = candidate_with_references(&outputs, &marker, &[wrong_context]);
+    let (_, _, invalid_context_at) = fold(&invalid_context);
+    assert!(reference.check_parent_reservation(&restored, invalid_context_at.point.daa_score).is_ok());
+    assert!(matches!(
+        retained(&restored, &invalid_context, native_award(claim, &slot, work, invalid_context_at), true),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 award context does not open its EXEC reservation"))
     ));
     assert_eq!(Moe2AwardReference::from_transactions(award_block.transactions.iter()).unwrap(), reference);
     assert!(reference.check_execution_slot(claim, attempt, &slot).is_ok());

@@ -111,26 +111,28 @@ async fn private_moe2_marked_coinbase_requires_a_winning_right_on_normal_accepta
         reservation: Hash64::from_u64_word(52),
     };
     let funding = &isolated.3[3];
-    let mut tx = Transaction::new(
-        crate::constants::TX_VERSION,
-        vec![TransactionInput::new(funding.0, vec![], 0, 1)],
-        vec![TransactionOutput::new(funding.1.amount - 2_000_000, super::super::t12_round_lane_e2e::card_payout_spk(3))],
-        0,
-        SUBNETWORK_ID_PALW_LIFECYCLE,
-        0,
-        reference.encode().to_vec(),
-    );
-    super::super::t12_round_lane_e2e::sign_spend(&mut tx, funding.1.clone(), 3, node.config.params.storage_mass_parameter);
-    let id = tx.id();
-    let mut miner = new_miner_data();
-    miner.extra_data = named.clone();
-    let block = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]).to_immutable();
-    assert!(block.transactions.iter().any(|tx| tx.id() == id));
-    let hash = block.hash();
-    node.api().validate_and_insert_block(block).virtual_state_task.await.unwrap();
-    assert_eq!(node.api().block_status(hash), BlockStatus::StatusDisqualifiedFromChain);
-    assert_eq!(node.chain.sink(), parent);
-    assert_eq!(node.chain.tip_state().1.state_root(), root);
+    for payload in [reference.encode().to_vec(), reference.encode_with_registration(&[1]).unwrap()] {
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(funding.0, vec![], 0, 1)],
+            vec![TransactionOutput::new(funding.1.amount - 2_000_000, super::super::t12_round_lane_e2e::card_payout_spk(3))],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        super::super::t12_round_lane_e2e::sign_spend(&mut tx, funding.1.clone(), 3, node.config.params.storage_mass_parameter);
+        let id = tx.id();
+        let mut miner = new_miner_data();
+        miner.extra_data = named.clone();
+        let block = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]).to_immutable();
+        assert!(block.transactions.iter().any(|tx| tx.id() == id));
+        let hash = block.hash();
+        node.api().validate_and_insert_block(block).virtual_state_task.await.unwrap();
+        assert_eq!(node.api().block_status(hash), BlockStatus::StatusDisqualifiedFromChain);
+        assert_eq!(node.chain.sink(), parent);
+        assert_eq!(node.chain.tip_state().1.state_root(), root);
+    }
 
     let original_profile = parts(Some(FENCE));
     let mut original = Rig::new(&original_profile, 0x12_c500_2000);
@@ -1031,27 +1033,31 @@ async fn run(stable: bool, registered: bool) {
             let pending = verify_candidate(close_parent, marker).unwrap();
             assert_eq!(pending.quoted_slots(), body_close.quoted_slots());
             use kaspa_consensus_core::{
-                errors::block::RuleError, palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
-                palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+                errors::block::RuleError,
+                palw_model_market_v1::moe2::award_reference::{Moe2AwardReference, Moe2AwardReferenceError, Moe2AwardSource},
+                palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable},
+                subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
             };
             let checkpoint = dir.path().join("before-moe2-price-recovery");
             node.api().checkpoint_database(&checkpoint);
             let recovered = stable_panel::reopen_checkpoint(&node.config, &checkpoint);
             let recovered_vp = recovered.virtual_processor();
+            let mut carried_awards = Vec::new();
             for closed in [&closed_quote, &long] {
                 let slot = closed.exec_slot();
                 let reference = Moe2AwardReference::for_slot(Hash64::default(), [0; 32], slot);
                 // Exercise the native history reader independently of admission:
                 // these signed QF1 quotes do not create mining reservations.
                 for selected_parent in [anchor, assignment] {
-                    let (archived, price) = node.vp().read_private_moe2_reserved_terms(selected_parent, &reference).unwrap();
+                    let (archived, price) =
+                        node.vp().read_private_moe2_reserved_terms(selected_parent, Moe2AwardSource::archived(reference)).unwrap();
                     assert_eq!(archived, *slot);
                     assert_eq!(price, body_close.price_anchor(&history, selected_parent, slot).unwrap());
                     let (point, selected_state) = recovered_vp.palw_observer_state_at_cached_v1(selected_parent).unwrap();
                     assert_eq!(point, selected_parent);
                     let before = selected_state.state_root();
                     let (stored_slot, stored_price) =
-                        recovered_vp.read_private_moe2_reserved_terms(selected_parent, &reference).unwrap();
+                        recovered_vp.read_private_moe2_reserved_terms(selected_parent, Moe2AwardSource::archived(reference)).unwrap();
                     assert_eq!((stored_slot, stored_price), (archived, price));
                     let price_state = recovered_vp.restore_private_moe2_price_state(&selected_state, stored_price).unwrap();
                     assert_eq!(price_state.last_point(), original_state.last_point());
@@ -1063,19 +1069,73 @@ async fn run(stable: bool, registered: bool) {
                     ));
                 }
                 assert!(matches!(
-                    node.vp().read_private_moe2_reserved_terms(close_parent, &reference),
+                    node.vp().read_private_moe2_reserved_terms(close_parent, Moe2AwardSource::archived(reference)),
                     Err(RuleError::PrivateMoe2AwardMalformed(_))
                 ));
+                let entry = entries.iter().find(|entry| entry.slot == slot.slot).unwrap();
+                let context = entry.terms.registration_preimage(parent, &rounds, entry.owner, 16).unwrap();
+                let tx = |payload| {
+                    kaspa_consensus_core::tx::Transaction::new(
+                        crate::constants::TX_VERSION,
+                        vec![],
+                        vec![],
+                        0,
+                        SUBNETWORK_ID_PALW_LIFECYCLE,
+                        0,
+                        payload,
+                    )
+                };
+                let carried = tx(reference.encode_with_registration(&context).unwrap());
+                let source = Moe2AwardSource::from_transactions([&carried]).unwrap();
+                assert_eq!(source.open_registration(slot.close_daa).unwrap(), Some((parent, *slot)));
+                assert_eq!(source.open_registration(slot.close_daa + 1), Err(Moe2AwardReferenceError::Context));
+                assert!(matches!(
+                    recovered_vp.read_private_moe2_reserved_terms(close_parent, source),
+                    Err(RuleError::PrivateMoe2AwardMalformed(_))
+                ));
+                assert_eq!(
+                    Moe2AwardSource::from_transactions([&carried, &tx(reference.encode().to_vec())]),
+                    Err(Moe2AwardReferenceError::Multiple),
+                );
+                let mut wrong_context = context;
+                let last = wrong_context.last_mut().unwrap();
+                *last ^= 1;
+                let wrong = tx(reference.encode_with_registration(&wrong_context).unwrap());
+                assert!(matches!(
+                    recovered_vp.read_private_moe2_reserved_terms(assignment, Moe2AwardSource::from_transactions([&wrong]).unwrap()),
+                    Err(RuleError::PrivateMoe2AwardMalformed(_))
+                ));
+                carried_awards.push((carried, *slot));
                 for changed in [
                     Moe2AwardReference { reservation: Hash64::default(), ..reference },
                     Moe2AwardReference { slot: u64::MAX, ..reference },
                 ] {
                     assert!(matches!(
-                        node.vp().read_private_moe2_reserved_terms(anchor, &changed),
+                        node.vp().read_private_moe2_reserved_terms(anchor, Moe2AwardSource::archived(changed)),
                         Err(RuleError::LocalNativeStateContextUnavailable(StoreUnreadable))
                     ));
                 }
             }
+            // Remove the close body only in this disposable reopened copy.
+            let mut prune = rocksdb::WriteBatch::default();
+            recovered_vp.block_transactions_store.delete_batch(&mut prune, anchor).unwrap();
+            recovered_vp.db.write(prune).unwrap();
+            for (carrier, slot) in &carried_awards {
+                let source = Moe2AwardSource::from_transactions([carrier]).unwrap();
+                assert!(matches!(
+                    recovered_vp.read_private_moe2_reserved_terms(assignment, Moe2AwardSource::archived(source.reference)),
+                    Err(RuleError::LocalNativeStateContextUnavailable(HistoryUnavailable))
+                ));
+                let (resolved, price) = recovered_vp.read_private_moe2_reserved_terms(assignment, source).unwrap();
+                assert_eq!(resolved, *slot);
+                assert_eq!(price, body_close.price_anchor(&history, assignment, slot).unwrap());
+                let (_, selected_state) = recovered_vp.palw_observer_state_at_cached_v1(assignment).unwrap();
+                assert_eq!(
+                    recovered_vp.restore_private_moe2_price_state(&selected_state, price).unwrap().state_root(),
+                    original_state.state_root()
+                );
+            }
+            peer_log!("MOE2 preimage recovered pruned close pid={} slots={}", std::process::id(), carried_awards.len());
             peer_log!(
                 "MOE2 recovered price state pid={} close={} anchor={} root={}",
                 std::process::id(),

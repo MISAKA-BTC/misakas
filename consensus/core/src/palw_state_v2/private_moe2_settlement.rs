@@ -8,7 +8,7 @@ use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRow
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit,
-    award_reference::Moe2AwardReference,
+    award_reference::Moe2AwardSource,
     quote_additional_reward,
     settlement::{
         Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2PreDrawQuote, Moe2SettledReward, Moe2SettlementBook,
@@ -147,6 +147,7 @@ pub struct Moe2ExecAwardInputV1<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2QuoteAnchorV1 {
     parent: Hash64,
+    preparation: Hash64,
     anchor: Hash64,
     root: Hash64,
     reservation: Hash64,
@@ -209,7 +210,7 @@ impl Moe2QuoteAnchorV1 {
         }
         let root = crate::palw_state_proof_v1::state_root_of_pinned_header_v1(header, preparation)
             .map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
-        Ok(Self { parent, anchor, root, reservation: slot.reservation_key() })
+        Ok(Self { parent, preparation, anchor, root, reservation: slot.reservation_key() })
     }
 }
 
@@ -279,10 +280,17 @@ pub(super) fn fold_exec_award_v1(
     if marker.as_ref().map(|hash| hash.as_slice()) != Some(&expected[MOE2_EXEC_AWARD_MARKER_TAG.len()..]) {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker"));
     }
-    let reference = Moe2AwardReference::from_transactions(block.transactions.iter())
+    let source = Moe2AwardSource::from_transactions(block.transactions.iter())
         .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
-    reference.check_execution_slot(award.claim, attempt, award.slot).map_err(PalwStateV2Error::DeltaMismatch)?;
-    reference.check_parent_reservation(parent, point.daa_score).map_err(PalwStateV2Error::DeltaMismatch)?;
+    source.reference.check_execution_slot(award.claim, attempt, award.slot).map_err(PalwStateV2Error::DeltaMismatch)?;
+    source.reference.check_parent_reservation(parent, point.daa_score).map_err(PalwStateV2Error::DeltaMismatch)?;
+    if source
+        .open_registration(award.slot.close_daa)
+        .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?
+        .is_some_and(|(preparation, slot)| (preparation, &slot) != (price.preparation, award.slot))
+    {
+        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 award context differs from its resolved slot or preparation"));
+    }
     let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
     let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;
     let mut book = Moe2SettlementBook::for_native_award(model, prior_exec_settlement(&builder.entries));
