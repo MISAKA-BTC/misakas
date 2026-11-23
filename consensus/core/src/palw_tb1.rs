@@ -8,6 +8,7 @@ pub mod moe2_exec_close;
 pub mod qf1_original_carrier;
 pub mod qualification;
 pub mod reconstruction;
+pub mod release_batch_carrier;
 pub mod releases;
 pub mod signatures;
 

@@ -3,6 +3,7 @@
 //! reservation references are supplied by the enclosing private policy.
 use super::{original::read_published_qf1_original, *};
 use crate::tb1_exposure::Tb1HolderFreeze;
+use crate::tb1_exposure::publication::with_published_batch;
 
 pub struct LocalSubmission<'a, 't> {
     pub input: &'a DerivedExecInput<'t>,
@@ -142,6 +143,23 @@ impl FrozenExecInputs<'_> {
             submissions.iter().map(|row| (*row, None)),
             pool,
         )
+    }
+
+    /// Read both the EXEC share batch and the Original carriers from the chain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn panel_cut_from_published_blocks(
+        &self,
+        native: &dyn ConsensusApi,
+        publication: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        submissions: &[PublishedLocalSubmission],
+        pool: LocalPanelInputs<'_>,
+    ) -> io::Result<LocalPanelCut> {
+        with_published_batch(native, publication, limits, |releases| {
+            self.published_panel_cut(native, publication, certificate, releases, q, limits, submissions, pool)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

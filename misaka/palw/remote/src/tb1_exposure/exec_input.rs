@@ -451,6 +451,24 @@ impl<'a> FrozenExecInputs<'a> {
         Ok(input)
     }
 
+    /// Start a live job using the share releases in the selected batch block.
+    pub fn derive_published(
+        &self,
+        native: &dyn ConsensusApi,
+        slot: u64,
+        publication: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<DerivedExecInput<'a>> {
+        let tip = native.get_sink();
+        let seed = self.gate.read_published_seed(native, publication, certificate, q, limits)?;
+        let input = self.derive_from_seed(slot, certificate, &seed)?;
+        input.check_live(native)?;
+        self.gate.require_tip(native, tip)?;
+        Ok(input)
+    }
+
     /// Reconstruct input for inspecting recorded evidence after the original
     /// deadline. Execution and new submissions still require the live window.
     pub fn derive_recorded(
@@ -487,6 +505,23 @@ impl<'a> FrozenExecInputs<'a> {
         limits: PublicationLimits,
     ) -> io::Result<BranchExecInput<'a>> {
         let seed = self.gate.read_seed_at_parent(native, parent, settlement, publication, certificate, rows, q, limits)?;
+        Ok(BranchExecInput { input: self.derive_from_seed(slot, certificate, &seed)?, parent })
+    }
+
+    /// Recover input using the shares carried by the published batch block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn derive_published_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &kaspa_consensus_core::palw_native_settlement_v1::NativeSettlementSnapshotV1,
+        slot: u64,
+        publication: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<BranchExecInput<'a>> {
+        let seed = self.gate.read_published_seed_at_parent(native, parent, settlement, publication, certificate, q, limits)?;
         Ok(BranchExecInput { input: self.derive_from_seed(slot, certificate, &seed)?, parent })
     }
 

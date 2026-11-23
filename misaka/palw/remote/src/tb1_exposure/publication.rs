@@ -1,8 +1,9 @@
-//! Live, private TB1 publication reader. One selected-chain block commits to the
-//! signed batch (preimages travel separately), a later one to its certificate.
+//! Private TB1 publication reader. One selected-chain block commits to the
+//! signed batch, a later one to its certificate.
 //! The observer must have seen native finality before the release publication.
-//! No public object tag, native credit or cold-import stability assertion.
+//! The publication gate authenticates the recorded seed for isolated consumers.
 use super::{AnchorState, Tb1HolderFreeze, anchor_state, invalid};
+pub use kaspa_consensus_core::palw_tb1::release_batch_carrier::PublishedRelease;
 use kaspa_consensus_core::{
     Hash64,
     api::ConsensusApi,
@@ -10,23 +11,16 @@ use kaspa_consensus_core::{
     palw_tb1::{
         freeze::Tb1MiningClosure,
         qualification::Tb1Qualification,
-        releases::{
-            Tb1BeaconCertificate, Tb1BeaconSeed, Tb1HolderRelease, Tb1ReleaseContext, Tb1ReleaseCut, Tb1ReleaseSet, Tb1SignedRelease,
-        },
+        release_batch_carrier::{encode_release_batch, release_batch_from_block},
+        releases::{Tb1BeaconCertificate, Tb1BeaconSeed, Tb1ReleaseContext, Tb1ReleaseCut, Tb1ReleaseSet, Tb1SignedRelease},
         signatures::release_message,
     },
 };
-use libcrux_ml_dsa::ml_dsa_65::MLDSA65Signature;
 use sha3::{Digest, Sha3_512};
 use std::{
     collections::BTreeMap,
     io::{self, Error, ErrorKind},
 };
-
-pub struct PublishedRelease<'a> {
-    pub row: Tb1HolderRelease<'a>,
-    pub signature: &'a MLDSA65Signature,
-}
 
 #[derive(Clone, Copy)]
 pub struct PublicationLimits {
@@ -51,6 +45,27 @@ pub fn batch_commitment(rows: &[PublishedRelease<'_>], limits: PublicationLimits
         h.update(signed.signature.as_slice());
     }
     Ok(h.finalize().into())
+}
+
+pub fn release_batch_payload(rows: &[PublishedRelease<'_>], limits: PublicationLimits) -> io::Result<Vec<u8>> {
+    encode_release_batch(rows, limits.records, limits.message_bytes)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, format!("TB1 release batch carrier: {error:?}")))
+}
+
+pub(super) fn with_published_batch<T>(
+    native: &dyn ConsensusApi,
+    batch: Hash64,
+    limits: PublicationLimits,
+    read: impl FnOnce(&[PublishedRelease<'_>]) -> io::Result<T>,
+) -> io::Result<T> {
+    let block = native.get_block(batch).map_err(Error::other)?;
+    if block.hash() != batch {
+        return Err(invalid("TB1 release batch block hash differs"));
+    }
+    let records = release_batch_from_block(&block, limits.records, limits.message_bytes)
+        .map_err(|error| Error::new(ErrorKind::InvalidData, format!("TB1 release batch carrier: {error:?}")))?;
+    let rows: Vec<_> = records.iter().map(|record| record.view()).collect();
+    read(&rows)
 }
 
 fn certificate_commitment(batch: Hash64, cert: &Tb1BeaconCertificate<'_, usize>) -> io::Result<[u8; 64]> {
@@ -258,6 +273,17 @@ impl NativePublicationGate {
         Ok(self.assemble(native, batch, None, rows, q, limits)?.1)
     }
 
+    /// Assemble the certificate commitment from the batch block's own shares.
+    pub fn propose_published(
+        &self,
+        native: &dyn ConsensusApi,
+        batch: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<[u8; 64]> {
+        with_published_batch(native, batch, limits, |rows| self.propose(native, batch, rows, q, limits))
+    }
+
     pub fn read_seed(
         &self,
         native: &dyn ConsensusApi,
@@ -273,6 +299,17 @@ impl NativePublicationGate {
         }
         self.require_tip(native, tip)?;
         Ok(seed)
+    }
+
+    pub fn read_published_seed(
+        &self,
+        native: &dyn ConsensusApi,
+        batch: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<Tb1BeaconSeed> {
+        with_published_batch(native, batch, limits, |rows| self.read_seed(native, batch, certificate, rows, q, limits))
     }
 
     /// Check a recorded release against the candidate's selected parent.
@@ -296,5 +333,22 @@ impl NativePublicationGate {
             return Err(invalid("TB1 certificate differs from selected block"));
         }
         Ok(seed)
+    }
+
+    /// Read the candidate branch's published rows without using the live tip.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_published_seed_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
+        batch: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<Tb1BeaconSeed> {
+        with_published_batch(native, batch, limits, |rows| {
+            self.read_seed_at_parent(native, parent, settlement, batch, certificate, rows, q, limits)
+        })
     }
 }

@@ -44,6 +44,34 @@ pub(super) fn heartbeat_with_transactions(
     b
 }
 
+pub(super) fn evidence_template(node: &mut Rig, miner: MinerData, payload: Vec<u8>) -> MutableBlock {
+    use kaspa_consensus_core::{
+        subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        tx::{Transaction, TransactionInput, TransactionOutput},
+    };
+    let spendable = node.api().get_virtual_utxos(None, 1_000_000, false);
+    let (card, (outpoint, utxo)) = (0..4)
+        .find_map(|card| {
+            let script = card_payout_spk(card);
+            spendable
+                .iter()
+                .find(|(_, entry)| !entry.is_coinbase && entry.amount > 2_000_000 && entry.script_public_key == script)
+                .map(|funding| (card, funding))
+        })
+        .expect("unspent fixture fee float for the TB1 evidence carrier");
+    let mut tx = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(*outpoint, vec![], 0, 1)],
+        vec![TransactionOutput::new(utxo.amount - 2_000_000, card_payout_spk(card))],
+        0,
+        SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    );
+    super::super::super::t12_round_lane_e2e::sign_spend(&mut tx, utxo.clone(), card, node.config.params.storage_mass_parameter);
+    heartbeat_with_transactions(node, miner, vec![tx])
+}
+
 pub(super) async fn arrive(node: &mut Rig, b: Block, label: &str) {
     if clocked(node) {
         node.chain.ctx.simulated_time = node.chain.ctx.simulated_time.max(b.header.timestamp);
@@ -551,13 +579,23 @@ pub(super) async fn release<'t>(
     };
     let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
     let rows = views(&decoded, context);
-    let batch = local_carrier(node, parent, peers, 0, batch_commitment(&rows, LIMITS).unwrap(), "signed PANEL shares").await;
+    let batch = local_evidence_carrier(
+        node,
+        parent,
+        peers,
+        0,
+        batch_commitment(&rows, LIMITS).unwrap(),
+        release_batch_payload(&rows, LIMITS).unwrap(),
+        "signed PANEL shares",
+    )
+    .await;
     let api = node.api().as_ref();
     assert!(gate.propose(api, batch.hash(), exec_rows, q, LIMITS).is_err());
-    let certificate_marker = gate.propose(api, batch.hash(), &rows, q, LIMITS).unwrap();
+    let certificate_marker = gate.propose_published(api, batch.hash(), q, LIMITS).unwrap();
     let cert = local_carrier(node, parent, peers, 0, certificate_marker, "PANEL seed certificate").await;
     let api = node.api().as_ref();
-    let seed = gate.read_seed(api, batch.hash(), cert.hash(), &rows, q, LIMITS).unwrap();
+    let seed = gate.read_published_seed(api, batch.hash(), cert.hash(), q, LIMITS).unwrap();
+    assert_eq!(seed, gate.read_seed(api, batch.hash(), cert.hash(), &rows, q, LIMITS).unwrap());
     assert!(gate.read_seed(api, batch.hash(), cert.hash(), &rows[..2], q, LIMITS).is_err());
     assert_ne!(seed.as_bytes(), exec_seed);
     if let Some(path) = &archive_dir {

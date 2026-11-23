@@ -11,7 +11,7 @@ mod exec_input;
 mod prediction;
 use kaspa_rpc_core::RpcRawBlock;
 use misaka_palw_remote::tb1_exposure::exec_input::{ExecInputBatch, QualifiedExecPanel, REGISTRATION_DOMAIN, SignedExecInput};
-use misaka_palw_remote::tb1_exposure::publication::{PublicationLimits, PublishedRelease, batch_commitment};
+use misaka_palw_remote::tb1_exposure::publication::{PublicationLimits, PublishedRelease, batch_commitment, release_batch_payload};
 use misaka_palw_remote::tb1_exposure::qf1::Qf1Use;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -288,6 +288,29 @@ async fn local_carrier<const N: usize>(
         }
         block
     }
+}
+
+async fn local_evidence_carrier(
+    node: &mut Rig,
+    parent: &mut Option<UnixStream>,
+    peers: &mut [(Child, UnixStream)],
+    card: usize,
+    marker: [u8; 64],
+    payload: Vec<u8>,
+    label: &str,
+) -> Block {
+    if let Some(socket) = parent {
+        let block = Block::try_from(receive::<RpcRawBlock>(socket)).unwrap();
+        stable_panel::arrive(node, block.clone(), label).await;
+        return block;
+    }
+    let miner = MinerData::new(card_payout_spk(card), marker.to_vec());
+    let template = stable_panel::evidence_template(node, miner, payload);
+    let block = node.take(template, label).await;
+    for (_, socket) in peers {
+        send(socket, &RpcRawBlock::from(&block));
+    }
+    block
 }
 
 fn views<'a>(rows: &'a [DecodedRecord], context: Tb1ReleaseContext<'a>) -> Vec<PublishedRelease<'a>> {
@@ -1375,9 +1398,17 @@ async fn run(stable: bool, registered: bool) {
         let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
         let rows = views(&decoded, context);
         let miner = MinerData::new(card_payout_spk(4), batch_commitment(&rows, LIMITS).unwrap().to_vec());
-        let template = stable_panel::carrier(&mut node, 4, miner);
+        let template = if stable {
+            stable_panel::evidence_template(&mut node, miner, release_batch_payload(&rows, LIMITS).unwrap())
+        } else {
+            stable_panel::carrier(&mut node, 4, miner)
+        };
         let batch = node.take(template, "TB1 signed batch").await;
-        let marker = gate.propose(node.api().as_ref(), batch.hash(), &rows, &q, LIMITS).unwrap();
+        let marker = if stable {
+            gate.propose_published(node.api().as_ref(), batch.hash(), &q, LIMITS).unwrap()
+        } else {
+            gate.propose(node.api().as_ref(), batch.hash(), &rows, &q, LIMITS).unwrap()
+        };
         assert!(gate.read_seed(node.api().as_ref(), batch.hash(), batch.hash(), &rows, &q, LIMITS).is_err());
         let miner = MinerData::new(card_payout_spk(5), marker.to_vec());
         let template = stable_panel::carrier(&mut node, 5, miner);
@@ -1391,10 +1422,28 @@ async fn run(stable: bool, registered: bool) {
     let decoded: Vec<_> = records.iter().map(ReleaseRecord::decode).collect();
     let mut rows = views(&decoded, context);
     assert_eq!(node.chain.sink(), batch.hash());
+    let batch_settlement = node.api().get_native_settlement_snapshot().unwrap().unwrap();
     stable_panel::arrive(&mut node, certificate.clone(), "native TB1 certificate").await;
     assert_eq!(node.chain.sink(), certificate.hash());
     let api = node.api().as_ref();
     let seed = gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+    if stable {
+        use kaspa_consensus_core::palw_tb1::release_batch_carrier::{ReleaseBatchCarrierError, decode_release_batch};
+        assert_eq!(gate.read_published_seed(api, batch.hash(), certificate.hash(), &q, LIMITS).unwrap(), seed);
+        let mut payload = release_batch_payload(&rows, LIMITS).unwrap();
+        assert!(matches!(decode_release_batch(&payload, rows.len() - 1, LIMITS.message_bytes), Err(ReleaseBatchCarrierError::Limit)));
+        assert!(matches!(decode_release_batch(&payload, LIMITS.records, 1), Err(ReleaseBatchCarrierError::Limit)));
+        payload.push(0);
+        assert!(matches!(
+            decode_release_batch(&payload, LIMITS.records, LIMITS.message_bytes),
+            Err(ReleaseBatchCarrierError::Encoding)
+        ));
+        payload.truncate(payload.len() - 2);
+        assert!(matches!(
+            decode_release_batch(&payload, LIMITS.records, LIMITS.message_bytes),
+            Err(ReleaseBatchCarrierError::Encoding)
+        ));
+    }
     assert!(gate.read_seed(api, batch.hash(), certificate.hash(), &rows[..2], &q, LIMITS).is_err());
     rows.swap(0, 1);
     assert!(gate.read_seed(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
@@ -1406,14 +1455,22 @@ async fn run(stable: bool, registered: bool) {
         certificate.hash(),
         faster_hex::hex_string(seed.as_bytes())
     );
-    let request = jobs.derive(api, 7, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+    let request = if stable {
+        jobs.derive_published(api, 7, batch.hash(), certificate.hash(), &q, LIMITS).unwrap()
+    } else {
+        jobs.derive(api, 7, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap()
+    };
     assert_eq!(request.registration_key(), &key);
     assert_eq!(request.tokens().len(), 38);
     assert_eq!(&request.tokens()[35..], terms.job_tokens);
     assert!(jobs.derive(api, 8, batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
     let mut retained_qf1 = None;
     if let Some(terms) = &qf1_terms {
-        let r = jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap();
+        let r = if stable {
+            jobs.derive_published(api, 9, batch.hash(), certificate.hash(), &q, LIMITS).unwrap()
+        } else {
+            jobs.derive(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap()
+        };
         let settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
         let history = CandidateHistory { api, candidate: None };
         let restore_gate = |snapshot: &NativeSettlementSnapshotV1| {
@@ -1616,39 +1673,17 @@ async fn run(stable: bool, registered: bool) {
         let certificate_settlement = api.get_native_settlement_snapshot().unwrap().unwrap();
         let block = if !stable {
             local_carrier(&mut node, &mut parent_socket, &mut peers, 6, id.as_bytes(), "local Original receipt").await
-        } else if let Some(socket) = &mut parent_socket {
-            let block = Block::try_from(receive::<RpcRawBlock>(socket)).unwrap();
-            stable_panel::arrive(&mut node, block.clone(), "QF1 Original publication").await;
-            block
         } else {
-            use kaspa_consensus_core::{
-                subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
-                tx::{Transaction, TransactionInput, TransactionOutput},
-            };
-            let spendable = node.api().get_virtual_utxos(None, 1_000_000, false);
-            let (card, (outpoint, utxo)) = parts
-                .3
-                .iter()
-                .enumerate()
-                .find(|(_, (outpoint, _))| spendable.iter().any(|(unspent, _)| unspent == outpoint))
-                .expect("unspent fixture fee float for the Original carrier");
-            let mut tx = Transaction::new(
-                crate::constants::TX_VERSION,
-                vec![TransactionInput::new(*outpoint, vec![], 0, 1)],
-                vec![TransactionOutput::new(utxo.amount - 2_000_000, card_payout_spk(card))],
-                0,
-                SUBNETWORK_ID_PALW_LIFECYCLE,
-                0,
+            local_evidence_carrier(
+                &mut node,
+                &mut parent_socket,
+                &mut peers,
+                6,
+                id.as_bytes(),
                 body.publication_payload(sig),
-            );
-            super::super::t12_round_lane_e2e::sign_spend(&mut tx, utxo.clone(), card, node.config.params.storage_mass_parameter);
-            let miner = MinerData::new(card_payout_spk(6), id.as_bytes().to_vec());
-            let candidate = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]);
-            let block = node.take(candidate, "QF1 Original publication").await;
-            for (_, socket) in &mut peers {
-                send(socket, &RpcRawBlock::from(&block));
-            }
-            block
+                "QF1 Original publication",
+            )
+            .await
         };
         assert_eq!(r.read_qf1_original(node.api().as_ref(), block.hash(), body, sig).unwrap(), *id);
         let api = node.api().as_ref();
@@ -1689,7 +1724,21 @@ async fn run(stable: bool, registered: bool) {
             node.api().checkpoint_database(&checkpoint);
             let cold = stable_panel::reopen_checkpoint(&node.config, &checkpoint);
             let cold_history = CandidateHistory { api: cold.as_ref(), candidate: None };
-            let published = recorded.read_qf1_execution_from_block(&cold_history, block.hash(), *id, bound_instance).unwrap();
+            let stored_input = jobs
+                .derive_published_at_parent(
+                    &cold_history,
+                    block.hash(),
+                    &receipt_settlement,
+                    9,
+                    batch.hash(),
+                    certificate.hash(),
+                    &q,
+                    LIMITS,
+                )
+                .unwrap();
+            assert_eq!(stored_input.derived().tokens(), r.tokens());
+            assert_eq!(stored_input.derived().attempt(), r.attempt());
+            let published = stored_input.read_qf1_execution_from_block(&cold_history, block.hash(), *id, bound_instance).unwrap();
             assert_eq!((published.original(), published.original_block()), (execution.original(), execution.original_block()));
             assert_eq!(
                 (published.work(), published.attempt(), published.ticket()),
@@ -1702,6 +1751,39 @@ async fn run(stable: bool, registered: bool) {
                 recorded_input(certificate.hash(), &certificate_settlement)
                     .read_qf1_execution_from_block(&cold_history, block.hash(), *id, bound_instance)
                     .is_err()
+            );
+            assert!(
+                jobs.derive_published_at_parent(
+                    &cold_history,
+                    certificate.hash(),
+                    &certificate_settlement,
+                    9,
+                    certificate.hash(),
+                    certificate.hash(),
+                    &q,
+                    LIMITS,
+                )
+                .is_err()
+            );
+            assert!(
+                jobs.derive_published_at_parent(
+                    &cold_history,
+                    batch.hash(),
+                    &batch_settlement,
+                    9,
+                    batch.hash(),
+                    certificate.hash(),
+                    &q,
+                    LIMITS,
+                )
+                .is_err()
+            );
+            peer_log!(
+                "TB1 retained EXEC batch pid={} publication={} certificate={} seed={}",
+                std::process::id(),
+                batch.hash(),
+                certificate.hash(),
+                faster_hex::hex_string(seed.as_bytes())
             );
             peer_log!(
                 "QF1 published Original pid={} block={} original={} work={}",
@@ -1741,7 +1823,7 @@ async fn run(stable: bool, registered: bool) {
         let cut = if stable {
             let publication = PublishedLocalSubmission { slot: 9, block: block.hash(), material_reservation: reservation };
             let from_block = jobs
-                .published_panel_cut(api, batch.hash(), certificate.hash(), &rows, &q, LIMITS, &[publication], pool(draw_policy))
+                .panel_cut_from_published_blocks(api, batch.hash(), certificate.hash(), &q, LIMITS, &[publication], pool(draw_policy))
                 .unwrap();
             assert_eq!(from_block.consumer_set_root(), cut.consumer_set_root());
             let missing = PublishedLocalSubmission { block: certificate.hash(), ..publication };
