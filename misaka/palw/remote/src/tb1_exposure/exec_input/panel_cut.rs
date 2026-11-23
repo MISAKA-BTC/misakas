@@ -4,6 +4,7 @@
 use super::{original::read_published_qf1_original, *};
 use crate::tb1_exposure::Tb1HolderFreeze;
 use crate::tb1_exposure::publication::with_published_batch;
+use kaspa_consensus_core::{palw_state_v2::Qf1PanelOriginal, palw_tb1::panel_close::PanelConsumerCommitment};
 
 pub struct LocalSubmission<'a, 't> {
     pub input: &'a DerivedExecInput<'t>,
@@ -184,13 +185,8 @@ impl FrozenExecInputs<'_> {
         if native.get_header(certificate).map_err(io::Error::other)?.blue_score >= score {
             return Err(invalid("EXEC certificate after local PANEL cutoff"));
         }
-        let mut hash = Sha3_512::new()
-            .chain_update(b"MISAKA/private/QF1/local-panel-inputs/v1")
-            .chain_update(self.batch.root)
-            .chain_update(self.close.as_bytes())
-            .chain_update(certificate.as_bytes())
-            .chain_update(exec_seed.as_bytes())
-            .chain_update(u32::try_from(submissions.len()).map_err(|_| invalid("PANEL submissions count"))?.to_be_bytes());
+        let mut commitment =
+            PanelConsumerCommitment::new(&self.batch.root, self.close, certificate, exec_seed.as_bytes(), submissions.len())?;
         let mut previous = None;
         let mut receipts = Vec::with_capacity(submissions.len());
         for (row, supplied) in submissions {
@@ -210,13 +206,17 @@ impl FrozenExecInputs<'_> {
                 }
             };
             let original = r.read_recorded_qf1_original(native, row.block, body, signature)?;
-            hash.update(row.slot.to_be_bytes());
-            hash.update(r.registration_key);
-            hash.update(original.as_bytes());
-            hash.update(row.block.as_bytes());
-            hash.update(entry.funding_ref);
-            hash.update(row.material_reservation.as_bytes());
-            hash.update(entry.terms.deadline_exclusive_daa.to_be_bytes());
+            commitment.push(
+                row.slot,
+                original,
+                &Qf1PanelOriginal {
+                    original_block: row.block,
+                    registration: Hash64::from_bytes(r.registration_key),
+                    funding_ref: Hash64::from_bytes(entry.funding_ref),
+                    deadline: entry.terms.deadline_exclusive_daa,
+                },
+                row.material_reservation,
+            )?;
             previous = Some(row.slot);
             receipts.push(FrozenReceipt {
                 original,
@@ -225,20 +225,10 @@ impl FrozenExecInputs<'_> {
                 deadline: entry.terms.deadline_exclusive_daa,
             });
         }
-        hash.update(u32::try_from(pool.candidates.len()).map_err(|_| invalid("PANEL pool count"))?.to_be_bytes());
-        let mut previous = None;
-        for &(actor, weight) in pool.candidates {
-            if weight == 0 || previous.is_some_and(|p| p >= actor) {
-                return Err(invalid("invalid local PANEL pool order or weight"));
-            }
-            hash.update(actor.as_bytes());
-            hash.update(weight.to_be_bytes());
-            previous = Some(actor);
-        }
         let closure = Tb1MiningClosure {
             round: *rounds.panel(),
             qual_root: rounds.panel_qual(),
-            consumer_set_root: hash.finalize().into(),
+            consumer_set_root: commitment.finish(pool.candidates)?,
             policy_root: pool.draw_policy.as_bytes(),
         };
         self.gate.require_tip(native, tip)?;

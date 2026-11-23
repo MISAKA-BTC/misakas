@@ -810,3 +810,11 @@ EXEC証明書の受理と同じブロックで、closeごとの索引開始を�
 隔離試験では、正しいattemptで受理したOriginalの登録と資金参照を索引から照合した。誤ったattemptは索引に入らず、DBを開き直した後も選択親に対応する受付集合と状態rootが一致した。
 
 実装・検証済みは0/5。索引はPANEL closeの受付集合を供給する。poolと選出方針の確定、PANEL close・証明書の通常受理、成功Finalと独立Gate C、当選権利と仕事キーの原子的消費、同一ブロック決済とreorg復元は残る。長時間DAA再生は未実施。
+
+### 選択親の受付集合からPANEL closeを照合
+
+既存のPANEL生成側と、選択鎖のOriginal受付索引を読む検証側でconsumer-setのバイト列を共通化した。検証側は受理済みEXEC freezeと準備済みPANEL roundを照合し、固定されたclose位置で、選択親の受付集合、資料予約の参照、候補者集合と選出方針からcoinbaseのcommitmentを再構成する。
+
+隔離試験では候補者集合・選出方針・資料予約の参照をfixtureで与えた。通常受理したOriginalの索引から従来形式と同じcommitmentを再構成し、そのcommitmentを持つブロックを受理した。受付済みOriginalを省いた入力はclose検証で拒否された。従来の非報酬PANEL経路も短時間試験を通過した。
+
+実装・検証済みは0/5。候補者集合と資料予約の認証元を通常受理へ接続し、PANEL closeの状態記録と後続の証明書・選出へ渡す処理が残る。長時間DAA再生は未実施。

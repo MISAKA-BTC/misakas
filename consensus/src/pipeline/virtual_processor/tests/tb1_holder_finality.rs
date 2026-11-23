@@ -505,6 +505,8 @@ async fn exercise_prepared_exec_certificate(
             apply_palw_transition_retained_v8, revert_delta_v2,
         },
         palw_tb1::{
+            panel_close::{PanelCloseInputs, verify_indexed_panel_close},
+            panel_reply_carrier::{actor_id, replay_policy_id},
             publication::{BranchPublicationGate, ExecCertificateReference, verify_prepared_exec_certificate},
             qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
             qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
@@ -735,6 +737,74 @@ async fn exercise_prepared_exec_certificate(
     }
     let original_block = node.chain.sink();
     let original = signing_id(&chain, &slot.registration, slot.slot, &correct_attempt, &body);
+    if native_certificate_fixture() {
+        let (at, state) = node.chain.tip_state();
+        let receipt = state.tb1_exec_close_receipt(close.hash()).unwrap();
+        let (_, panel) = state.tb1_exec_panel_preparation(receipt.preparation, at).unwrap();
+        let round = panel.round();
+        for _ in 0..16 {
+            let parent_header = node.api().get_header(node.chain.sink()).unwrap();
+            if parent_header.blue_score + 1 == round.close_blue_score {
+                break;
+            }
+            let heartbeat = stable_panel::next(node, 0).await;
+            await_certificate_fixture_checkpoint(node, &heartbeat.header).await;
+        }
+        let (panel_parent, state) = node.chain.tip_state();
+        let mut candidates = [[91; 32], [92; 32], [93; 32]].map(|seed| {
+            let key = ml_dsa_65::generate_key_pair(seed);
+            (actor_id(&key.verification_key), 1u64)
+        });
+        candidates.sort_unstable();
+        let material = Hash64::from_u64_word(83);
+        let policy = replay_policy_id(2);
+        // Compute the established holder preimage independently of the native
+        // index reader. The fixture supplies the pool and material reservation.
+        let mut consumers = Sha3_512::new()
+            .chain_update(b"MISAKA/private/QF1/local-panel-inputs/v1")
+            .chain_update(closure.consumer_set_root)
+            .chain_update(close.hash().as_bytes())
+            .chain_update(accepted.hash().as_bytes())
+            .chain_update(seed.as_bytes())
+            .chain_update(1u32.to_be_bytes())
+            .chain_update(slot.slot.to_be_bytes())
+            .chain_update(slot.registration)
+            .chain_update(original.as_bytes())
+            .chain_update(original_block.as_bytes())
+            .chain_update(Moe2ExecSlot::consent_ref(slot.registration, slot.slot))
+            .chain_update(material.as_bytes())
+            .chain_update(state.qf1_original_receipt(original).unwrap().1.to_be_bytes())
+            .chain_update((candidates.len() as u32).to_be_bytes());
+        for &(id, weight) in &candidates {
+            consumers.update(id.as_bytes());
+            consumers.update(weight.to_be_bytes());
+        }
+        let cohort = Tb1MiningClosure {
+            round,
+            qual_root: panel.qualification().root(),
+            consumer_set_root: consumers.finalize().into(),
+            policy_root: policy.as_bytes(),
+        };
+        let mut miner = new_miner_data();
+        miner.extra_data = cohort.commitment(panel_parent).to_vec();
+        let template = stable_panel::heartbeat(node, miner);
+        let candidate = template.clone().to_immutable();
+        let materials = [(original, material)];
+        let verify = |materials| {
+            verify_indexed_panel_close(
+                panel_parent,
+                &state,
+                &candidate,
+                close.hash(),
+                closure,
+                PanelCloseInputs { materials, candidates: &candidates, draw_policy: policy },
+            )
+        };
+        assert_eq!(verify(&materials).unwrap().consumer_set_root, cohort.consumer_set_root);
+        assert!(verify(&[]).is_err());
+        let panel_close = node.take(template, "PANEL close committing the indexed intake").await;
+        await_certificate_fixture_checkpoint(node, &panel_close.header).await;
+    }
     let record = [token.as_slice(), &stop].concat();
     let mut marker = Sha3_512::new()
         .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")

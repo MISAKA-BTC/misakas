@@ -5,6 +5,7 @@ pub mod exec_close_carrier;
 pub mod exec_registration;
 pub mod freeze;
 pub mod moe2_exec_close;
+pub mod panel_close;
 pub mod panel_reply_carrier;
 pub mod publication;
 pub mod qf1_original_carrier;
