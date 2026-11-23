@@ -60,6 +60,10 @@ pub struct Tb1BeaconCertificate<'a, R> {
 pub struct Tb1BeaconSeed([u8; 32]);
 
 impl Tb1BeaconSeed {
+    pub(super) fn from_retained(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

@@ -2487,15 +2487,29 @@ impl VirtualStateProcessor {
         if case.is_err() && !admitting_original {
             return Ok(None);
         }
-        if source.reference.check_parent_reservation(state, header.daa_score).is_err() {
-            return Ok(None);
-        }
         let history = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         if admitting_original {
+            let recorded_close = state.tb1_exec_close_receipt(source.reference.close).is_some();
+            if !recorded_close && source.reference.check_parent_reservation(state, header.daa_score).is_err() {
+                return Ok(None);
+            }
             if !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, selected_parent).map_err(history)? {
                 return Ok(None);
             }
             let close = self.headers_store.get_header(source.reference.close).map_err(missing)?;
+            if recorded_close {
+                let Some(certificate) = state.tb1_exec_certificate(source.reference.close) else {
+                    return Ok(None);
+                };
+                if !self.reachability_service.try_is_chain_ancestor_of(certificate.certificate(), selected_parent).map_err(history)? {
+                    return Ok(None);
+                }
+                let body = self.block_transactions_store.get(source.reference.close).map_err(missing)?;
+                let close = Block::from_arcs(close, body);
+                return Ok(Qf1OriginalAdmission::prepare_certified(&chain, state, source, &close, &candidate)
+                    .ok()
+                    .map(Qf1TerminalUpdate::Original));
+            }
             return Ok(Qf1OriginalAdmission::prepare(
                 &chain,
                 state,
@@ -2507,6 +2521,9 @@ impl VirtualStateProcessor {
             .map(Qf1TerminalUpdate::Original));
         }
         let Ok(case) = case else { return Ok(None) };
+        if source.reference.check_parent_reservation(state, header.daa_score).is_err() {
+            return Ok(None);
+        }
         if source.reference.close == case.original_block
             || !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, case.original_block).map_err(history)?
             || !self.reachability_service.try_is_chain_ancestor_of(case.original_block, selected_parent).map_err(history)?

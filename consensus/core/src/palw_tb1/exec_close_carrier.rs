@@ -183,6 +183,41 @@ impl<'a> ExecCloseCarrier<'a> {
         wanted_slot: u64,
         reservation: Hash64,
     ) -> Result<(Hash64, Moe2ExecSlot), ExecCloseCarrierError> {
+        let (carrier, row) = Self::read_slot(payload, wanted_slot)?;
+        let registration = Self::decode_slot(&carrier, &row)?;
+        if row.quote_consent.is_none() || row.funding_ref != Moe2ExecSlot::consent_ref(registration.key, row.slot) {
+            return Err(ExecCloseCarrierError::Registration(ExecRegistrationError::FundingReference));
+        }
+        Self::bind_reserved_registration(close.hash, close.daa_score, row.slot, reservation, registration)
+    }
+
+    /// Read the registration from the exact close already authenticated by
+    /// the selected branch, including closes that made no mining reservation.
+    pub(super) fn read_accepted_registration(
+        block: &'a Block,
+        receipt: &super::moe2_exec_close::Moe2ExecCloseReceipt,
+        slot: u64,
+    ) -> Result<(&'a [u8], ExecRegistration<'a>), ExecCloseCarrierError> {
+        let (carrier, row) = Self::read_slot(carrier_payload(&block.transactions)?, slot)?;
+        if receipt.block != block.hash()
+            || receipt.preparation != carrier.preparation
+            || receipt.freeze_id != carrier.closure.commitment(receipt.selected_parent)
+        {
+            return Err(ExecCloseCarrierError::Freeze);
+        }
+        Ok((row.context, Self::decode_slot(&carrier, &row)?))
+    }
+
+    fn decode_slot(carrier: &Self, row: &RecordBytes<'a>) -> Result<ExecRegistration<'a>, ExecCloseCarrierError> {
+        let registration =
+            ExecRegistration::decode(row.context, registration_key(row.context)).map_err(ExecCloseCarrierError::Registration)?;
+        if (registration.preparation, registration.qualified_rounds) != (carrier.preparation, carrier.qualified_rounds) {
+            return Err(ExecCloseCarrierError::Registration(ExecRegistrationError::Context));
+        }
+        Ok(registration)
+    }
+
+    fn read_slot(payload: &'a [u8], wanted_slot: u64) -> Result<(Self, RecordBytes<'a>), ExecCloseCarrierError> {
         use ExecCloseCarrierError::*;
         let (carrier, count, mut bytes) = Self::read_prefix(payload, usize::from(u16::MAX))?;
         let mut prior = None;
@@ -194,21 +229,13 @@ impl<'a> ExecCloseCarrier<'a> {
             }
             prior = Some(row.slot);
             if row.slot == wanted_slot {
-                let key = registration_key(row.context);
-                let registration = ExecRegistration::decode(row.context, key).map_err(Registration)?;
-                if (registration.preparation, registration.qualified_rounds) != (carrier.preparation, carrier.qualified_rounds) {
-                    return Err(Registration(ExecRegistrationError::Context));
-                }
-                if row.quote_consent.is_none() || row.funding_ref != Moe2ExecSlot::consent_ref(key, row.slot) {
-                    return Err(Registration(ExecRegistrationError::FundingReference));
-                }
-                result = Some(Self::bind_reserved_registration(close.hash, close.daa_score, row.slot, reservation, registration)?);
+                result = Some(row);
             }
         }
         if !bytes.is_empty() {
             return Err(Encoding);
         }
-        result.ok_or(Missing)
+        Ok((carrier, result.ok_or(Missing)?))
     }
 
     /// Open the already committed reservation with the owner's original

@@ -1,11 +1,18 @@
 //! Body evidence for an isolated QF1 Original. The reader still authenticates
 //! the Original against its EXEC input and the source block's commitment.
-use super::exec_registration::{ExecRegistration, ExecRegistrationProfile, registration_key};
+use super::{
+    exec_close_carrier::ExecCloseCarrier,
+    exec_registration::{ExecRegistration, ExecRegistrationProfile, registration_key},
+    releases::Tb1BeaconSeed,
+};
 use crate::{
     Hash64,
     block::Block,
     coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
-    palw_model_market_v1::moe2::award_reference::Moe2AwardSource,
+    palw_model_market_v1::moe2::{
+        award_reference::{Moe2AwardReference, Moe2AwardSource},
+        settlement::Moe2ExecSlot,
+    },
     palw_state_v2::PalwChainStateV2,
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
 };
@@ -72,9 +79,51 @@ impl Qf1OriginalAdmission {
         close_daa: u64,
         block: &Block,
     ) -> Result<Self, &'static str> {
+        if parent.tb1_exec_close_receipt(source.reference.close).is_some() {
+            return Err("recorded QF1 EXEC close requires its certificate");
+        }
         source.reference.check_parent_reservation(parent, block.header.daa_score)?;
         let (_, registration) = authenticate_original(chain, source, close_daa, block)?;
         Ok(Self { original: source.reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
+    }
+
+    /// Authenticate a Court subject from the accepted EXEC close and seed.
+    /// The caller supplies the accepted close body and checks ancestry of both
+    /// the close and the certificate on the selected chain.
+    pub fn prepare_certified(
+        chain: &[u8; 64],
+        parent: &PalwChainStateV2,
+        source: Moe2AwardSource<'_>,
+        close: &Block,
+        block: &Block,
+    ) -> Result<Self, &'static str> {
+        let reference = source.reference;
+        let receipt = parent.tb1_exec_close_receipt(reference.close).ok_or("missing accepted QF1 EXEC close")?;
+        let certificate = parent.tb1_exec_certificate(reference.close).ok_or("missing accepted QF1 EXEC certificate")?;
+        if certificate.freeze_id != receipt.freeze_id || close.hash() != reference.close {
+            return Err("QF1 EXEC certificate differs from its close");
+        }
+        let (context, registration) = ExecCloseCarrier::read_accepted_registration(close, &receipt, reference.slot)
+            .map_err(|_| "invalid QF1 EXEC close registration")?;
+        let reservation = registration.quote.map_or_else(Hash64::default, |quote| {
+            Moe2ExecSlot {
+                registration: registration.key,
+                slot: reference.slot,
+                close: close.hash(),
+                close_daa: close.header.daa_score,
+                quote,
+            }
+            .reservation_key()
+        });
+        let attempt = crate::palw_qf1::attempt(context, &Tb1BeaconSeed::from_retained(certificate.seed))?;
+        if source.registration_context().is_some_and(|supplied| supplied != context)
+            || reference.reservation != reservation
+            || reference.attempt != attempt
+        {
+            return Err("QF1 Original reference differs from the certified EXEC registration");
+        }
+        verify_original(chain, reference, close.header.daa_score, block, &registration)?;
+        Ok(Self { original: reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
     }
 }
 
@@ -85,19 +134,30 @@ pub(crate) fn authenticate_original<'a, 'b>(
     block: &'b Block,
 ) -> Result<(Qf1OriginalCarrier<'b>, ExecRegistration<'a>), &'static str> {
     let reference = source.reference;
-    let (_, slot) = source
+    source
         .open_registration(close_daa)
         .map_err(|error| error.reason())?
         .ok_or("QF1 Original requires the reserved EXEC registration context")?;
     let context = source.registration_context().ok_or("missing QF1 registration")?;
     let registration = ExecRegistration::decode(context, registration_key(context)).map_err(|_| "invalid QF1 registration")?;
+    let original = verify_original(chain, reference, close_daa, block, &registration)?;
+    Ok((original, registration))
+}
+
+fn verify_original<'a>(
+    chain: &[u8; 64],
+    reference: Moe2AwardReference,
+    close_daa: u64,
+    block: &'a Block,
+    registration: &ExecRegistration<'_>,
+) -> Result<Qf1OriginalCarrier<'a>, &'static str> {
     if !matches!(registration.profile, ExecRegistrationProfile::Qf1Local { .. }) {
         return Err("Original does not name a QF1 registration");
     }
     let original = Qf1OriginalCarrier::from_block(block).map_err(|_| "invalid native QF1 Original")?;
     if !(registration.open_daa..registration.deadline_exclusive_daa).contains(&block.header.daa_score)
         || close_daa > block.header.daa_score
-        || signing_id(chain, &registration.key, slot.slot, &reference.attempt, original.body) != reference.claim
+        || signing_id(chain, &registration.key, reference.slot, &reference.attempt, original.body) != reference.claim
         || qf1_marker(block) != Some(reference.claim.as_bytes())
     {
         return Err("QF1 Original differs from its commitment or window");
@@ -106,7 +166,7 @@ pub(crate) fn authenticate_original<'a, 'b>(
     let signature = MLDSA65Signature::new(*original.signature);
     ml_dsa_65::verify(&key, reference.claim.as_byte_slice(), b"MISAKA/private/QF1/local-original-signature/v1", &signature)
         .map_err(|_| "invalid native QF1 Original owner signature")?;
-    Ok((original, registration))
+    Ok(original)
 }
 
 pub(crate) fn qf1_marker(block: &Block) -> Option<[u8; 64]> {

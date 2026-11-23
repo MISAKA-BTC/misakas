@@ -479,13 +479,22 @@ async fn exercise_prepared_exec_certificate(
     q: &Tb1Qualification<'_>,
     keys: &[ml_dsa_65::MLDSA65KeyPair],
     dealers: &[usize],
+    owner: &ml_dsa_65::MLDSA65SigningKey,
+    slot: &kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot,
+    registration: &[u8],
 ) {
+    use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
     use kaspa_consensus_core::{
+        palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
+        palw_qf1,
         palw_state_v2::{
-            PalwBlockContextV2, PalwBlockWorkV3, PalwTransitionExtrasV1, PositiveCaseReplayInputV2, Qf1TerminalUpdate,
-            apply_palw_transition_retained_v8, revert_delta_v2,
+            PalwBlockContextV2, PalwBlockWorkV3, PalwDeltaEntryV2, PalwTransitionExtrasV1, PositiveCaseReplayInputV2,
+            Qf1OriginalVerification, Qf1TerminalUpdate, apply_delta_v2, apply_palw_transition_retained_v8, revert_delta_v2,
         },
-        palw_tb1::publication::{BranchPublicationGate, verify_prepared_exec_certificate},
+        palw_tb1::{
+            publication::{BranchPublicationGate, verify_prepared_exec_certificate},
+            qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
+        },
     };
     for _ in 0..24 {
         if node.chain.daa_of(node.chain.sink()) >= closure.round.release_from_daa {
@@ -531,7 +540,8 @@ async fn exercise_prepared_exec_certificate(
     let (marker, seed) = gate.assemble_on_branch(node.api().as_ref(), parent, parent, parent, &rows, q, LIMITS).unwrap();
     let mut miner = new_miner_data();
     miner.extra_data = marker.to_vec();
-    let candidate = stable_panel::heartbeat(node, miner).to_immutable();
+    let template = stable_panel::heartbeat(node, miner);
+    let candidate = template.clone().to_immutable();
     let history = CandidateHistory { api: node.api().as_ref(), candidate: Some(candidate.hash()) };
     let reference = verify_prepared_exec_certificate(
         &history,
@@ -583,6 +593,58 @@ async fn exercise_prepared_exec_certificate(
     let reverted = revert_delta_v2(&after, &delta, params).unwrap();
     assert_eq!(reverted.state_root(), state.state_root());
     assert!(reverted.tb1_exec_certificate(close.hash()).is_none());
+
+    // Install only the verified certificate fold in the isolated receiver.
+    // Its Original descendants enter via ordinary candidate acceptance.
+    let accepted = node.take(template, "EXEC certificate marker").await;
+    assert_eq!(accepted.hash(), candidate.hash());
+    {
+        let vp = node.vp();
+        let mut store = vp.palw_state_v2_store.write();
+        let mut actual = store.delta_of(accepted.hash()).unwrap().1;
+        let key = [b"S".as_slice(), close.hash().as_byte_slice()].concat();
+        let write = delta
+            .entries
+            .iter()
+            .find(|entry| matches!(entry, PalwDeltaEntryV2::KernelRouteRow { key: row_key, .. } if row_key == &key))
+            .unwrap();
+        actual.entries.push(write.clone());
+        let retained = apply_delta_v2(&state, &actual, &node.bundle.state).unwrap();
+        let record = PalwStateDeltaRecordV2 { state_root: retained.state_root(), delta_borsh: borsh::to_vec(&actual).unwrap() };
+        store.set_delta_record_for_tests(accepted.hash(), record).unwrap();
+        store.set_tip_for_tests(accepted.hash(), &retained).unwrap();
+    }
+    let chain = node.vp().palw_network_domain_v2().as_bytes();
+    let correct_attempt = palw_qf1::attempt(registration, &seed).unwrap();
+    let mut wrong_attempt = correct_attempt;
+    wrong_attempt[0] ^= 1;
+    // Owner-authenticated commitments isolate seed binding from execution
+    // and ticket verification, which are outside the Original receipt.
+    let body = [0; QF1_ORIGINAL_BODY_BYTES];
+    for (attempt, expected) in [(wrong_attempt, None), (correct_attempt, Some(Qf1OriginalVerification::AwaitingReplay))] {
+        let claim = signing_id(&chain, &slot.registration, slot.slot, &attempt, &body);
+        let signature = ml_dsa_65::sign(
+            owner,
+            claim.as_byte_slice(),
+            misaka_palw_remote::tb1_exposure::exec_input::LOCAL_ORIGINAL_DOMAIN,
+            [94; 32],
+        )
+        .unwrap();
+        let reference = Moe2AwardReference::for_slot(claim, attempt, slot);
+        let original = Qf1OriginalCarrier { body: &body, signature: signature.as_slice().try_into().unwrap() };
+        let payloads = [original.encode(), reference.encode_with_registration(registration).unwrap()];
+        let txs = stable_panel::evidence_transactions(node, payloads);
+        let txids: Vec<_> = txs.iter().map(|tx| tx.id()).collect();
+        let mut miner = new_miner_data();
+        miner.extra_data = claim.as_byte_slice().to_vec();
+        let template = stable_panel::heartbeat_with_transactions(node, miner, txs);
+        let block = node.take(template, "QF1 Original referencing the retained EXEC certificate").await;
+        assert!(txids.iter().all(|id| block.transactions.iter().any(|tx| tx.id() == *id)));
+        let (tip, state) = node.chain.tip_state();
+        assert_eq!(tip, block.hash());
+        assert_eq!(state.qf1_original_verification(claim), expected);
+        assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
+    }
 }
 
 async fn run(stable: bool, registered: bool) {
@@ -1075,6 +1137,7 @@ async fn run(stable: bool, registered: bool) {
             let (_, state) = receiver.chain.tip_state();
             let receipt = state.tb1_exec_close_receipt(native_hash).expect("normal acceptance recorded the EXEC close");
             assert_eq!((receipt.preparation, receipt.freeze_id), (parent, freeze_id));
+            let mut original_input = None;
             for (entry, context) in entries.iter().zip(&preimages) {
                 if let Some(quote) = entry.terms.moe2_quote {
                     let slot = kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot {
@@ -1085,9 +1148,22 @@ async fn run(stable: bool, registered: bool) {
                         quote,
                     };
                     assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
+                    original_input = Some((slot, context));
                 }
             }
-            exercise_prepared_exec_certificate(&mut receiver, &native, &closure, &q, &keys, &dealers).await;
+            let (slot, context) = original_input.unwrap();
+            exercise_prepared_exec_certificate(
+                &mut receiver,
+                &native,
+                &closure,
+                &q,
+                &keys,
+                &dealers,
+                &owner.signing_key,
+                &slot,
+                context,
+            )
+            .await;
             let close = node.take(t, "registered EXEC close").await;
             assert!(close.transactions.iter().any(|tx| tx.id() == carrier));
             let mut blocks = vec![RpcRawBlock::from(&close)];

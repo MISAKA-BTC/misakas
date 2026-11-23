@@ -45,31 +45,48 @@ pub(super) fn heartbeat_with_transactions(
 }
 
 pub(super) fn evidence_template(node: &mut Rig, miner: MinerData, payload: Vec<u8>) -> MutableBlock {
+    let txs = evidence_transactions(node, [payload]);
+    heartbeat_with_transactions(node, miner, txs)
+}
+
+pub(super) fn evidence_transactions(
+    node: &Rig,
+    payloads: impl IntoIterator<Item = Vec<u8>>,
+) -> Vec<kaspa_consensus_core::tx::Transaction> {
     use kaspa_consensus_core::{
         subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
         tx::{Transaction, TransactionInput, TransactionOutput},
     };
     let spendable = node.api().get_virtual_utxos(None, 1_000_000, false);
-    let (card, (outpoint, utxo)) = (0..4)
-        .find_map(|card| {
-            let script = card_payout_spk(card);
-            spendable
-                .iter()
-                .find(|(_, entry)| !entry.is_coinbase && entry.amount > 2_000_000 && entry.script_public_key == script)
-                .map(|funding| (card, funding))
+    let mut funds = (0..4).filter_map(|card| {
+        let script = card_payout_spk(card);
+        spendable
+            .iter()
+            .find(|(_, entry)| !entry.is_coinbase && entry.amount > 2_000_000 && entry.script_public_key == script)
+            .map(|funding| (card, funding))
+    });
+    payloads
+        .into_iter()
+        .map(|payload| {
+            let (card, (outpoint, utxo)) = funds.next().expect("unspent fixture fee float for the TB1 evidence carrier");
+            let mut tx = Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![TransactionInput::new(*outpoint, vec![], 0, 1)],
+                vec![TransactionOutput::new(utxo.amount - 2_000_000, card_payout_spk(card))],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            super::super::super::t12_round_lane_e2e::sign_spend(
+                &mut tx,
+                utxo.clone(),
+                card,
+                node.config.params.storage_mass_parameter,
+            );
+            tx
         })
-        .expect("unspent fixture fee float for the TB1 evidence carrier");
-    let mut tx = Transaction::new(
-        crate::constants::TX_VERSION,
-        vec![TransactionInput::new(*outpoint, vec![], 0, 1)],
-        vec![TransactionOutput::new(utxo.amount - 2_000_000, card_payout_spk(card))],
-        0,
-        SUBNETWORK_ID_PALW_LIFECYCLE,
-        0,
-        payload,
-    );
-    super::super::super::t12_round_lane_e2e::sign_spend(&mut tx, utxo.clone(), card, node.config.params.storage_mass_parameter);
-    heartbeat_with_transactions(node, miner, vec![tx])
+        .collect()
 }
 
 pub(super) async fn arrive(node: &mut Rig, b: Block, label: &str) {
