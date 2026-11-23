@@ -85,6 +85,53 @@ pub struct Moe2ExecAwardV1<'a> {
     pub worker_start: usize,
 }
 
+const MOE2_EXEC_AWARD_MARKER_TAG: &[u8; 8] = b"MOE2AW01";
+
+impl Moe2ExecAwardV1<'_> {
+    /// Candidate intent for an independently authenticated winning right.
+    /// The block hash is finalized after placing this marker in the coinbase.
+    pub fn coinbase_marker(&self, genesis: Hash64, selected_parent: Hash64, attempt: &[u8; 32]) -> [u8; 72] {
+        let mut hash = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/private/moe2/award-marker/v1").to_state();
+        hash.update(genesis.as_byte_slice())
+            .update(selected_parent.as_byte_slice())
+            .update(&self.position.point.blue_score.to_le_bytes())
+            .update(&self.position.point.daa_score.to_le_bytes())
+            .update(&self.position.ordinal.to_le_bytes())
+            .update(self.claim.as_byte_slice())
+            .update(attempt)
+            .update(self.work.as_byte_slice())
+            .update(self.slot.reservation_key().as_byte_slice())
+            .update(&(self.worker_start as u64).to_le_bytes());
+        let release = self.release;
+        for value in [
+            release.reward,
+            release.miner_now,
+            release.panel_now,
+            release.liability_until,
+            release.signed_hard_deadline,
+            release.material_ttl_until,
+            release.retire_not_before,
+        ] {
+            hash.update(&value.to_le_bytes());
+        }
+        hash.update(&[u8::from(release.vest_until.is_some())]);
+        if let Some(until) = release.vest_until {
+            hash.update(&until.to_le_bytes());
+        }
+        let miner = self.payees.miner.0;
+        hash.update(miner.transaction_id.as_byte_slice())
+            .update(&miner.index.to_le_bytes())
+            .update(&(self.payees.panel.len() as u64).to_le_bytes());
+        for (bond, amount) in self.payees.panel {
+            hash.update(bond.0.transaction_id.as_byte_slice()).update(&bond.0.index.to_le_bytes()).update(&amount.to_le_bytes());
+        }
+        let mut marker = [0; 72];
+        marker[..MOE2_EXEC_AWARD_MARKER_TAG.len()].copy_from_slice(MOE2_EXEC_AWARD_MARKER_TAG);
+        marker[MOE2_EXEC_AWARD_MARKER_TAG.len()..].copy_from_slice(hash.finalize().as_bytes());
+        marker
+    }
+}
+
 /// Branch-owned evidence and the authenticated price-anchor state for the
 /// ordinary retaining fold. It borrows the validated candidate body directly.
 pub struct Moe2ExecAwardInputV1<'a> {
@@ -174,12 +221,24 @@ pub(super) fn fold_exec_award_v1(
             .exact::<TransactionOutput>(payees as u64)?
             .exact::<u8>((2 * 69 * payees) as u64)?
             .exact::<Hash64>(leaves)?
+            .exact::<Hash64>(crate::palw_exec_v2_anchor::PALW_EXEC_V2_MAX_HEADS as u64)?
             .exact::<Option<Hash64>>(nodes)?;
         builder.admit_native_write_v1(q)?;
         builder
             .native_reservation
             .grow_v1(Moe2SettlementBook::native_award_scratch_bytes().map_err(PalwStateV2Error::NativeResource)?)
             .map_err(PalwStateV2Error::NativeResource)?;
+    }
+    let marker = block
+        .transactions
+        .first()
+        .filter(|tx| tx.is_coinbase())
+        .and_then(|tx| crate::coinbase::coinbase_payload_extra_data(&tx.payload))
+        .and_then(|extra| extra.strip_prefix(MOE2_EXEC_AWARD_MARKER_TAG))
+        .and_then(crate::coinbase::palw_coinbase_marker);
+    let expected = award.coinbase_marker(config.genesis.hash, price.parent, &attempt);
+    if marker.as_ref().map(|hash| hash.as_slice()) != Some(&expected[MOE2_EXEC_AWARD_MARKER_TAG.len()..]) {
+        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker"));
     }
     let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
     let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;

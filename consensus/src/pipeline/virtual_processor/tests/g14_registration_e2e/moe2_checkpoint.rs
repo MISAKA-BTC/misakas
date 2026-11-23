@@ -353,10 +353,17 @@ pub(super) fn check_exec_settlement_rewind(
     assert_eq!(outputs.len(), 2);
     let execution = env.chain.ctx.consensus.get_block(position.point.block).unwrap();
     let worker_start = execution.transactions[0].outputs.len();
-    let candidate = |workers: &[kaspa_consensus_core::tx::TransactionOutput]| {
+    let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
+    let selected_parent = reserved.last_point().unwrap().block;
+    let marker = native_award(claim, &slot, work, position).coinbase_marker(config.genesis.hash, selected_parent, &attempt);
+    let candidate_with_marker = |workers: &[kaspa_consensus_core::tx::TransactionOutput], marker: &[u8]| {
         let mut transactions: Vec<_> = execution.transactions.iter().cloned().collect();
         assert!(transactions[0].is_coinbase());
         transactions[0].outputs.extend_from_slice(workers);
+        let payload = &mut transactions[0].payload;
+        let prefix = payload.len() - kaspa_consensus_core::coinbase::coinbase_payload_extra_data(payload).unwrap().len();
+        payload.truncate(prefix);
+        payload.extend_from_slice(marker);
         transactions[0].finalize();
         let mut header = execution.header.as_ref().clone();
         header.palw_state_root = reserved.state_root();
@@ -369,6 +376,7 @@ pub(super) fn check_exec_settlement_rewind(
         let (state, delta) = apply_palw_transition_v2(&reserved, params, &point, &[], None).unwrap();
         (state, delta, Moe2Position { point, ..position })
     };
+    let candidate = |workers| candidate_with_marker(workers, &marker);
     let award_block = candidate(&outputs);
     let (mut child, mut award_delta, position) = fold(&award_block);
     let original_delta = award_delta.clone();
@@ -678,7 +686,6 @@ pub(super) fn check_exec_settlement_rewind(
     let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
     let restored = carriage.into_state(params, Some(reserved.state_root())).unwrap();
     let (mut native, mut native_delta) = apply_palw_transition_v2(&restored, params, &position.point, &[], None).unwrap();
-    let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
     let api = env.chain.ctx.consensus.as_ref();
     let price = Moe2QuoteAnchorV1::resolve(api, close, close, &slot).unwrap();
     assert!(Moe2QuoteAnchorV1::resolve(api, quote.quote_anchor, close, &slot).is_err());
@@ -688,6 +695,34 @@ pub(super) fn check_exec_settlement_rewind(
     };
     let input = || native_award(claim, &slot, work, position);
     assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
+    let missing = candidate_with_marker(&outputs, &[]);
+    let (_, _, missing_position) = fold(&missing);
+    let wrong_branch = native_award(claim, &slot, work, position).coinbase_marker(config.genesis.hash, Hash64::default(), &attempt);
+    let with_wrong_branch = candidate_with_marker(&outputs, &wrong_branch);
+    let (_, _, wrong_branch_position) = fold(&with_wrong_branch);
+    let mismatch = || PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker");
+    for (block, award) in [
+        (&missing, native_award(claim, &slot, work, missing_position)),
+        (&with_wrong_branch, native_award(claim, &slot, work, wrong_branch_position)),
+        (&award_block, native_award(alias_claim, &slot, work, position)),
+        (&award_block, native_award(claim, &slot, other_work, position)),
+        (
+            &award_block,
+            Moe2ExecAwardV1 { release: Moe2WorkerRelease { liability_until: release.liability_until - 1, ..release }, ..input() },
+        ),
+    ] {
+        assert!(matches!(retained(&restored, block, award, true), Err(error) if error == mismatch()));
+    }
+    assert!(matches!(
+        fold_retained_award(config, params, &restored, registration, price, &award_block, [99; 32], input(), true),
+        Err(error) if error == mismatch()
+    ));
+    let alias_price = Moe2QuoteAnchorV1::resolve(api, close, close, &alias_slot).unwrap();
+    assert!(matches!(
+        fold_retained_award(config, params, &restored, registration, alias_price, &award_block, attempt,
+            native_award(claim, &alias_slot, work, position), true),
+        Err(error) if error == mismatch()
+    ));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
     let mut expected_delta = award_delta.clone();
     let last = expected_delta.entries.last_mut().unwrap();

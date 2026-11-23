@@ -1,6 +1,24 @@
 use crate::tx::{ScriptPublicKey, Transaction};
 use serde::{Deserialize, Serialize};
 
+/// Fixed fields preceding the variable script in a canonical coinbase payload.
+pub const COINBASE_PAYLOAD_FIXED_PREFIX_LEN: usize = 8 + 8 + 2 + 1;
+
+/// Locate the extra data without allocating. The node's coinbase validator
+/// also enforces the network's payload and script length limits.
+pub fn coinbase_payload_extra_data(payload: &[u8]) -> Option<&[u8]> {
+    let script_len = usize::from(*payload.get(COINBASE_PAYLOAD_FIXED_PREFIX_LEN - 1)?);
+    payload.get(COINBASE_PAYLOAD_FIXED_PREFIX_LEN + script_len..)
+}
+
+/// A PALW marker is the whole miner extra-data prefix, including when an
+/// EXEC v2 anchor follows it.
+pub fn palw_coinbase_marker(extra_data: &[u8]) -> Option<[u8; 64]> {
+    extra_data.try_into().ok().or_else(|| {
+        crate::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra_data).ok().and_then(|(prefix, _)| prefix.try_into().ok())
+    })
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct MinerData<T: AsRef<[u8]> = Vec<u8>> {
     pub script_public_key: ScriptPublicKey,
