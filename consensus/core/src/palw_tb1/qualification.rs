@@ -302,6 +302,10 @@ pub(crate) struct RetainedExecPanelPreparation {
     panel: RetainedRound,
 }
 
+use crate::palw_native_resource_v1::wire::wire_struct;
+wire_struct!(RetainedRound; Tb1MiningRound, [u8; 64], Vec<[u8; 66]>, Vec<[u8; 1952]>, u32, u64, Vec<u32>);
+wire_struct!(RetainedExecPanelPreparation; RetainedRound, RetainedRound);
+
 impl RetainedExecPanelPreparation {
     pub(crate) fn restore(self) -> Option<(PreparedTb1Round, PreparedTb1Round)> {
         Some((self.exec.restore()?, self.panel.restore()?))

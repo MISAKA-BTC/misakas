@@ -1,6 +1,7 @@
 //! Private TB1 round and closure commitments. Each round commits to its
 //! schedule before dealer preparation. Consumer roots come from the owning
 //! registration or Original fold. No public network recognizes this codec.
+use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire::wire_struct};
 use borsh::{BorshDeserialize, BorshSerialize};
 use sha3::{Digest, Sha3_512};
 
@@ -23,6 +24,17 @@ pub struct Tb1MiningRound {
     pub release_from_daa: u64,
     pub deadline_exclusive_daa: u64,
 }
+
+impl NativeWireScanV1 for Tb1MiningPurpose {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        match reader.byte()? {
+            0..=2 => Ok(NativeWireShapeV1::default()),
+            _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown TB1 mining purpose")),
+        }
+    }
+}
+
+wire_struct!(Tb1MiningRound; [u8; 64], [u8; 64], u64, u64, Tb1MiningPurpose, [u8; 64], u64, u64, u64);
 
 impl Tb1MiningRound {
     pub fn id(&self) -> [u8; 64] {

@@ -729,6 +729,12 @@ pub(super) async fn check_exec_settlement_rewind(
                 assert!(approval_block.transactions.iter().any(|tx| tx.id() == lookup_id));
                 let (_, approved) = court.tip_state();
                 assert_eq!(approved.qf1_original_verification(original), Some(Qf1OriginalVerification::ReplayApproved));
+                let rows = &approved.kernel_route_state_v1().unwrap().aux;
+                for prefix in [b'D', b'A'] {
+                    let key = [&[prefix][..], original.as_byte_slice()].concat();
+                    let row = rows.get(&(212, key.clone())).unwrap();
+                    kaspa_consensus_core::palw_native_resource_v1::preflight_kernel_served_row_v1(212, &key, row).unwrap();
+                }
                 let (_, delta) = court.vp().palw_state_v2_store.read().delta_of(approval_block.hash()).unwrap();
                 assert_eq!(revert_delta_v2(&approved, &delta, params).unwrap().state_root(), with_draw.state_root());
             } else {

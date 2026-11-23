@@ -9,12 +9,36 @@ use crate::palw_tb1::{
     qualification::{PreparedExecPanelCandidate, PreparedTb1Round, RetainedExecPanelPreparation},
 };
 
-const TABLE: u8 = 212;
+pub(crate) const TABLE: u8 = 212;
 
 #[derive(borsh::BorshDeserialize, borsh::BorshSerialize, Default)]
 struct CourtStatus {
     pending: u32,
     refuted: bool,
+}
+
+use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire::wire_struct};
+
+wire_struct!(CourtStatus; u32, bool);
+wire_struct!(Moe2ExecCloseReceipt; Hash64, Hash64, Hash64, [u8; 64]);
+wire_struct!(ExecCertificateReceipt; Hash64, Hash64, Hash64, [u8; 64], [u8; 32]);
+wire_struct!(PanelReplayDuty; [u8; 64], Hash64, Hash64, Hash64, u64, [u8; 64], Vec<Hash64>);
+wire_struct!(Qf1TerminalRuling; Hash64, Hash64, [u8; 64], u64, bool);
+
+pub(crate) fn scan_row<R: std::io::Read>(key: &[u8], frame: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+    let malformed = || std::io::Error::new(std::io::ErrorKind::InvalidData, "unallocated TB1 Court row key");
+    let (kind, _) = key.split_first().filter(|(_, digest)| digest.len() == 64).ok_or_else(malformed)?;
+    match kind {
+        b'P' => RetainedExecPanelPreparation::scan_native_wire_v1(frame),
+        b'E' => Moe2ExecCloseReceipt::scan_native_wire_v1(frame),
+        b'S' => ExecCertificateReceipt::scan_native_wire_v1(frame),
+        b'R' => <(Hash64, u64)>::scan_native_wire_v1(frame),
+        b'D' => PanelReplayDuty::scan_native_wire_v1(frame),
+        b'A' => Hash64::scan_native_wire_v1(frame),
+        b'O' => CourtStatus::scan_native_wire_v1(frame),
+        b'V' => Qf1TerminalRuling::scan_native_wire_v1(frame),
+        _ => Err(malformed()),
+    }
 }
 
 #[derive(Clone)]

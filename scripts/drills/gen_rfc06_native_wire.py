@@ -582,6 +582,7 @@ router_arms += '150=>crate::palw_kernel_court_admission_v1::KernelCourtCapitalRo
 
 router_arms += '191 if key_bytes==132=>crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,\n'
 router_arms += '191=>return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),\n'
+router_arms += 'crate::palw_state_v2::qf1_terminal_court::TABLE=>crate::palw_state_v2::qf1_terminal_court::scan_row(k,frame)?,\n'
 code=code.replace(router_marker, router_arms+router_marker, 1)
 # Keep owner-audited aux151 VALUE scanning and strict map order on regeneration.
 # Patch this small manual section only; do not regenerate the shared DTO codec.

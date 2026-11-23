@@ -1391,6 +1391,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         150 => crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,
         191 if key_bytes == 132 => crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,
         191 => return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),
+        crate::palw_state_v2::qf1_terminal_court::TABLE => crate::palw_state_v2::qf1_terminal_court::scan_row(k, frame)?,
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
         misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => super::positive_rows::scan_positive_aux_row_v1(key, frame)?
             .allocation(

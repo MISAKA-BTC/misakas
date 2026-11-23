@@ -749,6 +749,11 @@ async fn exercise_prepared_exec_certificate(
         .into();
     let (_, pending) = node.chain.tip_state();
     assert!(pending.qf1_terminal_verdict_pending(&verdict, case.header.daa_score));
+    if native_certificate_fixture() {
+        let key = [b"V".as_slice(), &verdict].concat();
+        let rows = &pending.kernel_route_state_v1().unwrap().aux;
+        kaspa_consensus_core::palw_native_resource_v1::preflight_kernel_served_row_v1(212, &key, &rows[&(212, key.clone())]).unwrap();
+    }
     let mut miner = new_miner_data();
     miner.extra_data = verdict.to_vec();
     let template = stable_panel::heartbeat(node, miner);
@@ -758,6 +763,25 @@ async fn exercise_prepared_exec_certificate(
     assert!(decided.qf1_terminal_blocks_award(original));
     assert!(decided.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
     if native_certificate_fixture() {
+        let dir = kaspa_database::utils::get_kaspa_tempdir();
+        let path = dir.path().join("native-exec-court");
+        node.api().checkpoint_database(&path);
+        let cold = stable_panel::reopen_checkpoint(&node.config, &path);
+        let (at, restored) =
+            cold.virtual_processor().palw_state_v2_store.read().load_tip_retained_v1(&node.bundle.state).unwrap().unwrap();
+        assert_eq!((at, restored.state_root()), (decision.hash(), decided.state_root()));
+        let certificate = restored.tb1_exec_certificate(close.hash()).unwrap();
+        assert_eq!((certificate.certificate(), certificate.seed), (accepted.hash(), *seed.as_bytes()));
+        assert_eq!(restored.qf1_original_receipt(original), decided.qf1_original_receipt(original));
+        assert!(restored.qf1_terminal_blocks_award(original));
+        let mut prefixes = std::collections::BTreeSet::new();
+        for ((table, key), row) in &restored.kernel_route_state_v1().unwrap().aux {
+            if *table == 212 {
+                kaspa_consensus_core::palw_native_resource_v1::preflight_kernel_served_row_v1(*table, key, row).unwrap();
+                prefixes.insert(key[0]);
+            }
+        }
+        assert_eq!(prefixes, [b'E', b'O', b'P', b'R', b'S'].into_iter().collect());
         peer_log!("TB1 native EXEC and Court close={} certificate={} verdict={}", close.hash(), accepted.hash(), decision.hash());
     }
 }
