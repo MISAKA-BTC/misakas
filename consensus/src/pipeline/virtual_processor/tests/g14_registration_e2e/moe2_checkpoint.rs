@@ -204,7 +204,7 @@ fn fold_retained_award(
     .map(|(state, delta, _, _)| (state, delta))
 }
 
-pub(super) fn check_exec_settlement_rewind(
+pub(super) async fn check_exec_settlement_rewind(
     env: &Env,
     registration: &PalwChainStateV2,
     registered_book: &Moe2SettlementBook,
@@ -452,20 +452,31 @@ pub(super) fn check_exec_settlement_rewind(
         (state, delta, Moe2Position { point, ..position })
     };
     {
-        use kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::Moe2AwardSource;
+        use crate::pipeline::virtual_processor::tests::new_miner_data;
         use kaspa_consensus_core::{
-            palw_qf1::{TreeBuilder, TreeKind, TreeRoot, readout_chunks::record_count, ticket},
-            palw_state_v2::Qf1TerminalUpdate,
+            palw_qf1::{
+                TreeBuilder, TreeKind, TreeRoot,
+                readout_chunks::{CHUNK_BYTES, encoded_len, record_count},
+                terminal::{END_BYTES, LAST_CHUNK_BYTES},
+                ticket,
+            },
             palw_tb1::{
                 qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
-                qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation, Qf1TerminalRuling},
+                qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
             },
         };
         use sha3::{Digest, Sha3_512};
         let chain = vp.palw_network_domain_v2().as_bytes();
         let token = 151645u32.to_le_bytes();
-        let trace_count = u64::from(record_count(1).unwrap()) + 4;
-        let stop_index = trace_count - 2 - u64::from(record_count(1).unwrap());
+        let chunks = record_count(1).unwrap();
+        let bytes = encoded_len(1).unwrap();
+        let trace_count = u64::from(chunks) + 4;
+        let stop_index = trace_count - 2 - u64::from(chunks);
+        let input = 1u32.to_le_bytes();
+        let readout = [0u8; 64];
+        let input_root = TreeRoot::build(attempt, TreeKind::Input, std::iter::once(input.as_slice()), 1).unwrap();
+        let answer_root = TreeRoot::build(attempt, TreeKind::Answer, std::iter::once(token.as_slice()), 1).unwrap();
+        let readout_root = TreeRoot::build(attempt, TreeKind::Readout, std::iter::once(readout.as_slice()), 1).unwrap();
         let mut stop = [0; 18];
         stop[0] = 3;
         stop[1..5].copy_from_slice(&13u32.to_le_bytes());
@@ -473,19 +484,48 @@ pub(super) fn check_exec_settlement_rewind(
         stop[9..13].copy_from_slice(&1u32.to_le_bytes());
         stop[13..17].copy_from_slice(&token);
         stop[17] = 1; // contradicts the committed EOS token
-        let mut trace = TreeBuilder::new(attempt, TreeKind::Trace, trace_count, trace_count, Some(stop_index)).unwrap();
-        for i in 0..trace_count {
-            trace.push(if i == stop_index { &stop } else { &[1u8][..] }).unwrap();
+        let mut chunk = vec![4];
+        chunk.extend_from_slice(&((LAST_CHUNK_BYTES - 5) as u32).to_le_bytes());
+        chunk.extend_from_slice(&(chunks - 1).to_le_bytes());
+        chunk.extend_from_slice(&u64::from(bytes).to_le_bytes());
+        chunk.extend_from_slice(&((bytes - (chunks - 1) * CHUNK_BYTES as u32) as u16).to_le_bytes());
+        chunk.push(1);
+        chunk.extend_from_slice(&readout);
+        let mut end = vec![5];
+        end.extend_from_slice(&((END_BYTES - 5) as u32).to_le_bytes());
+        for root in [&input_root, &answer_root, &readout_root] {
+            end.extend_from_slice(root.digest.as_slice());
         }
-        let (trace, path) = trace.finish().unwrap();
-        let input = 1u32.to_le_bytes();
-        let readout = [0u8; 64];
-        let roots = [
-            TreeRoot::build(attempt, TreeKind::Input, std::iter::once(input.as_slice()), 1).unwrap(),
-            TreeRoot::build(attempt, TreeKind::Answer, std::iter::once(token.as_slice()), 1).unwrap(),
-            TreeRoot::build(attempt, TreeKind::Readout, std::iter::once(readout.as_slice()), 1).unwrap(),
-            trace,
-        ];
+        for field in [1u32; 3] {
+            end.extend_from_slice(&field.to_le_bytes());
+        }
+        end.extend_from_slice(&0u64.to_le_bytes());
+        end.extend_from_slice(&1u32.to_le_bytes());
+        end.extend_from_slice(&chunks.to_le_bytes());
+        end.extend_from_slice(&trace_count.to_le_bytes());
+        end.extend_from_slice(&readout);
+        let mut trace = TreeBuilder::with_openings(
+            attempt,
+            TreeKind::Trace,
+            trace_count,
+            trace_count,
+            [Some(stop_index), Some(trace_count - 2), Some(trace_count - 1)],
+        )
+        .unwrap();
+        for i in 0..trace_count {
+            let record: &[u8] = if i == stop_index {
+                stop.as_slice()
+            } else if i == trace_count - 2 {
+                &chunk
+            } else if i == trace_count - 1 {
+                &end
+            } else {
+                &[1u8]
+            };
+            trace.push(record).unwrap();
+        }
+        let (trace, [stop_path, chunk_path, end_path]) = trace.finish_with_openings().unwrap();
+        let roots = [input_root, answer_root, readout_root, trace];
         let mut body = [0; QF1_ORIGINAL_BODY_BYTES];
         let mut writer = body.as_mut_slice();
         borsh::BorshSerialize::serialize(&roots.each_ref().map(|root| root.count()), &mut writer).unwrap();
@@ -501,85 +541,87 @@ pub(super) fn check_exec_settlement_rewind(
         .unwrap();
         let original_tx =
             funded_carrier(Qf1OriginalCarrier { body: &body, signature: signature.as_slice().try_into().unwrap() }.encode(), 1);
-        let original_block = candidate_with_references(&[], original.as_byte_slice(), &[original_tx]);
-        let mut witness = Vec::from(token);
-        witness.extend_from_slice(&stop);
-        let mut case_hash = Sha3_512::new()
-            .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")
-            .chain_update(chain)
-            .chain_update(original_block.hash().as_bytes())
-            .chain_update(original.as_bytes())
-            .chain_update(token)
-            .chain_update(stop)
-            .chain_update([0, path.len() as u8]);
-        for sibling in path {
-            witness.extend_from_slice(&sibling);
-            case_hash.update(sibling);
+
+        let mut court_close_delta = close_delta.clone();
+        court_close_delta.entries.extend(reservation_writes.iter().cloned());
+        let court_close = apply_delta_v2(registration, &court_close_delta, params).unwrap();
+        for relation in [Qf1TerminalRelation::Stop, Qf1TerminalRelation::End] {
+            let mut court = t12_genesis_chain(&env.config, &env.bundle, &env.premine, &env.floats);
+            for block in chain_blocks(&env.chain, close) {
+                court.ctx.simulated_time = block.header.timestamp;
+                arrive(&court, block, "Court prefix").await;
+            }
+            assert_eq!(court.tip_state().0, close);
+            // Only the reserve is fixture input. All descendants enter via normal block insertion.
+            court.vp().palw_state_v2_store.write().set_tip_for_tests(close, &court_close).unwrap();
+            let miner = |marker: &[u8]| {
+                let mut miner = new_miner_data();
+                miner.extra_data = marker.to_vec();
+                miner
+            };
+            let interval = config.target_time_per_block();
+            let original_txid = original_tx.id();
+            let original_block = court.heartbeat_paying(miner(original.as_byte_slice()), interval, vec![original_tx.clone()]).await;
+            assert!(original_block.transactions.iter().any(|tx| tx.id() == original_txid));
+            let (_, prior) = court.tip_state();
+            let case_hash = |domain: &[u8]| {
+                Sha3_512::new()
+                    .chain_update(domain)
+                    .chain_update(chain)
+                    .chain_update(original_block.hash().as_bytes())
+                    .chain_update(original.as_bytes())
+            };
+            let (witness, case_marker, verdict_domain, refuted): (_, [u8; 64], &[u8], _) = match relation {
+                Qf1TerminalRelation::Stop => {
+                    let mut witness = Vec::from(token);
+                    witness.extend_from_slice(&stop);
+                    let mut marker = case_hash(b"MISAKA/private/QF1/court/last-answer-stop/v1")
+                        .chain_update(&witness)
+                        .chain_update([0, stop_path.len() as u8]);
+                    for sibling in &stop_path {
+                        witness.extend_from_slice(sibling);
+                        marker.update(sibling);
+                    }
+                    (witness, marker.finalize().into(), b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1", true)
+                }
+                Qf1TerminalRelation::End => {
+                    let witness = [chunk.as_slice(), chunk_path.as_flattened(), end.as_slice(), end_path.as_flattened()].concat();
+                    let marker = case_hash(b"MISAKA/private/QF1/court/readout-end/v1").chain_update(&witness).finalize().into();
+                    (witness, marker, b"MISAKA/private/QF1/court/readout-end/verdict/v1", false)
+                }
+            };
+            let witness_tx = funded_carrier(
+                Qf1TerminalCarrier { relation, original_block: original_block.hash(), disclosure: &witness }.encode().unwrap(),
+                4,
+            );
+            let source = Moe2AwardReference::for_slot(original, attempt, &slot);
+            let source_tx = reference_tx(source.encode_with_registration(&court_registration).unwrap());
+            let case = court.heartbeat_paying(miner(&case_marker), interval, vec![witness_tx, source_tx]).await;
+            let verdict: [u8; 64] = Sha3_512::new()
+                .chain_update(verdict_domain)
+                .chain_update(case.hash().as_bytes())
+                .chain_update(case_marker)
+                .chain_update([u8::from(refuted)])
+                .finalize()
+                .into();
+            let (_, pending) = court.tip_state();
+            assert!(pending.qf1_terminal_blocks_award(original));
+            assert!(pending.qf1_terminal_verdict_pending(&verdict, case.header.daa_score));
+            let decision_block = court.heartbeat_paying(miner(&verdict), interval, vec![]).await;
+            let (_, decided) = court.tip_state();
+            assert_eq!(decided.qf1_terminal_blocks_award(original), refuted);
+            assert!(!decided.qf1_terminal_verdict_pending(&verdict, decision_block.header.daa_score));
+            let court_processor = court.vp();
+            let court_store = court_processor.palw_state_v2_store.read();
+            let (_, open) = court_store.delta_of(case.hash()).unwrap();
+            let (_, decision) = court_store.delta_of(decision_block.hash()).unwrap();
+            let reopened = revert_delta_v2(&decided, &decision, params).unwrap();
+            assert_eq!(reopened.state_root(), pending.state_root());
+            assert!(reopened.qf1_terminal_verdict_pending(&verdict, case.header.daa_score));
+            assert!(!reopened.qf1_terminal_blocks_award(claim));
+            assert_eq!(apply_delta_v2(&reopened, &decision, params).unwrap().state_root(), decided.state_root());
+            assert_eq!(revert_delta_v2(&reopened, &open, params).unwrap().state_root(), prior.state_root());
         }
-        let witness_tx = funded_carrier(
-            Qf1TerminalCarrier { relation: Qf1TerminalRelation::Stop, original_block: original_block.hash(), disclosure: &witness }
-                .encode()
-                .unwrap(),
-            2,
-        );
-        let source = Moe2AwardReference::for_slot(original, attempt, &slot);
-        let source_tx = reference_tx(source.encode_with_registration(&court_registration).unwrap());
-        let case_marker: [u8; 64] = case_hash.finalize().into();
-        let case = candidate_with_references(&[], &case_marker, &[witness_tx, source_tx]);
-        let source = Moe2AwardSource::from_transactions(case.transactions.iter()).unwrap();
-        let ruling = Qf1TerminalRuling::prepare(chain, &reserved, source, slot.close_daa, &original_block, &case).unwrap();
-        let verdict: [u8; 64] = Sha3_512::new()
-            .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1")
-            .chain_update(case.hash().as_bytes())
-            .chain_update(case_marker)
-            .chain_update([1])
-            .finalize()
-            .into();
-        let apply = |parent: &PalwChainStateV2, point: PalwBlockContextV2, event| {
-            let extras = vp.palw_test_resolved_transition_extras_v1(&point);
-            apply_palw_transition_retained_v8(
-                parent,
-                params,
-                None,
-                &point,
-                &[],
-                PalwBlockWorkV3::None,
-                &[],
-                Hash64::default(),
-                false,
-                false,
-                false,
-                false,
-                &PalwTransitionExtrasV1 {
-                    private_moe2_registration: true,
-                    kernel_route: extras.kernel_route,
-                    ..Default::default()
-                },
-                PositiveCaseReplayInputV2 {
-                    selected_parent: parent.last_point().unwrap().block,
-                    live_case_cap: 0,
-                    load: &mut |_, _| panic!("no Assignment cases"),
-                },
-                None,
-                Some(event),
-            )
-        };
-        let case_point = PalwBlockContextV2 { block: case.hash(), ..position.point };
-        let (pending, open, _, _) = apply(&reserved, case_point, Qf1TerminalUpdate::Open(ruling)).unwrap();
-        assert!(pending.qf1_terminal_blocks_award(original));
-        assert!(pending.qf1_terminal_verdict_pending(&verdict, case_point.daa_score));
-        let verdict_point =
-            PalwBlockContextV2 { block: Hash64::from_u64_word(726), blue_score: case_point.blue_score + 1, ..case_point };
-        let (decided, decision, _, _) =
-            apply(&pending, verdict_point, Qf1TerminalUpdate::Verdict { block: verdict_point.block, marker: verdict }).unwrap();
-        assert!(decided.qf1_terminal_blocks_award(original));
-        assert!(!decided.qf1_terminal_verdict_pending(&verdict, verdict_point.daa_score));
-        let reopened = revert_delta_v2(&decided, &decision, params).unwrap();
-        assert_eq!(reopened.state_root(), pending.state_root());
-        assert!(reopened.qf1_terminal_verdict_pending(&verdict, case_point.daa_score));
-        assert!(!reopened.qf1_terminal_blocks_award(claim));
-        assert_eq!(apply_delta_v2(&reopened, &decision, params).unwrap().state_root(), decided.state_root());
-        assert_eq!(revert_delta_v2(&reopened, &open, params).unwrap().state_root(), reserved.state_root());
     }
     let candidate_with_marker = |workers, marker| candidate_with_references(workers, marker, std::slice::from_ref(&carrier));
     let candidate = |workers| candidate_with_marker(workers, &marker);

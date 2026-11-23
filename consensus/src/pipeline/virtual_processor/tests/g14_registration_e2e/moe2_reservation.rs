@@ -138,7 +138,8 @@ pub(super) async fn exercise(
         enrollment.hash(),
         at,
         registration_quote(state, model, bond, policy.digest()),
-    );
+    )
+    .await;
     book.admit(terms, |anchor, id| (anchor == point.block && id == model).then_some(registered)).unwrap();
     let mut journal = Vec::new();
     let held = u128::from(reward) * 4;
