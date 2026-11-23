@@ -833,6 +833,7 @@ pub(super) async fn release<'t>(
             }
             file.sync_all().unwrap();
             drop(file);
+            let accepted_settlement = node.api().get_native_settlement_snapshot().unwrap().unwrap();
             let deadline = input.terms().deadline_exclusive_daa;
             carry_to_daa(node, parent, peers, deadline - 1, []).await;
             let late = carry_to_daa(node, parent, peers, deadline, commitment).await;
@@ -938,6 +939,9 @@ pub(super) async fn release<'t>(
                 );
                 peer_log!("QF1 public metadata work key pid={} key={}", std::process::id(), model_free.execution().work());
             }
+            let terminal = branch_input.read_terminal_court_at_parent(&branch, original, original_receipt, 128).unwrap();
+            assert!(!terminal.blocks_success());
+            assert!(terminal.cases().is_empty());
             let (_, funding_parent) = expired.virtual_processor().palw_observer_state_at_cached_v1(late.hash()).unwrap();
             let unfunded = kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::Moe2AwardReference {
                 claim: original,
@@ -947,8 +951,30 @@ pub(super) async fn release<'t>(
                 reservation: Hash64::default(),
             };
             assert_eq!(
-                approved.bind_moe2_funding(&branch, &unfunded, &funding_parent, late.header.daa_score).unwrap_err().to_string(),
+                approved
+                    .bind_moe2_funding(&branch, &unfunded, &funding_parent, &terminal, late.header.daa_score)
+                    .unwrap_err()
+                    .to_string(),
                 "approved EXEC input carries no signed MOE2 quote"
+            );
+            let accepted_input = recover_branch_exec(&branch, accepted.hash(), &accepted_settlement);
+            let accepted_approval = published_at(accepted.hash(), &accepted_settlement, accepted.hash(), original).unwrap();
+            let accepted_execution = accepted_input.read_panel_approved_qf1_execution(&branch, accepted_approval, instance).unwrap();
+            let still_open = accepted_input.read_terminal_court_at_parent(&branch, original, original_receipt, 128).unwrap();
+            let (_, accepted_state) = expired.virtual_processor().palw_observer_state_at_cached_v1(accepted.hash()).unwrap();
+            assert_eq!(
+                accepted_execution
+                    .bind_moe2_funding(&branch, &unfunded, &accepted_state, &still_open, accepted.header.daa_score)
+                    .unwrap_err()
+                    .to_string(),
+                "terminal Court does not permit this MOE2 award",
+            );
+            assert_eq!(
+                approved
+                    .bind_moe2_funding(&branch, &unfunded, &funding_parent, &still_open, late.header.daa_score)
+                    .unwrap_err()
+                    .to_string(),
+                "terminal Court belongs to a different selected parent or Original",
             );
             assert_eq!(
                 earlier_input.read_panel_approved_qf1_execution(&branch, archived, instance).err().unwrap().to_string(),
@@ -1089,6 +1115,16 @@ pub(super) async fn release<'t>(
         faster_hex::hex_string(&wire)
     );
     let before_end = node.api().get_native_settlement_snapshot().unwrap().unwrap();
+    let republished = local_evidence_carrier(
+        node,
+        parent,
+        peers,
+        0,
+        original.as_bytes(),
+        body.publication_payload(owner),
+        "Republished QF1 Original",
+    )
+    .await;
     let end_wire = std::fs::read(dir.join(format!("{original}.end"))).expect("terminal Readout and End published with the Original");
     let case = input.prepare_end_case(node.api().as_ref(), original_receipt, body, owner, &end_wire).unwrap();
     assert!(case.verdict_marker(node.api().as_ref(), stop_case.hash()).is_err());
@@ -1102,6 +1138,7 @@ pub(super) async fn release<'t>(
         "QF1 Readout / End case",
     )
     .await;
+    let at_case = node.api().get_native_settlement_snapshot().unwrap().unwrap();
     let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
     let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 Readout / End verdict").await;
     let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
@@ -1147,6 +1184,47 @@ pub(super) async fn release<'t>(
     assert_eq!(
         earlier.read_published_terminal_verdict(&branch, original, stop_case.hash(), stop_verdict.hash()).unwrap(),
         StopOutcome::ChallengeNotEstablished
+    );
+    use misaka_palw_remote::tb1_exposure::exec_input::terminal_case::PublishedTerminalCase;
+    let completed = historical.read_terminal_court_at_parent(&branch, original, original_receipt, 128).unwrap();
+    assert_eq!(historical.read_terminal_court_at_parent(&branch, original, republished.hash(), 128).unwrap(), completed,);
+    let stop = PublishedTerminalCase {
+        block: stop_case.hash(),
+        receipt: original_receipt,
+        relation: Qf1TerminalRelation::Stop,
+        verdict: Some((stop_verdict.hash(), StopOutcome::ChallengeNotEstablished)),
+    };
+    let end = PublishedTerminalCase {
+        block: opened.hash(),
+        receipt: original_receipt,
+        relation: Qf1TerminalRelation::End,
+        verdict: Some((verdict.hash(), expected)),
+    };
+    assert_eq!(completed.cases(), &[stop, end]);
+    assert_eq!(completed.blocks_success(), expected == StopOutcome::ComputationRefuted);
+    let pending = recover_branch_exec(&branch, opened.hash(), &at_case)
+        .read_terminal_court_at_parent(&branch, original, original_receipt, 128)
+        .unwrap();
+    assert!(pending.blocks_success());
+    assert_eq!(pending.cases(), &[stop, PublishedTerminalCase { verdict: None, ..end }]);
+    let before = earlier.read_terminal_court_at_parent(&branch, original, original_receipt, 128).unwrap();
+    assert_eq!(before.cases(), &[stop]);
+    assert_eq!(
+        historical.read_terminal_court_at_parent(&branch, original, original_receipt, 1).unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock,
+    );
+    // Only this reopened test copy loses the case body. Missing history must
+    // not turn an unresolved or refuted claim into a cleared one.
+    let vp = recovered.virtual_processor();
+    let mut prune = rocksdb::WriteBatch::default();
+    vp.block_transactions_store.delete_batch(&mut prune, opened.hash()).unwrap();
+    vp.db.write(prune).unwrap();
+    assert!(historical.read_terminal_court_at_parent(&branch, original, original_receipt, 128).is_err());
+    peer_log!(
+        "QF1 terminal history pid={} cases={} blocks_success={}",
+        std::process::id(),
+        completed.cases().len(),
+        completed.blocks_success()
     );
     peer_log!("QF1 public terminal verdicts pid={} parent={} original={} end={expected:?}", std::process::id(), late.hash(), original);
     peer_log!(

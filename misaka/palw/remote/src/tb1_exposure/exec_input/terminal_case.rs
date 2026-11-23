@@ -1,6 +1,13 @@
 //! Common case and verdict inclusion checks for the private terminal relations.
-use super::{original::read_published_qf1_original, stop_case::StopWitness, *};
-use kaspa_consensus_core::palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation};
+use super::{
+    original::{decode_published_qf1_original, read_published_qf1_original},
+    stop_case::StopWitness,
+    *,
+};
+use kaspa_consensus_core::{
+    coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
+    palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
+};
 
 pub use kaspa_consensus_core::palw_qf1::terminal::TerminalOutcome;
 
@@ -98,13 +105,145 @@ impl BranchExecInput<'_> {
         if original != expected_original {
             return Err(invalid("QF1 terminal case belongs to a different Original"));
         }
-        let resolved = match carrier.relation {
-            Qf1TerminalRelation::Stop => {
-                let witness = StopWitness::decode(&body, carrier.disclosure)?;
-                self.input.judge_stop_case(receipt, original, &body, &witness)?
-            }
-            Qf1TerminalRelation::End => self.input.judge_end_case(receipt, original, &body, carrier.disclosure)?,
-        };
+        let resolved = self.input.judge_terminal_carrier(original, &body, carrier)?;
         resolved.read_verdict_on_branch(native, self.parent, case, verdict)
+    }
+}
+
+impl<'t> DerivedExecInput<'t> {
+    fn judge_terminal_carrier(
+        &self,
+        original: Hash64,
+        body: &LocalOriginalBody,
+        carrier: Qf1TerminalCarrier<'_>,
+    ) -> io::Result<LocalTerminalCase<'_, 't>> {
+        let receipt = carrier.original_block;
+        match carrier.relation {
+            Qf1TerminalRelation::Stop => {
+                let witness = StopWitness::decode(body, carrier.disclosure)?;
+                self.judge_stop_case(receipt, original, body, &witness)
+            }
+            Qf1TerminalRelation::End => self.judge_end_case(receipt, original, body, carrier.disclosure),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublishedTerminalCase {
+    pub block: Hash64,
+    pub receipt: Hash64,
+    pub relation: Qf1TerminalRelation,
+    pub verdict: Option<(Hash64, TerminalOutcome)>,
+}
+
+/// Complete read of the two terminal relations in the original case window
+/// on a pinned parent. Other Court relations and Gate C are separate inputs.
+#[derive(Debug, PartialEq, Eq)]
+pub struct BranchTerminalCourt {
+    parent: Hash64,
+    original: Hash64,
+    window_elapsed: bool,
+    cases: Vec<PublishedTerminalCase>,
+}
+
+impl BranchTerminalCourt {
+    pub fn parent(&self) -> Hash64 {
+        self.parent
+    }
+
+    pub fn original(&self) -> Hash64 {
+        self.original
+    }
+
+    pub fn cases(&self) -> &[PublishedTerminalCase] {
+        &self.cases
+    }
+
+    /// The terminal relations can prevent success. Clearing both is not
+    /// permission to skip other prosecutions or independent Gate C.
+    pub fn blocks_success(&self) -> bool {
+        !self.window_elapsed
+            || self.cases.iter().any(|case| !matches!(case.verdict, Some((_, TerminalOutcome::ChallengeNotEstablished))))
+    }
+}
+
+impl BranchExecInput<'_> {
+    /// Scan from the EXEC certificate to the selected parent. Starting at the
+    /// Panel's chosen receipt could omit a case against an earlier publication
+    /// of the same Original. An exhausted budget or missing body leaves no
+    /// usable result. Walk selected parents only, even during a reorg.
+    pub fn read_terminal_court_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        expected_original: Hash64,
+        original_block: Hash64,
+        max_blocks: usize,
+    ) -> io::Result<BranchTerminalCourt> {
+        let (body, signature) = read_published_qf1_original(native, original_block)?;
+        let original = self.input.read_qf1_original_on_branch(native, self.parent, original_block, &body, &signature)?;
+        if original != expected_original {
+            return Err(invalid("QF1 terminal history belongs to a different Original"));
+        }
+        let parent_header = native.get_header(self.parent).map_err(io::Error::other)?;
+        let window = self.input.terms.open_daa..self.input.terms.deadline_exclusive_daa;
+        let mut cursor = self.parent;
+        let mut remaining = max_blocks;
+        let mut timely = Vec::new();
+        while cursor != self.input.certificate {
+            remaining = remaining
+                .checked_sub(1)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "QF1 terminal history scan budget exhausted"))?;
+            let header = native.get_header(cursor).map_err(io::Error::other)?;
+            if header.hash != cursor {
+                return Err(invalid("QF1 terminal history header hash differs"));
+            }
+            if window.contains(&header.daa_score) {
+                timely.push(cursor);
+            }
+            cursor = native.get_ghostdag_data(cursor).map_err(io::Error::other)?.selected_parent;
+        }
+        let mut receipts = BTreeSet::new();
+        let mut pending: BTreeMap<[u8; 64], (usize, TerminalOutcome)> = BTreeMap::new();
+        let mut cases: Vec<PublishedTerminalCase> = Vec::new();
+        for block in timely.into_iter().rev() {
+            let source = native.get_block(block).map_err(io::Error::other)?;
+            if source.hash() != block {
+                return Err(invalid("QF1 terminal history body hash differs"));
+            }
+            let extra = source
+                .transactions
+                .first()
+                .filter(|tx| tx.is_coinbase())
+                .and_then(|tx| coinbase_payload_extra_data(&tx.payload))
+                .ok_or_else(|| invalid("QF1 terminal history coinbase missing or malformed"))?;
+            let Some(marker) = palw_coinbase_marker(extra) else { continue };
+            if let Some((i, outcome)) = pending.remove(&marker) {
+                cases[i].verdict = Some((block, outcome));
+                continue;
+            }
+            if marker == original.as_bytes() {
+                if block == original_block
+                    || decode_published_qf1_original(&source).is_ok_and(|(copy, sig)| {
+                        copy == body && self.input.verify_original_body(&copy, &sig).is_ok_and(|id| id == original)
+                    })
+                {
+                    receipts.insert(block);
+                }
+                continue;
+            }
+            // Only a well-formed, attached disclosure opens a terminal case.
+            // Invalid or unrelated traffic cannot place a claim on hold.
+            let Ok(carrier) = Qf1TerminalCarrier::from_block(&source) else { continue };
+            if !receipts.contains(&carrier.original_block) {
+                continue;
+            }
+            let Ok(resolved) = self.input.judge_terminal_carrier(original, &body, carrier) else { continue };
+            if resolved.marker != marker {
+                continue;
+            }
+            pending.insert(resolved.recorded_verdict_marker(block), (cases.len(), resolved.outcome));
+            cases.push(PublishedTerminalCase { block, receipt: carrier.original_block, relation: carrier.relation, verdict: None });
+        }
+        Ok(BranchTerminalCourt { parent: self.parent, original, window_elapsed: parent_header.daa_score >= window.end, cases })
     }
 }

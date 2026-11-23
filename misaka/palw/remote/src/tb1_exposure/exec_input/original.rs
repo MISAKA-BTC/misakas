@@ -1,7 +1,7 @@
 //! Private model-free Original readback and the independent replay check.
 //! The isolated envelope creates no entitlement or assessment result.
-use super::panel_cut::PublishedPanelApproval;
 use super::*;
+use super::{panel_cut::PublishedPanelApproval, terminal_case::BranchTerminalCourt};
 use kaspa_consensus_core::{
     palw_artifact::PalwArtifactOpeningV1,
     palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
@@ -35,7 +35,13 @@ pub(super) fn read_published_qf1_original(
     if source.hash() != block {
         return Err(invalid("QF1 Original source block hash differs"));
     }
-    let carrier = Qf1OriginalCarrier::from_block(&source)
+    decode_published_qf1_original(&source)
+}
+
+pub(super) fn decode_published_qf1_original(
+    source: &kaspa_consensus_core::block::Block,
+) -> io::Result<(LocalOriginalBody, MLDSA65Signature)> {
+    let carrier = Qf1OriginalCarrier::from_block(source)
         .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("QF1 Original carrier: {why:?}")))?;
     Ok((borsh::from_slice(carrier.body)?, MLDSA65Signature::new(*carrier.signature)))
 }
@@ -72,19 +78,26 @@ impl PanelApprovedQf1Execution {
         self.approval
     }
 
-    /// Match the signed quote and replay indexes against the selected
-    /// parent's reservation. Gate C and pricing use their own branch reads.
+    /// Match the terminal Court read, signed quote and replay indexes against
+    /// the selected parent's reservation. Gate C and pricing have their own reads.
     pub fn bind_moe2_funding(
         &self,
         native: &dyn ConsensusApi,
         reference: &Moe2AwardReference,
         parent: &PalwChainStateV2,
+        terminal_court: &BranchTerminalCourt,
         daa: u64,
     ) -> io::Result<Moe2ExecSlot> {
         let execution = &self.execution;
         let point = parent.last_point().ok_or_else(|| invalid("MOE2 award has no selected parent state"))?;
         if point.block != execution.parent || point.daa_score > daa {
             return Err(invalid("MOE2 award funding belongs to a different selected parent"));
+        }
+        if (terminal_court.parent(), terminal_court.original()) != (execution.parent, execution.original) {
+            return Err(invalid("terminal Court belongs to a different selected parent or Original"));
+        }
+        if terminal_court.blocks_success() {
+            return Err(invalid("terminal Court does not permit this MOE2 award"));
         }
         let quote = execution.quote.ok_or_else(|| invalid("approved EXEC input carries no signed MOE2 quote"))?;
         let close = native.get_header(execution.close).map_err(io::Error::other)?;
@@ -329,7 +342,7 @@ impl DerivedExecInput<'_> {
         Ok(id)
     }
 
-    fn verify_original_body(&self, body: &LocalOriginalBody, sig: &MLDSA65Signature) -> io::Result<Hash64> {
+    pub(super) fn verify_original_body(&self, body: &LocalOriginalBody, sig: &MLDSA65Signature) -> io::Result<Hash64> {
         self.terms.qf1.ok_or_else(|| invalid("registration has no QF1 frame"))?.admitted()?;
         let [x, t, z, records] = body.counts;
         if x != self.tokens.len() as u64
