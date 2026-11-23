@@ -153,6 +153,29 @@ pub struct Moe2QuoteAnchorV1 {
 }
 
 impl Moe2QuoteAnchorV1 {
+    pub fn state_block_for(&self, selected_parent: Hash64) -> Option<Hash64> {
+        (self.parent == selected_parent).then_some(self.anchor)
+    }
+
+    /// Validate and retain the recovered price state under its allocation owner.
+    pub fn retain_price_state(
+        &self,
+        state: crate::palw_native_resource_v1::NativeChainStateV1,
+    ) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+        use crate::palw_native_resource_v1::NativeTransitionReservationV1;
+        if state.last_point().map(|point| point.block) != Some(self.anchor) {
+            return Err(PalwStateV2Error::DeltaMismatch("MOE2 price state is at a different block"));
+        }
+        let (state, mut reservation) =
+            NativeTransitionReservationV1::take_state_v1(state).map_err(PalwStateV2Error::NativeResource)?;
+        let previous = reservation.requests_v1();
+        if reservation.state_root_v2(&state).map_err(PalwStateV2Error::NativeResource)? != self.root {
+            return Err(PalwStateV2Error::DeltaMismatch("MOE2 price state differs from the preparation header"));
+        }
+        reservation.restore_requests_v1(previous).map_err(PalwStateV2Error::NativeResource)?;
+        Ok(reservation.finish_state_envelope_v1(state))
+    }
+
     /// The EXEC owner supplies the preparation block committed by the
     /// authenticated allocation. Its selected parent's post-state set the quote.
     pub fn resolve(

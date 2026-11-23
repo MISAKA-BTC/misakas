@@ -847,6 +847,7 @@ impl VirtualStateProcessor {
                     Some(state),
                 ) {
                     Ok(()) => {}
+                    Err(RuleError::ConsensusExiting) => return Err(PalwLocalTransitionFaultV1::Shutdown),
                     Err(RuleError::LocalNativeCapacityUnavailable(why)) => return Err(why.into()),
                     Err(RuleError::LocalNativeStateContextUnavailable(why)) => return Err(PalwLocalTransitionFaultV1::Context(why)),
                     Err(why) => return Ok(PalwCandidateResultV3::Refused { stage: "UTXO", why: why.to_string() }),

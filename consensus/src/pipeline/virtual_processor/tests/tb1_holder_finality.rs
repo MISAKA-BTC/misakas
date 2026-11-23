@@ -1011,6 +1011,10 @@ async fn run(stable: bool, registered: bool) {
                 errors::block::RuleError, palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
                 palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable,
             };
+            let checkpoint = dir.path().join("before-moe2-price-recovery");
+            node.api().checkpoint_database(&checkpoint);
+            let recovered = stable_panel::reopen_checkpoint(&node.config, &checkpoint);
+            let recovered_vp = recovered.virtual_processor();
             for closed in [&closed_quote, &long] {
                 let slot = closed.exec_slot();
                 let reference = Moe2AwardReference::for_slot(Hash64::default(), [0; 32], slot);
@@ -1020,6 +1024,20 @@ async fn run(stable: bool, registered: bool) {
                     let (archived, price) = node.vp().read_private_moe2_reserved_terms(selected_parent, &reference).unwrap();
                     assert_eq!(archived, *slot);
                     assert_eq!(price, body_close.price_anchor(&history, selected_parent, slot).unwrap());
+                    let (point, selected_state) = recovered_vp.palw_observer_state_at_cached_v1(selected_parent).unwrap();
+                    assert_eq!(point, selected_parent);
+                    let before = selected_state.state_root();
+                    let (stored_slot, stored_price) =
+                        recovered_vp.read_private_moe2_reserved_terms(selected_parent, &reference).unwrap();
+                    assert_eq!((stored_slot, stored_price), (archived, price));
+                    let price_state = recovered_vp.restore_private_moe2_price_state(&selected_state, stored_price).unwrap();
+                    assert_eq!(price_state.last_point(), original_state.last_point());
+                    assert_eq!(price_state.state_root(), original_state.state_root());
+                    assert_eq!(selected_state.state_root(), before);
+                    assert!(matches!(
+                        node.vp().restore_private_moe2_price_state(&close_parent_state, price),
+                        Err(RuleError::LocalNativeStateContextUnavailable(StoreUnreadable))
+                    ));
                 }
                 assert!(matches!(
                     node.vp().read_private_moe2_reserved_terms(close_parent, &reference),
@@ -1035,6 +1053,13 @@ async fn run(stable: bool, registered: bool) {
                     ));
                 }
             }
+            peer_log!(
+                "MOE2 recovered price state pid={} close={} anchor={} root={}",
+                std::process::id(),
+                anchor,
+                original_state.last_point().unwrap().block,
+                original_state.state_root()
+            );
             peer_log!(
                 "TB1 EXEC candidate pid={} close={} parent={} allocations={}",
                 std::process::id(),

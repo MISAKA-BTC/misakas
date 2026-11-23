@@ -1990,7 +1990,7 @@ impl VirtualStateProcessor {
         self.pruning_sender.send(PruningProcessingMessage::Exit).unwrap();
     }
 
-    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
+    pub(super) fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
         if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
     }
 
@@ -2839,6 +2839,7 @@ impl VirtualStateProcessor {
                     // Local storage/admission faults do not establish a rule
                     // violation. Preserve the candidate for a later retry.
                     let res = match res {
+                        Err(RuleError::ConsensusExiting) => return Err(PalwLocalTransitionFaultV1::Shutdown),
                         Err(RuleError::LocalNativeCapacityUnavailable(why)) => {
                             return Err(why.into());
                         }

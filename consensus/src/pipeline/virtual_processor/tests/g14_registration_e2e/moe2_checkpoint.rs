@@ -863,6 +863,11 @@ pub(super) fn check_exec_settlement_rewind(
     let changed = changed.into_state(params, None).unwrap();
     assert_eq!(changed.last_point(), registration.last_point());
     assert_ne!(changed.state_root(), registration.state_root());
+    use kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1;
+    assert!(matches!(
+        price.retain_price_state(NativeChainStateV1::try_from_clone_v1(&changed).unwrap()),
+        Err(PalwStateV2Error::DeltaMismatch("MOE2 price state differs from the preparation header"))
+    ));
     assert!(matches!(
         fold_retained_award(config, params, &restored, &changed, price, &award_block, attempt, input(), true),
         Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"))

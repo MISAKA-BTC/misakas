@@ -4,7 +4,7 @@ pub(super) mod positive_native_context_v2;
 use super::{
     VirtualStateProcessor,
     processor::{
-        manifest_requests_v3::NativeManifestRequestPassV3, palw_accept::NativeRelayFeePlanV2,
+        PalwLocalTransitionFaultV1, manifest_requests_v3::NativeManifestRequestPassV3, palw_accept::NativeRelayFeePlanV2,
         tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1,
     },
 };
@@ -37,7 +37,7 @@ use crate::{
 };
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::palw_native_resource_v1::{
-    NativeCoverageV1, NativeDemandLeaseV1, btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1,
+    NativeChainStateV1, NativeCoverageV1, NativeDemandLeaseV1, btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1,
 };
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
@@ -58,7 +58,7 @@ use kaspa_consensus_core::{
     muhash::MuHashExtensions,
     palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
     palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1,
-    palw_state_v2::Moe2QuoteAnchorV1,
+    palw_state_v2::{Moe2QuoteAnchorV1, PalwChainStateV2, PalwStateV2Error},
     palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
     subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
@@ -2296,7 +2296,8 @@ impl VirtualStateProcessor {
                         .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
                         .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
                     reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
-                    self.read_private_moe2_reserved_terms(ctx.selected_parent(), &reference)?;
+                    let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), &reference)?;
+                    self.restore_private_moe2_price_state(parent, price)?;
                     // The resolved terms still require an independently certified winning right.
                     return Err(PrivateMoe2AwardUnresolved);
                 }
@@ -2470,6 +2471,51 @@ impl VirtualStateProcessor {
             }
         })?;
         Ok((slot, price))
+    }
+
+    /// Reconstruct the authenticated preparation state from the very same
+    /// selected-parent state used by UTXO verification. The live tip may be on
+    /// another branch. Retained delta owners account for rollback allocations.
+    pub(super) fn restore_private_moe2_price_state(
+        &self,
+        parent: &PalwChainStateV2,
+        price: Moe2QuoteAnchorV1,
+    ) -> BlockProcessResult<NativeChainStateV1> {
+        use crate::processes::palw_state_walk::PalwStateWalkError;
+        use PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
+        let missing = || LocalNativeStateContextUnavailable(HistoryUnavailable);
+        let invalid = || LocalNativeStateContextUnavailable(StoreUnreadable);
+        let params = self.palw_state_params_v2.as_ref().ok_or_else(missing)?;
+        let selected_parent = parent.last_point().ok_or_else(missing)?.block;
+        let anchor = price.state_block_for(selected_parent).ok_or_else(invalid)?;
+        let local_fault = |error: PalwStateWalkError| match error {
+            PalwStateWalkError::MissingDelta(_) | PalwStateWalkError::Store(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                missing()
+            }
+            _ => error.native_capacity_v1().map_or_else(invalid, LocalNativeCapacityUnavailable),
+        };
+        let mut state = NativeChainStateV1::try_from_clone_v1(parent).map_err(LocalNativeCapacityUnavailable)?;
+        while let Some(point) = state.last_point() {
+            self.check_shutdown_boundary().map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            if point.block == anchor {
+                break;
+            }
+            let block = point.block;
+            let blue_score = point.blue_score;
+            let selected = self.ghostdag_store.get_selected_parent(block).map_err(|error| local_fault(error.into()))?;
+            let (_, delta) = self.palw_state_v2_store.read().delta_of_retained_v1(block).map_err(|error| local_fault(error.into()))?;
+            if delta.point != *point {
+                return Err(invalid());
+            }
+            state = state.into_delta_v1(&delta, params, true).map_err(|error| local_fault(error.into()))?;
+            if state.last_point().is_none_or(|point| point.block != selected || point.blue_score >= blue_score) {
+                return Err(invalid());
+            }
+        }
+        price.retain_price_state(state).map_err(|error| match error {
+            PalwStateV2Error::NativeResource(why) => LocalNativeCapacityUnavailable(why),
+            _ => invalid(),
+        })
     }
 
     pub(super) fn coinbase_inputs_for_candidate_v3(
