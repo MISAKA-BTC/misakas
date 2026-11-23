@@ -1234,7 +1234,7 @@ native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationQuote
 native_enum!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationStatusV1; Pending, Complete { point, record }, Superseded { point }, Expired { point });
 native_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationReservationV1; opener, accepted_daa, finish_until_daa, material_until_daa, quote, assigned_slots, released_at);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetVectorV1; claims, block_units, reward_sompi, final_weight, round_rights);
-native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability, Moe2Exec { expires_at });
+native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability, Moe2Exec { expires_at }, Moe2ExecBound { expires_at, close, slot });
 native_enum!(crate::palw_bond_budget_v1::PalwMaterialPaymentV1; Pending { income }, Queued { income, queue, queued_daa, paid_daa, release_daa }, Historical { until }, UnprovenPhysicalPayment { until }, HeldEscrow { obligation });
 native_struct!(crate::palw_bond_budget_v1::PalwPaidConsumerTermsV1; accepted_daa, service_until, backstop_until, material_until, policy);
 native_enum!(crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1; Live, Exhausted { daa }, Terminal { daa });

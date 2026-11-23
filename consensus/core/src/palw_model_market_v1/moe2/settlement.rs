@@ -96,7 +96,15 @@ impl Moe2ExecSlot {
     /// The signed deadline is inclusive. The first later block retires the slot.
     pub fn budget_origin(&self) -> Result<PalwBudgetOriginV1, Moe2SettlementError> {
         let expires_at = self.quote.deadline.checked_add(1).ok_or(Moe2SettlementError::OutsideWindow)?;
-        Ok(PalwBudgetOriginV1::Moe2Exec { expires_at })
+        Ok(PalwBudgetOriginV1::Moe2ExecBound { expires_at, close: self.close, slot: self.slot })
+    }
+
+    fn matches_budget_origin(&self, origin: PalwBudgetOriginV1) -> Result<bool, Moe2SettlementError> {
+        let expected = self.budget_origin()?;
+        Ok(match origin {
+            PalwBudgetOriginV1::Moe2Exec { .. } => origin.moe2_exec_expiry() == expected.moe2_exec_expiry(),
+            _ => origin == expected,
+        })
     }
 
     /// Consume capacity for this authenticated slot. The owning batch discards
@@ -891,7 +899,7 @@ impl Moe2SettlementBook {
         if !(slot.quote.valid_from..=slot.quote.deadline).contains(&slot.close_daa)
             || budget.header.policy_digest != slot.quote.policy
             || row.accepted_daa != slot.close_daa
-            || (row.origin != PalwBudgetOriginV1::Attempt && row.origin != slot.budget_origin()?)
+            || (row.origin != PalwBudgetOriginV1::Attempt && !slot.matches_budget_origin(row.origin)?)
             || !row.live
             || !row.open
             || row.model.map(|(model, _)| model) != Some(slot.quote.model)
@@ -1009,7 +1017,7 @@ impl Moe2SettlementBook {
                         || !(terms.valid_from..=position.point.daa_score).contains(&slot.close_daa)
                         || row.reserved.reward_sompi != terms.limits.max_reward
                         || (row.origin != PalwBudgetOriginV1::Attempt
-                            && (row.origin != slot.budget_origin()? || liability.signed_hard_deadline != Ok(terms.deadline)))
+                            && (!slot.matches_budget_origin(row.origin)? || liability.signed_hard_deadline != Ok(terms.deadline)))
                 }
             }
             || liability.reserved_reward != Ok(row.reserved.reward_sompi)

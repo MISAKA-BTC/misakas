@@ -4,9 +4,7 @@ use super::*;
 use crate::block::Block;
 use crate::coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, coinbase_payload_extra_data, private_moe2_award_marker};
 use crate::config::params::Params;
-use crate::palw_bond_budget_v1::{
-    PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, PalwBudgetOriginV1, palw_bond_budget_export_cap_v1,
-};
+use crate::palw_bond_budget_v1::{PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, palw_bond_budget_export_cap_v1};
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
     Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit,
@@ -248,6 +246,7 @@ pub(super) fn fold_exec_award_v1(
     if reference != Moe2AwardReference::for_slot(award.claim, attempt, award.slot) {
         return Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"));
     }
+    reference.check_parent_reservation(parent, point.daa_score).map_err(PalwStateV2Error::DeltaMismatch)?;
     let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
     let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;
     let mut book = Moe2SettlementBook::for_native_award(model, prior_exec_settlement(&builder.entries));
@@ -404,7 +403,7 @@ pub(super) fn check_exec_settlement_debit_v1(
     let after = borsh::from_slice::<PalwBudgetClaimRowV1>(new).map_err(|_| mismatch())?;
     let expected = before.after_exec_slot_reward(total).ok();
     if before.model.map(|(model, _)| model) != Some(record.model)
-        || matches!(before.origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= point.daa_score)
+        || before.origin.moe2_exec_expiry().is_some_and(|expires_at| expires_at <= point.daa_score)
         || expected != Some(after)
     {
         return Err(mismatch());

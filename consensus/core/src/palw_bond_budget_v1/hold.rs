@@ -353,6 +353,7 @@ pub fn palw_bond_hold_shadows_origin_v1(origin: PalwBudgetOriginV1) -> bool {
         origin,
         PalwBudgetOriginV1::Attempt
             | PalwBudgetOriginV1::Moe2Exec { .. }
+            | PalwBudgetOriginV1::Moe2ExecBound { .. }
             | PalwBudgetOriginV1::Rider
             | PalwBudgetOriginV1::FreePrompt
             | PalwBudgetOriginV1::Legacy

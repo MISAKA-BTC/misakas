@@ -14,8 +14,9 @@ use crate::{
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbasePayload, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape,
             BadUTXOCommitment, ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
-            LocalNativeCapacityUnavailable, PrivateMoe2AwardMalformed, PrivateMoe2AwardUnresolved, UnauthorizedUnbondRequestInBlock,
-            UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            LocalNativeCapacityUnavailable, LocalNativeStateContextUnavailable, PrivateMoe2AwardMalformed, PrivateMoe2AwardUnresolved,
+            UnauthorizedUnbondRequestInBlock, UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
+            WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -2180,8 +2181,9 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         header: &Header,
+        parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> BlockProcessResult<()> {
-        self.verify_expected_utxo_state_with_parent_v3(ctx, selected_parent_utxo_view, selected_parent_bond_view, header, None)
+        self.verify_expected_utxo_state_with_parent_v3(ctx, selected_parent_utxo_view, selected_parent_bond_view, header, parent_state)
     }
 
     pub(super) fn verify_expected_utxo_state_with_parent_v3<V: UtxoView + Sync>(
@@ -2287,7 +2289,14 @@ impl VirtualStateProcessor {
                 // An award marker cannot substitute for a branch-verified
                 // winning right. No mining-active FOW1 profile supplies one yet.
                 if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
-                    Moe2AwardReference::from_transactions(txs.iter()).map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
+                    let reference = Moe2AwardReference::from_transactions(txs.iter())
+                        .map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
+                    let parent = parent_state
+                        .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
+                        .ok_or(LocalNativeStateContextUnavailable(
+                            kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                        ))?;
+                    reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
                     return Err(PrivateMoe2AwardUnresolved);
                 }
             }
@@ -2391,8 +2400,9 @@ impl VirtualStateProcessor {
             &ctx.ghostdag_data,
             header.daa_score,
         );
+        let coinbase_parent = parent_state.filter(|_| ctx.palw_manifest_requests_v3.is_some());
         let CandidateCoinbaseInputsV3 { validator_reward_outputs, carve, inclusion, own_subsidy } =
-            self.coinbase_inputs_for_candidate_v3(ctx, selected_parent_bond_view, header, &txs, &mergeset_non_daa, parent_state)?;
+            self.coinbase_inputs_for_candidate_v3(ctx, selected_parent_bond_view, header, &txs, &mergeset_non_daa, coinbase_parent)?;
         self.verify_coinbase_transaction(
             &txs[0],
             header.daa_score,

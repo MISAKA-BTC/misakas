@@ -2,7 +2,13 @@
 //! points to the winning right and reservation that the block owner must
 //! authenticate from branch state before settlement.
 use super::settlement::Moe2ExecSlot;
-use crate::{Hash64, subnets::SUBNETWORK_ID_PALW_LIFECYCLE, tx::Transaction};
+use crate::{
+    Hash64,
+    palw_bond_budget_v1::{PalwBudgetOriginV1, PalwBudgetVectorV1},
+    palw_state_v2::PalwChainStateV2,
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+    tx::Transaction,
+};
 
 const TAG: &[u8; 8] = b"MOE2REF1";
 const LENGTH: usize = 8 + 64 + 32 + 64 + 8 + 64;
@@ -36,6 +42,30 @@ impl Moe2AwardReferenceError {
 impl Moe2AwardReference {
     pub fn for_slot(claim: Hash64, attempt: [u8; 32], slot: &Moe2ExecSlot) -> Self {
         Self { claim, attempt, close: slot.close, slot: slot.slot, reservation: slot.reservation_key() }
+    }
+
+    /// Resolve the reference against the selected parent's committed reservation.
+    /// The reservation admits no claim or winner; Gate C remains a separate read.
+    pub fn check_parent_reservation(&self, parent: &PalwChainStateV2, daa: u64) -> Result<(), &'static str> {
+        let row = parent
+            .bond_budget()
+            .and_then(|budget| budget.claim_row(&self.reservation))
+            .ok_or("private MOE2 reservation is absent from the selected parent")?;
+        let PalwBudgetOriginV1::Moe2ExecBound { expires_at, close, slot } = row.origin else {
+            return Err("private MOE2 reservation has no bound EXEC close and slot");
+        };
+        if (close, slot) != (self.close, self.slot) {
+            return Err("private MOE2 reservation names a different EXEC close or slot");
+        }
+        if !(row.accepted_daa..expires_at).contains(&daa)
+            || !row.open
+            || !row.live
+            || row.reserved.claims != 1
+            || row.consumed != PalwBudgetVectorV1::ZERO
+        {
+            return Err("private MOE2 reservation is no longer available at this DAA");
+        }
+        Ok(())
     }
 
     pub fn encode(&self) -> [u8; LENGTH] {

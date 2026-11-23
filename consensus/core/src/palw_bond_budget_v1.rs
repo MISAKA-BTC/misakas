@@ -271,6 +271,21 @@ pub enum PalwBudgetOriginV1 {
     Moe2Exec {
         expires_at: u64,
     } = 16,
+    /// Private EXEC reservation with the close and slot committed in the budget row.
+    Moe2ExecBound {
+        expires_at: u64,
+        close: Hash64,
+        slot: u64,
+    } = 17,
+}
+
+impl PalwBudgetOriginV1 {
+    pub(crate) fn moe2_exec_expiry(self) -> Option<u64> {
+        match self {
+            Self::Moe2Exec { expires_at } | Self::Moe2ExecBound { expires_at, .. } => Some(expires_at),
+            _ => None,
+        }
+    }
 }
 
 /// **RFC-0016 P4 (user decision 2026-10-15): is this origin's reward user-paid escrow rather than a coinbase-derived leg?** A
@@ -1435,7 +1450,7 @@ pub struct PalwBudgetClaimRowV1 {
 
 impl PalwBudgetClaimRowV1 {
     pub(crate) fn after_exec_slot_reward(mut self, reward: u64) -> Result<Self, PalwBudgetRefusalV1> {
-        if !matches!(self.origin, PalwBudgetOriginV1::Attempt | PalwBudgetOriginV1::Moe2Exec { .. }) || !self.open || !self.live {
+        if (self.origin != PalwBudgetOriginV1::Attempt && self.origin.moe2_exec_expiry().is_none()) || !self.open || !self.live {
             return Err(PalwBudgetRefusalV1::NotOpen);
         }
         if self.consumed != PalwBudgetVectorV1::ZERO || self.reserved.claims != 1 {
@@ -2155,7 +2170,7 @@ impl PalwBondBudgetStateV1 {
         let due: Vec<(u64, Hash64)> = self.releases.iter().take_while(|(at, _)| *at <= now).copied().collect();
         for (at, claim_id) in due {
             if let Some(claim) = self.claims.get(&claim_id).copied()
-                && claim.origin == (PalwBudgetOriginV1::Moe2Exec { expires_at: at })
+                && claim.origin.moe2_exec_expiry() == Some(at)
                 && claim.live
             {
                 self.forget(&claim_id, j);
@@ -2275,7 +2290,7 @@ impl PalwBondBudgetStateV1 {
         mode: PalwHoldModeV1,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
-        if matches!(origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= accepted_daa) {
+        if origin.moe2_exec_expiry().is_some_and(|expires_at| expires_at <= accepted_daa) {
             return Err(PalwBudgetRefusalV1::ExecDeadline);
         }
         if self.claims.contains_key(&claim_id) {
@@ -2315,7 +2330,7 @@ impl PalwBondBudgetStateV1 {
             j,
         );
         self.put_release((reuse_not_before, claim_id), true, j);
-        if let PalwBudgetOriginV1::Moe2Exec { expires_at } = origin {
+        if let Some(expires_at) = origin.moe2_exec_expiry() {
             self.put_release((expires_at, claim_id), true, j);
         }
         self.write_hold_shadows_v1(policy, &claim_id, &bond, accepted_daa, &reservation, origin, j)?;
@@ -3065,7 +3080,7 @@ impl PalwBondBudgetStateV1 {
         mode: PalwHoldModeV1,
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
-        if matches!(origin, PalwBudgetOriginV1::Moe2Exec { expires_at } if expires_at <= accepted_daa) {
+        if origin.moe2_exec_expiry().is_some_and(|expires_at| expires_at <= accepted_daa) {
             return Err(PalwBudgetRefusalV1::ExecDeadline);
         }
         if self.claims.contains_key(&claim_id) {
@@ -3407,7 +3422,7 @@ impl PalwBondBudgetStateV1 {
         }
         self.close(claim_id, j);
         let Some(mut claim) = self.claims.get(claim_id).copied().filter(|c| c.live) else { return };
-        if let PalwBudgetOriginV1::Moe2Exec { expires_at } = claim.origin
+        if let Some(expires_at) = claim.origin.moe2_exec_expiry()
             && (!claim.in_window || expires_at != claim.reuse_not_before)
         {
             self.put_release((expires_at, *claim_id), false, j);
@@ -3481,10 +3496,7 @@ impl PalwBondBudgetStateV1 {
             if !claim.consumed.fits_within(&claim.reserved) {
                 return Err("a claim consumed beyond its reservation");
             }
-            let expires_at = match claim.origin {
-                PalwBudgetOriginV1::Moe2Exec { expires_at } => Some(expires_at),
-                _ => None,
-            };
+            let expires_at = claim.origin.moe2_exec_expiry();
             if let Some(expires_at) = expires_at {
                 if expires_at <= claim.accepted_daa
                     || (claim.live || (claim.in_window && expires_at == claim.reuse_not_before))
@@ -3514,8 +3526,10 @@ impl PalwBondBudgetStateV1 {
         }
         if self.releases.iter().any(|(at, id)| {
             self.claims.get(id).is_none_or(|claim| {
-                matches!(claim.origin, PalwBudgetOriginV1::Moe2Exec { expires_at }
-                    if !(claim.live && *at == expires_at || claim.in_window && *at == claim.reuse_not_before))
+                claim
+                    .origin
+                    .moe2_exec_expiry()
+                    .is_some_and(|expires_at| !(claim.live && *at == expires_at || claim.in_window && *at == claim.reuse_not_before))
             })
         }) {
             return Err("a release names no row");

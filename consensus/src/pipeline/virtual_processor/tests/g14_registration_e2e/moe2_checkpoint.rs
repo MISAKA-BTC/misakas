@@ -358,6 +358,25 @@ pub(super) fn check_exec_settlement_rewind(
     let selected_parent = reserved.last_point().unwrap().block;
     let marker = native_award(claim, &slot, work, position).coinbase_marker(config.genesis.hash, selected_parent, &attempt);
     let reference = Moe2AwardReference::for_slot(claim, attempt, &slot);
+    assert!(reference.check_parent_reservation(&reserved, position.point.daa_score).is_ok());
+    assert_eq!(
+        reference.check_parent_reservation(&unreserved, position.point.daa_score),
+        Err("private MOE2 reservation is absent from the selected parent")
+    );
+    for changed in [
+        Moe2AwardReference { close: Hash64::from_u64_word(700), ..reference },
+        Moe2AwardReference { slot: alias_slot.slot, ..reference },
+        Moe2AwardReference { reservation: alias_slot.reservation_key(), ..reference },
+    ] {
+        assert_eq!(
+            changed.check_parent_reservation(&reserved, position.point.daa_score),
+            Err("private MOE2 reservation names a different EXEC close or slot")
+        );
+    }
+    assert_eq!(
+        reference.check_parent_reservation(&reserved, slot.quote.deadline + 1),
+        Err("private MOE2 reservation is no longer available at this DAA")
+    );
     let reference_tx = |reference: Moe2AwardReference| {
         let funding = &env.floats[3];
         let mut tx = Transaction::new(
@@ -709,6 +728,7 @@ pub(super) fn check_exec_settlement_rewind(
     let price = Moe2QuoteAnchorV1::resolve(api, close, close, &slot).unwrap();
     assert!(Moe2QuoteAnchorV1::resolve(api, quote.quote_anchor, close, &slot).is_err());
     assert!(Moe2QuoteAnchorV1::resolve(api, close, quote.quote_anchor, &slot).is_err());
+    assert!(reference.check_parent_reservation(&restored, position.point.daa_score).is_ok());
     let retained = |parent: &PalwChainStateV2, block: &Block, input: Moe2ExecAwardV1<'_>, enabled| {
         fold_retained_award(config, params, parent, registration, price, block, attempt, input, enabled)
     };
@@ -761,6 +781,10 @@ pub(super) fn check_exec_settlement_rewind(
     trailing.push(0);
     assert_eq!(Moe2AwardReference::decode(&trailing), Err(Moe2AwardReferenceError::Encoding));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
+    assert_eq!(
+        reference.check_parent_reservation(&retained_child, position.point.daa_score),
+        Err("private MOE2 reservation is no longer available at this DAA")
+    );
     let mut expected_delta = award_delta.clone();
     let last = expected_delta.entries.last_mut().unwrap();
     let PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work: expected_work, record } = last else {

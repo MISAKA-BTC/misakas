@@ -2827,7 +2827,13 @@ impl VirtualStateProcessor {
                     let res = if manifest_candidate.is_some() {
                         Ok(())
                     } else {
-                        self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header)
+                        self.verify_expected_utxo_state(
+                            &mut ctx,
+                            &selected_parent_utxo_view,
+                            &*bond_view,
+                            &header,
+                            palw_state.as_deref(),
+                        )
                     };
 
                     // Local storage/admission faults do not establish a rule
