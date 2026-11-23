@@ -11997,7 +11997,7 @@ pub struct PalwChainStateV2 {
 
 mod chain_state;
 pub(crate) mod qf1_terminal_court;
-pub use qf1_terminal_court::{Qf1OriginalVerification, Qf1TerminalUpdate};
+pub use qf1_terminal_court::{Qf1OriginalVerification, Qf1PanelOriginal, Qf1TerminalUpdate};
 pub(crate) mod private_moe2_settlement;
 pub use private_moe2_settlement::{Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, Moe2QuoteAnchorV1};
 mod evm_replay_settlements_owned_v2;

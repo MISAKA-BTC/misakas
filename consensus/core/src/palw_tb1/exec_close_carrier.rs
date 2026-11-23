@@ -197,7 +197,7 @@ impl<'a> ExecCloseCarrier<'a> {
         block: &'a Block,
         receipt: &super::moe2_exec_close::Moe2ExecCloseReceipt,
         slot: u64,
-    ) -> Result<(&'a [u8], ExecRegistration<'a>), ExecCloseCarrierError> {
+    ) -> Result<(&'a [u8], ExecRegistration<'a>, [u8; 64]), ExecCloseCarrierError> {
         let (carrier, row) = Self::read_slot(carrier_payload(&block.transactions)?, slot)?;
         if receipt.block != block.hash()
             || receipt.preparation != carrier.preparation
@@ -205,7 +205,7 @@ impl<'a> ExecCloseCarrier<'a> {
         {
             return Err(ExecCloseCarrierError::Freeze);
         }
-        Ok((row.context, Self::decode_slot(&carrier, &row)?))
+        Ok((row.context, Self::decode_slot(&carrier, &row)?, row.funding_ref))
     }
 
     fn decode_slot(carrier: &Self, row: &RecordBytes<'a>) -> Result<ExecRegistration<'a>, ExecCloseCarrierError> {

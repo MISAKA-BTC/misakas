@@ -497,11 +497,12 @@ async fn exercise_prepared_exec_certificate(
 ) {
     use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
     use kaspa_consensus_core::{
-        palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
+        palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
         palw_qf1::{self, TreeBuilder, TreeKind, TreeRoot, readout_chunks::record_count, ticket},
         palw_state_v2::{
-            PalwBlockContextV2, PalwBlockWorkV3, PalwDeltaEntryV2, PalwTransitionExtrasV1, PositiveCaseReplayInputV2,
-            Qf1OriginalVerification, Qf1TerminalUpdate, apply_delta_v2, apply_palw_transition_retained_v8, revert_delta_v2,
+            PalwBlockContextV2, PalwBlockWorkV3, PalwChainStateV2, PalwDeltaEntryV2, PalwTransitionExtrasV1,
+            PositiveCaseReplayInputV2, Qf1OriginalVerification, Qf1PanelOriginal, Qf1TerminalUpdate, apply_delta_v2,
+            apply_palw_transition_retained_v8, revert_delta_v2,
         },
         palw_tb1::{
             publication::{BranchPublicationGate, ExecCertificateReference, verify_prepared_exec_certificate},
@@ -644,13 +645,15 @@ async fn exercise_prepared_exec_certificate(
         let vp = node.vp();
         let mut store = vp.palw_state_v2_store.write();
         let mut actual = store.delta_of(accepted.hash()).unwrap().1;
-        let key = [b"S".as_slice(), close.hash().as_byte_slice()].concat();
-        let write = delta
-            .entries
-            .iter()
-            .find(|entry| matches!(entry, PalwDeltaEntryV2::KernelRouteRow { key: row_key, .. } if row_key == &key))
-            .unwrap();
-        actual.entries.push(write.clone());
+        for prefix in [b'I', b'S'] {
+            let key = [&[prefix][..], close.hash().as_byte_slice()].concat();
+            let write = delta
+                .entries
+                .iter()
+                .find(|entry| matches!(entry, PalwDeltaEntryV2::KernelRouteRow { key: row_key, .. } if row_key == &key))
+                .unwrap();
+            actual.entries.push(write.clone());
+        }
         let retained = apply_delta_v2(&state, &actual, &node.bundle.state).unwrap();
         let record = PalwStateDeltaRecordV2 { state_root: retained.state_root(), delta_borsh: borsh::to_vec(&actual).unwrap() };
         store.set_delta_record_for_tests(accepted.hash(), record).unwrap();
@@ -713,6 +716,21 @@ async fn exercise_prepared_exec_certificate(
         let (tip, state) = node.chain.tip_state();
         assert_eq!(tip, block.hash());
         assert_eq!(state.qf1_original_verification(claim), expected);
+        let mut intake = state.qf1_panel_intake(close.hash(), tip).unwrap();
+        let admitted = expected.map(|_| {
+            (
+                slot.slot,
+                claim,
+                Qf1PanelOriginal {
+                    original_block: tip,
+                    deadline: state.qf1_original_receipt(claim).unwrap().1,
+                    registration: Hash64::from_bytes(slot.registration),
+                    funding_ref: Hash64::from_bytes(Moe2ExecSlot::consent_ref(slot.registration, slot.slot)),
+                },
+            )
+        });
+        assert_eq!(intake.next().transpose().unwrap(), admitted);
+        assert!(intake.next().is_none());
         assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
     }
     let original_block = node.chain.sink();
@@ -773,6 +791,10 @@ async fn exercise_prepared_exec_certificate(
         let certificate = restored.tb1_exec_certificate(close.hash()).unwrap();
         assert_eq!((certificate.certificate(), certificate.seed), (accepted.hash(), *seed.as_bytes()));
         assert_eq!(restored.qf1_original_receipt(original), decided.qf1_original_receipt(original));
+        let intake =
+            |state: &PalwChainStateV2| state.qf1_panel_intake(close.hash(), at).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(intake(&restored), intake(&decided));
+        assert!(restored.qf1_panel_intake(close.hash(), original_block).is_none());
         assert!(restored.qf1_terminal_blocks_award(original));
         let mut prefixes = std::collections::BTreeSet::new();
         for ((table, key), row) in &restored.kernel_route_state_v1().unwrap().aux {
@@ -781,7 +803,7 @@ async fn exercise_prepared_exec_certificate(
                 prefixes.insert(key[0]);
             }
         }
-        assert_eq!(prefixes, [b'E', b'O', b'P', b'R', b'S'].into_iter().collect());
+        assert_eq!(prefixes, [b'E', b'I', b'O', b'P', b'R', b'S'].into_iter().collect());
         peer_log!("TB1 native EXEC and Court close={} certificate={} verdict={}", close.hash(), accepted.hash(), decision.hash());
     }
 }

@@ -802,3 +802,11 @@ QF1のStopとReadout Endの局所裁定をconsensus coreから呼べるように
 状態差分が既に書いていたTB1の行に、保存状態・行提供で使う厳密なcodecを対応させた。EXEC/PANEL準備のrosterとPANEL選出席は格納済みvectorの長さから読取容量を算出する。既存の行キーとBorsh形式を使用し、生成元にも同じ対応を登録した。
 
 通常ブロックでEXEC証明書とStop裁定を受理した履歴保持ノードのDBを別ノードで開いた。裁定ブロック、状態root、証明書のseed、Original受付と受賞阻止が一致した。既存の隔離MOE2試験でPANEL選出・承認行のcodecも実際の保存行から確認した。この試験では既存fixtureが選出を与えており、PANEL選出の通常受理と受賞決済のreorg復元は残る。実装・検証済みは0/5。長時間DAA再生は未実施。
+
+### PANEL closeに渡すOriginal受付の索引
+
+EXEC証明書の受理と同じブロックで、closeごとの索引開始を記録する。以降の認証済みOriginalは受付と同じ差分に、slot、署名済み登録、資金参照、Originalのブロックと元期限を記録する。提案されたPANEL closeの選択親から、同じEXEC closeに属する受付をslot・claim順に読み出せる。過去の証明書に索引開始の記録がなければ、索引による読み出しは未対応として扱う。既存のOriginal受付行はそのまま読み取れる。
+
+隔離試験では、正しいattemptで受理したOriginalの登録と資金参照を索引から照合した。誤ったattemptは索引に入らず、DBを開き直した後も選択親に対応する受付集合と状態rootが一致した。
+
+実装・検証済みは0/5。索引はPANEL closeの受付集合を供給する。poolと選出方針の確定、PANEL close・証明書の通常受理、成功Finalと独立Gate C、当選権利と仕事キーの原子的消費、同一ブロック決済とreorg復元は残る。長時間DAA再生は未実施。

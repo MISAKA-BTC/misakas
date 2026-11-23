@@ -128,7 +128,7 @@ impl Qf1TerminalRuling {
         {
             return Err("QF1 Court case differs from the admitted Original");
         }
-        let (original, registration) = authenticate_certified_original(&chain, parent, source, close, original_block)?;
+        let (original, registration, _) = authenticate_certified_original(&chain, parent, source, close, original_block)?;
         if deadline != registration.deadline_exclusive_daa {
             return Err("QF1 Court case differs from the admitted deadline");
         }

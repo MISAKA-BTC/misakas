@@ -17,6 +17,16 @@ struct CourtStatus {
     refuted: bool,
 }
 
+/// The registration and receipt coordinates of an admitted Original. These
+/// are intake facts for a PANEL cut; eligibility and draw policy are separate.
+#[derive(Debug, PartialEq, Eq, borsh::BorshDeserialize, borsh::BorshSerialize)]
+pub struct Qf1PanelOriginal {
+    pub original_block: Hash64,
+    pub deadline: u64,
+    pub registration: Hash64,
+    pub funding_ref: Hash64,
+}
+
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire::wire_struct};
 
 wire_struct!(CourtStatus; u32, bool);
@@ -24,8 +34,12 @@ wire_struct!(Moe2ExecCloseReceipt; Hash64, Hash64, Hash64, [u8; 64]);
 wire_struct!(ExecCertificateReceipt; Hash64, Hash64, Hash64, [u8; 64], [u8; 32]);
 wire_struct!(PanelReplayDuty; [u8; 64], Hash64, Hash64, Hash64, u64, [u8; 64], Vec<Hash64>);
 wire_struct!(Qf1TerminalRuling; Hash64, Hash64, [u8; 64], u64, bool);
+wire_struct!(Qf1PanelOriginal; Hash64, u64, Hash64, Hash64);
 
 pub(crate) fn scan_row<R: std::io::Read>(key: &[u8], frame: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+    if key.len() == 1 + 64 + 8 + 64 && key[0] == b'I' {
+        return Qf1PanelOriginal::scan_native_wire_v1(frame);
+    }
     let malformed = || std::io::Error::new(std::io::ErrorKind::InvalidData, "unallocated TB1 Court row key");
     let (kind, _) = key.split_first().filter(|(_, digest)| digest.len() == 64).ok_or_else(malformed)?;
     match kind {
@@ -34,7 +48,7 @@ pub(crate) fn scan_row<R: std::io::Read>(key: &[u8], frame: &mut NativeWireReade
         b'S' => ExecCertificateReceipt::scan_native_wire_v1(frame),
         b'R' => <(Hash64, u64)>::scan_native_wire_v1(frame),
         b'D' => PanelReplayDuty::scan_native_wire_v1(frame),
-        b'A' => Hash64::scan_native_wire_v1(frame),
+        b'A' | b'I' => Hash64::scan_native_wire_v1(frame),
         b'O' => CourtStatus::scan_native_wire_v1(frame),
         b'V' => Qf1TerminalRuling::scan_native_wire_v1(frame),
         _ => Err(malformed()),
@@ -119,6 +133,40 @@ impl PalwChainStateV2 {
         self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'R', &original.as_bytes()))
     }
 
+    fn qf1_panel_intake_prefix(&self, close: Hash64) -> Option<Vec<u8>> {
+        let cert = self.tb1_exec_certificate(close)?;
+        let prefix = key(b'I', &close.as_bytes());
+        let indexed: Hash64 = self.kernel_route.as_ref()?.aux_row(TABLE, &prefix)?;
+        (indexed == cert.certificate()).then_some(prefix)
+    }
+
+    /// Stream admitted submissions for one certified close in slot/claim
+    /// order, from the exact parent of the proposed PANEL cut. A second
+    /// distinct claim on a slot cannot overwrite the earlier submission.
+    /// Older certificates without an index marker have no indexed view.
+    pub fn qf1_panel_intake(
+        &self,
+        close: Hash64,
+        selected_parent: Hash64,
+    ) -> Option<impl Iterator<Item = Result<(u64, Hash64, Qf1PanelOriginal), PalwStateV2Error>> + '_> {
+        if self.last_point()?.block != selected_parent {
+            return None;
+        }
+        let route = self.kernel_route.as_ref()?;
+        let prefix = self.qf1_panel_intake_prefix(close)?;
+        let mut first = prefix.clone();
+        first.extend_from_slice(&0u64.to_be_bytes());
+        Some(route.aux.range((TABLE, first)..).take_while(move |((table, key), _)| *table == TABLE && key.starts_with(&prefix)).map(
+            |((_, key), bytes)| {
+                let malformed = || PalwStateV2Error::DeltaMismatch("invalid QF1 PANEL intake row");
+                let (slot, original) = key[65..].split_first_chunk::<8>().ok_or_else(malformed)?;
+                let original = Hash64::from_bytes(original.try_into().map_err(|_| malformed())?);
+                let admitted = borsh::from_slice(bytes).map_err(|_| malformed())?;
+                Ok((u64::from_be_bytes(*slot), original, admitted))
+            },
+        ))
+    }
+
     pub fn qf1_terminal_verdict_pending(&self, marker: &[u8; 64], daa: u64) -> bool {
         self.kernel_route
             .as_ref()
@@ -153,6 +201,8 @@ pub(super) fn fold_terminal_court(
                 return Err(mismatch("TB1 EXEC close already has a certificate"));
             }
             let receipt = borsh::to_vec(&cert).expect("fixed TB1 EXEC certificate receipt");
+            let intake = borsh::to_vec(&cert.certificate()).expect("fixed QF1 PANEL intake marker");
+            builder.write_kernel_row(TABLE, key(b'I', &cert.close.as_bytes()), Some(intake))?;
             return builder.write_kernel_row(TABLE, key(b'S', &cert.close.as_bytes()), Some(receipt));
         }
         Qf1TerminalUpdate::ExecClose(close) if close.block == point.block && selected_parent == Some(close.selected_parent) => {
@@ -172,12 +222,25 @@ pub(super) fn fold_terminal_court(
         }
         Qf1TerminalUpdate::Original(original) if original.block == point.block && point.daa_score < original.deadline => {
             super::palw_kernel_route_fold_v1::ensure_route_header(builder, point)?;
-            let key = key(b'R', &original.original.as_bytes());
             if builder.state.qf1_original_verification_at(original.original, point.daa_score).is_some() {
                 return Ok(());
             }
+            if let Some(input) = original.panel_intake
+                && let Some(mut intake_key) = builder.state.qf1_panel_intake_prefix(input.close)
+            {
+                intake_key.extend_from_slice(&input.slot.to_be_bytes());
+                intake_key.extend_from_slice(original.original.as_byte_slice());
+                let intake = Qf1PanelOriginal {
+                    original_block: original.block,
+                    deadline: original.deadline,
+                    registration: input.registration,
+                    funding_ref: input.funding_ref,
+                };
+                let bytes = borsh::to_vec(&intake).expect("fixed QF1 PANEL intake receipt");
+                builder.write_kernel_row(TABLE, intake_key, Some(bytes))?;
+            }
             let receipt = borsh::to_vec(&(original.block, original.deadline)).expect("fixed QF1 Original receipt");
-            return builder.write_kernel_row(TABLE, key, Some(receipt));
+            return builder.write_kernel_row(TABLE, key(b'R', &original.original.as_bytes()), Some(receipt));
         }
         Qf1TerminalUpdate::PanelDraw(draw) if draw.certificate == point.block => {
             let route = builder.state.kernel_route.as_ref().ok_or_else(|| mismatch("QF1 PANEL draw has no Original"))?;

@@ -69,6 +69,15 @@ pub struct Qf1OriginalAdmission {
     pub(crate) original: Hash64,
     pub(crate) block: Hash64,
     pub(crate) deadline: u64,
+    pub(crate) panel_intake: Option<CertifiedQf1Original>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CertifiedQf1Original {
+    pub close: Hash64,
+    pub slot: u64,
+    pub registration: Hash64,
+    pub funding_ref: Hash64,
 }
 
 impl Qf1OriginalAdmission {
@@ -84,7 +93,12 @@ impl Qf1OriginalAdmission {
         }
         source.reference.check_parent_reservation(parent, block.header.daa_score)?;
         let (_, registration) = authenticate_original(chain, source, close_daa, block)?;
-        Ok(Self { original: source.reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
+        Ok(Self {
+            original: source.reference.claim,
+            block: block.hash(),
+            deadline: registration.deadline_exclusive_daa,
+            panel_intake: None,
+        })
     }
 
     /// Authenticate a Court subject from the accepted EXEC close and seed.
@@ -97,8 +111,18 @@ impl Qf1OriginalAdmission {
         close: &Block,
         block: &Block,
     ) -> Result<Self, &'static str> {
-        let (_, registration) = authenticate_certified_original(chain, parent, source, close, block)?;
-        Ok(Self { original: source.reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
+        let (_, registration, funding_ref) = authenticate_certified_original(chain, parent, source, close, block)?;
+        Ok(Self {
+            original: source.reference.claim,
+            block: block.hash(),
+            deadline: registration.deadline_exclusive_daa,
+            panel_intake: Some(CertifiedQf1Original {
+                close: source.reference.close,
+                slot: source.reference.slot,
+                registration: Hash64::from_bytes(registration.key),
+                funding_ref: Hash64::from_bytes(funding_ref),
+            }),
+        })
     }
 }
 
@@ -108,14 +132,14 @@ pub(super) fn authenticate_certified_original<'a, 'b>(
     source: Moe2AwardSource<'_>,
     close: &'a Block,
     block: &'b Block,
-) -> Result<(Qf1OriginalCarrier<'b>, ExecRegistration<'a>), &'static str> {
+) -> Result<(Qf1OriginalCarrier<'b>, ExecRegistration<'a>, [u8; 64]), &'static str> {
     let reference = source.reference;
     let receipt = parent.tb1_exec_close_receipt(reference.close).ok_or("missing accepted QF1 EXEC close")?;
     let certificate = parent.tb1_exec_certificate(reference.close).ok_or("missing accepted QF1 EXEC certificate")?;
     if certificate.freeze_id != receipt.freeze_id || close.hash() != reference.close {
         return Err("QF1 EXEC certificate differs from its close");
     }
-    let (context, registration) = ExecCloseCarrier::read_accepted_registration(close, &receipt, reference.slot)
+    let (context, registration, funding_ref) = ExecCloseCarrier::read_accepted_registration(close, &receipt, reference.slot)
         .map_err(|_| "invalid QF1 EXEC close registration")?;
     let reservation = registration.quote.map_or_else(Hash64::default, |quote| {
         Moe2ExecSlot {
@@ -135,7 +159,7 @@ pub(super) fn authenticate_certified_original<'a, 'b>(
         return Err("QF1 Original reference differs from the certified EXEC registration");
     }
     let original = verify_original(chain, reference, close.header.daa_score, block, &registration)?;
-    Ok((original, registration))
+    Ok((original, registration, funding_ref))
 }
 
 pub(crate) fn authenticate_original<'a, 'b>(
