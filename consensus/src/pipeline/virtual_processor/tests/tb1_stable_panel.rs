@@ -6,7 +6,7 @@ use kaspa_consensus_core::palw_tb1::{Tb1DealerPoint, reconstruction::reconstruct
 use kaspa_math::Uint576;
 use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::LocalPanelCut;
 use misaka_palw_remote::tb1_exposure::exec_input::{
-    DerivedExecInput, LocalOriginalBody,
+    BranchExecInput, DerivedExecInput, LocalOriginalBody,
     panel_cut::{LocalReplayPolicy, REPLAY_SIGNATURE_DOMAIN, actor_id},
 };
 use misaka_palw_tir_exec::node::qf1::LocalInstance;
@@ -503,6 +503,7 @@ pub(super) async fn release<'t>(
     actors: &Actors,
     input: &DerivedExecInput<'t>,
     recover_exec: impl Fn(&dyn ConsensusApi) -> DerivedExecInput<'t>,
+    recover_branch_exec: impl Fn(&dyn ConsensusApi, Hash64, &NativeSettlementSnapshotV1) -> BranchExecInput<'t>,
     instance: &LocalInstance<'_>,
     body: &LocalOriginalBody,
     owner: &ml_dsa_65::MLDSA65Signature,
@@ -888,16 +889,44 @@ pub(super) async fn release<'t>(
             );
             assert!(published_at(cert.hash(), &before_replies, accepted.hash(), original).is_err());
             assert!(published_at(late.hash(), &late_settlement, accepted.hash(), Hash64::default()).is_err());
+            let branch_input = recover_branch_exec(&branch, late.hash(), &late_settlement);
+            let approved = branch_input.read_panel_approved_qf1_execution(&branch, archived, instance).unwrap();
+            assert_eq!(approved.approval(), archived);
+            let execution = approved.execution();
+            assert_eq!(
+                (execution.original(), execution.original_block(), execution.parent()),
+                (original, original_receipt, late.hash())
+            );
+            assert_eq!(execution.attempt(), input.attempt());
+            assert_eq!(execution.work(), instance.computational_work_key(input.tokens(), input.terms().decode_tokens).unwrap());
+            let (_, funding_parent) = expired.virtual_processor().palw_observer_state_at_cached_v1(late.hash()).unwrap();
+            let unfunded = kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::Moe2AwardReference {
+                claim: original,
+                attempt: *execution.attempt(),
+                close: Hash64::default(),
+                slot: 9,
+                reservation: Hash64::default(),
+            };
+            assert_eq!(
+                approved.bind_moe2_funding(&branch, &unfunded, &funding_parent, late.header.daa_score).unwrap_err().to_string(),
+                "approved EXEC input carries no signed MOE2 quote"
+            );
+            let earlier_input = recover_branch_exec(&branch, cert.hash(), &before_replies);
+            assert_eq!(
+                earlier_input.read_panel_approved_qf1_execution(&branch, archived, instance).err().unwrap().to_string(),
+                "PANEL approval belongs to a different selected parent"
+            );
             assert_eq!(
                 published_at(late.hash(), &late_settlement, late.hash(), original).unwrap_err().kind(),
                 std::io::ErrorKind::TimedOut
             );
             peer_log!(
-                "QF1 archived PANEL approval pid={} parent={} reply={} original={}",
+                "QF1 archived PANEL approval pid={} parent={} reply={} original={} work={}",
                 std::process::id(),
                 archived.selected_parent(),
                 archived.accepting_block(),
-                archived.original()
+                archived.original(),
+                execution.work()
             );
             if checkpoint_replay {
                 let observed = reopen_checkpoint(&node.config, &checkpoint_dir.join("before-panel-release"));

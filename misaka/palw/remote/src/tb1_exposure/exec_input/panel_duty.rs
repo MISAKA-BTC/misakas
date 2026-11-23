@@ -78,6 +78,7 @@ pub struct LocalReplayDraw {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PublishedPanelApproval {
     original: Hash64,
+    original_block: Hash64,
     accepting_block: Hash64,
     selected_parent: Hash64,
 }
@@ -85,6 +86,10 @@ pub struct PublishedPanelApproval {
 impl PublishedPanelApproval {
     pub fn original(&self) -> Hash64 {
         self.original
+    }
+
+    pub fn original_block(&self) -> Hash64 {
+        self.original_block
     }
 
     pub fn accepting_block(&self) -> Hash64 {
@@ -471,7 +476,12 @@ impl LocalReplayDraw {
         let replies: Vec<_> = signed.iter().map(|(key, signature)| (key, signature)).collect();
         let marker = self.replies_marker(&replies)?;
         self.check_reply_marker(native, block, &marker)?;
-        Ok(PublishedPanelApproval { original: self.original, accepting_block: block, selected_parent: tip })
+        Ok(PublishedPanelApproval {
+            original: self.original,
+            original_block: self.receipt,
+            accepting_block: block,
+            selected_parent: tip,
+        })
     }
 }
 

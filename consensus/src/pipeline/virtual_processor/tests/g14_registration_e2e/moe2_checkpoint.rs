@@ -776,11 +776,25 @@ pub(super) fn check_exec_settlement_rewind(
         Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"))
     ));
     assert_eq!(Moe2AwardReference::from_transactions(award_block.transactions.iter()).unwrap(), reference);
+    assert!(reference.check_execution_slot(claim, attempt, &slot).is_ok());
+    for remapped in [
+        Moe2AwardReference { claim: alias_claim, ..reference },
+        Moe2AwardReference { attempt: [99; 32], ..reference },
+        Moe2AwardReference { close: Hash64::default(), ..reference },
+        Moe2AwardReference { slot: alias_slot.slot, ..reference },
+        Moe2AwardReference { reservation: alias_slot.reservation_key(), ..reference },
+    ] {
+        assert!(remapped.check_execution_slot(claim, attempt, &slot).is_err());
+    }
     assert_eq!(Moe2AwardReference::from_transactions([&carrier, &replaced]), Err(Moe2AwardReferenceError::Multiple));
     let mut trailing = reference.encode().to_vec();
     trailing.push(0);
     assert_eq!(Moe2AwardReference::decode(&trailing), Err(Moe2AwardReferenceError::Encoding));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
+    assert!(reference.check_parent_unspent(&restored).is_ok());
+    assert_eq!(reference.check_parent_unspent(&retained_child), Err("private MOE2 claim has already settled on this branch"));
+    let another_claim = Moe2AwardReference { claim: alias_claim, ..reference };
+    assert_eq!(another_claim.check_parent_unspent(&retained_child), Err("private MOE2 attempt has already settled on this branch"));
     assert_eq!(
         reference.check_parent_reservation(&retained_child, position.point.daa_score),
         Err("private MOE2 reservation is no longer available at this DAA")

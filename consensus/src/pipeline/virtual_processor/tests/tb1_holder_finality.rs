@@ -1907,6 +1907,9 @@ async fn run(stable: bool, registered: bool) {
                 actors,
                 r,
                 |api| jobs.derive_recorded(api, 9, batch.hash(), certificate.hash(), &rows, &q, LIMITS).unwrap(),
+                |api, parent, settlement| {
+                    jobs.derive_published_at_parent(api, parent, settlement, 9, batch.hash(), certificate.hash(), &q, LIMITS).unwrap()
+                },
                 instance.as_ref().unwrap(),
                 body,
                 sig,

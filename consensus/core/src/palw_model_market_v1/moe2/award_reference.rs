@@ -44,6 +44,26 @@ impl Moe2AwardReference {
         Self { claim, attempt, close: slot.close, slot: slot.slot, reservation: slot.reservation_key() }
     }
 
+    /// Check every lookup key against the authenticated Original and slot.
+    pub fn check_execution_slot(&self, claim: Hash64, attempt: [u8; 32], slot: &Moe2ExecSlot) -> Result<(), &'static str> {
+        if *self != Self::for_slot(claim, attempt, slot) {
+            return Err("private MOE2 award differs from its candidate reference");
+        }
+        Ok(())
+    }
+
+    /// Check the selected parent's replay indexes before loading archived
+    /// evidence. The numerical key is checked once the EXEC input is resolved.
+    pub fn check_parent_unspent(&self, parent: &PalwChainStateV2) -> Result<(), &'static str> {
+        if parent.private_moe2_exec_settlement(&self.claim).is_some() {
+            return Err("private MOE2 claim has already settled on this branch");
+        }
+        if parent.private_moe2_attempt_work(&self.attempt).is_some() {
+            return Err("private MOE2 attempt has already settled on this branch");
+        }
+        Ok(())
+    }
+
     /// Resolve the reference against the selected parent's committed reservation.
     /// The reservation admits no claim or winner; Gate C remains a separate read.
     pub fn check_parent_reservation(&self, parent: &PalwChainStateV2, daa: u64) -> Result<(), &'static str> {

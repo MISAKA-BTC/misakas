@@ -281,9 +281,7 @@ pub(super) fn fold_exec_award_v1(
     }
     let reference = Moe2AwardReference::from_transactions(block.transactions.iter())
         .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
-    if reference != Moe2AwardReference::for_slot(award.claim, attempt, award.slot) {
-        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"));
-    }
+    reference.check_execution_slot(award.claim, attempt, award.slot).map_err(PalwStateV2Error::DeltaMismatch)?;
     reference.check_parent_reservation(parent, point.daa_score).map_err(PalwStateV2Error::DeltaMismatch)?;
     let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
     let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;

@@ -2296,6 +2296,7 @@ impl VirtualStateProcessor {
                         .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
                         .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
                     reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
+                    reference.check_parent_unspent(parent).map_err(PrivateMoe2AwardMalformed)?;
                     let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), &reference)?;
                     self.restore_private_moe2_price_state(parent, price)?;
                     // The resolved terms still require an independently certified winning right.

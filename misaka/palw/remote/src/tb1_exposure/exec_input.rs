@@ -721,7 +721,7 @@ impl DerivedExecInput<'_> {
 #[cfg(feature = "private-tb1-tir")]
 mod original;
 #[cfg(feature = "private-tb1-tir")]
-pub use original::{BranchQf1Execution, LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody};
+pub use original::{BranchQf1Execution, LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody, PanelApprovedQf1Execution};
 
 #[cfg(feature = "private-tb1-tir")]
 pub mod panel_cut;

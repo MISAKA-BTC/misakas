@@ -1,8 +1,11 @@
 //! Private model-free Original readback and the independent replay check.
 //! The isolated envelope creates no entitlement or assessment result.
+use super::panel_cut::PublishedPanelApproval;
 use super::*;
 use kaspa_consensus_core::{
+    palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
     palw_qf1::{TreeKind, TreeRoot, readout_chunks::record_count, ticket},
+    palw_state_v2::PalwChainStateV2,
     palw_tb1::qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier},
 };
 use misaka_palw_tir_exec::node::qf1::LocalTrace;
@@ -47,6 +50,58 @@ pub struct BranchQf1Execution {
     ticket_meets_target: bool,
 }
 
+/// A target-meeting execution and its complete replay approval on the same
+/// selected parent. Gate C certification and mining eligibility are separate.
+pub struct PanelApprovedQf1Execution {
+    execution: BranchQf1Execution,
+    approval: PublishedPanelApproval,
+}
+
+impl PanelApprovedQf1Execution {
+    pub fn execution(&self) -> &BranchQf1Execution {
+        &self.execution
+    }
+
+    pub fn approval(&self) -> PublishedPanelApproval {
+        self.approval
+    }
+
+    /// Match the signed quote and replay indexes against the selected
+    /// parent's reservation. Gate C and pricing use their own branch reads.
+    pub fn bind_moe2_funding(
+        &self,
+        native: &dyn ConsensusApi,
+        reference: &Moe2AwardReference,
+        parent: &PalwChainStateV2,
+        daa: u64,
+    ) -> io::Result<Moe2ExecSlot> {
+        let execution = &self.execution;
+        let point = parent.last_point().ok_or_else(|| invalid("MOE2 award has no selected parent state"))?;
+        if point.block != execution.parent || point.daa_score > daa {
+            return Err(invalid("MOE2 award funding belongs to a different selected parent"));
+        }
+        let quote = execution.quote.ok_or_else(|| invalid("approved EXEC input carries no signed MOE2 quote"))?;
+        let close = native.get_header(execution.close).map_err(io::Error::other)?;
+        if close.hash != execution.close {
+            return Err(invalid("MOE2 EXEC close hash differs from the approved execution"));
+        }
+        let slot = Moe2ExecSlot {
+            registration: execution.registration,
+            slot: execution.slot,
+            close: execution.close,
+            close_daa: close.daa_score,
+            quote,
+        };
+        reference.check_execution_slot(execution.original, execution.attempt, &slot).map_err(invalid)?;
+        reference.check_parent_reservation(parent, daa).map_err(invalid)?;
+        reference.check_parent_unspent(parent).map_err(invalid)?;
+        if parent.private_moe2_work_claim(&execution.work).is_some() {
+            return Err(invalid("private MOE2 work has already settled on this branch"));
+        }
+        Ok(slot)
+    }
+}
+
 impl BranchQf1Execution {
     pub fn parent(&self) -> Hash64 {
         self.parent
@@ -78,6 +133,23 @@ impl BranchQf1Execution {
 }
 
 impl BranchExecInput<'_> {
+    /// Read the Original named by this branch's verified Panel approval.
+    pub fn read_panel_approved_qf1_execution(
+        &self,
+        native: &dyn ConsensusApi,
+        approval: PublishedPanelApproval,
+        instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
+    ) -> io::Result<PanelApprovedQf1Execution> {
+        if approval.selected_parent() != self.parent {
+            return Err(invalid("PANEL approval belongs to a different selected parent"));
+        }
+        let execution = self.read_qf1_execution_from_block(native, approval.original_block(), approval.original(), instance)?;
+        if !execution.ticket_meets_target() {
+            return Err(invalid("PANEL Original does not meet its signed EXEC target"));
+        }
+        Ok(PanelApprovedQf1Execution { execution, approval })
+    }
+
     /// Recover the owner-signed Original from the source block on this branch.
     /// The award's expected claim must equal the Original derived from EXEC.
     pub fn read_qf1_execution_from_block(
