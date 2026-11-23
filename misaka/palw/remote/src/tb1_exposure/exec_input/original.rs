@@ -392,7 +392,7 @@ impl DerivedExecInput<'_> {
         Ok(original)
     }
 
-    fn read_qf1_original_on_branch(
+    pub(super) fn read_qf1_original_on_branch(
         &self,
         native: &dyn ConsensusApi,
         selected_parent: Hash64,

@@ -1,11 +1,8 @@
 //! Common case and verdict inclusion checks for the private terminal relations.
-use super::*;
+use super::{original::read_published_qf1_original, stop_case::StopWitness, *};
+use kaspa_consensus_core::palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TerminalOutcome {
-    ChallengeNotEstablished,
-    ComputationRefuted,
-}
+pub use kaspa_consensus_core::palw_qf1::terminal::TerminalOutcome;
 
 pub struct LocalTerminalCase<'i, 't> {
     pub(super) input: &'i DerivedExecInput<'t>,
@@ -30,9 +27,6 @@ impl LocalTerminalCase<'_, '_> {
             || !native.palw_coinbase_commits_to(self.input.chain, block, &marker).map_err(io::Error::other)?
         {
             return Err(invalid("local terminal case outside committed history"));
-        }
-        if native.get_sink() != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
         }
         Ok(())
     }
@@ -62,11 +56,55 @@ impl LocalTerminalCase<'_, '_> {
     }
     pub fn read_verdict(&self, native: &dyn ConsensusApi, case: Hash64, verdict: Hash64) -> io::Result<TerminalOutcome> {
         let (_, tip) = self.input.check_selected(native)?;
-        self.included(native, tip, self.receipt, case, self.marker)?;
-        self.included(native, tip, case, verdict, self.recorded_verdict_marker(case))?;
+        let outcome = self.read_verdict_on_branch(native, tip, case, verdict)?;
         if self.input.check_selected(native)?.1 != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
+        Ok(outcome)
+    }
+
+    fn read_verdict_on_branch(
+        &self,
+        native: &dyn ConsensusApi,
+        tip: Hash64,
+        case: Hash64,
+        verdict: Hash64,
+    ) -> io::Result<TerminalOutcome> {
+        self.included(native, tip, self.receipt, case, self.marker)?;
+        self.included(native, tip, case, verdict, self.recorded_verdict_marker(case))?;
         Ok(self.outcome)
+    }
+}
+
+impl BranchExecInput<'_> {
+    /// Reconstruct a named terminal decision from the selected parent's own
+    /// blocks. A failed challenge establishes only this individual relation.
+    pub fn read_published_terminal_verdict(
+        &self,
+        native: &dyn ConsensusApi,
+        expected_original: Hash64,
+        case: Hash64,
+        verdict: Hash64,
+    ) -> io::Result<TerminalOutcome> {
+        let source = native.get_block(case).map_err(io::Error::other)?;
+        if source.hash() != case {
+            return Err(invalid("QF1 terminal case source block hash differs"));
+        }
+        let carrier = Qf1TerminalCarrier::from_block(&source)
+            .map_err(|why| io::Error::new(io::ErrorKind::InvalidData, format!("QF1 terminal case carrier: {why:?}")))?;
+        let receipt = carrier.original_block;
+        let (body, signature) = read_published_qf1_original(native, receipt)?;
+        let original = self.input.read_qf1_original_on_branch(native, self.parent, receipt, &body, &signature)?;
+        if original != expected_original {
+            return Err(invalid("QF1 terminal case belongs to a different Original"));
+        }
+        let resolved = match carrier.relation {
+            Qf1TerminalRelation::Stop => {
+                let witness = StopWitness::decode(&body, carrier.disclosure)?;
+                self.input.judge_stop_case(receipt, original, &body, &witness)?
+            }
+            Qf1TerminalRelation::End => self.input.judge_end_case(receipt, original, &body, carrier.disclosure)?,
+        };
+        resolved.read_verdict_on_branch(native, self.parent, case, verdict)
     }
 }

@@ -1,7 +1,10 @@
 //! Model-free adjudication of the last answer and the fixed Stop slot.
 //! Consistency here gives no verdict on earlier tokens or the model arithmetic.
 use super::*;
-use kaspa_consensus_core::palw_qf1::{TreeBuilder, TreeKind, TreeRoot, is_eos, readout_chunks::record_count};
+use kaspa_consensus_core::palw_qf1::{
+    TreeBuilder, TreeKind,
+    terminal::{Qf1TerminalContext, stop_index},
+};
 
 #[derive(Clone, Debug)]
 pub struct StopWitness {
@@ -15,8 +18,7 @@ pub use super::terminal_case::{LocalTerminalCase as LocalStopCase, TerminalOutco
 
 impl LocalOriginalBody {
     pub fn stop_index(&self) -> io::Result<u64> {
-        let t = u32::try_from(self.counts[1]).map_err(|_| invalid("Stop answer count"))?;
-        self.counts[3].checked_sub(2 + u64::from(record_count(t).map_err(invalid)?)).ok_or_else(|| invalid("absent QF1 Stop slot"))
+        stop_index(self.counts)
     }
 }
 
@@ -48,14 +50,6 @@ impl LocalOriginal<'_, '_> {
     }
 }
 
-fn opened(root: &TreeRoot, i: u64, record: &[u8], path: &[Hash64]) -> bool {
-    let depth = (u64::BITS - (root.count() - 1).leading_zeros()) as usize;
-    if path.len() != depth {
-        return false;
-    }
-    root.verify_opening(i, record, &path.iter().map(|h| h.as_bytes()).collect::<Vec<_>>())
-}
-
 impl StopWitness {
     pub fn encode(&self) -> Vec<u8> {
         let mut wire = Vec::new();
@@ -85,34 +79,12 @@ impl StopWitness {
     }
 
     fn judge(&self, attempt: [u8; 32], body: &LocalOriginalBody, limit: u32) -> io::Result<StopOutcome> {
-        let [l, t, _, d] = body.counts;
-        let y = TreeRoot::from_claimed_digest(attempt, TreeKind::Answer, t, body.roots[1].as_bytes()).map_err(invalid)?;
-        let trace = TreeRoot::from_claimed_digest(attempt, TreeKind::Trace, d, body.roots[3].as_bytes()).map_err(invalid)?;
-        let l = u32::try_from(l).map_err(|_| invalid("Stop input count"))?;
-        let t = u32::try_from(t).map_err(|_| invalid("Stop answer count"))?;
-        kaspa_consensus_core::palw_qf1::check_capacity(l, limit).map_err(invalid)?;
-        if t == 0
-            || t > limit
-            || !opened(&y, u64::from(t - 1), &self.token.to_le_bytes(), &self.answer_path)
-            || !opened(&trace, body.stop_index()?, &self.stop, &self.trace_path)
-        {
-            return Err(invalid("unauthenticated Stop case"));
-        }
-        let reason = if is_eos(self.token) {
-            0
-        } else if t == limit {
-            1
-        } else {
-            return Ok(StopOutcome::ComputationRefuted);
-        };
-        let mut expected = [0; 18];
-        expected[0] = 3;
-        expected[1..5].copy_from_slice(&13u32.to_le_bytes());
-        expected[5..9].copy_from_slice(&t.to_le_bytes());
-        expected[9..13].copy_from_slice(&(l + t - 1).to_le_bytes());
-        expected[13..17].copy_from_slice(&self.token.to_le_bytes());
-        expected[17] = reason;
-        Ok(if self.stop == expected { StopOutcome::ChallengeNotEstablished } else { StopOutcome::ComputationRefuted })
+        Qf1TerminalContext { attempt, counts: body.counts, roots: &body.roots, decode_limit: limit }.judge_stop(
+            self.token,
+            &self.stop,
+            &self.answer_path,
+            &self.trace_path,
+        )
     }
 }
 
@@ -155,6 +127,16 @@ impl<'t> DerivedExecInput<'t> {
         w: &StopWitness,
     ) -> io::Result<LocalStopCase<'_, 't>> {
         let original = self.read_recorded_qf1_original(native, receipt, body, owner)?;
+        self.judge_stop_case(receipt, original, body, w)
+    }
+
+    pub(super) fn judge_stop_case(
+        &self,
+        receipt: Hash64,
+        original: Hash64,
+        body: &LocalOriginalBody,
+        w: &StopWitness,
+    ) -> io::Result<LocalStopCase<'_, 't>> {
         let outcome = w.judge(self.attempt, body, self.terms.decode_tokens)?;
         let mut h = Sha3_512::new()
             .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")
@@ -182,7 +164,7 @@ impl<'t> DerivedExecInput<'t> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_qf1::{VOCAB, ticket};
+    use kaspa_consensus_core::palw_qf1::{TreeRoot, VOCAB, readout_chunks::record_count, ticket};
 
     /// Isolate the two authenticated trees of this one Court relation.
     fn committed(token: u32, reason: u8, positions: u32, recorded_token: u32) -> (LocalOriginalBody, StopWitness) {

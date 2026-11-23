@@ -1052,7 +1052,10 @@ pub(super) async fn release<'t>(
         }
         accepted.hash()
     };
+    use kaspa_consensus_core::palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation};
     use misaka_palw_remote::tb1_exposure::exec_input::stop_case::{StopOutcome, StopWitness};
+    let disclosure =
+        |relation, disclosure| Qf1TerminalCarrier { relation, original_block: original_receipt, disclosure }.encode().unwrap();
     let wire = std::fs::read(dir.join(format!("{original}.stop"))).expect("Stop disclosure published with the Original");
     let api = node.api().as_ref();
     let witness = StopWitness::decode(body, &wire).unwrap();
@@ -1061,7 +1064,16 @@ pub(super) async fn release<'t>(
     assert!(input.prepare_stop_case(api, original_receipt, body, owner, &changed).is_err());
     let case = input.prepare_stop_case(api, original_receipt, body, owner, &witness).unwrap();
     assert!(case.verdict_marker(api, before_stop).is_err());
-    let stop_case = local_carrier(node, parent, peers, 0, case.marker(), "QF1 last answer / Stop case").await;
+    let stop_case = local_evidence_carrier(
+        node,
+        parent,
+        peers,
+        0,
+        case.marker(),
+        disclosure(Qf1TerminalRelation::Stop, &wire),
+        "QF1 last answer / Stop case",
+    )
+    .await;
     let marker = case.verdict_marker(node.api().as_ref(), stop_case.hash()).unwrap();
     assert!(case.read_verdict(node.api().as_ref(), stop_case.hash(), stop_case.hash()).is_err());
     let stop_verdict = local_carrier(node, parent, peers, 0, marker, "QF1 last answer / Stop verdict").await;
@@ -1076,10 +1088,20 @@ pub(super) async fn release<'t>(
         outcome,
         faster_hex::hex_string(&wire)
     );
+    let before_end = node.api().get_native_settlement_snapshot().unwrap().unwrap();
     let end_wire = std::fs::read(dir.join(format!("{original}.end"))).expect("terminal Readout and End published with the Original");
     let case = input.prepare_end_case(node.api().as_ref(), original_receipt, body, owner, &end_wire).unwrap();
     assert!(case.verdict_marker(node.api().as_ref(), stop_case.hash()).is_err());
-    let opened = local_carrier(node, parent, peers, 0, case.marker(), "QF1 Readout / End case").await;
+    let opened = local_evidence_carrier(
+        node,
+        parent,
+        peers,
+        0,
+        case.marker(),
+        disclosure(Qf1TerminalRelation::End, &end_wire),
+        "QF1 Readout / End case",
+    )
+    .await;
     let marker = case.verdict_marker(node.api().as_ref(), opened.hash()).unwrap();
     let verdict = local_carrier(node, parent, peers, 0, marker, "QF1 Readout / End verdict").await;
     let outcome = case.read_verdict(node.api().as_ref(), opened.hash(), verdict.hash()).unwrap();
@@ -1111,6 +1133,22 @@ pub(super) async fn release<'t>(
     assert!(end.verdict_marker(api, opened.hash()).is_err());
     assert_eq!(end.read_verdict(api, opened.hash(), verdict.hash()).unwrap(), expected);
     assert_eq!(end.read_verdict(api, opened.hash(), late.hash()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    let branch = CandidateHistory { api, candidate: None };
+    let historical = recover_branch_exec(&branch, late.hash(), &api.get_native_settlement_snapshot().unwrap().unwrap());
+    let read = |claim, case, verdict| historical.read_published_terminal_verdict(&branch, claim, case, verdict);
+    assert_eq!(read(original, stop_case.hash(), stop_verdict.hash()).unwrap(), StopOutcome::ChallengeNotEstablished);
+    assert_eq!(read(original, opened.hash(), verdict.hash()).unwrap(), expected);
+    assert!(read(Hash64::default(), opened.hash(), verdict.hash()).is_err());
+    assert!(read(original, stop_case.hash(), verdict.hash()).is_err());
+    assert!(read(original, opened.hash(), opened.hash()).is_err());
+    assert_eq!(read(original, opened.hash(), late.hash()).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    let earlier = recover_branch_exec(&branch, stop_verdict.hash(), &before_end);
+    assert!(earlier.read_published_terminal_verdict(&branch, original, opened.hash(), verdict.hash()).is_err());
+    assert_eq!(
+        earlier.read_published_terminal_verdict(&branch, original, stop_case.hash(), stop_verdict.hash()).unwrap(),
+        StopOutcome::ChallengeNotEstablished
+    );
+    peer_log!("QF1 public terminal verdicts pid={} parent={} original={} end={expected:?}", std::process::id(), late.hash(), original);
     peer_log!(
         "TB1 Court recovered pid={} deadline_tip={} end_verdict={} result={expected:?}",
         std::process::id(),

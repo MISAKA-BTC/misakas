@@ -5,6 +5,7 @@ use blake2b_simd::{Params, State};
 use misaka_palw_tir::{Block, DType, Dim, Prim, Ref, TensorType};
 
 pub mod readout_chunks;
+pub mod terminal;
 use readout_chunks::{ChunkStream, HashChunk};
 
 pub const VOCAB: u32 = 151936;

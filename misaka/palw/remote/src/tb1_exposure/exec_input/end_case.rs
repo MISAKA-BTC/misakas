@@ -3,13 +3,7 @@
 //! compression state from its source vectors is a separate local relation.
 use super::terminal_case::{LocalTerminalCase, TerminalOutcome};
 use super::*;
-use kaspa_consensus_core::palw_qf1::{
-    TreeKind, TreeRoot, check_capacity,
-    readout_chunks::{CHUNK_BYTES, encoded_len, record_count},
-};
-
-const LAST_CHUNK_BYTES: usize = 5 + 4 + 8 + 2 + 1 + 64;
-const END_BYTES: usize = 5 + 3 * 64 + 3 * 4 + 8 + 4 + 4 + 8 + 64;
+use kaspa_consensus_core::palw_qf1::terminal::{END_BYTES, LAST_CHUNK_BYTES, Qf1TerminalContext};
 
 impl LocalOriginal<'_, '_> {
     /// Both records and their Merkle paths come from the producer's original trace pass.
@@ -29,57 +23,7 @@ impl LocalOriginal<'_, '_> {
 }
 
 fn judge(attempt: [u8; 32], body: &LocalOriginalBody, limit: u32, wire: &[u8]) -> io::Result<TerminalOutcome> {
-    let [l, t, z_count, d] = body.counts;
-    let l = u32::try_from(l).map_err(|_| invalid("End input length"))?;
-    let t = u32::try_from(t).map_err(|_| invalid("End output length"))?;
-    check_capacity(l, limit).map_err(invalid)?;
-    let h = record_count(t).map_err(invalid)?;
-    let tiles = d.checked_sub(u64::from(t) + u64::from(h) + 3).ok_or_else(|| invalid("End trace length"))?;
-    if t > limit || z_count != 1 {
-        return Err(invalid("End counts outside registered frame"));
-    }
-    let depth = (u64::BITS - (d - 1).leading_zeros()) as usize;
-    if depth > 63 || wire.len() != LAST_CHUNK_BYTES + END_BYTES + 2 * depth * 64 {
-        return Err(invalid("noncanonical QF1 End disclosure length"));
-    }
-    let trace = TreeRoot::from_claimed_digest(attempt, TreeKind::Trace, d, body.roots[3].as_bytes()).map_err(invalid)?;
-    let (first, last) = wire.split_at(LAST_CHUNK_BYTES + depth * 64);
-    let (chunk, chunk_path) = first.split_at(LAST_CHUNK_BYTES);
-    let (end, end_path) = last.split_at(END_BYTES);
-    for (index, record, siblings) in [(d - 2, chunk, chunk_path), (d - 1, end, end_path)] {
-        let path = siblings.chunks_exact(64).map(|hash| hash.try_into().unwrap()).collect::<Vec<_>>();
-        if !trace.verify_opening(index, record, &path) {
-            return Err(invalid("unauthenticated QF1 terminal record"));
-        }
-    }
-
-    let bytes = encoded_len(t).map_err(invalid)?;
-    let last_len = bytes - (h - 1) * CHUNK_BYTES as u32;
-    let z = &chunk[LAST_CHUNK_BYTES - 64..];
-    let rz = TreeRoot::from_claimed_digest(attempt, TreeKind::Readout, 1, body.roots[2].as_bytes()).map_err(invalid)?;
-    let mut expected_chunk = vec![4];
-    expected_chunk.extend_from_slice(&((LAST_CHUNK_BYTES - 5) as u32).to_le_bytes());
-    expected_chunk.extend_from_slice(&(h - 1).to_le_bytes());
-    expected_chunk.extend_from_slice(&u64::from(bytes).to_le_bytes());
-    expected_chunk.extend_from_slice(&(last_len as u16).to_le_bytes());
-    expected_chunk.push(1);
-    expected_chunk.extend_from_slice(z);
-
-    let mut expected_end = vec![5];
-    expected_end.extend_from_slice(&((END_BYTES - 5) as u32).to_le_bytes());
-    for root in &body.roots[..3] {
-        expected_end.extend_from_slice(root.as_byte_slice());
-    }
-    for field in [l, t, l + t - 1] {
-        expected_end.extend_from_slice(&field.to_le_bytes());
-    }
-    expected_end.extend_from_slice(&tiles.to_le_bytes());
-    expected_end.extend_from_slice(&t.to_le_bytes());
-    expected_end.extend_from_slice(&h.to_le_bytes());
-    expected_end.extend_from_slice(&d.to_le_bytes());
-    expected_end.extend_from_slice(z);
-    let correct = chunk == expected_chunk && end == expected_end && rz.verify_opening(0, z, &[]);
-    Ok(if correct { TerminalOutcome::ChallengeNotEstablished } else { TerminalOutcome::ComputationRefuted })
+    Qf1TerminalContext { attempt, counts: body.counts, roots: &body.roots, decode_limit: limit }.judge_end(wire)
 }
 
 impl<'t> DerivedExecInput<'t> {
@@ -118,6 +62,16 @@ impl<'t> DerivedExecInput<'t> {
         wire: &[u8],
     ) -> io::Result<LocalTerminalCase<'_, 't>> {
         let original = self.read_recorded_qf1_original(native, receipt, body, owner)?;
+        self.judge_end_case(receipt, original, body, wire)
+    }
+
+    pub(super) fn judge_end_case(
+        &self,
+        receipt: Hash64,
+        original: Hash64,
+        body: &LocalOriginalBody,
+        wire: &[u8],
+    ) -> io::Result<LocalTerminalCase<'_, 't>> {
         let outcome = judge(self.attempt, body, self.terms.decode_tokens, wire)?;
         let marker = Sha3_512::new()
             .chain_update(b"MISAKA/private/QF1/court/readout-end/v1")
@@ -140,7 +94,7 @@ impl<'t> DerivedExecInput<'t> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_qf1::{ROLES, Readout, TreeBuilder, WIDTH, ticket};
+    use kaspa_consensus_core::palw_qf1::{ROLES, Readout, TreeBuilder, TreeKind, TreeRoot, WIDTH, ticket};
 
     #[test]
     fn authenticates_both_records_before_adjudicating_the_terminal_link() {

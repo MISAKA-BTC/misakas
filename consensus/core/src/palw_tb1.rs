@@ -7,6 +7,7 @@ pub mod freeze;
 pub mod moe2_exec_close;
 pub mod panel_reply_carrier;
 pub mod qf1_original_carrier;
+pub mod qf1_terminal_carrier;
 pub mod qualification;
 pub mod reconstruction;
 pub mod release_batch_carrier;
