@@ -5,6 +5,13 @@ use super::{original::read_published_qf1_original, *};
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_DRAW_WEIGHT_MAX_MSK_V1, palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1, palw_panel_stake_ticket_v1,
 };
+use kaspa_consensus_core::{
+    palw_native_settlement_v1::NativeSettlementSnapshotV1,
+    palw_tb1::{
+        panel_reply_carrier::{PANEL_REPLY_KEY_BYTES, PANEL_REPLY_SIGNATURE_BYTES, encode_panel_replies, panel_replies_from_block},
+        releases::Tb1BeaconSeed,
+    },
+};
 use misaka_palw_tir_exec::node::qf1::LocalInstance;
 
 pub const REPLAY_SIGNATURE_DOMAIN: &[u8] = b"MISAKA/private/TB1/QF1/complete-replay/v1";
@@ -33,8 +40,8 @@ impl LocalReplayPolicy {
     pub fn read_reply_evidence(self, mut input: impl io::Read) -> io::Result<Vec<(MLDSA65VerificationKey, MLDSA65Signature)>> {
         let mut rows = Vec::new();
         for _ in 0..self.seats {
-            let mut key = [0; 1952];
-            let mut signature = [0; 3309];
+            let mut key = [0; PANEL_REPLY_KEY_BYTES];
+            let mut signature = [0; PANEL_REPLY_SIGNATURE_BYTES];
             input.read_exact(&mut key)?;
             input.read_exact(&mut signature)?;
             rows.push((MLDSA65VerificationKey::new(key), MLDSA65Signature::new(signature)));
@@ -66,6 +73,29 @@ pub struct LocalReplayDraw {
     duty: [u8; 64],
 }
 
+/// The complete PANEL reply set for this Original on the named branch.
+/// Consensus credit still requires its separate Gate C certification.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PublishedPanelApproval {
+    original: Hash64,
+    accepting_block: Hash64,
+    selected_parent: Hash64,
+}
+
+impl PublishedPanelApproval {
+    pub fn original(&self) -> Hash64 {
+        self.original
+    }
+
+    pub fn accepting_block(&self) -> Hash64 {
+        self.accepting_block
+    }
+
+    pub fn selected_parent(&self) -> Hash64 {
+        self.selected_parent
+    }
+}
+
 impl LocalPanelCut {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_replays(
@@ -83,7 +113,35 @@ impl LocalPanelCut {
     ) -> io::Result<LocalReplayDraw> {
         let tip = native.get_sink();
         let freeze = self.resolve(native, close, q)?;
-        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        let draw = self.reconstruct_draw(close, gate, certificate, original, policy, freeze, || {
+            gate.read_seed(native, batch, certificate, rows, q, limits)
+        })?;
+        draw.live(native)?;
+        if native.get_sink() != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(draw)
+    }
+
+    /// Draw the live PANEL seats from the shares recorded in the batch block.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_published_replays(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        certificate: Hash64,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+    ) -> io::Result<LocalReplayDraw> {
+        let tip = native.get_sink();
+        let freeze = self.resolve(native, close, q)?;
+        let draw = self.reconstruct_draw(close, gate, certificate, original, policy, freeze, || {
+            gate.read_published_seed(native, batch, certificate, q, limits)
+        })?;
         draw.live(native)?;
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -109,7 +167,9 @@ impl LocalPanelCut {
     ) -> io::Result<LocalReplayDraw> {
         let tip = native.get_sink();
         let (freeze, _) = self.resolve_on_selected_branch(native, close, q)?;
-        let draw = self.reconstruct_draw(native, close, gate, batch, certificate, rows, q, limits, original, policy, freeze)?;
+        let draw = self.reconstruct_draw(close, gate, certificate, original, policy, freeze, || {
+            gate.read_seed(native, batch, certificate, rows, q, limits)
+        })?;
         if native.get_sink() != tip {
             return Err(io::ErrorKind::WouldBlock.into());
         }
@@ -143,20 +203,42 @@ impl LocalPanelCut {
         Ok(())
     }
 
+    /// Reconstruct the draw and verify its published reply set for a
+    /// candidate's authenticated selected parent. The accepting block must
+    /// be timely even when the candidate follows the original deadline.
     #[allow(clippy::too_many_arguments)]
-    fn reconstruct_draw(
+    pub fn read_published_approval_at_parent(
         &self,
         native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
         close: Hash64,
         gate: &NativePublicationGate,
         batch: Hash64,
         certificate: Hash64,
-        rows: &[PublishedRelease<'_>],
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
         original: Hash64,
         policy: LocalReplayPolicy,
+        block: Hash64,
+    ) -> io::Result<PublishedPanelApproval> {
+        let freeze = self.resolve_at_parent(native, close, parent, q)?;
+        let draw = self.reconstruct_draw(close, gate, certificate, original, policy, freeze, || {
+            gate.read_published_seed_at_parent(native, parent, settlement, batch, certificate, q, limits)
+        })?;
+        draw.read_published_replies_on_branch(native, parent, block)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reconstruct_draw(
+        &self,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        certificate: Hash64,
+        original: Hash64,
+        policy: LocalReplayPolicy,
         freeze: Tb1HolderFreeze,
+        read_seed: impl FnOnce() -> io::Result<Tb1BeaconSeed>,
     ) -> io::Result<LocalReplayDraw> {
         let seats = policy.seats as usize;
         let receipt = self.receipts.iter().find(|r| r.original == original).ok_or_else(|| invalid("Original outside PANEL cut"))?;
@@ -169,7 +251,7 @@ impl LocalPanelCut {
         {
             return Err(invalid("different PANEL policy, population or publication gate"));
         }
-        let seed = gate.read_seed(native, batch, certificate, rows, q, limits)?;
+        let seed = read_seed()?;
         let anchor = Hash64::from_bytes(
             Sha3_512::new()
                 .chain_update(b"MISAKA/private/TB1/PANEL/draw-anchor/v1")
@@ -299,6 +381,15 @@ impl LocalReplayDraw {
         marker
     }
 
+    /// Prepare the existing commitment and its complete signed reply payload.
+    pub fn publish_replies(
+        &self,
+        native: &dyn ConsensusApi,
+        replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)],
+    ) -> io::Result<([u8; 64], Vec<u8>)> {
+        Ok((self.reply_commitment(native, replies)?, encode_panel_replies(replies)))
+    }
+
     fn replies_marker(&self, replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)]) -> io::Result<[u8; 64]> {
         let mut seats = self.selected.iter();
         let mut h = Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/reply-set/v1").chain_update(self.duty);
@@ -325,20 +416,62 @@ impl LocalReplayDraw {
     ) -> io::Result<()> {
         let (_, tip) = self.branch(native)?;
         let marker = self.replies_marker(replies)?;
+        self.check_reply_block(native, tip, block)?;
+        self.check_reply_marker(native, block, &marker)?;
+        if self.branch(native)?.1 != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(())
+    }
+
+    pub fn read_published_replies(&self, native: &dyn ConsensusApi, block: Hash64) -> io::Result<PublishedPanelApproval> {
+        let (_, tip) = self.branch(native)?;
+        let approval = self.read_published_replies_on_branch(native, tip, block)?;
+        if self.branch(native)?.1 != tip {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        Ok(approval)
+    }
+
+    fn check_reply_block(&self, native: &dyn ConsensusApi, tip: Hash64, block: Hash64) -> io::Result<()> {
         if native.get_header(block).map_err(io::Error::other)?.daa_score >= self.deadline {
             return Err(io::ErrorKind::TimedOut.into());
         }
         let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
         if !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
             || !native.is_chain_ancestor_of(block, tip).map_err(io::Error::other)?
-            || !native.palw_coinbase_commits_to(self.chain, block, &marker).map_err(io::Error::other)?
         {
             return Err(invalid("local PANEL replies outside committed branch"));
         }
-        if self.branch(native)?.1 != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
+        Ok(())
+    }
+
+    fn check_reply_marker(&self, native: &dyn ConsensusApi, block: Hash64, marker: &[u8; 64]) -> io::Result<()> {
+        if !native.palw_coinbase_commits_to(self.chain, block, marker).map_err(io::Error::other)? {
+            return Err(invalid("local PANEL replies outside committed branch"));
         }
         Ok(())
+    }
+
+    fn read_published_replies_on_branch(
+        &self,
+        native: &dyn ConsensusApi,
+        tip: Hash64,
+        block: Hash64,
+    ) -> io::Result<PublishedPanelApproval> {
+        self.check_reply_block(native, tip, block)?;
+        let source = native.get_block(block).map_err(io::Error::other)?;
+        if source.hash() != block {
+            return Err(invalid("local PANEL reply block hash differs"));
+        }
+        let rows = panel_replies_from_block(&source, self.selected.len())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("PANEL reply carrier: {error:?}")))?;
+        let seats = u32::try_from(self.selected.len()).map_err(|_| invalid("PANEL seat count exceeds private encoding"))?;
+        let signed = LocalReplayPolicy::new(seats)?.read_reply_evidence(rows)?;
+        let replies: Vec<_> = signed.iter().map(|(key, signature)| (key, signature)).collect();
+        let marker = self.replies_marker(&replies)?;
+        self.check_reply_marker(native, block, &marker)?;
+        Ok(PublishedPanelApproval { original: self.original, accepting_block: block, selected_parent: tip })
     }
 }
 

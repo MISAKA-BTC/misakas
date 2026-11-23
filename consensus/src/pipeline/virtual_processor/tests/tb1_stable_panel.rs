@@ -634,7 +634,7 @@ pub(super) async fn release<'t>(
     }
     let api = node.api().as_ref();
     let draw =
-        cut.draw_replays(api, close.hash(), &gate, batch.hash(), cert.hash(), &rows, q, LIMITS, original, actors.policy).unwrap();
+        cut.draw_published_replays(api, close.hash(), &gate, batch.hash(), cert.hash(), q, LIMITS, original, actors.policy).unwrap();
     assert!(
         cut.draw_replays(
             api,
@@ -789,11 +789,30 @@ pub(super) async fn release<'t>(
         assert_eq!(ordered.len(), draw.selected().len());
         assert!(draw.reply_commitment(api, &replies[..1]).is_err());
         assert!(draw.reply_commitment(api, &[replies[0], replies[0]]).is_err());
+        assert!(draw.reply_commitment(api, &[replies[1], replies[0]]).is_err());
         assert!(draw.verify_reply(api, replies[0].0, replies[1].1).is_err());
-        let commitment = draw.reply_commitment(api, &replies).unwrap();
+        let (commitment, payload) = draw.publish_replies(api, &replies).unwrap();
+        let before_replies = api.get_native_settlement_snapshot().unwrap().unwrap();
         assert!(draw.read_replies(api, cert.hash(), &replies).is_err());
-        let accepted = local_carrier(node, parent, peers, 0, commitment, "selected full replay replies").await;
-        draw.read_replies(node.api().as_ref(), accepted.hash(), &replies).unwrap();
+        let accepted =
+            local_evidence_carrier(node, parent, peers, 0, commitment, payload.clone(), "selected full replay replies").await;
+        let approval = draw.read_published_replies(node.api().as_ref(), accepted.hash()).unwrap();
+        assert_eq!(
+            (approval.original(), approval.accepting_block(), approval.selected_parent()),
+            (original, accepted.hash(), accepted.hash())
+        );
+        use kaspa_consensus_core::palw_tb1::panel_reply_carrier::{
+            PanelReplyCarrierError, decode_panel_replies, panel_replies_from_block,
+        };
+        assert!(matches!(decode_panel_replies(&payload[0..payload.len() - 1], replies.len()), Err(PanelReplyCarrierError::Encoding)));
+        assert!(matches!(decode_panel_replies(&payload, replies.len() + 1), Err(PanelReplyCarrierError::Encoding)));
+        let transaction = accepted.transactions.iter().find(|tx| tx.payload == payload).unwrap();
+        let mut duplicates = accepted.transactions.to_vec();
+        duplicates.push(transaction.clone());
+        assert!(matches!(
+            panel_replies_from_block(&Block::new((*accepted.header).clone(), duplicates), replies.len()),
+            Err(PanelReplyCarrierError::Multiple)
+        ));
         peer_log!(
             "TB1 replay duty pid={} actor={} replayed={} selected={:?} original={} replies={}",
             std::process::id(),
@@ -840,14 +859,51 @@ pub(super) async fn release<'t>(
             let recovered = actors.policy.read_reply_evidence(File::open(&evidence).unwrap()).unwrap();
             let recovered: Vec<_> = recovered.iter().map(|(key, sig)| (key, sig)).collect();
             recorded(accepted.hash(), recovered.as_slice()).unwrap();
+            let deadline_checkpoint = checkpoint_dir.join("at-original-deadline");
+            node.api().checkpoint_database(&deadline_checkpoint);
+            let expired = reopen_checkpoint(&node.config, &deadline_checkpoint);
+            assert_eq!(expired.get_sink(), late.hash());
+            let late_settlement = expired.get_native_settlement_snapshot().unwrap().unwrap();
+            let branch = CandidateHistory { api: expired.as_ref(), candidate: None };
+            let published_at = |parent, state, block, claim| {
+                cut.read_published_approval_at_parent(
+                    &branch,
+                    parent,
+                    state,
+                    close.hash(),
+                    &gate,
+                    batch.hash(),
+                    cert.hash(),
+                    q,
+                    LIMITS,
+                    claim,
+                    actors.policy,
+                    block,
+                )
+            };
+            let archived = published_at(late.hash(), &late_settlement, accepted.hash(), original).unwrap();
+            assert_eq!(
+                (archived.original(), archived.accepting_block(), archived.selected_parent()),
+                (original, accepted.hash(), late.hash())
+            );
+            assert!(published_at(cert.hash(), &before_replies, accepted.hash(), original).is_err());
+            assert!(published_at(late.hash(), &late_settlement, accepted.hash(), Hash64::default()).is_err());
+            assert_eq!(
+                published_at(late.hash(), &late_settlement, late.hash(), original).unwrap_err().kind(),
+                std::io::ErrorKind::TimedOut
+            );
+            peer_log!(
+                "QF1 archived PANEL approval pid={} parent={} reply={} original={}",
+                std::process::id(),
+                archived.selected_parent(),
+                archived.accepting_block(),
+                archived.original()
+            );
             if checkpoint_replay {
-                node.api().checkpoint_database(&checkpoint_dir.join("at-original-deadline"));
                 let observed = reopen_checkpoint(&node.config, &checkpoint_dir.join("before-panel-release"));
                 assert_eq!(observed.get_sink(), observed_at);
                 let restored_gate = cut.observe(observed.as_ref(), close.hash(), q).unwrap();
                 drop(observed);
-                let expired = reopen_checkpoint(&node.config, &checkpoint_dir.join("at-original-deadline"));
-                assert_eq!(expired.get_sink(), late.hash());
                 let read = |block| {
                     cut.read_recorded_replies(
                         expired.as_ref(),

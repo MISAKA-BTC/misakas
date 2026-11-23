@@ -270,24 +270,37 @@ impl LocalPanelCut {
         q: &Tb1Qualification<'_>,
     ) -> io::Result<(Tb1HolderFreeze, u64)> {
         let (state, daa, tip) = anchor_state(native, self.exec_close)?;
-        let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
-        if !matches!(state, AnchorState::Finalized)
-            || !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
-            || !native.is_chain_ancestor_of(close, tip).map_err(io::Error::other)?
-        {
+        if !matches!(state, AnchorState::Finalized) {
             return Err(invalid("local PANEL close outside live EXEC history"));
+        }
+        let freeze = self.resolve_at_parent(native, close, tip, q)?;
+        let (exec_state, _, exec_tip) = anchor_state(native, self.exec_close)?;
+        if exec_tip != tip || !matches!(exec_state, AnchorState::Finalized) {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL close view moved"));
+        }
+        Ok((freeze, daa))
+    }
+
+    fn resolve_at_parent(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        selected_parent: Hash64,
+        q: &Tb1Qualification<'_>,
+    ) -> io::Result<Tb1HolderFreeze> {
+        let parent = native.get_ghostdag_data(close).map_err(io::Error::other)?.selected_parent;
+        if !native.is_chain_ancestor_of(self.exec_close, self.certificate).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(self.certificate, parent).map_err(io::Error::other)?
+            || !native.is_chain_ancestor_of(close, selected_parent).map_err(io::Error::other)?
+        {
+            return Err(invalid("local PANEL close outside selected EXEC history"));
         }
         for receipt in &self.receipts {
             if !native.is_chain_ancestor_of(receipt.block, parent).map_err(io::Error::other)? {
                 return Err(invalid("local Original absent from PANEL prefix"));
             }
         }
-        let freeze = Tb1HolderFreeze::resolve(native, close, &self.closure, q)?;
-        let (exec_state, _, exec_tip) = anchor_state(native, self.exec_close)?;
-        if exec_tip != tip || !matches!(exec_state, AnchorState::Finalized) {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "local PANEL close view moved"));
-        }
-        Ok((freeze, daa))
+        Tb1HolderFreeze::resolve_in_branch(native, close, &self.closure, q)
     }
     pub fn observe(&self, native: &dyn ConsensusApi, close: Hash64, q: &Tb1Qualification<'_>) -> io::Result<NativePublicationGate> {
         self.resolve(native, close, q)?;
@@ -297,4 +310,4 @@ impl LocalPanelCut {
 
 #[path = "panel_duty.rs"]
 mod duty;
-pub use duty::{LocalReplayDraw, LocalReplayPolicy, REPLAY_SIGNATURE_DOMAIN, actor_id};
+pub use duty::{LocalReplayDraw, LocalReplayPolicy, PublishedPanelApproval, REPLAY_SIGNATURE_DOMAIN, actor_id};
