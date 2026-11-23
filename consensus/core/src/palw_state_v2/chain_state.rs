@@ -77,6 +77,7 @@ impl PalwChainStateV2 {
             private_moe2_exec_settlements: BTreeMap::new(),
             private_moe2_settled_reservations: BTreeSet::new(),
             private_moe2_work_uses: BTreeMap::new(),
+            private_moe2_attempt_uses: BTreeMap::new(),
             model_positions: BTreeMap::new(),
             model_lines: BTreeMap::new(),
             model_versions: BTreeMap::new(),
@@ -3736,6 +3737,14 @@ impl PalwChainStateV2 {
                 collection_root(b"exec_v2_job_uses", &self.exec_v2_job_uses)
             );
         }
+        if !self.private_moe2_attempt_uses.is_empty() {
+            state.update(b"private_moe2_attempt_uses/v1");
+            direct_collection!(
+                b"private_moe2_attempt_uses",
+                &self.private_moe2_attempt_uses,
+                collection_root(b"private_moe2_attempt_uses", &self.private_moe2_attempt_uses)
+            );
+        }
         if !self.private_moe2_work_uses.is_empty() {
             state.update(b"private_moe2_work_uses/v1");
             direct_collection!(
@@ -3959,6 +3968,14 @@ impl PalwChainStateV2 {
             .any(|claim| !self.private_moe2_exec_settlements.contains_key(claim) || !work_claims.insert(*claim))
         {
             return Err(PalwStateV2Error::CarriageInconsistent("private MOE2 work lacks a unique settlement".into()));
+        }
+        let mut attempt_works = BTreeSet::new();
+        if self
+            .private_moe2_attempt_uses
+            .values()
+            .any(|work| !self.private_moe2_work_uses.contains_key(work) || !attempt_works.insert(*work))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("private MOE2 attempt lacks a unique work settlement".into()));
         }
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.

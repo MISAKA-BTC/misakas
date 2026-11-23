@@ -17569,6 +17569,7 @@ fn every_delta_entry_kind_round_trips_through_borsh() {
                 PalwDeltaEntryV2::ModelMarket { .. } => "model_market",
                 PalwDeltaEntryV2::PrivateMoe2ExecSettlement { .. } => "private_moe2_exec_settlement",
                 PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { .. } => "private_moe2_exec_work_settlement",
+                PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { .. } => "private_moe2_attempt_settlement",
                 PalwDeltaEntryV2::ModelPosition { .. } => "model_position",
                 PalwDeltaEntryV2::ModelBenefits { .. } => "model_benefits",
                 PalwDeltaEntryV2::ModelPositionSince { .. } => "model_position_since",

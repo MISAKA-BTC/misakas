@@ -92,6 +92,8 @@ pub struct Moe2ExecAwardInputV1<'a> {
     pub quote_anchor: &'a PalwChainStateV2,
     pub price: Moe2QuoteAnchorV1,
     pub block: &'a Block,
+    /// Canonical attempt from the independently authenticated winning Original.
+    pub attempt: [u8; 32],
     pub award: Moe2ExecAwardV1<'a>,
 }
 
@@ -134,7 +136,7 @@ pub(super) fn fold_exec_award_v1(
     input: Moe2ExecAwardInputV1<'_>,
 ) -> Result<(), PalwStateV2Error> {
     use super::{native_writers::NativeWriteQuoteV1, palw_bond_budget_fold_v1::PalwBudgetGrowthV1};
-    let Moe2ExecAwardInputV1 { config, quote_anchor, price, block, award } = input;
+    let Moe2ExecAwardInputV1 { config, quote_anchor, price, block, attempt, award } = input;
     let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award has no consensus configuration"));
     };
@@ -149,6 +151,9 @@ pub(super) fn fold_exec_award_v1(
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"));
     }
     let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC award: {why:?}"));
+    if builder.state.private_moe2_attempt_work(&attempt).is_some() {
+        return Err(refuse(Moe2SettlementError::AttemptAlreadyConsumed));
+    }
     if builder.native_writers_tracking_v1() {
         let payees = award.payees.panel.len().saturating_add(1);
         if payees > PALW_V2_MAX_PAYOUTS_PER_BLOCK.saturating_add(1) {
@@ -163,6 +168,7 @@ pub(super) fn fold_exec_award_v1(
         q.member::<Hash64, Moe2NativeExecSettlement>(1)?
             .member::<Hash64, ()>(1)?
             .member::<Hash64, Hash64>(1)?
+            .member::<[u8; 32], Hash64>(1)?
             .member::<PalwBondKeyV2, ()>(payees as u64)?
             .exact::<Moe2NativeExecSettlement>(1)?
             .exact::<TransactionOutput>(payees as u64)?
@@ -213,15 +219,24 @@ pub(super) fn fold_exec_award_v1(
         .ok_or_else(|| refuse(Moe2SettlementError::ReservationMismatch))?
         .map_err(refuse)?;
     builder.reserve_final_journal_v1(2)?;
-    builder.state.write_private_moe2_settlement(&mut builder.entries, before, &book, &undo, reward, Some(slot), Some(work));
+    builder.state.write_private_moe2_settlement(
+        &mut builder.entries,
+        before,
+        &book,
+        &undo,
+        reward,
+        Some(slot),
+        Some(work),
+        Some(attempt),
+    );
     Ok(())
 }
 
 fn prior_exec_settlement(prefix: &[PalwDeltaEntryV2]) -> Option<Moe2Position> {
     prefix.iter().rev().find_map(|entry| match entry {
-        PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => {
-            Some(record.position)
-        }
+        PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }
+        | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }
+        | PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { record, .. } => Some(record.position),
         _ => None,
     })
 }
@@ -271,7 +286,8 @@ pub(super) fn check_exec_settlement_debit_v1(
 ) -> Result<(), PalwStateV2Error> {
     let (record, keyed) = match entry {
         PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record } => (record, false),
-        PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => (record, true),
+        PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }
+        | PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { record, .. } => (record, true),
         _ => return Ok(()),
     };
     let mismatch = || PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement lacks its same-block debit");
@@ -335,6 +351,10 @@ pub(super) fn check_exec_settlement_debit_v1(
 impl PalwChainStateV2 {
     pub fn private_moe2_exec_settlement(&self, claim: &Hash64) -> Option<&Moe2NativeExecSettlement> {
         self.private_moe2_exec_settlements.get(claim)
+    }
+
+    pub fn private_moe2_attempt_work(&self, attempt: &[u8; 32]) -> Option<&Hash64> {
+        self.private_moe2_attempt_uses.get(attempt)
     }
 
     pub fn private_moe2_work_claim(&self, work: &Hash64) -> Option<&Hash64> {
@@ -657,7 +677,9 @@ impl PalwChainStateV2 {
         }
         let work = match delta.entries.last() {
             Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, .. }) => {
-                if self.private_moe2_work_claim(work) != Some(&undo.claim()) {
+                if self.private_moe2_work_claim(work) != Some(&undo.claim())
+                    || self.private_moe2_attempt_uses.values().any(|used| used == work)
+                {
                     return Err(UndoMismatch);
                 }
                 suffix.push(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work: *work, record: Box::new(record) });
@@ -707,7 +729,7 @@ impl PalwChainStateV2 {
         let anchor = book.admitted_terms(&claim).ok_or(Moe2SettlementError::UnknownClaimContext)?.quote_anchor;
         let (reward, undo) = book.settle_from_reservation(claim, position, anchor, &funding, budget, &mut writes, slot)?;
         delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
-        self.write_private_moe2_settlement(&mut delta.entries, before, book, &undo, reward, slot, work);
+        self.write_private_moe2_settlement(&mut delta.entries, before, book, &undo, reward, slot, work, None);
         Ok((reward, undo))
     }
 
@@ -809,6 +831,7 @@ impl PalwChainStateV2 {
         reward: Moe2SettledReward,
         slot: Option<&Moe2ExecSlot>,
         work: Option<Hash64>,
+        attempt: Option<[u8; 32]>,
     ) {
         let claim = undo.claim();
         let model = undo.model();
@@ -824,7 +847,12 @@ impl PalwChainStateV2 {
             self.private_moe2_exec_settlements.insert(claim, record.clone());
             let entry = if let Some(work) = work {
                 self.private_moe2_work_uses.insert(work, claim);
-                PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record: Box::new(record) }
+                if let Some(attempt) = attempt {
+                    self.private_moe2_attempt_uses.insert(attempt, work);
+                    PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { attempt, work, record: Box::new(record) }
+                } else {
+                    PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record: Box::new(record) }
+                }
             } else {
                 PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record: Box::new(record) }
             };

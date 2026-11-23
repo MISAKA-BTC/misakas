@@ -11325,6 +11325,7 @@ pub struct PalwChainStateV2 {
     // Derived from the permanent receipts, including after budget-row expiry.
     private_moe2_settled_reservations: BTreeSet<Hash64>,
     private_moe2_work_uses: BTreeMap<Hash64, Hash64>,
+    private_moe2_attempt_uses: BTreeMap<[u8; 32], Hash64>,
     /// ADR-0087 Decision 1: units held, by `(line, holder)`; a row is removed at zero. (ADR-0088
     /// Decision 9: the key is a LINE id; a class's founding line has the class id.)
     model_positions: BTreeMap<(Hash64, Hash64), u64>,
@@ -13133,6 +13134,12 @@ pub enum PalwDeltaEntryV2 {
         work: Hash64,
         record: Box<crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
     } = 254,
+    /// The authenticated FOW1 attempt and numerical work are consumed by the same settlement.
+    PrivateMoe2AttemptSettlement {
+        attempt: [u8; 32],
+        work: Hash64,
+        record: Box<crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
+    } = 255,
 }
 
 /// RFC-0008 v2: the table ids of [`PalwDeltaEntryV2::ExecV2Row`].
@@ -24833,10 +24840,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ModelMarket { key, old, new } => swap_write!(state.model_markets, key, old, new),
         PalwDeltaEntryV2::PrivateMoe2ExecSettlement { record }
-        | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. } => {
-            let work = match entry {
-                PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, .. } => Some(work),
-                _ => None,
+        | PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { record, .. }
+        | PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { record, .. } => {
+            let (work, attempt) = match entry {
+                PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { work, attempt, .. } => (Some(work), Some(attempt)),
+                PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, .. } => (Some(work), None),
+                _ => (None, None),
             };
             if state.last_point != Some(record.position.point)
                 || !record.has_consistent_reward()
@@ -24858,6 +24867,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 {
                     return Err(PalwStateV2Error::DeltaMismatch("private MOE2 EXEC settlement differs from its journal"));
                 }
+                if let Some(attempt) = attempt {
+                    if state.private_moe2_attempt_uses.get(attempt) != work {
+                        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 attempt differs from its journal"));
+                    }
+                } else if work.is_some_and(|work| state.private_moe2_attempt_uses.values().any(|used| used == work)) {
+                    return Err(PalwStateV2Error::DeltaMismatch("private MOE2 attempt missing from its journal"));
+                }
                 if let Some(work) = work {
                     if state.private_moe2_work_uses.get(work) != Some(&record.claim) {
                         return Err(PalwStateV2Error::DeltaMismatch("private MOE2 work differs from its journal"));
@@ -24865,6 +24881,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                     state.private_moe2_work_uses.remove(work);
                 } else if state.private_moe2_work_uses.values().any(|claim| *claim == record.claim) {
                     return Err(PalwStateV2Error::DeltaMismatch("private MOE2 work missing from its journal"));
+                }
+                if let Some(attempt) = attempt {
+                    state.private_moe2_attempt_uses.remove(attempt);
                 }
                 state.private_moe2_exec_settlements.remove(&record.claim);
                 state.private_moe2_settled_reservations.remove(&record.reservation);
@@ -24875,11 +24894,17 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 if state.private_moe2_settled_reservations.contains(&record.reservation) {
                     return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 EXEC reservation"));
                 }
+                if attempt.is_some_and(|attempt| state.private_moe2_attempt_uses.contains_key(attempt)) {
+                    return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 attempt"));
+                }
                 if let Some(work) = work {
                     if state.private_moe2_work_uses.contains_key(work) {
                         return Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 numerical work"));
                     }
                     state.private_moe2_work_uses.insert(*work, record.claim);
+                    if let Some(attempt) = attempt {
+                        state.private_moe2_attempt_uses.insert(*attempt, *work);
+                    }
                 }
                 state.private_moe2_exec_settlements.insert(record.claim, record.as_ref().clone());
                 state.private_moe2_settled_reservations.insert(record.reservation);
@@ -25231,6 +25256,7 @@ pub struct PalwStateCarriageV2 {
     pub model_markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
     pub private_moe2_exec_settlements: BTreeMap<Hash64, crate::palw_model_market_v1::moe2::settlement::Moe2NativeExecSettlement>,
     pub private_moe2_work_uses: BTreeMap<Hash64, Hash64>,
+    pub private_moe2_attempt_uses: BTreeMap<[u8; 32], Hash64>,
     pub model_positions: BTreeMap<(Hash64, Hash64), u64>,
     /// ADR-0088 Decision 10. A second tagged tail after ADR-0087's, encoded only when non-empty,
     /// for the same reason.
@@ -25675,6 +25701,7 @@ const PALW_CARRIAGE_SEAT_ROOT_READINESS_TAIL_V1: u8 = 0xEB;
 const PALW_CARRIAGE_PANEL_V3_TAIL_V1: u8 = 0xED;
 const PALW_CARRIAGE_PRIVATE_MOE2_EXEC_SETTLEMENTS_TAIL: u8 = 0xFC;
 const PALW_CARRIAGE_PRIVATE_MOE2_WORK_USES_TAIL: u8 = 0xFD;
+const PALW_CARRIAGE_PRIVATE_MOE2_ATTEMPT_USES_TAIL: u8 = 0xFE;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -26091,6 +26118,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_PRIVATE_MOE2_WORK_USES_TAIL.serialize(writer)?;
             self.private_moe2_work_uses.serialize(writer)?;
         }
+        if !self.private_moe2_attempt_uses.is_empty() {
+            PALW_CARRIAGE_PRIVATE_MOE2_ATTEMPT_USES_TAIL.serialize(writer)?;
+            self.private_moe2_attempt_uses.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -26130,6 +26161,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut model_markets = BTreeMap::new();
         let mut private_moe2_exec_settlements = BTreeMap::new();
         let mut private_moe2_work_uses = BTreeMap::new();
+        let mut private_moe2_attempt_uses = BTreeMap::new();
         let mut model_positions = BTreeMap::new();
         let mut model_lines = BTreeMap::new();
         let mut model_versions = BTreeMap::new();
@@ -26715,6 +26747,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_bond_budget = true;
                     bond_budget = Some(crate::palw_bond_budget_v1::PalwBondBudgetStateV1::deserialize_reader(reader)?);
                 }
+                PALW_CARRIAGE_PRIVATE_MOE2_ATTEMPT_USES_TAIL if private_moe2_attempt_uses.is_empty() => {
+                    private_moe2_attempt_uses = BTreeMap::deserialize_reader(reader)?;
+                    if private_moe2_attempt_uses.is_empty() {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "an empty private MOE2 attempt uses tail"));
+                    }
+                }
                 PALW_CARRIAGE_PRIVATE_MOE2_WORK_USES_TAIL if private_moe2_work_uses.is_empty() => {
                     private_moe2_work_uses = BTreeMap::deserialize_reader(reader)?;
                     if private_moe2_work_uses.is_empty() {
@@ -26782,6 +26820,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             model_markets,
             private_moe2_exec_settlements,
             private_moe2_work_uses,
+            private_moe2_attempt_uses,
             model_positions,
             model_lines,
             model_versions,
@@ -26935,6 +26974,7 @@ impl PalwStateCarriageV2 {
             model_markets: state.model_markets.clone(),
             private_moe2_exec_settlements: state.private_moe2_exec_settlements.clone(),
             private_moe2_work_uses: state.private_moe2_work_uses.clone(),
+            private_moe2_attempt_uses: state.private_moe2_attempt_uses.clone(),
             model_positions: state.model_positions.clone(),
             model_lines: state.model_lines.clone(),
             model_benefits: state.model_benefits.clone(),
@@ -27220,6 +27260,7 @@ impl PalwStateCarriageV2 {
             private_moe2_exec_settlements: self.private_moe2_exec_settlements,
             private_moe2_settled_reservations,
             private_moe2_work_uses: self.private_moe2_work_uses,
+            private_moe2_attempt_uses: self.private_moe2_attempt_uses,
             model_positions: self.model_positions,
             model_lines: self.model_lines,
             model_benefits: self.model_benefits,

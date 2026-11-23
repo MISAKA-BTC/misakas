@@ -47,6 +47,7 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
     tree::<Hash64, Hash64>(&mut q, claims)?; // expected work IDs
     tree::<Hash64, ()>(&mut q, c.private_moe2_exec_settlements.len() as u64)?; // derived spent EXEC reservations
     tree::<Hash64, ()>(&mut q, c.private_moe2_work_uses.len() as u64)?; // unique numerical settlement claims
+    tree::<Hash64, ()>(&mut q, c.private_moe2_attempt_uses.len() as u64)?; // one settled attempt per work
     tree::<(u64, Hash64), ()>(&mut q, claims)?; // internal expected deadlines
     tree::<(u64, Hash64), ()>(&mut q, claims)?; // parameterized deadline check
     tree::<Hash64, usize>(&mut q, c.derived_artifacts.len() as u64)?;

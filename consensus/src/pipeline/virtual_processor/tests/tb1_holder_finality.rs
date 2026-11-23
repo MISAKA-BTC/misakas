@@ -1482,6 +1482,7 @@ async fn run(stable: bool, registered: bool) {
         let mut ticket = [0u8; 33];
         ticket[1..].copy_from_slice(&body.ticket);
         assert_eq!(execution.ticket_meets_target(), ticket < r.terms().target);
+        assert_eq!(execution.attempt(), r.attempt());
         assert!(recorded.read_qf1_execution(&history, block.hash(), body, &owner_sig, bound_instance).is_err());
         let (artifact, norm) = exercise.as_ref().unwrap();
         let wrong_model = prediction::bind_scale(artifact, *norm, b"branch read substitute");

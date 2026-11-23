@@ -85,7 +85,7 @@ fn retained_moe2_award_resource_probe() {
         |bytes: &[u8], root| borsh::from_slice::<PalwStateCarriageV2>(bytes).unwrap().into_state(params, Some(root)).unwrap();
     let parent = restore(&probe.parent, probe.parent_root);
     let anchor = restore(&probe.anchor, probe.anchor_root);
-    let Some(PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work, record }) = probe.delta.entries.last() else {
+    let Some(PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { attempt, work, record }) = probe.delta.entries.last() else {
         panic!("missing expected award receipt");
     };
     let slot = Moe2ExecSlot {
@@ -120,6 +120,7 @@ fn retained_moe2_award_resource_probe() {
         &anchor,
         price,
         &block,
+        *attempt,
         Moe2ExecAwardV1 {
             claim: record.claim,
             position: record.position,
@@ -166,6 +167,7 @@ fn fold_retained_award(
     anchor: &PalwChainStateV2,
     price: Moe2QuoteAnchorV1,
     block: &Block,
+    attempt: [u8; 32],
     award: Moe2ExecAwardV1<'_>,
     enabled: bool,
 ) -> Result<
@@ -195,7 +197,7 @@ fn fold_retained_award(
             live_case_cap: 0,
             load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
         },
-        Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, price, block, award }),
+        Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, price, block, attempt, award }),
     )
     .map(|(state, delta, _, _)| (state, delta))
 }
@@ -224,6 +226,7 @@ pub(super) fn check_exec_settlement_rewind(
     // This fixture injects the identity that the block owner's authenticated
     // EXEC verifier would provide. It only exercises native accounting.
     let work = Hash64::from_u64_word(650);
+    let attempt = [43; 32];
     let other_work = Hash64::from_u64_word(651);
     let alias_claim = Hash64::from_u64_word(652);
     let alias_slot = Moe2ExecSlot {
@@ -681,20 +684,91 @@ pub(super) fn check_exec_settlement_rewind(
     assert!(Moe2QuoteAnchorV1::resolve(api, quote.quote_anchor, close, &slot).is_err());
     assert!(Moe2QuoteAnchorV1::resolve(api, close, quote.quote_anchor, &slot).is_err());
     let retained = |parent: &PalwChainStateV2, block: &Block, input: Moe2ExecAwardV1<'_>, enabled| {
-        fold_retained_award(config, params, parent, registration, price, block, input, enabled)
+        fold_retained_award(config, params, parent, registration, price, block, attempt, input, enabled)
     };
     let input = || native_award(claim, &slot, work, position);
     assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
-    assert_eq!((retained_child.state_root(), &*retained_delta), (child.state_root(), &award_delta));
-    assert_eq!(revert_delta_v2(&retained_child, &retained_delta, params).unwrap().state_root(), restored.state_root());
+    let mut expected_delta = award_delta.clone();
+    let last = expected_delta.entries.last_mut().unwrap();
+    let PalwDeltaEntryV2::PrivateMoe2ExecWorkSettlement { work: expected_work, record } = last else {
+        panic!("missing keyed settlement")
+    };
+    *last = PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { attempt, work: *expected_work, record: record.clone() };
+    assert_eq!(&*retained_delta, &expected_delta);
+    let wire = borsh::to_vec(&*retained_delta).unwrap();
+    kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(wire.as_slice(), wire.len() as u64)
+        .unwrap();
+    assert_eq!(borsh::from_slice::<PalwStateDeltaV2>(&wire).unwrap(), expected_delta);
+    assert_eq!(retained_child.private_moe2_attempt_work(&attempt), Some(&work));
+    assert_ne!(retained_child.state_root(), child.state_root());
+    let carriage = PalwStateCarriageV2::from_state(&retained_child);
+    let carriage_bytes = borsh::to_vec(&carriage).unwrap();
+    kaspa_consensus_core::palw_native_resource_v1::preflight_native_carriage_v1(
+        carriage_bytes.as_slice(),
+        carriage_bytes.len() as u64,
+    )
+    .unwrap();
+    let saved: PalwStateCarriageV2 = borsh::from_slice(&carriage_bytes).unwrap();
+    let recovered = saved.into_state(params, Some(retained_child.state_root())).unwrap();
+    assert_eq!(recovered.private_moe2_attempt_work(&attempt), Some(&work));
+    let reversed = revert_delta_v2(&recovered, &retained_delta, params).unwrap();
+    assert_eq!(reversed.state_root(), restored.state_root());
+    assert!(reversed.private_moe2_attempt_work(&attempt).is_none());
+    assert_eq!(apply_delta_v2(&reversed, &retained_delta, params).unwrap().state_root(), retained_child.state_root(),);
+    assert!(matches!(
+        revert_delta_v2(&recovered, &award_delta, params),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 attempt missing from its journal"))
+    ));
+    let mut wrong_attempt = expected_delta.clone();
+    let Some(PalwDeltaEntryV2::PrivateMoe2AttemptSettlement { attempt: substituted_attempt, .. }) = wrong_attempt.entries.last_mut()
+    else {
+        panic!("missing attempt use");
+    };
+    *substituted_attempt = [44; 32];
+    assert!(matches!(
+        revert_delta_v2(&recovered, &wrong_attempt, params),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 attempt differs from its journal"))
+    ));
+    let mut unknown_work = carriage;
+    unknown_work.private_moe2_attempt_uses.insert(attempt, other_work);
+    assert!(matches!(unknown_work.into_state(params, None), Err(PalwStateV2Error::CarriageInconsistent(_))));
+
+    // Prior use of the same attempt for another claim, numerical work and
+    // reservation survives reload and prevents settling this candidate.
+    let mut competing_parent = PalwStateCarriageV2::from_state(&restored);
+    let mut prior = recovered.private_moe2_exec_settlement(&claim).unwrap().clone();
+    prior.claim = alias_claim;
+    prior.reservation = alias_slot.reservation_key();
+    prior.signed_slot =
+        kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &borsh::to_vec(&alias_slot).unwrap());
+    prior.position.point = *restored.last_point().unwrap();
+    if let Some(lp) = &mut prior.permanent_liquidity {
+        lp.claim = alias_claim;
+        lp.position = prior.position;
+    }
+    competing_parent.private_moe2_exec_settlements.insert(alias_claim, prior);
+    competing_parent.private_moe2_attempt_uses.insert(attempt, other_work);
+    competing_parent.private_moe2_work_uses.insert(other_work, alias_claim);
+    let competing_parent = competing_parent.into_state(params, None).unwrap();
+    let competing_root = competing_parent.state_root();
+    assert!(matches!(
+        retained(&competing_parent, &award_block, input(), true),
+        Err(PalwStateV2Error::BondBudgetRefused(reason)) if reason.contains("AttemptAlreadyConsumed")
+    ));
+    assert!(matches!(
+        apply_delta_v2(&competing_parent, &retained_delta, params),
+        Err(PalwStateV2Error::DeltaMismatch("duplicate private MOE2 attempt"))
+    ));
+    assert_eq!(competing_parent.state_root(), competing_root);
+    println!("MOE2 attempt-use pid={} block={} root={}", std::process::id(), position.point.block, retained_child.state_root());
     let mut changed = PalwStateCarriageV2::from_state(registration);
     changed.model_markets.get_mut(&quote.model).unwrap().burned_sompi += 1;
     let changed = changed.into_state(params, None).unwrap();
     assert_eq!(changed.last_point(), registration.last_point());
     assert_ne!(changed.state_root(), registration.state_root());
     assert!(matches!(
-        fold_retained_award(config, params, &restored, &changed, price, &award_block, input(), true),
+        fold_retained_award(config, params, &restored, &changed, price, &award_block, attempt, input(), true),
         Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"))
     ));
     if std::env::var_os("MISAKA_TEST_MOE2_REGISTRATION_BLOCKS").is_none() {
@@ -704,8 +778,8 @@ pub(super) fn check_exec_settlement_rewind(
                 parent_root: restored.state_root(),
                 anchor: borsh::to_vec(&PalwStateCarriageV2::from_state(registration)).unwrap(),
                 anchor_root: registration.state_root(),
-                after_root: child.state_root(),
-                delta: award_delta.clone(),
+                after_root: retained_child.state_root(),
+                delta: expected_delta,
                 registration: slot.registration,
                 slot: slot.slot,
                 close: slot.close,
@@ -948,6 +1022,13 @@ pub(super) fn check_exec_settlement_rewind(
     header.finalize();
     let sibling = Block::new(header, award_block.transactions.as_ref().to_vec()).with_evm_payload(award_block.evm_payload.clone());
     let (mut replacement, mut replacement_delta, replacement_at) = fold(&sibling);
+    // The authenticated attempt can be received on a sibling after the
+    // first award is disconnected, with its original slot and work.
+    let (sibling_state, sibling_delta) =
+        retained(&reversed, &sibling, native_award(claim, &slot, work, replacement_at), true).unwrap();
+    assert_ne!(sibling_state.state_root(), retained_child.state_root());
+    assert_eq!(sibling_state.private_moe2_attempt_work(&attempt), Some(&work));
+    assert_eq!(revert_delta_v2(&sibling_state, &sibling_delta, params).unwrap().state_root(), restored.state_root());
     replacement
         .fold_private_moe2_exec_award(
             config,

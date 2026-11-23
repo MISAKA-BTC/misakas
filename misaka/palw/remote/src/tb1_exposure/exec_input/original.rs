@@ -26,6 +26,7 @@ pub struct BranchQf1Execution {
     original: Hash64,
     original_block: Hash64,
     work: Hash64,
+    attempt: [u8; 32],
     ticket: [u8; 32],
     ticket_meets_target: bool,
 }
@@ -41,6 +42,10 @@ impl BranchQf1Execution {
 
     pub fn original_block(&self) -> Hash64 {
         self.original_block
+    }
+
+    pub fn attempt(&self) -> &[u8; 32] {
+        &self.attempt
     }
 
     pub fn work(&self) -> Hash64 {
@@ -81,6 +86,7 @@ impl BranchExecInput<'_> {
             original,
             original_block: block,
             work,
+            attempt: *input.attempt(),
             ticket: body.ticket,
             ticket_meets_target: input.terms.threshold()?.admits_ticket_be(&body.ticket),
         })
