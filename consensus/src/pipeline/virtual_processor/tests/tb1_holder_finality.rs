@@ -486,7 +486,7 @@ async fn exercise_prepared_exec_certificate(
     use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
     use kaspa_consensus_core::{
         palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
-        palw_qf1,
+        palw_qf1::{self, TreeBuilder, TreeKind, TreeRoot, readout_chunks::record_count, ticket},
         palw_state_v2::{
             PalwBlockContextV2, PalwBlockWorkV3, PalwDeltaEntryV2, PalwTransitionExtrasV1, PositiveCaseReplayInputV2,
             Qf1OriginalVerification, Qf1TerminalUpdate, apply_delta_v2, apply_palw_transition_retained_v8, revert_delta_v2,
@@ -494,8 +494,10 @@ async fn exercise_prepared_exec_certificate(
         palw_tb1::{
             publication::{BranchPublicationGate, verify_prepared_exec_certificate},
             qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
+            qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
         },
     };
+    use sha3::{Digest, Sha3_512};
     for _ in 0..24 {
         if node.chain.daa_of(node.chain.sink()) >= closure.round.release_from_daa {
             break;
@@ -618,9 +620,36 @@ async fn exercise_prepared_exec_certificate(
     let correct_attempt = palw_qf1::attempt(registration, &seed).unwrap();
     let mut wrong_attempt = correct_attempt;
     wrong_attempt[0] ^= 1;
-    // Owner-authenticated commitments isolate seed binding from execution
-    // and ticket verification, which are outside the Original receipt.
-    let body = [0; QF1_ORIGINAL_BODY_BYTES];
+    // Commit to an EOS token with a contradictory Stop reason. The fixture
+    // supplies only the leaves needed to open this terminal dispute.
+    let token = 151645u32.to_le_bytes();
+    let mut stop = [0; 18];
+    stop[0] = 3;
+    stop[1..5].copy_from_slice(&13u32.to_le_bytes());
+    stop[5..9].copy_from_slice(&1u32.to_le_bytes());
+    stop[9..13].copy_from_slice(&1u32.to_le_bytes());
+    stop[13..17].copy_from_slice(&token);
+    stop[17] = 1;
+    let trace_count = u64::from(record_count(1).unwrap()) + 4;
+    let stop_index = 2;
+    let mut trace = TreeBuilder::new(correct_attempt, TreeKind::Trace, trace_count, trace_count, Some(stop_index)).unwrap();
+    for index in 0..trace_count {
+        trace.push(if index == stop_index { &stop } else { &[1] }).unwrap();
+    }
+    let (trace, stop_path) = trace.finish().unwrap();
+    let input = 1u32.to_le_bytes();
+    let readout = [0; 64];
+    let roots = [
+        TreeRoot::build(correct_attempt, TreeKind::Input, std::iter::once(input.as_slice()), 1).unwrap(),
+        TreeRoot::build(correct_attempt, TreeKind::Answer, std::iter::once(token.as_slice()), 1).unwrap(),
+        TreeRoot::build(correct_attempt, TreeKind::Readout, std::iter::once(readout.as_slice()), 1).unwrap(),
+        trace,
+    ];
+    let mut body = [0; QF1_ORIGINAL_BODY_BYTES];
+    let mut writer = body.as_mut_slice();
+    borsh::BorshSerialize::serialize(&roots.each_ref().map(|root| root.count()), &mut writer).unwrap();
+    borsh::BorshSerialize::serialize(&roots.each_ref().map(|root| root.digest), &mut writer).unwrap();
+    borsh::BorshSerialize::serialize(&ticket(roots.each_ref()).unwrap(), &mut writer).unwrap();
     for (attempt, expected) in [(wrong_attempt, None), (correct_attempt, Some(Qf1OriginalVerification::AwaitingReplay))] {
         let claim = signing_id(&chain, &slot.registration, slot.slot, &attempt, &body);
         let signature = ml_dsa_65::sign(
@@ -645,6 +674,47 @@ async fn exercise_prepared_exec_certificate(
         assert_eq!(state.qf1_original_verification(claim), expected);
         assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
     }
+    let original_block = node.chain.sink();
+    let original = signing_id(&chain, &slot.registration, slot.slot, &correct_attempt, &body);
+    let record = [token.as_slice(), &stop].concat();
+    let mut marker = Sha3_512::new()
+        .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")
+        .chain_update(chain)
+        .chain_update(original_block.as_bytes())
+        .chain_update(original.as_bytes())
+        .chain_update(&record)
+        .chain_update([0, stop_path.len() as u8]);
+    let mut disclosure = record;
+    for sibling in stop_path {
+        marker.update(sibling);
+        disclosure.extend_from_slice(&sibling);
+    }
+    let marker: [u8; 64] = marker.finalize().into();
+    let mut miner = new_miner_data();
+    miner.extra_data = marker.to_vec();
+    let case_payload =
+        Qf1TerminalCarrier { relation: Qf1TerminalRelation::Stop, original_block, disclosure: &disclosure }.encode().unwrap();
+    let reference = Moe2AwardReference::for_slot(original, correct_attempt, slot);
+    let txs = stable_panel::evidence_transactions(node, [case_payload, reference.encode().to_vec()]);
+    let template = stable_panel::heartbeat_with_transactions(node, miner, txs);
+    let case = node.take(template, "QF1 Stop case against the certified Original").await;
+    let verdict: [u8; 64] = Sha3_512::new()
+        .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1")
+        .chain_update(case.hash().as_bytes())
+        .chain_update(marker)
+        .chain_update([1])
+        .finalize()
+        .into();
+    let (_, pending) = node.chain.tip_state();
+    assert!(pending.qf1_terminal_verdict_pending(&verdict, case.header.daa_score));
+    let mut miner = new_miner_data();
+    miner.extra_data = verdict.to_vec();
+    let template = stable_panel::heartbeat(node, miner);
+    let decision = node.take(template, "QF1 Stop verdict").await;
+    let (_, decided) = node.chain.tip_state();
+    assert!(!decided.qf1_terminal_verdict_pending(&verdict, decision.header.daa_score));
+    assert!(decided.qf1_terminal_blocks_award(original));
+    assert!(decided.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
 }
 
 async fn run(stable: bool, registered: bool) {

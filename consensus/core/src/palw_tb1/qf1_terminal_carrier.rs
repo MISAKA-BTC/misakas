@@ -1,9 +1,15 @@
 //! Bounded public disclosure for a QF1 terminal Court case. The case and
 //! verdict commitments and the Original's openings are checked by the reader.
+use super::{
+    exec_registration::ExecRegistration,
+    qf1_original_carrier::{Qf1OriginalCarrier, authenticate_certified_original, authenticate_original, qf1_marker},
+};
 use crate::{
     Hash64,
     block::Block,
+    palw_model_market_v1::moe2::award_reference::{Moe2AwardReference, Moe2AwardSource},
     palw_qf1::terminal::{END_BYTES, LAST_CHUNK_BYTES},
+    palw_state_v2::PalwChainStateV2,
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
 };
 
@@ -91,21 +97,57 @@ impl Qf1TerminalRuling {
     /// selected history. The parent must fund the exact EXEC registration.
     pub fn prepare(
         chain: [u8; 64],
-        parent: &crate::palw_state_v2::PalwChainStateV2,
-        source: crate::palw_model_market_v1::moe2::award_reference::Moe2AwardSource<'_>,
+        parent: &PalwChainStateV2,
+        source: Moe2AwardSource<'_>,
         slot_close_daa: u64,
         original_block: &Block,
         candidate: &Block,
     ) -> Result<Self, &'static str> {
-        use super::qf1_original_carrier::{authenticate_original, qf1_marker};
+        if parent.tb1_exec_close_receipt(source.reference.close).is_some() {
+            return Err("recorded QF1 EXEC close requires its certificate");
+        }
+        source.reference.check_parent_reservation(parent, candidate.header.daa_score)?;
+        let (original, registration) = authenticate_original(&chain, source, slot_close_daa, original_block)?;
+        Self::judge(chain, source.reference, original_block.hash(), original, &registration, candidate)
+    }
+
+    /// The Original and close bodies come from the selected chain. Require
+    /// the admitted Original's own reference before opening its commitments.
+    pub fn prepare_certified(
+        chain: [u8; 64],
+        parent: &PalwChainStateV2,
+        source: Moe2AwardSource<'_>,
+        close: &Block,
+        original_block: &Block,
+        candidate: &Block,
+    ) -> Result<Self, &'static str> {
+        let reference = source.reference;
+        let (admitted_block, deadline) = parent.qf1_original_receipt(reference.claim).ok_or("missing QF1 Original receipt")?;
+        if admitted_block != original_block.hash()
+            || Moe2AwardReference::from_transactions(original_block.transactions.iter()).map_err(|error| error.reason())? != reference
+        {
+            return Err("QF1 Court case differs from the admitted Original");
+        }
+        let (original, registration) = authenticate_certified_original(&chain, parent, source, close, original_block)?;
+        if deadline != registration.deadline_exclusive_daa {
+            return Err("QF1 Court case differs from the admitted deadline");
+        }
+        Self::judge(chain, reference, admitted_block, original, &registration, candidate)
+    }
+
+    fn judge(
+        chain: [u8; 64],
+        reference: Moe2AwardReference,
+        original_block: Hash64,
+        original: Qf1OriginalCarrier<'_>,
+        registration: &ExecRegistration<'_>,
+        candidate: &Block,
+    ) -> Result<Self, &'static str> {
         use crate::palw_qf1::terminal::{Qf1TerminalContext, TerminalOutcome};
         use sha3::{Digest, Sha3_512};
-        let reference = source.reference;
-        reference.check_parent_reservation(parent, candidate.header.daa_score)?;
         let carrier = Qf1TerminalCarrier::from_block(candidate).map_err(|_| "invalid native QF1 terminal carrier")?;
-        let (original, registration) = authenticate_original(&chain, source, slot_close_daa, original_block)?;
         let window = registration.open_daa..registration.deadline_exclusive_daa;
-        if carrier.original_block != original_block.hash() || !window.contains(&candidate.header.daa_score) {
+        if carrier.original_block != original_block || !window.contains(&candidate.header.daa_score) {
             return Err("QF1 terminal case differs from its committed Original or window");
         }
         let counts = std::array::from_fn(|i| u64::from_le_bytes(original.body[8 * i..8 * (i + 1)].try_into().unwrap()));

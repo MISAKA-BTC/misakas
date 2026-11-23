@@ -91,6 +91,10 @@ impl PalwChainStateV2 {
         Some(if daa < deadline { Qf1OriginalVerification::AwaitingReplay } else { Qf1OriginalVerification::Unverified })
     }
 
+    pub fn qf1_original_receipt(&self, original: Hash64) -> Option<(Hash64, u64)> {
+        self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'R', &original.as_bytes()))
+    }
+
     pub fn qf1_terminal_verdict_pending(&self, marker: &[u8; 64], daa: u64) -> bool {
         self.kernel_route
             .as_ref()

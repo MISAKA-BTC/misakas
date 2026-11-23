@@ -2487,12 +2487,12 @@ impl VirtualStateProcessor {
         if case.is_err() && !admitting_original {
             return Ok(None);
         }
+        let recorded_close = state.tb1_exec_close_receipt(source.reference.close).is_some();
+        if !recorded_close && source.reference.check_parent_reservation(state, header.daa_score).is_err() {
+            return Ok(None);
+        }
         let history = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
         if admitting_original {
-            let recorded_close = state.tb1_exec_close_receipt(source.reference.close).is_some();
-            if !recorded_close && source.reference.check_parent_reservation(state, header.daa_score).is_err() {
-                return Ok(None);
-            }
             if !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, selected_parent).map_err(history)? {
                 return Ok(None);
             }
@@ -2521,7 +2521,11 @@ impl VirtualStateProcessor {
             .map(Qf1TerminalUpdate::Original));
         }
         let Ok(case) = case else { return Ok(None) };
-        if source.reference.check_parent_reservation(state, header.daa_score).is_err() {
+        if recorded_close
+            && state
+                .qf1_original_receipt(source.reference.claim)
+                .is_none_or(|(block, deadline)| block != case.original_block || header.daa_score >= deadline)
+        {
             return Ok(None);
         }
         if source.reference.close == case.original_block
@@ -2531,15 +2535,20 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let close = self.headers_store.get_header(source.reference.close).map_err(missing)?;
-        if !source.open_registration(close.daa_score).is_ok_and(|preimage| preimage.is_some()) {
+        if !recorded_close && !source.open_registration(close.daa_score).is_ok_and(|preimage| preimage.is_some()) {
             return Ok(None);
         }
         let origin = self.headers_store.get_header(case.original_block).map_err(missing)?;
         let body = self.block_transactions_store.get(case.original_block).map_err(missing)?;
         let original = Block::from_arcs(origin, body);
-        Ok(Qf1TerminalRuling::prepare(chain, state, source, close.daa_score, &original, &candidate)
-            .ok()
-            .map(Qf1TerminalUpdate::Open))
+        let ruling = if recorded_close {
+            let body = self.block_transactions_store.get(source.reference.close).map_err(missing)?;
+            let close = Block::from_arcs(close, body);
+            Qf1TerminalRuling::prepare_certified(chain, state, source, &close, &original, &candidate)
+        } else {
+            Qf1TerminalRuling::prepare(chain, state, source, close.daa_score, &original, &candidate)
+        };
+        Ok(ruling.ok().map(Qf1TerminalUpdate::Open))
     }
 
     /// The reservation row has already authenticated the exact close and slot.

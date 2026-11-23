@@ -97,34 +97,45 @@ impl Qf1OriginalAdmission {
         close: &Block,
         block: &Block,
     ) -> Result<Self, &'static str> {
-        let reference = source.reference;
-        let receipt = parent.tb1_exec_close_receipt(reference.close).ok_or("missing accepted QF1 EXEC close")?;
-        let certificate = parent.tb1_exec_certificate(reference.close).ok_or("missing accepted QF1 EXEC certificate")?;
-        if certificate.freeze_id != receipt.freeze_id || close.hash() != reference.close {
-            return Err("QF1 EXEC certificate differs from its close");
-        }
-        let (context, registration) = ExecCloseCarrier::read_accepted_registration(close, &receipt, reference.slot)
-            .map_err(|_| "invalid QF1 EXEC close registration")?;
-        let reservation = registration.quote.map_or_else(Hash64::default, |quote| {
-            Moe2ExecSlot {
-                registration: registration.key,
-                slot: reference.slot,
-                close: close.hash(),
-                close_daa: close.header.daa_score,
-                quote,
-            }
-            .reservation_key()
-        });
-        let attempt = crate::palw_qf1::attempt(context, &Tb1BeaconSeed::from_retained(certificate.seed))?;
-        if source.registration_context().is_some_and(|supplied| supplied != context)
-            || reference.reservation != reservation
-            || reference.attempt != attempt
-        {
-            return Err("QF1 Original reference differs from the certified EXEC registration");
-        }
-        verify_original(chain, reference, close.header.daa_score, block, &registration)?;
-        Ok(Self { original: reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
+        let (_, registration) = authenticate_certified_original(chain, parent, source, close, block)?;
+        Ok(Self { original: source.reference.claim, block: block.hash(), deadline: registration.deadline_exclusive_daa })
     }
+}
+
+pub(super) fn authenticate_certified_original<'a, 'b>(
+    chain: &[u8; 64],
+    parent: &PalwChainStateV2,
+    source: Moe2AwardSource<'_>,
+    close: &'a Block,
+    block: &'b Block,
+) -> Result<(Qf1OriginalCarrier<'b>, ExecRegistration<'a>), &'static str> {
+    let reference = source.reference;
+    let receipt = parent.tb1_exec_close_receipt(reference.close).ok_or("missing accepted QF1 EXEC close")?;
+    let certificate = parent.tb1_exec_certificate(reference.close).ok_or("missing accepted QF1 EXEC certificate")?;
+    if certificate.freeze_id != receipt.freeze_id || close.hash() != reference.close {
+        return Err("QF1 EXEC certificate differs from its close");
+    }
+    let (context, registration) = ExecCloseCarrier::read_accepted_registration(close, &receipt, reference.slot)
+        .map_err(|_| "invalid QF1 EXEC close registration")?;
+    let reservation = registration.quote.map_or_else(Hash64::default, |quote| {
+        Moe2ExecSlot {
+            registration: registration.key,
+            slot: reference.slot,
+            close: close.hash(),
+            close_daa: close.header.daa_score,
+            quote,
+        }
+        .reservation_key()
+    });
+    let attempt = crate::palw_qf1::attempt(context, &Tb1BeaconSeed::from_retained(certificate.seed))?;
+    if source.registration_context().is_some_and(|supplied| supplied != context)
+        || reference.reservation != reservation
+        || reference.attempt != attempt
+    {
+        return Err("QF1 Original reference differs from the certified EXEC registration");
+    }
+    let original = verify_original(chain, reference, close.header.daa_score, block, &registration)?;
+    Ok((original, registration))
 }
 
 pub(crate) fn authenticate_original<'a, 'b>(
