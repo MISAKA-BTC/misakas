@@ -7,7 +7,9 @@ use crate::{
     coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
     header::Header,
     palw_native_settlement_v1::NativeSettlementSnapshotV1,
+    palw_state_v2::PalwChainStateV2,
     palw_tb1::{
+        exec_close_carrier::ExecCloseCarrier,
         freeze::{Tb1MiningClosure, Tb1MiningPurpose},
         qualification::Tb1Qualification,
         release_batch_carrier::{encode_release_batch, release_batch_from_block},
@@ -124,6 +126,61 @@ pub struct VerifiedTb1Publication {
     closure: Tb1MiningClosure,
     freeze_id: [u8; 64],
     seed: Tb1BeaconSeed,
+}
+
+/// The EXEC certificate accepted for an already recorded native close.
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct ExecCertificateReceipt {
+    pub(crate) certificate: Hash64,
+    pub(crate) parent: Hash64,
+    pub(crate) close: Hash64,
+    pub(crate) freeze_id: [u8; 64],
+    pub seed: [u8; 32],
+}
+
+impl ExecCertificateReceipt {
+    pub fn certificate(&self) -> Hash64 {
+        self.certificate
+    }
+}
+
+/// Verify the candidate against the selected parent's recorded EXEC close and
+/// preparation. Both settlement views must be validated by the native owner.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_prepared_exec_certificate(
+    native: &dyn ConsensusApi,
+    parent: Hash64,
+    parent_state: &PalwChainStateV2,
+    close: Hash64,
+    close_limit: usize,
+    observation: &NativeSettlementSnapshotV1,
+    settlement: &NativeSettlementSnapshotV1,
+    batch: Hash64,
+    candidate: &Block,
+    limits: PublicationLimits,
+) -> io::Result<ExecCertificateReceipt> {
+    let receipt = parent_state.tb1_exec_close_receipt(close).ok_or_else(|| invalid("missing native TB1 EXEC close"))?;
+    let (exec, _) = parent_state
+        .tb1_exec_panel_preparation(receipt.preparation, parent)
+        .ok_or_else(|| invalid("missing native TB1 EXEC preparation"))?;
+    let origin = native.get_block(close).map_err(Error::other)?;
+    if origin.hash() != close {
+        return Err(invalid("TB1 EXEC close body differs from native receipt"));
+    }
+    let closure = ExecCloseCarrier::closure_from_block(&origin, close_limit).map_err(|_| invalid("invalid TB1 EXEC close carrier"))?;
+    let q = exec.qualification();
+    let gate = BranchPublicationGate::observe(native, close, &closure, &q, observation)?;
+    if gate.freeze_id != receipt.freeze_id {
+        return Err(invalid("TB1 EXEC certificate differs from native close"));
+    }
+    let publication = gate.verify_published_candidate(native, parent, settlement, batch, candidate, &q, limits)?;
+    Ok(ExecCertificateReceipt {
+        certificate: publication.certificate,
+        parent,
+        close,
+        freeze_id: receipt.freeze_id,
+        seed: *publication.seed.as_bytes(),
+    })
 }
 
 impl VerifiedTb1Publication {

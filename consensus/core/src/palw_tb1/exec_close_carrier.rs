@@ -100,12 +100,20 @@ impl<'a> RecordBytes<'a> {
 }
 
 impl<'a> ExecCloseCarrier<'a> {
+    pub fn closure_from_block(block: &'a Block, max_bytes: usize) -> Result<Tb1MiningClosure, ExecCloseCarrierError> {
+        Ok(Self::header_from_block(block, max_bytes)?.closure)
+    }
+
     pub fn preparation_from_block(block: &'a Block, max_bytes: usize) -> Result<Hash64, ExecCloseCarrierError> {
+        Ok(Self::header_from_block(block, max_bytes)?.preparation)
+    }
+
+    fn header_from_block(block: &'a Block, max_bytes: usize) -> Result<Self, ExecCloseCarrierError> {
         let payload = carrier_payload(&block.transactions)?;
         if payload.len() > max_bytes {
             return Err(ExecCloseCarrierError::Limit);
         }
-        Ok(Self::read_prefix(payload, usize::from(u16::MAX))?.0.preparation)
+        Ok(Self::read_prefix(payload, usize::from(u16::MAX))?.0)
     }
 
     /// Locate the single carrier in a body already checked against its header.

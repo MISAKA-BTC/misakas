@@ -472,6 +472,119 @@ fn inconsistent_readout_fixture() -> bool {
     std::env::var_os("MISAKA_PRIVATE_QF1_INCONSISTENT_READOUT").is_some()
 }
 
+async fn exercise_prepared_exec_certificate(
+    node: &mut Rig,
+    close: &Block,
+    closure: &Tb1MiningClosure,
+    q: &Tb1Qualification<'_>,
+    keys: &[ml_dsa_65::MLDSA65KeyPair],
+    dealers: &[usize],
+) {
+    use kaspa_consensus_core::{
+        palw_state_v2::{
+            PalwBlockContextV2, PalwBlockWorkV3, PalwTransitionExtrasV1, PositiveCaseReplayInputV2, Qf1TerminalUpdate,
+            apply_palw_transition_retained_v8, revert_delta_v2,
+        },
+        palw_tb1::publication::{BranchPublicationGate, verify_prepared_exec_certificate},
+    };
+    for _ in 0..24 {
+        if node.chain.daa_of(node.chain.sink()) >= closure.round.release_from_daa {
+            break;
+        }
+        stable_panel::next(node, 0).await;
+    }
+    // This detached receipt fixture supplies the finalized close as an
+    // owner input. The live holder path continues to read native finality.
+    let close_finalized = |snapshot: NativeSettlementSnapshotV1| NativeSettlementSnapshotV1 {
+        safe: Some(close.hash()),
+        finalized: Some(close.hash()),
+        ..snapshot
+    };
+    let observation = close_finalized(snapshot_of(node).unwrap());
+    assert!(node.chain.daa_of(observation.generation) >= closure.round.release_from_daa);
+    let (_, state) = node.chain.tip_state();
+    let retained = state.tb1_exec_close_receipt(close.hash()).unwrap();
+    let round = closure.round.id();
+    let context = Tb1ReleaseContext { round_ref: &round, qual_root: q.root(), freeze_id: retained.freeze_id };
+    let signed: Vec<_> = keys
+        .iter()
+        .take(keys.len() - q.roster().f)
+        .enumerate()
+        .map(|(slot, key)| {
+            let shares: Vec<_> = dealers.iter().map(|&d| (d, field(10 + d + slot + 1))).collect();
+            let row = Tb1HolderRelease { context, holder_slot: slot, shares: &shares };
+            let message = q.holder_release_message(&row, &key.verification_key, LIMITS.message_bytes).unwrap();
+            let signature = ml_dsa_65::sign(&key.signing_key, &message, RELEASE_CONTEXT, [94; 32]).unwrap();
+            DecodedRecord { holder: slot, shares, signature }
+        })
+        .collect();
+    let rows = views(&signed, context);
+    let mut miner = new_miner_data();
+    miner.extra_data = batch_commitment(&rows, LIMITS).unwrap().to_vec();
+    let block = stable_panel::evidence_template(node, miner, release_batch_payload(&rows, LIMITS).unwrap());
+    let batch = node.take(block, "prepared EXEC release batch").await;
+    let parent = batch.hash();
+    let settlement = close_finalized(snapshot_of(node).unwrap());
+    let (tip, state) = node.chain.tip_state();
+    assert_eq!(tip, parent);
+    let gate = BranchPublicationGate::observe(node.api().as_ref(), close.hash(), closure, q, &observation).unwrap();
+    let (marker, seed) = gate.assemble_on_branch(node.api().as_ref(), parent, parent, parent, &rows, q, LIMITS).unwrap();
+    let mut miner = new_miner_data();
+    miner.extra_data = marker.to_vec();
+    let candidate = stable_panel::heartbeat(node, miner).to_immutable();
+    let history = CandidateHistory { api: node.api().as_ref(), candidate: Some(candidate.hash()) };
+    let reference = verify_prepared_exec_certificate(
+        &history,
+        parent,
+        &state,
+        close.hash(),
+        node.config.params.max_block_mass as usize,
+        &observation,
+        &settlement,
+        parent,
+        &candidate,
+        LIMITS,
+    )
+    .unwrap();
+    assert_eq!(reference.seed, *seed.as_bytes());
+    let point = PalwBlockContextV2 {
+        block: candidate.hash(),
+        daa_score: candidate.header.daa_score,
+        blue_score: candidate.header.blue_score,
+        subsidy: node.vp().coinbase_manager.calc_block_subsidy(candidate.header.daa_score),
+    };
+    let params = &node.bundle.state;
+    let (after, delta, _, _) = apply_palw_transition_retained_v8(
+        &state,
+        params,
+        None,
+        &point,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1 { private_moe2_registration: true, ..Default::default() },
+        PositiveCaseReplayInputV2 {
+            selected_parent: parent,
+            live_case_cap: 0,
+            load: &mut |_, _| panic!("TB1 fixture has no Assignment cases"),
+        },
+        None,
+        Some(Qf1TerminalUpdate::ExecCertificate(reference)),
+    )
+    .unwrap();
+    let certificate = after.tb1_exec_certificate(close.hash()).unwrap();
+    assert_eq!(certificate.certificate(), candidate.hash());
+    assert_eq!(certificate.seed, *seed.as_bytes());
+    let reverted = revert_delta_v2(&after, &delta, params).unwrap();
+    assert_eq!(reverted.state_root(), state.state_root());
+    assert!(reverted.tb1_exec_certificate(close.hash()).is_none());
+}
+
 async fn run(stable: bool, registered: bool) {
     use super::super::g14_registration_e2e::{private_moe2::arm_private_registration, tb1_registration_prefix};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -944,19 +1057,22 @@ async fn run(stable: bool, registered: bool) {
                 store.set_delta_record_for_tests(parent, prepared_delta.clone()).unwrap();
                 store.set_tip_for_tests(parent, prepared_state).unwrap();
             }
-            let receiver_context = crate::pipeline::virtual_processor::tests::TestContext::new(receiver);
-            let receiver = &receiver_context.consensus;
-            let receiver_vp = receiver.virtual_processor();
+            let chain = super::super::t12_round_lane_e2e::t12_reopened_chain(
+                receiver,
+                &node.config,
+                &node.bundle,
+                t.header.timestamp,
+                node.nonce,
+            );
+            let mut receiver = Rig::resumed(chain, &parts, node.wallets.clone(), node.nonce);
+            stable_panel::arm(&mut receiver);
             let mut native = t.clone();
             native.header.palw_state_root = prepared_state.state_root();
             native.header.finalize();
-            receiver.set_validation_time_for_test(native.header.timestamp);
-            let native = native.to_immutable();
-            let native_hash = native.hash();
             let close_daa = native.header.daa_score;
-            receiver.validate_and_insert_block(native).virtual_state_task.await.unwrap();
-            assert_eq!(receiver.get_sink(), native_hash);
-            let (_, state) = receiver_vp.palw_state_v2_store.read().load_tip(&node.bundle.state).unwrap().unwrap();
+            let native = receiver.take(native, "EXEC close with a retained preparation").await;
+            let native_hash = native.hash();
+            let (_, state) = receiver.chain.tip_state();
             let receipt = state.tb1_exec_close_receipt(native_hash).expect("normal acceptance recorded the EXEC close");
             assert_eq!((receipt.preparation, receipt.freeze_id), (parent, freeze_id));
             for (entry, context) in entries.iter().zip(&preimages) {
@@ -971,6 +1087,7 @@ async fn run(stable: bool, registered: bool) {
                     assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
                 }
             }
+            exercise_prepared_exec_certificate(&mut receiver, &native, &closure, &q, &keys, &dealers).await;
             let close = node.take(t, "registered EXEC close").await;
             assert!(close.transactions.iter().any(|tx| tx.id() == carrier));
             let mut blocks = vec![RpcRawBlock::from(&close)];
