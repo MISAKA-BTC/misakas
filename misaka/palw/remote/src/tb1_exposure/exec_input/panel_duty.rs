@@ -418,16 +418,20 @@ impl LocalReplayDraw {
         tip: Hash64,
         block: Hash64,
     ) -> io::Result<PublishedPanelApproval> {
+        self.replay_duty().verify_published(native, tip, block)
+    }
+
+    /// The reconstructed draw retained by the native certificate owner.
+    pub fn replay_duty(&self) -> PanelReplayDuty {
         PanelReplayDuty {
             chain: self.chain,
             original: self.original,
             original_block: self.receipt,
             certificate: self.certificate,
             deadline: self.deadline,
-            duty: &self.duty,
-            selected: &self.selected,
+            duty: self.duty,
+            selected: self.selected.clone(),
         }
-        .verify_published(native, tip, block)
     }
 }
 

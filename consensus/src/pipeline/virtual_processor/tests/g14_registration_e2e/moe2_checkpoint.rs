@@ -243,7 +243,8 @@ pub(super) async fn check_exec_settlement_rewind(
     for field in [1u32, kaspa_consensus_core::palw_qf1::VOCAB, kaspa_consensus_core::palw_qf1::CONTEXT, 1] {
         court_registration.extend_from_slice(&field.to_be_bytes());
     }
-    for field in [100u64, close_delta.point.daa_score, quote.deadline.checked_add(1).unwrap()] {
+    let court_deadline = quote.deadline.checked_add(3).unwrap();
+    for field in [100u64, close_delta.point.daa_score, court_deadline] {
         court_registration.extend_from_slice(&field.to_be_bytes());
     }
     court_registration.extend_from_slice(MOE2_QUOTE_DOMAIN);
@@ -414,8 +415,7 @@ pub(super) async fn check_exec_settlement_rewind(
         reference.check_parent_reservation(&reserved, slot.quote.deadline + 1),
         Err("private MOE2 reservation is no longer available at this DAA")
     );
-    let funded_carrier = |payload, payer: usize| {
-        let funding = &env.floats[payer];
+    let funded_carrier_from = |payload, payer: usize, funding: &(TransactionOutpoint, UtxoEntry)| {
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
             vec![TransactionInput::new(funding.0, vec![], 0, 1)],
@@ -428,6 +428,7 @@ pub(super) async fn check_exec_settlement_rewind(
         sign_spend(&mut tx, funding.1.clone(), payer, config.storage_mass_parameter);
         tx
     };
+    let funded_carrier = |payload, payer: usize| funded_carrier_from(payload, payer, &env.floats[payer]);
     let reference_tx = |payload| funded_carrier(payload, 3);
     let carrier = reference_tx(reference.encode().to_vec());
     let candidate_with_references = |workers: &[TransactionOutput], marker: &[u8], references: &[Transaction]| {
@@ -604,6 +605,7 @@ pub(super) async fn check_exec_settlement_rewind(
                 4,
             );
             let source_tx = reference_tx(source.encode_with_registration(&court_registration).unwrap());
+            let source_change = TransactionOutpoint::new(source_tx.id(), 0);
             let case = court.heartbeat_paying(miner(&case_marker), interval, vec![witness_tx, source_tx]).await;
             let verdict: [u8; 64] = Sha3_512::new()
                 .chain_update(verdict_domain)
@@ -671,23 +673,22 @@ pub(super) async fn check_exec_settlement_rewind(
                 let replies = std::array::from_fn::<_, 2, _>(|i| (&panel[i].verification_key, &signatures[i]));
                 let marker = panel_reply_commitment(&duty, &selected, &replies).unwrap();
                 let reply = funded_carrier(encode_panel_replies(&replies), 0);
-                let approval_block = court.heartbeat_paying(miner(&marker), interval, vec![reply]).await;
+                let certificate = court.heartbeat(interval, vec![]).await;
                 let (_, observed) = court.tip_state();
                 let point = *observed.last_point().unwrap();
                 let parent = decision_block.hash();
-                // The short fixture supplies the draw; the candidate supplies the replies.
-                let approval = PanelReplayDuty {
+                // The certificate owner supplies the draw. The next block must
+                // read and authenticate the replies through normal acceptance.
+                let draw = PanelReplayDuty {
                     chain,
                     original,
                     original_block: original_block.hash(),
-                    certificate: case.hash(),
-                    deadline: quote.deadline + 1,
-                    duty: &duty,
-                    selected: &selected,
-                }
-                .verify_candidate(court.ctx.consensus.as_ref(), parent, &approval_block)
-                .unwrap();
-                let (approved, delta, _, _) = apply_palw_transition_retained_v8(
+                    certificate: certificate.hash(),
+                    deadline: court_deadline,
+                    duty,
+                    selected: selected.to_vec(),
+                };
+                let (with_draw, _, _, _) = apply_palw_transition_retained_v8(
                     &decided,
                     params,
                     None,
@@ -707,24 +708,34 @@ pub(super) async fn check_exec_settlement_rewind(
                         load: &mut |_, _| panic!("QF1 fixture has no Assignment cases"),
                     },
                     None,
-                    Some(Qf1TerminalUpdate::PanelApproval(approval)),
+                    Some(Qf1TerminalUpdate::PanelDraw(draw)),
                 )
                 .unwrap();
+                court.vp().palw_state_v2_store.write().set_tip_for_tests(certificate.hash(), &with_draw).unwrap();
+                let fee = court.ctx.consensus.get_virtual_utxo_entry(source_change).unwrap();
+                let lookup = funded_carrier_from(source.encode().to_vec(), 3, &(source_change, fee));
+                let reply_id = reply.id();
+                let lookup_id = lookup.id();
+                let approval_block = court.heartbeat_paying(miner(&marker), interval, vec![reply, lookup]).await;
+                assert!(approval_block.transactions.iter().any(|tx| tx.id() == reply_id));
+                assert!(approval_block.transactions.iter().any(|tx| tx.id() == lookup_id));
+                let (_, approved) = court.tip_state();
                 assert_eq!(approved.qf1_original_verification(original), Some(Qf1OriginalVerification::ReplayApproved));
-                assert_eq!(revert_delta_v2(&approved, &delta, params).unwrap().state_root(), decided.state_root());
-
-                let mut daa = approval_block.header.daa_score;
-                for _ in 0..8 {
+                let (_, delta) = court.vp().palw_state_v2_store.read().delta_of(approval_block.hash()).unwrap();
+                assert_eq!(revert_delta_v2(&approved, &delta, params).unwrap().state_root(), with_draw.state_root());
+            } else {
+                let mut daa = decision_block.header.daa_score;
+                for _ in 0..16 {
                     assert_eq!(court.tip_state().1.qf1_original_verification(original), Some(Qf1OriginalVerification::AwaitingReplay));
                     daa = court.heartbeat(interval, vec![]).await.header.daa_score;
-                    if daa > quote.deadline {
+                    if daa >= court_deadline {
                         break;
                     }
                 }
-                assert_eq!(daa, quote.deadline + 1);
+                assert_eq!(daa, court_deadline);
                 let (_, expired) = court.tip_state();
                 assert_eq!(expired.qf1_original_verification(original), Some(Qf1OriginalVerification::Unverified));
-                assert!(!expired.qf1_terminal_blocks_award(original));
+                assert!(expired.qf1_terminal_blocks_award(original));
             }
         }
     }

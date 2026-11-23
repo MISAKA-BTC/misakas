@@ -2478,6 +2478,10 @@ impl VirtualStateProcessor {
         let Ok(source) = Moe2AwardSource::from_transactions(candidate.transactions.iter()) else {
             return Ok(None);
         };
+        let chain = self.palw_network_domain_v2().as_bytes();
+        if let Some(approval) = state.qf1_panel_reply_for_candidate(chain, source.reference.claim, selected_parent, &candidate) {
+            return Ok(Some(Qf1TerminalUpdate::PanelApproval(approval)));
+        }
         let case = Qf1TerminalCarrier::from_block(&candidate);
         let admitting_original = case.is_err() && marker == source.reference.claim.as_bytes();
         if case.is_err() && !admitting_original {
@@ -2493,7 +2497,7 @@ impl VirtualStateProcessor {
             }
             let close = self.headers_store.get_header(source.reference.close).map_err(missing)?;
             return Ok(Qf1OriginalAdmission::prepare(
-                &self.palw_network_domain_v2().as_bytes(),
+                &chain,
                 state,
                 source,
                 close.daa_score,
@@ -2516,7 +2520,7 @@ impl VirtualStateProcessor {
         let origin = self.headers_store.get_header(case.original_block).map_err(missing)?;
         let body = self.block_transactions_store.get(case.original_block).map_err(missing)?;
         let original = Block::from_arcs(origin, body);
-        Ok(Qf1TerminalRuling::prepare(self.palw_network_domain_v2().as_bytes(), state, source, close.daa_score, &original, &candidate)
+        Ok(Qf1TerminalRuling::prepare(chain, state, source, close.daa_score, &original, &candidate)
             .ok()
             .map(Qf1TerminalUpdate::Open))
     }

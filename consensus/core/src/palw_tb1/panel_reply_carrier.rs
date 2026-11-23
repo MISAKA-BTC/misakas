@@ -49,16 +49,17 @@ pub fn panel_reply_commitment(
     Ok(marker.finalize().into())
 }
 
-/// View of a duty reconstructed from the authenticated PANEL close and seed.
-/// The caller owns the authenticated draw. The reply payload supplies only signatures.
-pub struct PanelReplayDuty<'a> {
+/// Duty reconstructed by the owner from the authenticated PANEL close and seed.
+/// The reply payload supplies signatures. It cannot install a duty.
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PanelReplayDuty {
     pub chain: [u8; 64],
     pub original: Hash64,
     pub original_block: Hash64,
     pub certificate: Hash64,
     pub deadline: u64,
-    pub duty: &'a [u8; 64],
-    pub selected: &'a [Hash64],
+    pub duty: [u8; 64],
+    pub selected: Vec<Hash64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +69,8 @@ pub struct PublishedPanelApproval {
     accepting_block: Hash64,
     selected_parent: Hash64,
     pub(crate) deadline: u64,
+    pub(crate) certificate: Hash64,
+    pub(crate) duty: [u8; 64],
 }
 
 impl PublishedPanelApproval {
@@ -88,7 +91,7 @@ impl PublishedPanelApproval {
     }
 }
 
-impl PanelReplayDuty<'_> {
+impl PanelReplayDuty {
     pub fn verify_published(&self, native: &dyn ConsensusApi, tip: Hash64, block: Hash64) -> io::Result<PublishedPanelApproval> {
         let source = native.get_block(block).map_err(io::Error::other)?;
         let parent = native.get_ghostdag_data(block).map_err(io::Error::other)?.selected_parent;
@@ -111,13 +114,18 @@ impl PanelReplayDuty<'_> {
         selected_parent: Hash64,
         candidate: &Block,
     ) -> io::Result<PublishedPanelApproval> {
-        if candidate.header.daa_score >= self.deadline {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
         if !native.is_chain_ancestor_of(self.original_block, selected_parent).map_err(io::Error::other)?
             || !native.is_chain_ancestor_of(self.certificate, selected_parent).map_err(io::Error::other)?
         {
             return Err(invalid("local PANEL replies outside committed branch"));
+        }
+        self.verify_bound_replies(selected_parent, candidate)
+    }
+
+    /// Verify a body against the draw already stored by its selected parent.
+    pub fn verify_bound_replies(&self, selected_parent: Hash64, candidate: &Block) -> io::Result<PublishedPanelApproval> {
+        if candidate.header.daa_score >= self.deadline {
+            return Err(io::ErrorKind::TimedOut.into());
         }
         let raw = panel_replies_from_block(candidate, self.selected.len())
             .map_err(|error| invalid(&format!("PANEL reply carrier: {error:?}")))?;
@@ -129,7 +137,7 @@ impl PanelReplayDuty<'_> {
             })
             .collect();
         let rows: Vec<_> = replies.iter().map(|(key, signature)| (key, signature)).collect();
-        if qf1_marker(candidate) != Some(panel_reply_commitment(self.duty, self.selected, &rows)?) {
+        if qf1_marker(candidate) != Some(panel_reply_commitment(&self.duty, &self.selected, &rows)?) {
             return Err(invalid("local PANEL replies outside committed branch"));
         }
         Ok(PublishedPanelApproval {
@@ -138,6 +146,8 @@ impl PanelReplayDuty<'_> {
             accepting_block: candidate.hash(),
             selected_parent,
             deadline: self.deadline,
+            certificate: self.certificate,
+            duty: self.duty,
         })
     }
 }

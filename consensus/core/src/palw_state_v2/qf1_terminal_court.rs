@@ -1,7 +1,9 @@
 //! Ordered terminal Court writes for the existing private MOE2 candidate path.
 use super::*;
 use crate::palw_tb1::{
-    panel_reply_carrier::PublishedPanelApproval, qf1_original_carrier::Qf1OriginalAdmission, qf1_terminal_carrier::Qf1TerminalRuling,
+    panel_reply_carrier::{PanelReplayDuty, PublishedPanelApproval},
+    qf1_original_carrier::Qf1OriginalAdmission,
+    qf1_terminal_carrier::Qf1TerminalRuling,
 };
 
 const TABLE: u8 = 212;
@@ -15,6 +17,7 @@ struct CourtStatus {
 #[derive(Clone)]
 pub enum Qf1TerminalUpdate {
     Original(Qf1OriginalAdmission),
+    PanelDraw(PanelReplayDuty),
     PanelApproval(PublishedPanelApproval),
     Open(Qf1TerminalRuling),
     Verdict { block: Hash64, marker: [u8; 64] },
@@ -35,6 +38,24 @@ fn key(kind: u8, digest: &[u8; 64]) -> Vec<u8> {
 }
 
 impl PalwChainStateV2 {
+    pub fn qf1_panel_reply_for_candidate(
+        &self,
+        chain: [u8; 64],
+        original: Hash64,
+        selected_parent: Hash64,
+        candidate: &crate::block::Block,
+    ) -> Option<PublishedPanelApproval> {
+        if self.last_point()?.block != selected_parent {
+            return None;
+        }
+        let route = self.kernel_route.as_ref()?;
+        let duty: PanelReplayDuty = route.aux_row(TABLE, &key(b'D', &original.as_bytes()))?;
+        if duty.original != original || duty.chain != chain {
+            return None;
+        }
+        duty.verify_bound_replies(selected_parent, candidate).ok()
+    }
+
     pub fn qf1_original_verification(&self, original: Hash64) -> Option<Qf1OriginalVerification> {
         self.qf1_original_verification_at(original, self.last_point()?.daa_score)
     }
@@ -83,6 +104,20 @@ pub(super) fn fold_terminal_court(
             let receipt = borsh::to_vec(&(original.block, original.deadline)).expect("fixed QF1 Original receipt");
             return builder.write_kernel_row(TABLE, key, Some(receipt));
         }
+        Qf1TerminalUpdate::PanelDraw(draw) if draw.certificate == point.block => {
+            let route = builder.state.kernel_route.as_ref().ok_or_else(|| mismatch("QF1 PANEL draw has no Original"))?;
+            let original = draw.original.as_bytes();
+            let (receipt, deadline): (Hash64, u64) =
+                route.aux_row(TABLE, &key(b'R', &original)).ok_or_else(|| mismatch("QF1 PANEL draw has no Original"))?;
+            if receipt != draw.original_block || deadline != draw.deadline || point.daa_score >= deadline || draw.selected.is_empty() {
+                return Err(mismatch("QF1 PANEL draw differs from the Original receipt or deadline"));
+            }
+            let key = key(b'D', &original);
+            if route.aux.contains_key(&(TABLE, key.clone())) {
+                return Err(mismatch("QF1 Original already has a PANEL draw"));
+            }
+            return builder.write_kernel_row(TABLE, key, Some(borsh::to_vec(&draw).expect("fixed PANEL draw encoding")));
+        }
         Qf1TerminalUpdate::PanelApproval(approval) if approval.accepting_block() == point.block => {
             if selected_parent != Some(approval.selected_parent()) {
                 return Err(mismatch("QF1 PANEL approval belongs to another selected parent"));
@@ -93,6 +128,11 @@ pub(super) fn fold_terminal_court(
                 route.aux_row(TABLE, &key(b'R', &original)).ok_or_else(|| mismatch("QF1 PANEL approval has no Original"))?;
             if receipt != approval.original_block() || deadline != approval.deadline || point.daa_score >= deadline {
                 return Err(mismatch("QF1 PANEL approval differs from the Original receipt or deadline"));
+            }
+            let draw: PanelReplayDuty =
+                route.aux_row(TABLE, &key(b'D', &original)).ok_or_else(|| mismatch("QF1 PANEL draw missing"))?;
+            if draw.certificate != approval.certificate || draw.duty != approval.duty {
+                return Err(mismatch("QF1 PANEL approval differs from the stored draw"));
             }
             let key = key(b'A', &original);
             if route.aux.contains_key(&(TABLE, key.clone())) {
