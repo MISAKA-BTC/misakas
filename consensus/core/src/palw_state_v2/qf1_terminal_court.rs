@@ -1,6 +1,7 @@
 //! Ordered terminal Court writes for the existing private MOE2 candidate path.
 use super::*;
 use crate::palw_tb1::{
+    moe2_exec_close::Moe2ExecCloseReceipt,
     panel_reply_carrier::{PanelReplayDuty, PublishedPanelApproval},
     qf1_original_carrier::Qf1OriginalAdmission,
     qf1_terminal_carrier::Qf1TerminalRuling,
@@ -18,6 +19,7 @@ struct CourtStatus {
 #[derive(Clone)]
 pub enum Qf1TerminalUpdate {
     Preparation(PreparedExecPanelCandidate),
+    ExecClose(Moe2ExecCloseReceipt),
     Original(Qf1OriginalAdmission),
     PanelDraw(PanelReplayDuty),
     PanelApproval(PublishedPanelApproval),
@@ -40,6 +42,10 @@ fn key(kind: u8, digest: &[u8; 64]) -> Vec<u8> {
 }
 
 impl PalwChainStateV2 {
+    pub fn tb1_exec_close_receipt(&self, block: Hash64) -> Option<Moe2ExecCloseReceipt> {
+        self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'E', &block.as_bytes()))
+    }
+
     pub fn tb1_exec_panel_preparation(&self, block: Hash64, selected_parent: Hash64) -> Option<(PreparedTb1Round, PreparedTb1Round)> {
         if self.last_point()?.block != selected_parent {
             return None;
@@ -105,6 +111,14 @@ pub(super) fn fold_terminal_court(
         return Err(mismatch("QF1 terminal Court outside the private profile"));
     }
     let (ruling, resolves) = match update {
+        Qf1TerminalUpdate::ExecClose(close) if close.block == point.block && selected_parent == Some(close.selected_parent) => {
+            let route = builder.state.kernel_route.as_ref().ok_or_else(|| mismatch("TB1 EXEC close has no preparation"))?;
+            if !route.aux.contains_key(&(TABLE, key(b'P', &close.preparation.as_bytes()))) {
+                return Err(mismatch("TB1 EXEC close has no preparation"));
+            }
+            let receipt = borsh::to_vec(&close).expect("fixed TB1 EXEC close receipt");
+            return builder.write_kernel_row(TABLE, key(b'E', &point.block.as_bytes()), Some(receipt));
+        }
         Qf1TerminalUpdate::Preparation(preparation)
             if preparation.block == point.block && selected_parent == Some(preparation.parent) =>
         {

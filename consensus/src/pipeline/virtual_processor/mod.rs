@@ -5,6 +5,7 @@ mod palw_rule_e;
 mod processor;
 mod utxo_inquirer;
 mod utxo_validation;
+mod private_tb1_close;
 pub use processor::*;
 pub mod test_block_builder;
 #[cfg(test)]

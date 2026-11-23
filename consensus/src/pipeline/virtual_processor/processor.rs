@@ -732,6 +732,7 @@ pub struct VirtualStateProcessor {
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
     pub(super) palw_model_market: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) private_moe2_registration_from: Option<u64>,
+    pub(super) private_moe2_exec_rules: Option<kaspa_consensus_core::palw_tb1::moe2_exec_close::Moe2ExecCloseRules>,
     /// **ADR-0088 Decision 11's fence, `None` on every shipped preset.** Past it the ten registry
     /// objects are accepted (their signatures checked here, against the bond each is attributed
     /// to) and the fold attributes claims to versions; before it all ten are refused by name.
@@ -1659,6 +1660,7 @@ impl VirtualStateProcessor {
             palw_share_growth_final: params.palw_share_growth_final_fence(),
             palw_model_market: params.palw_model_market_fence(),
             private_moe2_registration_from: params.private_moe2_registration_from(),
+            private_moe2_exec_rules: kaspa_consensus_core::palw_tb1::moe2_exec_close::Moe2ExecCloseRules::from_params(params),
             palw_model_lines: params.palw_model_lines_fence(),
             palw_model_immutable_v1: params.palw_model_immutable_v1_fence(),
             palw_class_semantics_v1: params.palw_class_semantics_v1_fence(),

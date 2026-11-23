@@ -100,6 +100,14 @@ impl<'a> RecordBytes<'a> {
 }
 
 impl<'a> ExecCloseCarrier<'a> {
+    pub fn preparation_from_block(block: &'a Block, max_bytes: usize) -> Result<Hash64, ExecCloseCarrierError> {
+        let payload = carrier_payload(&block.transactions)?;
+        if payload.len() > max_bytes {
+            return Err(ExecCloseCarrierError::Limit);
+        }
+        Ok(Self::read_prefix(payload, usize::from(u16::MAX))?.0.preparation)
+    }
+
     /// Locate the single carrier in a body already checked against its header.
     /// Looking at the coinbase alone cannot authenticate the allocation set.
     pub fn from_block(block: &'a Block, max_records: usize, max_bytes: usize) -> Result<Self, ExecCloseCarrierError> {
@@ -112,6 +120,11 @@ impl<'a> ExecCloseCarrier<'a> {
             return Err(Limit);
         }
         let (mut carrier, count, mut bytes) = Self::read_prefix(payload, max_records)?;
+        // Slot, funding reference, context length, at least one context byte,
+        // owner signature and consent tag must exist before allocating rows.
+        if count > bytes.len() / (8 + 64 + 2 + 1 + 3309 + 1) {
+            return Err(Encoding);
+        }
         carrier.records.reserve_exact(count);
         let mut prior = None;
         for _ in 0..count {

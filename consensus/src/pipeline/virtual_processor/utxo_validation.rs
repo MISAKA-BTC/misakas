@@ -2573,13 +2573,28 @@ impl VirtualStateProcessor {
         parent: &PalwChainStateV2,
         price: Moe2QuoteAnchorV1,
     ) -> BlockProcessResult<NativeChainStateV1> {
+        use PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
+        let missing = || LocalNativeStateContextUnavailable(HistoryUnavailable);
+        let invalid = || LocalNativeStateContextUnavailable(StoreUnreadable);
+        let selected_parent = parent.last_point().ok_or_else(missing)?.block;
+        let anchor = price.state_block_for(selected_parent).ok_or_else(invalid)?;
+        let state = self.restore_private_moe2_state_at(parent, anchor)?;
+        price.retain_price_state(state).map_err(|error| match error {
+            PalwStateV2Error::NativeResource(why) => LocalNativeCapacityUnavailable(why),
+            _ => invalid(),
+        })
+    }
+
+    pub(super) fn restore_private_moe2_state_at(
+        &self,
+        parent: &PalwChainStateV2,
+        anchor: BlockHash,
+    ) -> BlockProcessResult<NativeChainStateV1> {
         use crate::processes::palw_state_walk::PalwStateWalkError;
         use PalwSourceBootstrapContextFaultV1::{HistoryUnavailable, StoreUnreadable};
         let missing = || LocalNativeStateContextUnavailable(HistoryUnavailable);
         let invalid = || LocalNativeStateContextUnavailable(StoreUnreadable);
         let params = self.palw_state_params_v2.as_ref().ok_or_else(missing)?;
-        let selected_parent = parent.last_point().ok_or_else(missing)?.block;
-        let anchor = price.state_block_for(selected_parent).ok_or_else(invalid)?;
         let local_fault = |error: PalwStateWalkError| match error {
             PalwStateWalkError::MissingDelta(_) | PalwStateWalkError::Store(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
                 missing()
@@ -2604,10 +2619,10 @@ impl VirtualStateProcessor {
                 return Err(invalid());
             }
         }
-        price.retain_price_state(state).map_err(|error| match error {
-            PalwStateV2Error::NativeResource(why) => LocalNativeCapacityUnavailable(why),
-            _ => invalid(),
-        })
+        if state.last_point().is_none_or(|point| point.block != anchor) {
+            return Err(invalid());
+        }
+        Ok(state)
     }
 
     pub(super) fn coinbase_inputs_for_candidate_v3(

@@ -20,6 +20,32 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
+#[derive(Clone, Copy)]
+pub struct Moe2ExecCloseRules {
+    pub chain: [u8; 64],
+    pub private_from: u64,
+    pub max_block_mass: u64,
+}
+
+impl Moe2ExecCloseRules {
+    pub fn from_params(config: &Params) -> Option<Self> {
+        Some(Self {
+            chain: palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash)).as_bytes(),
+            private_from: config.private_moe2_registration_from()?,
+            max_block_mass: config.max_block_mass,
+        })
+    }
+}
+
+/// Authenticated close of the allocation batch. This receipt creates no mining entitlement.
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Moe2ExecCloseReceipt {
+    pub(crate) block: Hash64,
+    pub(crate) selected_parent: Hash64,
+    pub preparation: Hash64,
+    pub freeze_id: [u8; 64],
+}
+
 pub struct VerifiedMoe2ExecClose {
     close: Moe2ExecCloseV1,
     preparation: Hash64,
@@ -28,6 +54,15 @@ pub struct VerifiedMoe2ExecClose {
 }
 
 impl VerifiedMoe2ExecClose {
+    pub fn receipt(&self) -> Moe2ExecCloseReceipt {
+        Moe2ExecCloseReceipt {
+            block: self.close.block,
+            selected_parent: self.close.selected_parent,
+            preparation: self.preparation,
+            freeze_id: self.freeze_id,
+        }
+    }
+
     pub fn quoted_slots(&self) -> &[Moe2ExecSlot] {
         &self.close.slots
     }
@@ -72,12 +107,42 @@ pub fn verify_moe2_exec_close_candidate(
     max_records: usize,
     max_job_tokens: usize,
 ) -> io::Result<VerifiedMoe2ExecClose> {
+    let rules = Moe2ExecCloseRules::from_params(config).ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
+    verify_exec_close_with_rules(
+        native,
+        rules,
+        point,
+        block,
+        selected_parent,
+        coinbase_commits_to,
+        rounds,
+        parent,
+        preparation_state,
+        max_records,
+        max_job_tokens,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_exec_close_with_rules(
+    native: &dyn ConsensusApi,
+    rules: Moe2ExecCloseRules,
+    point: &PalwBlockContextV2,
+    block: &Block,
+    selected_parent: Hash64,
+    coinbase_commits_to: impl FnOnce(&Tb1MiningClosure, &[u8; 64]) -> io::Result<bool>,
+    rounds: &QualifiedExecPanel,
+    parent: &PalwChainStateV2,
+    preparation_state: &PalwChainStateV2,
+    max_records: usize,
+    max_job_tokens: usize,
+) -> io::Result<VerifiedMoe2ExecClose> {
     let close = point.block;
     if block.hash() != close || (block.header.daa_score, block.header.blue_score) != (point.daa_score, point.blue_score) {
         return Err(invalid("MOE2 reservation differs from close position"));
     }
-    let private_from = check_close_parent(config, &block.header, close, selected_parent, parent, rounds)?;
-    let byte_cap = usize::try_from(config.max_block_mass).map_err(|_| invalid("EXEC carrier budget overflow"))?;
+    let private_from = check_close_parent_with_rules(rules, &block.header, close, selected_parent, parent, rounds)?;
+    let byte_cap = usize::try_from(rules.max_block_mass).map_err(|_| invalid("EXEC carrier budget overflow"))?;
     let evidence_error = |why| io::Error::new(io::ErrorKind::InvalidData, format!("invalid EXEC close carrier: {why:?}"));
     let carrier = ExecCloseCarrier::from_block(block, max_records, byte_cap).map_err(evidence_error)?;
     let closure = &carrier.closure;
@@ -160,16 +225,26 @@ pub fn check_close_parent(
     state: &PalwChainStateV2,
     rounds: &QualifiedExecPanel,
 ) -> io::Result<u64> {
-    let network = palw_network_domain_v2_for(config.net.to_string().as_bytes(), Some(config.genesis.hash));
-    let from = config.private_moe2_registration_from().ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
-    if network.as_bytes() != rounds.exec().chain_id
-        || header.daa_score < from
+    let rules = Moe2ExecCloseRules::from_params(config).ok_or_else(|| invalid("MOE2 private budget unavailable"))?;
+    check_close_parent_with_rules(rules, header, close, selected_parent, state, rounds)
+}
+
+fn check_close_parent_with_rules(
+    rules: Moe2ExecCloseRules,
+    header: &Header,
+    close: Hash64,
+    selected_parent: Hash64,
+    state: &PalwChainStateV2,
+    rounds: &QualifiedExecPanel,
+) -> io::Result<u64> {
+    if rules.chain != rounds.exec().chain_id
+        || header.daa_score < rules.private_from
         || state.last_point().map(|p| p.block) != Some(selected_parent)
         || state.state_root() != state_root_of_pinned_header_v1(header, close).map_err(io::Error::other)?
     {
         return Err(invalid("MOE2 capacity requires the original network and close parent state"));
     }
-    Ok(from)
+    Ok(rules.private_from)
 }
 
 pub fn check_quote_window(quote: &Moe2PreDrawQuote, parent: Hash64, daa: u64) -> io::Result<()> {

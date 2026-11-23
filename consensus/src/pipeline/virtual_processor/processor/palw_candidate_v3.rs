@@ -549,8 +549,18 @@ impl VirtualStateProcessor {
         // Declared before the immutable overlays: they drop before the
         // Manifest construction lease on every normal/error return.
         let attached_manifest;
+        let selected_parent = ctx.ghostdag_data.selected_parent;
+        let (exec_close, exec_receipt) = if projecting {
+            (None, None)
+        } else {
+            self.resolve_private_exec_close(&point, header, selected_parent, state)?.map_or((None, None), |close| {
+                let receipt = close.receipt();
+                (close.into_mining_reservation().ok(), Some(receipt))
+            })
+        };
         let transition_extras = prefix_dependencies.attach_v1(&fp_answers, {
             let mut extras = self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
+            extras.private_moe2_exec_close = exec_close;
             if kaspa_consensus_core::palw_state_v2::included_replay::protected_bound_panel_present_v1(state) {
                 let draws = kaspa_consensus_core::palw_state_v2::included_replay::protected_draws_for_point_v1(state, &point);
                 let mut approvals = Vec::new();
@@ -856,8 +866,13 @@ impl VirtualStateProcessor {
             // Rehearsal owns no persistent delta. Only the successful
             // authoritative fold below may publish state and UTXO effects.
         }
-        let selected_parent = ctx.ghostdag_data.selected_parent;
-        let private_qf1_court = if projecting { None } else { self.prepare_private_qf1_court(header, selected_parent, state)? };
+        let private_qf1_court = if projecting {
+            None
+        } else if let Some(receipt) = exec_receipt {
+            Some(kaspa_consensus_core::palw_state_v2::Qf1TerminalUpdate::ExecClose(receipt))
+        } else {
+            self.prepare_private_qf1_court(header, selected_parent, state)?
+        };
         let live_case_cap = self
             .palw_positive_assignment_params_v2
             .as_ref()

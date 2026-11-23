@@ -649,10 +649,11 @@ async fn run(stable: bool, registered: bool) {
     let parent = preparation.hash();
     assert_eq!(node.chain.sink(), parent);
     let prepared = preparation_parent.map(|(before_hash, before)| {
+        use crate::model::stores::palw_state_v2::PalwStateDeltaRecordV2;
         use kaspa_consensus_core::{
             palw_state_v2::{
-                PalwBlockWorkV3, PalwTransitionExtrasV1, PositiveCaseReplayInputV2, Qf1TerminalUpdate,
-                apply_palw_transition_retained_v8, revert_delta_v2,
+                PalwBlockWorkV3, PalwDeltaEntryV2, PalwTransitionExtrasV1, PositiveCaseReplayInputV2, Qf1TerminalUpdate,
+                apply_delta_v2, apply_palw_transition_retained_v8, revert_delta_v2,
             },
             palw_tb1::qualification::PreparedExecPanelCandidate,
         };
@@ -687,11 +688,27 @@ async fn run(stable: bool, registered: bool) {
         )
         .unwrap();
         assert_eq!(revert_delta_v2(&after, &delta, params).unwrap().state_root(), before.state_root());
-        after.tb1_exec_panel_preparation(parent, parent).unwrap()
+        // Only the validated preparation fact is fixture input. Preserve all
+        // ordinary writes in the accepted block's existing journal.
+        let key = [b"P".as_slice(), parent.as_byte_slice()].concat();
+        let write = delta
+            .entries
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry, PalwDeltaEntryV2::KernelRouteRow { key: row_key, .. } if row_key == &key
+                )
+            })
+            .unwrap();
+        let (_, mut actual) = node.vp().palw_state_v2_store.read().delta_of(parent).unwrap();
+        actual.entries.push(write.clone());
+        let prepared = apply_delta_v2(&before, &actual, params).unwrap();
+        let record = PalwStateDeltaRecordV2 { state_root: prepared.state_root(), delta_borsh: borsh::to_vec(&actual).unwrap() };
+        (prepared.tb1_exec_panel_preparation(parent, parent).unwrap(), prepared, record)
     });
-    let q = prepared.as_ref().map_or(q, |(exec, _)| exec.qualification());
-    let panel_q = prepared.as_ref().map_or(panel_q, |(_, panel)| panel.qualification());
-    let (round, panel) = prepared.as_ref().map_or((round, panel), |(exec, panel)| (exec.round(), panel.round()));
+    let q = prepared.as_ref().map_or(q, |((exec, _), _, _)| exec.qualification());
+    let panel_q = prepared.as_ref().map_or(panel_q, |((_, panel), _, _)| panel.qualification());
+    let (round, panel) = prepared.as_ref().map_or((round, panel), |((exec, panel), _, _)| (exec.round(), panel.round()));
     let restored_rounds = QualifiedExecPanel::new(round, &q, panel, &panel_q).unwrap();
     assert_eq!(restored_rounds.commitment(), rounds.commitment());
     let rounds = restored_rounds;
@@ -915,6 +932,45 @@ async fn run(stable: bool, registered: bool) {
             let mut miner = new_miner_data();
             miner.extra_data = freeze_id.to_vec();
             let t = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]);
+            // Only the preparation is fixture input on this separate receiver.
+            // The original branch retains its native finality journal.
+            let (_, prepared_state, prepared_delta) = prepared.as_ref().unwrap();
+            let path = dir.path().join("native-tb1-close");
+            node.api().checkpoint_database(&path);
+            let receiver = stable_panel::reopen_checkpoint(&node.config, &path);
+            let receiver_vp = receiver.virtual_processor();
+            {
+                let mut store = receiver_vp.palw_state_v2_store.write();
+                store.set_delta_record_for_tests(parent, prepared_delta.clone()).unwrap();
+                store.set_tip_for_tests(parent, prepared_state).unwrap();
+            }
+            let receiver_context = crate::pipeline::virtual_processor::tests::TestContext::new(receiver);
+            let receiver = &receiver_context.consensus;
+            let receiver_vp = receiver.virtual_processor();
+            let mut native = t.clone();
+            native.header.palw_state_root = prepared_state.state_root();
+            native.header.finalize();
+            receiver.set_validation_time_for_test(native.header.timestamp);
+            let native = native.to_immutable();
+            let native_hash = native.hash();
+            let close_daa = native.header.daa_score;
+            receiver.validate_and_insert_block(native).virtual_state_task.await.unwrap();
+            assert_eq!(receiver.get_sink(), native_hash);
+            let (_, state) = receiver_vp.palw_state_v2_store.read().load_tip(&node.bundle.state).unwrap().unwrap();
+            let receipt = state.tb1_exec_close_receipt(native_hash).expect("normal acceptance recorded the EXEC close");
+            assert_eq!((receipt.preparation, receipt.freeze_id), (parent, freeze_id));
+            for (entry, context) in entries.iter().zip(&preimages) {
+                if let Some(quote) = entry.terms.moe2_quote {
+                    let slot = kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2ExecSlot {
+                        registration: kaspa_consensus_core::palw_tb1::exec_registration::registration_key(context),
+                        slot: entry.slot,
+                        close: native_hash,
+                        close_daa,
+                        quote,
+                    };
+                    assert!(state.bond_budget().unwrap().claim_row(&slot.reservation_key()).is_none());
+                }
+            }
             let close = node.take(t, "registered EXEC close").await;
             assert!(close.transactions.iter().any(|tx| tx.id() == carrier));
             let mut blocks = vec![RpcRawBlock::from(&close)];
