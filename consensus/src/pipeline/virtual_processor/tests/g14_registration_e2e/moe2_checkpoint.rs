@@ -1,6 +1,7 @@
 //! Run the projected reserve and pool moves through the native state delta and
 //! carriage codecs. The fixture retains these roots outside the selected chain.
 use super::*;
+use kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::{Moe2AwardReference, Moe2AwardReferenceError};
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::{
     Moe2ExecSlot, Moe2SettledReward, Moe2SettlementBook, Moe2SettlementUndo, Moe2WorkerRelease,
 };
@@ -356,8 +357,25 @@ pub(super) fn check_exec_settlement_rewind(
     let native_award = |claim, slot, work, position| Moe2ExecAwardV1 { claim, position, release, slot, work, payees, worker_start };
     let selected_parent = reserved.last_point().unwrap().block;
     let marker = native_award(claim, &slot, work, position).coinbase_marker(config.genesis.hash, selected_parent, &attempt);
-    let candidate_with_marker = |workers: &[kaspa_consensus_core::tx::TransactionOutput], marker: &[u8]| {
+    let reference = Moe2AwardReference::for_slot(claim, attempt, &slot);
+    let reference_tx = |reference: Moe2AwardReference| {
+        let funding = &env.floats[3];
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(funding.0, vec![], 0, 1)],
+            vec![TransactionOutput::new(funding.1.amount - 2_000_000, card_payout_spk(3))],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            reference.encode().to_vec(),
+        );
+        sign_spend(&mut tx, funding.1.clone(), 3, config.storage_mass_parameter);
+        tx
+    };
+    let carrier = reference_tx(reference);
+    let candidate_with_references = |workers: &[TransactionOutput], marker: &[u8], references: &[Transaction]| {
         let mut transactions: Vec<_> = execution.transactions.iter().cloned().collect();
+        transactions.extend_from_slice(references);
         assert!(transactions[0].is_coinbase());
         transactions[0].outputs.extend_from_slice(workers);
         let payload = &mut transactions[0].payload;
@@ -376,6 +394,7 @@ pub(super) fn check_exec_settlement_rewind(
         let (state, delta) = apply_palw_transition_v2(&reserved, params, &point, &[], None).unwrap();
         (state, delta, Moe2Position { point, ..position })
     };
+    let candidate_with_marker = |workers, marker| candidate_with_references(workers, marker, std::slice::from_ref(&carrier));
     let candidate = |workers| candidate_with_marker(workers, &marker);
     let award_block = candidate(&outputs);
     let (mut child, mut award_delta, position) = fold(&award_block);
@@ -723,6 +742,24 @@ pub(super) fn check_exec_settlement_rewind(
             native_award(claim, &alias_slot, work, position), true),
         Err(error) if error == mismatch()
     ));
+    let missing_ref = candidate_with_references(&outputs, &marker, &[]);
+    let (_, _, missing_ref_at) = fold(&missing_ref);
+    assert!(matches!(
+        retained(&restored, &missing_ref, native_award(claim, &slot, work, missing_ref_at), true),
+        Err(PalwStateV2Error::DeltaMismatch("missing private MOE2 award reference in the candidate"))
+    ));
+    let replaced = reference_tx(Moe2AwardReference::for_slot(claim, attempt, &alias_slot));
+    let wrong_ref = candidate_with_references(&outputs, &marker, std::slice::from_ref(&replaced));
+    let (_, _, wrong_ref_at) = fold(&wrong_ref);
+    assert!(matches!(
+        retained(&restored, &wrong_ref, native_award(claim, &slot, work, wrong_ref_at), true),
+        Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"))
+    ));
+    assert_eq!(Moe2AwardReference::from_transactions(award_block.transactions.iter()).unwrap(), reference);
+    assert_eq!(Moe2AwardReference::from_transactions([&carrier, &replaced]), Err(Moe2AwardReferenceError::Multiple));
+    let mut trailing = reference.encode().to_vec();
+    trailing.push(0);
+    assert_eq!(Moe2AwardReference::decode(&trailing), Err(Moe2AwardReferenceError::Encoding));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
     let mut expected_delta = award_delta.clone();
     let last = expected_delta.entries.last_mut().unwrap();

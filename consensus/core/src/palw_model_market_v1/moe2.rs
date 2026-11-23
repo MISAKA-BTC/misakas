@@ -1,5 +1,6 @@
 //! RFC-0064 reward quote for the MOE2 cohort. The caller supplies the market
 //! at the canonical settlement position and the limits bound at admission.
+pub mod award_reference;
 pub mod settlement;
 
 use super::{PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1};

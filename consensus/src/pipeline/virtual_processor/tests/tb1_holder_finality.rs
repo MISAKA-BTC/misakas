@@ -96,6 +96,42 @@ async fn private_moe2_marked_coinbase_requires_a_winning_right_on_normal_accepta
     let block = stable_panel::heartbeat(&mut node, miner);
     node.take(block, "bare TB1 marker with the MOE2 prefix").await;
 
+    use kaspa_consensus_core::{
+        palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
+        subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        tx::{Transaction, TransactionInput, TransactionOutput},
+    };
+    let parent = node.chain.sink();
+    let root = node.chain.tip_state().1.state_root();
+    let reference = Moe2AwardReference {
+        claim: Hash64::from_u64_word(51),
+        attempt: [3; 32],
+        close: parent,
+        slot: 2,
+        reservation: Hash64::from_u64_word(52),
+    };
+    let funding = &isolated.3[3];
+    let mut tx = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(funding.0, vec![], 0, 1)],
+        vec![TransactionOutput::new(funding.1.amount - 2_000_000, super::super::t12_round_lane_e2e::card_payout_spk(3))],
+        0,
+        SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        reference.encode().to_vec(),
+    );
+    super::super::t12_round_lane_e2e::sign_spend(&mut tx, funding.1.clone(), 3, node.config.params.storage_mass_parameter);
+    let id = tx.id();
+    let mut miner = new_miner_data();
+    miner.extra_data = named.clone();
+    let block = stable_panel::heartbeat_with_transactions(&mut node, miner, vec![tx]).to_immutable();
+    assert!(block.transactions.iter().any(|tx| tx.id() == id));
+    let hash = block.hash();
+    node.api().validate_and_insert_block(block).virtual_state_task.await.unwrap();
+    assert_eq!(node.api().block_status(hash), BlockStatus::StatusDisqualifiedFromChain);
+    assert_eq!(node.chain.sink(), parent);
+    assert_eq!(node.chain.tip_state().1.state_root(), root);
+
     let original_profile = parts(Some(FENCE));
     let mut original = Rig::new(&original_profile, 0x12_c500_2000);
     assert_eq!(original.config.params.private_moe2_registration_from(), None);

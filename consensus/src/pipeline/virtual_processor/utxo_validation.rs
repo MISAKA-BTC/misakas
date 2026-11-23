@@ -2273,6 +2273,7 @@ impl VirtualStateProcessor {
             use kaspa_consensus_core::{
                 coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, private_moe2_award_marker},
                 palw_exec_v2_anchor::{PALW_EXEC_V2_ANCHOR_MAGIC, PALW_EXEC_V2_MAX_HEADS},
+                palw_model_market_v1::moe2::award_reference::Moe2AwardReference,
                 palw_native_resource_v1::reserve_native_requests_v1,
             };
             let extra = self.coinbase_manager.coinbase_extra_data(&txs[0].payload).map_err(BadCoinbasePayload)?;
@@ -2286,6 +2287,7 @@ impl VirtualStateProcessor {
                 // An award marker cannot substitute for a branch-verified
                 // winning right. No mining-active FOW1 profile supplies one yet.
                 if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
+                    Moe2AwardReference::from_transactions(txs.iter()).map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
                     return Err(PrivateMoe2AwardUnresolved);
                 }
             }

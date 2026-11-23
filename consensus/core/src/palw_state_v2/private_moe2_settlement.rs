@@ -9,7 +9,9 @@ use crate::palw_bond_budget_v1::{
 };
 use crate::palw_mode_v2::PalwConsensusMode;
 use crate::palw_model_market_v1::moe2::{
-    Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit, quote_additional_reward,
+    Moe2ModelAllocation, Moe2QuantityLimits, Moe2RegisteredModel, Moe2RewardSplit,
+    award_reference::Moe2AwardReference,
+    quote_additional_reward,
     settlement::{
         Moe2ExecSlot, Moe2NativeExecSettlement, Moe2Position, Moe2PreDrawQuote, Moe2SettledReward, Moe2SettlementBook,
         Moe2SettlementError, Moe2SettlementFunding, Moe2SettlementUndo, Moe2WorkerRelease,
@@ -240,6 +242,11 @@ pub(super) fn fold_exec_award_v1(
     let expected = award.coinbase_marker(config.genesis.hash, price.parent, &attempt);
     if marker.as_ref().map(|hash| hash.as_slice()) != Some(&expected[MOE2_EXEC_AWARD_MARKER_TAG.len()..]) {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker"));
+    }
+    let reference = Moe2AwardReference::from_transactions(block.transactions.iter())
+        .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
+    if reference != Moe2AwardReference::for_slot(award.claim, attempt, award.slot) {
+        return Err(PalwStateV2Error::DeltaMismatch("private MOE2 award differs from its candidate reference"));
     }
     let parent_root = builder.native_reservation.state_root_v2(parent).map_err(PalwStateV2Error::NativeResource)?;
     let model = project_award_model(config, &builder.state, &award.slot.quote, point.daa_score).map_err(refuse)?;
