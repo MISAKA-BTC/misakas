@@ -16140,7 +16140,7 @@ fn apply_palw_transition_v7_inner(
     )?;
     ordered_prefix::apply_ordered_prefix_v1(&mut builder, parent, ctx, accepted_objects)?;
     if let Some(court) = private_qf1_court {
-        qf1_terminal_court::fold_terminal_court(&mut builder, ctx, court)?;
+        qf1_terminal_court::fold_terminal_court(&mut builder, parent.last_point().map(|point| point.block), ctx, court)?;
     }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned

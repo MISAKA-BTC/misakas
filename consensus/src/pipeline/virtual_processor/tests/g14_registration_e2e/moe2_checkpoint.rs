@@ -460,8 +460,11 @@ pub(super) async fn check_exec_settlement_rewind(
                 terminal::{END_BYTES, LAST_CHUNK_BYTES},
                 ticket,
             },
-            palw_state_v2::Qf1OriginalVerification,
+            palw_state_v2::{Qf1OriginalVerification, Qf1TerminalUpdate},
             palw_tb1::{
+                panel_reply_carrier::{
+                    PanelReplayDuty, REPLAY_SIGNATURE_DOMAIN, actor_id, encode_panel_replies, panel_reply_commitment, replay_message,
+                },
                 qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
                 qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
             },
@@ -653,7 +656,64 @@ pub(super) async fn check_exec_settlement_rewind(
                     ),
                     Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"))
                 ));
-                let mut daa = decision_block.header.daa_score;
+                let panel = [[61; 32], [62; 32]].map(libcrux_ml_dsa::ml_dsa_65::generate_key_pair);
+                let selected = panel.each_ref().map(|key| actor_id(&key.verification_key));
+                let duty = [63; 64];
+                let signatures = std::array::from_fn::<_, 2, _>(|i| {
+                    libcrux_ml_dsa::ml_dsa_65::sign(
+                        &panel[i].signing_key,
+                        &replay_message(&duty, selected[i]),
+                        REPLAY_SIGNATURE_DOMAIN,
+                        [64; 32],
+                    )
+                    .unwrap()
+                });
+                let replies = std::array::from_fn::<_, 2, _>(|i| (&panel[i].verification_key, &signatures[i]));
+                let marker = panel_reply_commitment(&duty, &selected, &replies).unwrap();
+                let reply = funded_carrier(encode_panel_replies(&replies), 0);
+                let approval_block = court.heartbeat_paying(miner(&marker), interval, vec![reply]).await;
+                let (_, observed) = court.tip_state();
+                let point = *observed.last_point().unwrap();
+                let parent = decision_block.hash();
+                // The short fixture supplies the draw; the candidate supplies the replies.
+                let approval = PanelReplayDuty {
+                    chain,
+                    original,
+                    original_block: original_block.hash(),
+                    certificate: case.hash(),
+                    deadline: quote.deadline + 1,
+                    duty: &duty,
+                    selected: &selected,
+                }
+                .verify_candidate(court.ctx.consensus.as_ref(), parent, &approval_block)
+                .unwrap();
+                let (approved, delta, _, _) = apply_palw_transition_retained_v8(
+                    &decided,
+                    params,
+                    None,
+                    &point,
+                    &[],
+                    PalwBlockWorkV3::None,
+                    &[],
+                    Hash64::default(),
+                    false,
+                    false,
+                    false,
+                    false,
+                    &PalwTransitionExtrasV1 { private_moe2_registration: true, ..Default::default() },
+                    PositiveCaseReplayInputV2 {
+                        selected_parent: parent,
+                        live_case_cap: 0,
+                        load: &mut |_, _| panic!("QF1 fixture has no Assignment cases"),
+                    },
+                    None,
+                    Some(Qf1TerminalUpdate::PanelApproval(approval)),
+                )
+                .unwrap();
+                assert_eq!(approved.qf1_original_verification(original), Some(Qf1OriginalVerification::ReplayApproved));
+                assert_eq!(revert_delta_v2(&approved, &delta, params).unwrap().state_root(), decided.state_root());
+
+                let mut daa = approval_block.header.daa_score;
                 for _ in 0..8 {
                     assert_eq!(court.tip_state().1.qf1_original_verification(original), Some(Qf1OriginalVerification::AwaitingReplay));
                     daa = court.heartbeat(interval, vec![]).await.header.daa_score;

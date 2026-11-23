@@ -239,8 +239,14 @@ pub(super) fn fold_exec_award_v1(
     if builder.state.qf1_terminal_blocks_award(award.claim) {
         return Err(PalwStateV2Error::DeltaMismatch("native QF1 terminal Court blocks this MOE2 award"));
     }
-    if builder.state.qf1_original_verification_at(award.claim, point.daa_score).is_some() {
-        return Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"));
+    match builder.state.qf1_original_verification_at(award.claim, point.daa_score) {
+        Some(Qf1OriginalVerification::ReplayApproved) => {
+            return Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no successful Final"));
+        }
+        Some(Qf1OriginalVerification::AwaitingReplay | Qf1OriginalVerification::Unverified) => {
+            return Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"));
+        }
+        None => {}
     }
     if builder.state.private_moe2_attempt_work(&attempt).is_some() {
         return Err(refuse(Moe2SettlementError::AttemptAlreadyConsumed));

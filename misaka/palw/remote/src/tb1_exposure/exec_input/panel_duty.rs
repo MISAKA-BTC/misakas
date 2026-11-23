@@ -8,19 +8,16 @@ use kaspa_consensus_core::palw_panel_v2::{
 use kaspa_consensus_core::{
     palw_native_settlement_v1::NativeSettlementSnapshotV1,
     palw_tb1::{
-        panel_reply_carrier::{PANEL_REPLY_KEY_BYTES, PANEL_REPLY_SIGNATURE_BYTES, encode_panel_replies, panel_replies_from_block},
+        panel_reply_carrier::{
+            PANEL_REPLY_KEY_BYTES, PANEL_REPLY_SIGNATURE_BYTES, PanelReplayDuty, encode_panel_replies, panel_reply_commitment,
+            replay_message,
+        },
         releases::Tb1BeaconSeed,
     },
 };
 use misaka_palw_tir_exec::node::qf1::LocalInstance;
 
-pub const REPLAY_SIGNATURE_DOMAIN: &[u8] = b"MISAKA/private/TB1/QF1/complete-replay/v1";
-
-pub fn actor_id(key: &MLDSA65VerificationKey) -> Hash64 {
-    Hash64::from_bytes(
-        Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/actor/v1").chain_update(key.as_slice()).finalize().into(),
-    )
-}
+pub use kaspa_consensus_core::palw_tb1::panel_reply_carrier::{PublishedPanelApproval, REPLAY_SIGNATURE_DOMAIN, actor_id};
 
 /// Uses the existing integer stake-ticket race with the frozen weights. This
 /// private policy commits the seat count and all seats' complete replay duty.
@@ -71,34 +68,6 @@ pub struct LocalReplayDraw {
     deadline: u64,
     selected: Vec<Hash64>,
     duty: [u8; 64],
-}
-
-/// The complete PANEL reply set for this Original on the named branch.
-/// Consensus credit still requires its separate Gate C certification.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PublishedPanelApproval {
-    original: Hash64,
-    original_block: Hash64,
-    accepting_block: Hash64,
-    selected_parent: Hash64,
-}
-
-impl PublishedPanelApproval {
-    pub fn original(&self) -> Hash64 {
-        self.original
-    }
-
-    pub fn original_block(&self) -> Hash64 {
-        self.original_block
-    }
-
-    pub fn accepting_block(&self) -> Hash64 {
-        self.accepting_block
-    }
-
-    pub fn selected_parent(&self) -> Hash64 {
-        self.selected_parent
-    }
 }
 
 impl LocalPanelCut {
@@ -322,7 +291,7 @@ impl LocalReplayDraw {
         if !self.selected.contains(&actor) {
             return Err(invalid("actor not selected for local replay"));
         }
-        Ok(Sha3_512::new().chain_update(self.duty).chain_update(actor.as_bytes()).finalize().into())
+        Ok(replay_message(&self.duty, actor))
     }
 
     /// Read the assigned Original from its source block, then independently
@@ -396,22 +365,7 @@ impl LocalReplayDraw {
     }
 
     fn replies_marker(&self, replies: &[(&MLDSA65VerificationKey, &MLDSA65Signature)]) -> io::Result<[u8; 64]> {
-        let mut seats = self.selected.iter();
-        let mut h = Sha3_512::new().chain_update(b"MISAKA/private/TB1/PANEL/reply-set/v1").chain_update(self.duty);
-        for &(key, sig) in replies {
-            let id = actor_id(key);
-            if !seats.any(|seat| *seat == id) {
-                return Err(invalid("PANEL replies outside draw order"));
-            }
-            let msg = self.message(key)?;
-            ml_dsa_65::verify(key, &msg, REPLAY_SIGNATURE_DOMAIN, sig).map_err(|_| invalid("invalid local PANEL reply"))?;
-            h.update(id.as_bytes());
-            h.update(sig.as_slice());
-        }
-        if replies.len() != self.selected.len() {
-            return Err(io::Error::new(io::ErrorKind::WouldBlock, "incomplete local PANEL replies"));
-        }
-        Ok(h.finalize().into())
+        panel_reply_commitment(&self.duty, &self.selected, replies)
     }
     pub fn read_replies(
         &self,
@@ -464,24 +418,16 @@ impl LocalReplayDraw {
         tip: Hash64,
         block: Hash64,
     ) -> io::Result<PublishedPanelApproval> {
-        self.check_reply_block(native, tip, block)?;
-        let source = native.get_block(block).map_err(io::Error::other)?;
-        if source.hash() != block {
-            return Err(invalid("local PANEL reply block hash differs"));
-        }
-        let rows = panel_replies_from_block(&source, self.selected.len())
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("PANEL reply carrier: {error:?}")))?;
-        let seats = u32::try_from(self.selected.len()).map_err(|_| invalid("PANEL seat count exceeds private encoding"))?;
-        let signed = LocalReplayPolicy::new(seats)?.read_reply_evidence(rows)?;
-        let replies: Vec<_> = signed.iter().map(|(key, signature)| (key, signature)).collect();
-        let marker = self.replies_marker(&replies)?;
-        self.check_reply_marker(native, block, &marker)?;
-        Ok(PublishedPanelApproval {
+        PanelReplayDuty {
+            chain: self.chain,
             original: self.original,
             original_block: self.receipt,
-            accepting_block: block,
-            selected_parent: tip,
-        })
+            certificate: self.certificate,
+            deadline: self.deadline,
+            duty: &self.duty,
+            selected: &self.selected,
+        }
+        .verify_published(native, tip, block)
     }
 }
 
