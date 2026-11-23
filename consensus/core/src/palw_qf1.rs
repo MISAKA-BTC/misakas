@@ -98,6 +98,42 @@ impl ReadoutBinding {
     }
 }
 
+/// The public Readout preimage named by an owner-signed QF1 descriptor.
+#[derive(Clone)]
+pub struct ReadoutMetadata {
+    pub manifest: Hash64,
+    pub final_norm: u16,
+    pub scales: [Hash64; ROLES],
+}
+
+impl ReadoutMetadata {
+    /// Open the signed class and Readout descriptor without loading the model.
+    /// An ordinary inventory opening distinguishes this root from a composite
+    /// section commitment. It authenticates data only and grants no work credit.
+    pub fn open_work_model(
+        &self,
+        class: &crate::palw_tir_class_v1::PalwTirClassV1,
+        inventory: Hash64,
+        signed_class: Hash64,
+        signed_tokenizer: Hash64,
+        signed_descriptor: Hash64,
+        opening: &crate::palw_artifact::PalwArtifactOpeningV1,
+    ) -> Result<WorkModel, String> {
+        if class.tokenizer_id != signed_tokenizer || class.class_id(&inventory) != signed_class {
+            return Err("QF1 metadata differs from the owner-signed class or tokenizer".into());
+        }
+        let space = PalwTirStepSpaceV1::new(class).map_err(|error| error.to_string())?;
+        let readout = ReadoutBinding::from_step_space(&space, self.final_norm)?;
+        if readout.instance_descriptor(self.manifest, signed_class, &self.scales) != signed_descriptor {
+            return Err("QF1 Readout differs from the owner-signed descriptor".into());
+        }
+        let inventory_check = crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1::new(&space.program, inventory)
+            .ok_or("invalid QF1 ordinary inventory geometry")?;
+        inventory_check.check(opening).map_err(|error| error.to_string())?;
+        Ok(readout.work_model(class.graph_ir_root(), inventory))
+    }
+}
+
 /// Check dataflow in the validated SSA block, optionally cutting a producer.
 fn depends(block: &Block, output: u16, source: Ref, cut: Option<u16>) -> bool {
     let mut reachable = Vec::with_capacity(usize::from(output) + 1);

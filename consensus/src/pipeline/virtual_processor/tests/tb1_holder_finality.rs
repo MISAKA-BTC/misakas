@@ -1911,6 +1911,7 @@ async fn run(stable: bool, registered: bool) {
                     jobs.derive_published_at_parent(api, parent, settlement, 9, batch.hash(), certificate.hash(), &q, LIMITS).unwrap()
                 },
                 instance.as_ref().unwrap(),
+                exercise.as_ref().filter(|_| full.is_none()).map(|(artifact, norm)| (artifact, *norm)),
                 body,
                 sig,
                 *id,

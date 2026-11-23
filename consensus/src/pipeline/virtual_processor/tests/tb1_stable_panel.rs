@@ -505,6 +505,7 @@ pub(super) async fn release<'t>(
     recover_exec: impl Fn(&dyn ConsensusApi) -> DerivedExecInput<'t>,
     recover_branch_exec: impl Fn(&dyn ConsensusApi, Hash64, &NativeSettlementSnapshotV1) -> BranchExecInput<'t>,
     instance: &LocalInstance<'_>,
+    metadata_fixture: Option<(&misaka_palw_tir_exec::node::TirArtifactV1, u16)>,
     body: &LocalOriginalBody,
     owner: &ml_dsa_65::MLDSA65Signature,
     original: Hash64,
@@ -899,6 +900,44 @@ pub(super) async fn release<'t>(
             );
             assert_eq!(execution.attempt(), input.attempt());
             assert_eq!(execution.work(), instance.computational_work_key(input.tokens(), input.terms().decode_tokens).unwrap());
+            let earlier_input = recover_branch_exec(&branch, cert.hash(), &before_replies);
+            if let Some((artifact, final_norm)) = metadata_fixture {
+                use misaka_palw_tir_exec::node::TirParamOpenerV1;
+                let class = artifact.class().unwrap();
+                let metadata = super::prediction::readout_metadata(final_norm, b"unit scale");
+                let opening = artifact.param_opening(0).unwrap();
+                let read = |class, metadata, opening| {
+                    branch_input.read_panel_approved_qf1_execution_with_metadata(&branch, archived, class, metadata, opening)
+                };
+                let model_free = read(&class, &metadata, &opening).unwrap();
+                assert_eq!(model_free.approval(), archived);
+                assert_eq!(model_free.execution().work(), execution.work());
+                assert_eq!(model_free.execution().attempt(), execution.attempt());
+                let mut changed = metadata.clone();
+                changed.scales[0] = Hash64::default();
+                assert_eq!(
+                    read(&class, &changed, &opening).err().unwrap().to_string(),
+                    "QF1 Readout differs from the owner-signed descriptor"
+                );
+                let mut changed = class.clone();
+                changed.layout.checkpoint_interval += 1;
+                assert_eq!(
+                    read(&changed, &metadata, &opening).err().unwrap().to_string(),
+                    "QF1 metadata differs from the owner-signed class or tokenizer"
+                );
+                let mut changed = opening.clone();
+                changed.operand.bytes[0] ^= 1;
+                assert!(read(&class, &metadata, &changed).is_err());
+                let mut changed = opening.clone();
+                changed.leaf_count += 1;
+                assert!(read(&class, &metadata, &changed).is_err());
+                assert!(
+                    earlier_input
+                        .read_panel_approved_qf1_execution_with_metadata(&branch, archived, &class, &metadata, &opening)
+                        .is_err()
+                );
+                peer_log!("QF1 public metadata work key pid={} key={}", std::process::id(), model_free.execution().work());
+            }
             let (_, funding_parent) = expired.virtual_processor().palw_observer_state_at_cached_v1(late.hash()).unwrap();
             let unfunded = kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::Moe2AwardReference {
                 claim: original,
@@ -911,7 +950,6 @@ pub(super) async fn release<'t>(
                 approved.bind_moe2_funding(&branch, &unfunded, &funding_parent, late.header.daa_score).unwrap_err().to_string(),
                 "approved EXEC input carries no signed MOE2 quote"
             );
-            let earlier_input = recover_branch_exec(&branch, cert.hash(), &before_replies);
             assert_eq!(
                 earlier_input.read_panel_approved_qf1_execution(&branch, archived, instance).err().unwrap().to_string(),
                 "PANEL approval belongs to a different selected parent"

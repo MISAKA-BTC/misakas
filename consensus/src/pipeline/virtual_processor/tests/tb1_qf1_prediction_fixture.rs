@@ -4,7 +4,7 @@
 use super::QF1_TEST_TOKENIZER;
 use kaspa_consensus_core::{
     Hash64,
-    palw_qf1::{self, ROLES, Readout, Stop, VOCAB, WIDTH},
+    palw_qf1::{self, ROLES, Readout, ReadoutMetadata, Stop, VOCAB, WIDTH},
     palw_step_refute::tiled_logits_scheme_id_v1,
     palw_tir_class_v1::{PALW_TIR_LAYOUT_VERSION_V1, PalwTirLayoutV1},
 };
@@ -88,12 +88,17 @@ pub(super) fn bind(a: &TirArtifactV1, norm: u16) -> LocalInstance<'_> {
 }
 
 pub(super) fn bind_scale<'a>(a: &'a TirArtifactV1, norm: u16, units: &[u8]) -> LocalInstance<'a> {
+    let metadata = readout_metadata(norm, units);
+    LocalInstance::bind(a, metadata.manifest, metadata.final_norm, &metadata.scales).unwrap()
+}
+
+pub(super) fn readout_metadata(norm: u16, units: &[u8]) -> ReadoutMetadata {
     let manifest = kaspa_hashes::blake2b_512_keyed(
         b"qf1-schedule-test",
         b"prefix-sum with lane offset (i%7)-3 / layer: +1 / final: +5 / signed logit table",
     );
     let scale = kaspa_hashes::blake2b_512_keyed(b"qf1-schedule-test", units);
-    LocalInstance::bind(a, manifest, norm, &[scale; ROLES]).unwrap()
+    ReadoutMetadata { manifest, final_norm: norm, scales: [scale; ROLES] }
 }
 
 pub(super) fn check(prompt: &[u32], limit: u32, actual: &LocalAnswer) {

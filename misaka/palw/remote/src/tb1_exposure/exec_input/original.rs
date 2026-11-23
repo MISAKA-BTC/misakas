@@ -3,15 +3,21 @@
 use super::panel_cut::PublishedPanelApproval;
 use super::*;
 use kaspa_consensus_core::{
+    palw_artifact::PalwArtifactOpeningV1,
     palw_model_market_v1::moe2::{award_reference::Moe2AwardReference, settlement::Moe2ExecSlot},
-    palw_qf1::{TreeKind, TreeRoot, readout_chunks::record_count, ticket},
+    palw_qf1::{ReadoutMetadata, TreeKind, TreeRoot, WorkInput, readout_chunks::record_count, ticket},
     palw_state_v2::PalwChainStateV2,
     palw_tb1::qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier},
+    palw_tir_class_v1::PalwTirClassV1,
 };
 use misaka_palw_tir_exec::node::qf1::LocalTrace;
 use serde::{Deserialize, Serialize};
 
 pub const LOCAL_ORIGINAL_DOMAIN: &[u8] = b"MISAKA/private/QF1/local-original-signature/v1";
+
+fn invalid_work(why: String) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, why)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[serde(deny_unknown_fields)]
@@ -140,10 +146,41 @@ impl BranchExecInput<'_> {
         approval: PublishedPanelApproval,
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> io::Result<PanelApprovedQf1Execution> {
+        self.read_approved_qf1(native, approval, |input| input.local_work_key(instance).map_err(invalid_work))
+    }
+
+    /// Recover an approved Original using the signed class and Readout
+    /// preimages and a single ordinary artifact opening. No weight file or
+    /// model execution is needed for this work-identity read.
+    pub fn read_panel_approved_qf1_execution_with_metadata(
+        &self,
+        native: &dyn ConsensusApi,
+        approval: PublishedPanelApproval,
+        class: &PalwTirClassV1,
+        readout: &ReadoutMetadata,
+        opening: &PalwArtifactOpeningV1,
+    ) -> io::Result<PanelApprovedQf1Execution> {
+        self.read_approved_qf1(native, approval, |input| {
+            let terms = input.terms;
+            let frame = terms.qf1.ok_or_else(|| invalid("signed EXEC input has no QF1 frame"))?.admitted()?;
+            let model = readout
+                .open_work_model(class, terms.model_root, terms.class_id, terms.tokenizer, frame.instance_descriptor, opening)
+                .map_err(invalid_work)?;
+            let work_input = WorkInput::new(&input.tokens, terms.decode_tokens).map_err(invalid_work)?;
+            Ok(model.work_key(work_input))
+        })
+    }
+
+    fn read_approved_qf1(
+        &self,
+        native: &dyn ConsensusApi,
+        approval: PublishedPanelApproval,
+        work: impl FnOnce(&DerivedExecInput<'_>) -> io::Result<Hash64>,
+    ) -> io::Result<PanelApprovedQf1Execution> {
         if approval.selected_parent() != self.parent {
             return Err(invalid("PANEL approval belongs to a different selected parent"));
         }
-        let execution = self.read_qf1_execution_from_block(native, approval.original_block(), approval.original(), instance)?;
+        let execution = self.read_published_qf1_execution(native, approval.original_block(), approval.original(), work)?;
         if !execution.ticket_meets_target() {
             return Err(invalid("PANEL Original does not meet its signed EXEC target"));
         }
@@ -159,11 +196,23 @@ impl BranchExecInput<'_> {
         expected_original: Hash64,
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> io::Result<BranchQf1Execution> {
+        self.read_published_qf1_execution(native, block, expected_original, |input| {
+            input.local_work_key(instance).map_err(invalid_work)
+        })
+    }
+
+    fn read_published_qf1_execution(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        expected_original: Hash64,
+        work: impl FnOnce(&DerivedExecInput<'_>) -> io::Result<Hash64>,
+    ) -> io::Result<BranchQf1Execution> {
         let (body, signature) = read_published_qf1_original(native, block)?;
         if body.signing_id(&self.input) != expected_original {
             return Err(invalid("QF1 Original differs from the expected claim"));
         }
-        self.read_qf1_execution(native, block, &body, &signature, instance)
+        self.read_qf1_execution_with_work(native, block, &body, &signature, work)
     }
 
     /// Bind a recorded Original and its numerical work. This reads the
@@ -176,11 +225,20 @@ impl BranchExecInput<'_> {
         sig: &MLDSA65Signature,
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> io::Result<BranchQf1Execution> {
+        self.read_qf1_execution_with_work(native, block, body, sig, |input| input.local_work_key(instance).map_err(invalid_work))
+    }
+
+    fn read_qf1_execution_with_work(
+        &self,
+        native: &dyn ConsensusApi,
+        block: Hash64,
+        body: &LocalOriginalBody,
+        sig: &MLDSA65Signature,
+        work: impl FnOnce(&DerivedExecInput<'_>) -> io::Result<Hash64>,
+    ) -> io::Result<BranchQf1Execution> {
         let input = &self.input;
         let original = input.read_qf1_original_on_branch(native, self.parent, block, body, sig)?;
-        let invalid_work = |why| io::Error::new(io::ErrorKind::InvalidData, why);
-        input.check_qf1_instance_binding(instance).map_err(invalid_work)?;
-        let work = instance.computational_work_key(&input.tokens, input.terms.decode_tokens).map_err(invalid_work)?;
+        let work = work(input)?;
         Ok(BranchQf1Execution {
             close: input.close,
             registration: input.registration_key,

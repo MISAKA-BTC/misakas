@@ -668,10 +668,15 @@ impl DerivedExecInput<'_> {
         native: &dyn ConsensusApi,
         instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>,
     ) -> Result<Hash64, String> {
-        self.check_qf1_instance(native, instance)?;
-        let key = instance.computational_work_key(&self.tokens, self.terms.decode_tokens)?;
+        self.check_live(native).map_err(|e| e.to_string())?;
+        let key = self.local_work_key(instance)?;
         self.check_live(native).map_err(|e| e.to_string())?;
         Ok(key)
+    }
+
+    fn local_work_key(&self, instance: &misaka_palw_tir_exec::node::qf1::LocalInstance<'_>) -> Result<Hash64, String> {
+        self.check_qf1_instance_binding(instance)?;
+        instance.computational_work_key(&self.tokens, self.terms.decode_tokens)
     }
 
     /// Produce from the signed registration and live EXEC without a declared T.
