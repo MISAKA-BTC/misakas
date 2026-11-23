@@ -44,6 +44,68 @@ mod offers;
 #[path = "tb1_stable_panel.rs"]
 mod stable_panel;
 
+#[tokio::test]
+async fn private_moe2_marked_coinbase_requires_a_winning_right_on_normal_acceptance() {
+    use crate::pipeline::virtual_processor::tests::g14_registration_e2e::private_moe2::arm_private_registration;
+    use kaspa_consensus_core::coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, private_moe2_award_marker};
+
+    let mut named = MOE2_EXEC_AWARD_MARKER_TAG.to_vec();
+    named.extend_from_slice(&[7; 64]);
+    assert_eq!(private_moe2_award_marker(&named), Ok(Some([7; 64])));
+
+    let mut legacy = named.clone();
+    legacy.truncate(64);
+    assert_eq!(private_moe2_award_marker(&legacy), Ok(None));
+    let anchor = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1 {
+        heads: vec![Hash64::from_u64_word(1)],
+        count: 1,
+        root: Hash64::from_u64_word(2),
+    };
+    let trailer = anchor.trailer();
+    assert_eq!(private_moe2_award_marker(&[named.as_slice(), &trailer].concat()), Ok(Some([7; 64])));
+    assert_eq!(private_moe2_award_marker(&[legacy.as_slice(), &trailer].concat()), Ok(None));
+    let malformed = named[..named.len() - 1].to_vec();
+    assert!(private_moe2_award_marker(&malformed).is_err());
+
+    let isolated = parts_custom(Some(FENCE), false, |p| arm_private_registration(p, false));
+    let mut node = Rig::new(&isolated, 0x12_c500_1000);
+    stable_panel::arm(&mut node);
+    for _ in 0..6 {
+        if node.chain.daa_of(node.chain.sink()) >= 1 {
+            break;
+        }
+        stable_panel::next(&mut node, 0).await;
+    }
+    let parent = node.chain.sink();
+    let root = node.chain.tip_state().1.state_root();
+    assert!(node.chain.daa_of(parent) >= 1);
+    for extra in [named.clone(), malformed] {
+        let mut miner = new_miner_data();
+        miner.extra_data = extra;
+        let block = stable_panel::heartbeat(&mut node, miner).to_immutable();
+        let hash = block.hash();
+        assert_ne!(hash, parent);
+        assert!(block.header.daa_score >= 1);
+        node.api().validate_and_insert_block(block).virtual_state_task.await.unwrap();
+        assert_eq!(node.api().block_status(hash), BlockStatus::StatusDisqualifiedFromChain);
+        assert_eq!(node.chain.sink(), parent);
+        assert_eq!(node.chain.tip_state().1.state_root(), root);
+    }
+    let mut miner = new_miner_data();
+    miner.extra_data = legacy;
+    let block = stable_panel::heartbeat(&mut node, miner);
+    node.take(block, "bare TB1 marker with the MOE2 prefix").await;
+
+    let original_profile = parts(Some(FENCE));
+    let mut original = Rig::new(&original_profile, 0x12_c500_2000);
+    assert_eq!(original.config.params.private_moe2_registration_from(), None);
+    stable_panel::arm(&mut original);
+    let mut miner = new_miner_data();
+    miner.extra_data = named;
+    let block = stable_panel::heartbeat(&mut original, miner);
+    original.take(block, "ordinary miner data on the original profile").await;
+}
+
 const QF1_TEST_TOKENIZER: &str =
     "10ed14bc48937bd836b309447040a8d43d38f103fde39682f7f9f2c4cbb6b4b4666658ab71ed3d90de7c6e2e00cce21c01863b4403ae41dab361b099fdfe2ec5";
 const READER_DIR: &str = "MISAKA_PRIVATE_TB1_FREEZE_READER";

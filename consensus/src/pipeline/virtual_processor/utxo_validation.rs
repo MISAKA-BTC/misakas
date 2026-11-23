@@ -12,8 +12,9 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
-            ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
+            BadAcceptedIDMerkleRoot, BadCoinbasePayload, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape,
+            BadUTXOCommitment, ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
+            LocalNativeCapacityUnavailable, PrivateMoe2AwardMalformed, PrivateMoe2AwardUnresolved, UnauthorizedUnbondRequestInBlock,
             UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
@@ -2267,6 +2268,28 @@ impl VirtualStateProcessor {
         }
 
         let txs = self.block_transactions_store.get(header.hash).unwrap();
+
+        if self.private_moe2_registration_from.is_some_and(|from| header.daa_score >= from) {
+            use kaspa_consensus_core::{
+                coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, private_moe2_award_marker},
+                palw_exec_v2_anchor::{PALW_EXEC_V2_ANCHOR_MAGIC, PALW_EXEC_V2_MAX_HEADS},
+                palw_native_resource_v1::reserve_native_requests_v1,
+            };
+            let extra = self.coinbase_manager.coinbase_extra_data(&txs[0].payload).map_err(BadCoinbasePayload)?;
+            if extra.starts_with(MOE2_EXEC_AWARD_MARKER_TAG) {
+                let _anchor_lease = if extra.len() != 64 && extra.ends_with(&PALW_EXEC_V2_ANCHOR_MAGIC) {
+                    reserve_native_requests_v1((PALW_EXEC_V2_MAX_HEADS * size_of::<BlockHash>()) as u64)
+                        .map_err(LocalNativeCapacityUnavailable)?
+                } else {
+                    None
+                };
+                // An award marker cannot substitute for a branch-verified
+                // winning right. No mining-active FOW1 profile supplies one yet.
+                if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
+                    return Err(PrivateMoe2AwardUnresolved);
+                }
+            }
+        }
 
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): Model-B
         // reward-eligibility block-validity rule, run BEFORE the coinbase

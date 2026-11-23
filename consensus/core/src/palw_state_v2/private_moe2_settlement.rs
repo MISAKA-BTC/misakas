@@ -2,6 +2,7 @@
 //! settlement book and the authenticated claim release. No public object dispatch.
 use super::*;
 use crate::block::Block;
+use crate::coinbase::{MOE2_EXEC_AWARD_MARKER_TAG, coinbase_payload_extra_data, private_moe2_award_marker};
 use crate::config::params::Params;
 use crate::palw_bond_budget_v1::{
     PALW_BUDGET_TABLE_CLAIMS_V1, PalwBudgetClaimRowV1, PalwBudgetOriginV1, palw_bond_budget_export_cap_v1,
@@ -84,8 +85,6 @@ pub struct Moe2ExecAwardV1<'a> {
     pub payees: Moe2ExecWorkerPayees<'a>,
     pub worker_start: usize,
 }
-
-const MOE2_EXEC_AWARD_MARKER_TAG: &[u8; 8] = b"MOE2AW01";
 
 impl Moe2ExecAwardV1<'_> {
     /// Candidate intent for an independently authenticated winning right.
@@ -233,9 +232,11 @@ pub(super) fn fold_exec_award_v1(
         .transactions
         .first()
         .filter(|tx| tx.is_coinbase())
-        .and_then(|tx| crate::coinbase::coinbase_payload_extra_data(&tx.payload))
-        .and_then(|extra| extra.strip_prefix(MOE2_EXEC_AWARD_MARKER_TAG))
-        .and_then(crate::coinbase::palw_coinbase_marker);
+        .and_then(|tx| coinbase_payload_extra_data(&tx.payload))
+        .map(private_moe2_award_marker)
+        .transpose()
+        .map_err(PalwStateV2Error::DeltaMismatch)?
+        .flatten();
     let expected = award.coinbase_marker(config.genesis.hash, price.parent, &attempt);
     if marker.as_ref().map(|hash| hash.as_slice()) != Some(&expected[MOE2_EXEC_AWARD_MARKER_TAG.len()..]) {
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker"));

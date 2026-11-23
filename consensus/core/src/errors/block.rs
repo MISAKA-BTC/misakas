@@ -271,6 +271,12 @@ pub enum RuleError {
     #[error("bad coinbase payload: {0}")]
     BadCoinbasePayload(CoinbaseError),
 
+    #[error("invalid private MOE2 award in coinbase: {0}")]
+    PrivateMoe2AwardMalformed(&'static str),
+
+    #[error("private MOE2 award in coinbase has no authenticated winning right")]
+    PrivateMoe2AwardUnresolved,
+
     #[error("coinbase blue score of {0} is not the expected value of {1}")]
     BadCoinbasePayloadBlueScore(u64, u64),
 

@@ -19,6 +19,31 @@ pub fn palw_coinbase_marker(extra_data: &[u8]) -> Option<[u8; 64]> {
     })
 }
 
+pub const MOE2_EXEC_AWARD_MARKER_TAG: &[u8; 8] = b"MOE2AW01";
+
+/// Read the private MOE2 award tag and its commitment. An EXEC v2 anchor
+/// may follow the miner's extra data. Bare 64-byte markers retain their
+/// original meaning even if their digest starts with the award tag.
+pub fn private_moe2_award_marker(extra_data: &[u8]) -> Result<Option<[u8; 64]>, &'static str> {
+    let Some(tagged) = extra_data.strip_prefix(MOE2_EXEC_AWARD_MARKER_TAG) else { return Ok(None) };
+    if extra_data.len() == 64 {
+        return Ok(None);
+    }
+    if let Ok(commitment) = tagged.try_into() {
+        return Ok(Some(commitment));
+    }
+    let (prefix, anchor) = crate::palw_exec_v2_anchor::palw_exec_v2_anchor_split(extra_data)
+        .map_err(|_| "invalid EXEC v2 trailer after the private MOE2 award tag")?;
+    if anchor.is_some() && prefix.len() == 64 {
+        return Ok(None);
+    }
+    prefix
+        .strip_prefix(MOE2_EXEC_AWARD_MARKER_TAG)
+        .and_then(|data| data.try_into().ok())
+        .map(Some)
+        .ok_or("invalid private MOE2 award marker length")
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub struct MinerData<T: AsRef<[u8]> = Vec<u8>> {
     pub script_public_key: ScriptPublicKey,
