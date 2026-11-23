@@ -7,6 +7,11 @@ use super::{
     freeze::{Tb1MiningPurpose, Tb1MiningRound},
     signatures,
 };
+use crate::{
+    Hash64,
+    block::Block,
+    coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
+};
 use libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey;
 use sha3::{Digest, Sha3_512};
 use std::{collections::BTreeSet, io};
@@ -214,6 +219,137 @@ pub struct QualifiedExecPanel {
     exec_qual: [u8; 64],
     panel_qual: [u8; 64],
     marker: [u8; 64],
+}
+
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+struct RetainedRound {
+    round: Tb1MiningRound,
+    root: [u8; 64],
+    coordinates: Vec<[u8; 66]>,
+    holder_keys: Vec<[u8; 1952]>,
+    faults: u32,
+    deadline_position: u64,
+    dealers: Vec<u32>,
+}
+
+impl RetainedRound {
+    fn capture(round: Tb1MiningRound, qualification: &Tb1Qualification<'_>) -> io::Result<Self> {
+        let width = |v| u32::try_from(v).map_err(io::Error::other);
+        Ok(Self {
+            round,
+            root: qualification.qual_root,
+            coordinates: qualification.roster.coordinates.iter().map(|coordinate| coordinate.to_bytes()).collect(),
+            holder_keys: qualification
+                .roster
+                .holder_keys
+                .iter()
+                .map(|key| key.as_slice().try_into().expect("ML-DSA-65 verification key width"))
+                .collect(),
+            faults: width(qualification.roster.f)?,
+            deadline_position: qualification.preparation_deadline,
+            dealers: qualification.dealers.iter().copied().map(width).collect::<Result<_, _>>()?,
+        })
+    }
+
+    fn restore(self) -> Option<PreparedTb1Round> {
+        let coordinates = self.coordinates.iter().map(Tb1Field::from_bytes).collect::<Option<Vec<_>>>()?;
+        let holder_keys = self.holder_keys.into_iter().map(MLDSA65VerificationKey::new).collect();
+        let dealers = self.dealers.into_iter().map(|slot| slot as usize).collect();
+        Some(PreparedTb1Round {
+            round: self.round,
+            id: self.round.id(),
+            root: self.root,
+            coordinates,
+            holder_keys,
+            faults: self.faults as usize,
+            deadline_position: self.deadline_position,
+            dealers,
+        })
+    }
+}
+
+/// An authenticated preparation restored from the selected branch's state.
+pub struct PreparedTb1Round {
+    round: Tb1MiningRound,
+    id: [u8; 64],
+    root: [u8; 64],
+    coordinates: Vec<Tb1Field>,
+    holder_keys: Vec<MLDSA65VerificationKey>,
+    faults: usize,
+    deadline_position: u64,
+    dealers: Vec<usize>,
+}
+
+impl PreparedTb1Round {
+    pub fn round(&self) -> Tb1MiningRound {
+        self.round
+    }
+
+    pub fn qualification(&self) -> Tb1Qualification<'_> {
+        Tb1Qualification {
+            round_ref: &self.id,
+            qual_root: self.root,
+            roster: Tb1Roster { coordinates: &self.coordinates, holder_keys: &self.holder_keys, f: self.faults },
+            preparation_deadline: self.deadline_position,
+            dealers: &self.dealers,
+        }
+    }
+}
+
+#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub(crate) struct RetainedExecPanelPreparation {
+    exec: RetainedRound,
+    panel: RetainedRound,
+}
+
+impl RetainedExecPanelPreparation {
+    pub(crate) fn restore(self) -> Option<(PreparedTb1Round, PreparedTb1Round)> {
+        Some((self.exec.restore()?, self.panel.restore()?))
+    }
+}
+
+/// The owner supplies the two authenticated cuts resolved against their
+/// frozen rosters. The candidate must commit the exact qualification pair.
+#[derive(Clone)]
+pub struct PreparedExecPanelCandidate {
+    pub(crate) block: Hash64,
+    pub(crate) parent: Hash64,
+    pub(crate) rounds: RetainedExecPanelPreparation,
+}
+
+impl PreparedExecPanelCandidate {
+    pub fn verify(
+        chain: [u8; 64],
+        parent: Hash64,
+        candidate: &Block,
+        exec: Tb1MiningRound,
+        exec_q: &Tb1Qualification<'_>,
+        panel: Tb1MiningRound,
+        panel_q: &Tb1Qualification<'_>,
+    ) -> io::Result<Self> {
+        let rounds = QualifiedExecPanel::new(exec, exec_q, panel, panel_q)?;
+        let marker = candidate
+            .transactions
+            .first()
+            .filter(|tx| tx.is_coinbase())
+            .and_then(|tx| coinbase_payload_extra_data(&tx.payload))
+            .and_then(palw_coinbase_marker);
+        if chain != exec.chain_id
+            || candidate.header.blue_score >= exec.close_blue_score
+            || candidate.header.daa_score >= exec.release_from_daa
+            || marker != Some(rounds.commitment())
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "missing joint qualification before EXEC close"));
+        }
+        Ok(Self {
+            block: candidate.hash(),
+            parent,
+            rounds: RetainedExecPanelPreparation {
+                exec: RetainedRound::capture(exec, exec_q)?,
+                panel: RetainedRound::capture(panel, panel_q)?,
+            },
+        })
+    }
 }
 
 impl QualifiedExecPanel {

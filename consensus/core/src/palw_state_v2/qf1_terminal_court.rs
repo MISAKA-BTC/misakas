@@ -4,6 +4,7 @@ use crate::palw_tb1::{
     panel_reply_carrier::{PanelReplayDuty, PublishedPanelApproval},
     qf1_original_carrier::Qf1OriginalAdmission,
     qf1_terminal_carrier::Qf1TerminalRuling,
+    qualification::{PreparedExecPanelCandidate, PreparedTb1Round, RetainedExecPanelPreparation},
 };
 
 const TABLE: u8 = 212;
@@ -16,6 +17,7 @@ struct CourtStatus {
 
 #[derive(Clone)]
 pub enum Qf1TerminalUpdate {
+    Preparation(PreparedExecPanelCandidate),
     Original(Qf1OriginalAdmission),
     PanelDraw(PanelReplayDuty),
     PanelApproval(PublishedPanelApproval),
@@ -38,6 +40,14 @@ fn key(kind: u8, digest: &[u8; 64]) -> Vec<u8> {
 }
 
 impl PalwChainStateV2 {
+    pub fn tb1_exec_panel_preparation(&self, block: Hash64, selected_parent: Hash64) -> Option<(PreparedTb1Round, PreparedTb1Round)> {
+        if self.last_point()?.block != selected_parent {
+            return None;
+        }
+        let rounds: RetainedExecPanelPreparation = self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'P', &block.as_bytes()))?;
+        rounds.restore()
+    }
+
     pub fn qf1_panel_reply_for_candidate(
         &self,
         chain: [u8; 64],
@@ -95,6 +105,13 @@ pub(super) fn fold_terminal_court(
         return Err(mismatch("QF1 terminal Court outside the private profile"));
     }
     let (ruling, resolves) = match update {
+        Qf1TerminalUpdate::Preparation(preparation)
+            if preparation.block == point.block && selected_parent == Some(preparation.parent) =>
+        {
+            super::palw_kernel_route_fold_v1::ensure_route_header(builder, point)?;
+            let receipt = borsh::to_vec(&preparation.rounds).expect("checked TB1 preparation encoding");
+            return builder.write_kernel_row(TABLE, key(b'P', &point.block.as_bytes()), Some(receipt));
+        }
         Qf1TerminalUpdate::Original(original) if original.block == point.block && point.daa_score < original.deadline => {
             super::palw_kernel_route_fold_v1::ensure_route_header(builder, point)?;
             let key = key(b'R', &original.original.as_bytes());

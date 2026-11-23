@@ -632,6 +632,7 @@ async fn run(stable: bool, registered: bool) {
     assert!(QualifiedExecPanel::new(round, &q, panel, &q).is_err());
     assert!(QualifiedExecPanel::new(round, &panel_q, panel, &q).is_err());
     let rounds = QualifiedExecPanel::new(round, &q, panel, &panel_q).unwrap();
+    let preparation_parent = registered.then(|| node.chain.tip_state());
     let preparation = if let Some(path) = &child_dir {
         let raw: RpcRawBlock = serde_json::from_reader(File::open(path.join("preparation.json")).unwrap()).unwrap();
         let block = Block::try_from(raw).unwrap();
@@ -647,6 +648,53 @@ async fn run(stable: bool, registered: bool) {
     };
     let parent = preparation.hash();
     assert_eq!(node.chain.sink(), parent);
+    let prepared = preparation_parent.map(|(before_hash, before)| {
+        use kaspa_consensus_core::{
+            palw_state_v2::{
+                PalwBlockWorkV3, PalwTransitionExtrasV1, PositiveCaseReplayInputV2, Qf1TerminalUpdate,
+                apply_palw_transition_retained_v8, revert_delta_v2,
+            },
+            palw_tb1::qualification::PreparedExecPanelCandidate,
+        };
+        let point = *node.chain.tip_state().1.last_point().unwrap();
+        let prepared =
+            PreparedExecPanelCandidate::verify(node.domain.as_bytes(), before_hash, &preparation, round, &q, panel, &panel_q).unwrap();
+        let node_extras = node.vp().palw_test_resolved_transition_extras_v1(&point);
+        let extras =
+            PalwTransitionExtrasV1 { private_moe2_registration: true, kernel_route: node_extras.kernel_route, ..Default::default() };
+        let params = &parts.1.state;
+        let (after, delta, _, _) = apply_palw_transition_retained_v8(
+            &before,
+            params,
+            None,
+            &point,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &extras,
+            PositiveCaseReplayInputV2 {
+                selected_parent: before_hash,
+                live_case_cap: 0,
+                load: &mut |_, _| panic!("TB1 fixture has no Assignment cases"),
+            },
+            None,
+            Some(Qf1TerminalUpdate::Preparation(prepared)),
+        )
+        .unwrap();
+        assert_eq!(revert_delta_v2(&after, &delta, params).unwrap().state_root(), before.state_root());
+        after.tb1_exec_panel_preparation(parent, parent).unwrap()
+    });
+    let q = prepared.as_ref().map_or(q, |(exec, _)| exec.qualification());
+    let panel_q = prepared.as_ref().map_or(panel_q, |(_, panel)| panel.qualification());
+    let (round, panel) = prepared.as_ref().map_or((round, panel), |(exec, panel)| (exec.round(), panel.round()));
+    let restored_rounds = QualifiedExecPanel::new(round, &q, panel, &panel_q).unwrap();
+    assert_eq!(restored_rounds.commitment(), rounds.commitment());
+    let rounds = restored_rounds;
     let mut terms = exec_input::terms(parent);
     if stable {
         terms.deadline_exclusive_daa = daa_offset + 60;

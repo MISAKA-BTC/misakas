@@ -744,3 +744,11 @@ QF1のStopとReadout Endの局所裁定をconsensus coreから呼べるように
 実装・検証済みは0/5。通常の候補処理が認証済みの準備cutと参加者集合を解決し、導出した選出結果を状態差分に記録する接続が残る。資料case、不一致notice、成功Final、独立Gate Cも未接続。
 
 隔離3プロセスの短時間試験で、証明書候補を履歴APIから読めない状態で得た選出席、Original、期限、署名対象が、受理後の履歴から得た値と一致した。実際の非報酬Panel返信の読み戻しと、選出結果をfixtureで渡す通常受理の回帰試験も通過した。
+
+### EXEC/PANEL準備の状態記録
+
+認証済みの両方の準備cutから、候補coinbaseのjoint qualification、元のschedule、選択親を照合して準備ブロック用の状態差分を作る。状態から各roundのroster、全qualified dealer、資格rootと元期限を復元し、後続のcloseと署名済みreleaseの検証に渡せる。
+
+実装・検証済みは0/5。VSSの終了記録とReadyの集合を、通常の候補処理がnative履歴から得る経路は残る。準備をfixtureから渡す経路では、通常受理された準備ブロックに対する状態差分を分離して検証する。
+
+登録済みQF1の隔離試験で、状態差分の逆適用により準備前のrootを復元し、読み戻した両roundで元のjoint qualificationと同じcommitmentを得た。復元した情報を使う後続のEXEC close・署名済みバッチの検証と、QF1の採掘予約拒否を確認した。同じビルドで非報酬Panelと、通常受理での当選権利なしの候補拒否も通過した。
