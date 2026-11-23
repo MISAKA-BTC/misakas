@@ -2452,7 +2452,10 @@ impl VirtualStateProcessor {
             block::Block,
             coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
             palw_state_v2::Qf1TerminalUpdate,
-            palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRuling},
+            palw_tb1::{
+                qf1_original_carrier::Qf1OriginalAdmission,
+                qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRuling},
+            },
         };
         if self.private_moe2_registration_from.is_none_or(|from| header.daa_score < from) {
             return Ok(None);
@@ -2472,15 +2475,34 @@ impl VirtualStateProcessor {
         if state.qf1_terminal_verdict_pending(&marker, header.daa_score) {
             return Ok(Some(Qf1TerminalUpdate::Verdict { block: header.hash, marker }));
         }
-        let (Ok(case), Ok(source)) =
-            (Qf1TerminalCarrier::from_block(&candidate), Moe2AwardSource::from_transactions(candidate.transactions.iter()))
-        else {
+        let Ok(source) = Moe2AwardSource::from_transactions(candidate.transactions.iter()) else {
             return Ok(None);
         };
+        let case = Qf1TerminalCarrier::from_block(&candidate);
+        let admitting_original = case.is_err() && marker == source.reference.claim.as_bytes();
+        if case.is_err() && !admitting_original {
+            return Ok(None);
+        }
         if source.reference.check_parent_reservation(state, header.daa_score).is_err() {
             return Ok(None);
         }
         let history = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
+        if admitting_original {
+            if !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, selected_parent).map_err(history)? {
+                return Ok(None);
+            }
+            let close = self.headers_store.get_header(source.reference.close).map_err(missing)?;
+            return Ok(Qf1OriginalAdmission::prepare(
+                &self.palw_network_domain_v2().as_bytes(),
+                state,
+                source,
+                close.daa_score,
+                &candidate,
+            )
+            .ok()
+            .map(Qf1TerminalUpdate::Original));
+        }
+        let Ok(case) = case else { return Ok(None) };
         if source.reference.close == case.original_block
             || !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, case.original_block).map_err(history)?
             || !self.reachability_service.try_is_chain_ancestor_of(case.original_block, selected_parent).map_err(history)?

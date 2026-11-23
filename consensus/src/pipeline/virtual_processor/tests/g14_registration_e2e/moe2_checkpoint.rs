@@ -460,6 +460,7 @@ pub(super) async fn check_exec_settlement_rewind(
                 terminal::{END_BYTES, LAST_CHUNK_BYTES},
                 ticket,
             },
+            palw_state_v2::Qf1OriginalVerification,
             palw_tb1::{
                 qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
                 qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation},
@@ -541,6 +542,8 @@ pub(super) async fn check_exec_settlement_rewind(
         .unwrap();
         let original_tx =
             funded_carrier(Qf1OriginalCarrier { body: &body, signature: signature.as_slice().try_into().unwrap() }.encode(), 1);
+        let source = Moe2AwardReference::for_slot(original, attempt, &slot);
+        let original_reference = funded_carrier(source.encode_with_registration(&court_registration).unwrap(), 5);
 
         let mut court_close_delta = close_delta.clone();
         court_close_delta.entries.extend(reservation_writes.iter().cloned());
@@ -561,9 +564,12 @@ pub(super) async fn check_exec_settlement_rewind(
             };
             let interval = config.target_time_per_block();
             let original_txid = original_tx.id();
-            let original_block = court.heartbeat_paying(miner(original.as_byte_slice()), interval, vec![original_tx.clone()]).await;
+            let original_block = court
+                .heartbeat_paying(miner(original.as_byte_slice()), interval, vec![original_tx.clone(), original_reference.clone()])
+                .await;
             assert!(original_block.transactions.iter().any(|tx| tx.id() == original_txid));
             let (_, prior) = court.tip_state();
+            assert_eq!(prior.qf1_original_verification(original), Some(Qf1OriginalVerification::AwaitingReplay));
             let case_hash = |domain: &[u8]| {
                 Sha3_512::new()
                     .chain_update(domain)
@@ -594,7 +600,6 @@ pub(super) async fn check_exec_settlement_rewind(
                 Qf1TerminalCarrier { relation, original_block: original_block.hash(), disclosure: &witness }.encode().unwrap(),
                 4,
             );
-            let source = Moe2AwardReference::for_slot(original, attempt, &slot);
             let source_tx = reference_tx(source.encode_with_registration(&court_registration).unwrap());
             let case = court.heartbeat_paying(miner(&case_marker), interval, vec![witness_tx, source_tx]).await;
             let verdict: [u8; 64] = Sha3_512::new()
@@ -611,16 +616,56 @@ pub(super) async fn check_exec_settlement_rewind(
             let (_, decided) = court.tip_state();
             assert_eq!(decided.qf1_terminal_blocks_award(original), refuted);
             assert!(!decided.qf1_terminal_verdict_pending(&verdict, decision_block.header.daa_score));
-            let court_processor = court.vp();
-            let court_store = court_processor.palw_state_v2_store.read();
-            let (_, open) = court_store.delta_of(case.hash()).unwrap();
-            let (_, decision) = court_store.delta_of(decision_block.hash()).unwrap();
+            let (open, decision) = {
+                let court_processor = court.vp();
+                let court_store = court_processor.palw_state_v2_store.read();
+                (court_store.delta_of(case.hash()).unwrap().1, court_store.delta_of(decision_block.hash()).unwrap().1)
+            };
             let reopened = revert_delta_v2(&decided, &decision, params).unwrap();
             assert_eq!(reopened.state_root(), pending.state_root());
             assert!(reopened.qf1_terminal_verdict_pending(&verdict, case.header.daa_score));
             assert!(!reopened.qf1_terminal_blocks_award(claim));
             assert_eq!(apply_delta_v2(&reopened, &decision, params).unwrap().state_root(), decided.state_root());
             assert_eq!(revert_delta_v2(&reopened, &open, params).unwrap().state_root(), prior.state_root());
+            if !refuted {
+                let price = Moe2QuoteAnchorV1::resolve(court.ctx.consensus.as_ref(), decision_block.hash(), close, &slot).unwrap();
+                let anchor = *decided.last_point().unwrap();
+                let position = Moe2Position {
+                    point: PalwBlockContextV2 {
+                        block: Hash64::from_u64_word(726),
+                        daa_score: anchor.daa_score + 1,
+                        blue_score: anchor.blue_score + 1,
+                        ..anchor
+                    },
+                    ..position
+                };
+                assert!(matches!(
+                    fold_retained_award(
+                        config,
+                        params,
+                        &decided,
+                        registration,
+                        price,
+                        &decision_block,
+                        attempt,
+                        native_award(original, &slot, work, position),
+                        true,
+                    ),
+                    Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"))
+                ));
+                let mut daa = decision_block.header.daa_score;
+                for _ in 0..8 {
+                    assert_eq!(court.tip_state().1.qf1_original_verification(original), Some(Qf1OriginalVerification::AwaitingReplay));
+                    daa = court.heartbeat(interval, vec![]).await.header.daa_score;
+                    if daa > quote.deadline {
+                        break;
+                    }
+                }
+                assert_eq!(daa, quote.deadline + 1);
+                let (_, expired) = court.tip_state();
+                assert_eq!(expired.qf1_original_verification(original), Some(Qf1OriginalVerification::Unverified));
+                assert!(!expired.qf1_terminal_blocks_award(original));
+            }
         }
     }
     let candidate_with_marker = |workers, marker| candidate_with_references(workers, marker, std::slice::from_ref(&carrier));

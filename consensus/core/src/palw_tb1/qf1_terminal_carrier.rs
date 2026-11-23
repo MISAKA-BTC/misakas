@@ -97,52 +97,17 @@ impl Qf1TerminalRuling {
         original_block: &Block,
         candidate: &Block,
     ) -> Result<Self, &'static str> {
-        use super::{
-            exec_registration::{ExecRegistration, ExecRegistrationProfile, registration_key},
-            qf1_original_carrier::{Qf1OriginalCarrier, signing_id},
-        };
-        use crate::{
-            coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
-            palw_qf1::terminal::{Qf1TerminalContext, TerminalOutcome},
-        };
-        use libcrux_ml_dsa::ml_dsa_65::{self, MLDSA65Signature, MLDSA65VerificationKey};
+        use super::qf1_original_carrier::{authenticate_original, qf1_marker};
+        use crate::palw_qf1::terminal::{Qf1TerminalContext, TerminalOutcome};
         use sha3::{Digest, Sha3_512};
         let reference = source.reference;
         reference.check_parent_reservation(parent, candidate.header.daa_score)?;
-        let (_, slot) = source
-            .open_registration(slot_close_daa)
-            .map_err(|error| error.reason())?
-            .ok_or("QF1 terminal case requires the reserved EXEC registration context")?;
-        let context = source.registration_context().ok_or("missing QF1 terminal registration")?;
-        let registration =
-            ExecRegistration::decode(context, registration_key(context)).map_err(|_| "invalid QF1 terminal registration")?;
-        if !matches!(registration.profile, ExecRegistrationProfile::Qf1Local { .. }) || registration.key != slot.registration {
-            return Err("terminal case does not name a QF1 registration");
-        }
         let carrier = Qf1TerminalCarrier::from_block(candidate).map_err(|_| "invalid native QF1 terminal carrier")?;
-        let original = Qf1OriginalCarrier::from_block(original_block).map_err(|_| "invalid native QF1 Original")?;
-        let marker = |block: &Block| {
-            block
-                .transactions
-                .first()
-                .filter(|tx| tx.is_coinbase())
-                .and_then(|tx| coinbase_payload_extra_data(&tx.payload))
-                .and_then(palw_coinbase_marker)
-        };
+        let (original, registration) = authenticate_original(&chain, source, slot_close_daa, original_block)?;
         let window = registration.open_daa..registration.deadline_exclusive_daa;
-        if carrier.original_block != original_block.hash()
-            || !window.contains(&original_block.header.daa_score)
-            || !window.contains(&candidate.header.daa_score)
-            || slot.close_daa > original_block.header.daa_score
-            || signing_id(&chain, &registration.key, slot.slot, &reference.attempt, original.body) != reference.claim
-            || marker(original_block) != Some(reference.claim.as_bytes())
-        {
+        if carrier.original_block != original_block.hash() || !window.contains(&candidate.header.daa_score) {
             return Err("QF1 terminal case differs from its committed Original or window");
         }
-        let key = MLDSA65VerificationKey::new(*registration.owner);
-        let signature = MLDSA65Signature::new(*original.signature);
-        ml_dsa_65::verify(&key, reference.claim.as_byte_slice(), b"MISAKA/private/QF1/local-original-signature/v1", &signature)
-            .map_err(|_| "invalid native QF1 Original owner signature")?;
         let counts = std::array::from_fn(|i| u64::from_le_bytes(original.body[8 * i..8 * (i + 1)].try_into().unwrap()));
         let roots = std::array::from_fn(|i| Hash64::from_bytes(original.body[32 + 64 * i..32 + 64 * (i + 1)].try_into().unwrap()));
         let terminal =
@@ -182,7 +147,7 @@ impl Qf1TerminalRuling {
             ),
         };
         let refuted = outcome.map_err(|_| "invalid native QF1 terminal disclosure")? == TerminalOutcome::ComputationRefuted;
-        if marker(candidate) != Some(case_marker) {
+        if qf1_marker(candidate) != Some(case_marker) {
             return Err("QF1 case differs from the candidate commitment");
         }
         let verdict = Sha3_512::new()

@@ -1,6 +1,6 @@
 //! Ordered terminal Court writes for the existing private MOE2 candidate path.
 use super::*;
-use crate::palw_tb1::qf1_terminal_carrier::Qf1TerminalRuling;
+use crate::palw_tb1::{qf1_original_carrier::Qf1OriginalAdmission, qf1_terminal_carrier::Qf1TerminalRuling};
 
 const TABLE: u8 = 212;
 
@@ -12,8 +12,15 @@ struct CourtStatus {
 
 #[derive(Clone)]
 pub enum Qf1TerminalUpdate {
+    Original(Qf1OriginalAdmission),
     Open(Qf1TerminalRuling),
     Verdict { block: Hash64, marker: [u8; 64] },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Qf1OriginalVerification {
+    AwaitingReplay,
+    Unverified,
 }
 
 fn key(kind: u8, digest: &[u8; 64]) -> Vec<u8> {
@@ -24,6 +31,15 @@ fn key(kind: u8, digest: &[u8; 64]) -> Vec<u8> {
 }
 
 impl PalwChainStateV2 {
+    pub fn qf1_original_verification(&self, original: Hash64) -> Option<Qf1OriginalVerification> {
+        self.qf1_original_verification_at(original, self.last_point()?.daa_score)
+    }
+
+    pub(super) fn qf1_original_verification_at(&self, original: Hash64, daa: u64) -> Option<Qf1OriginalVerification> {
+        let (_, deadline): (Hash64, u64) = self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'R', &original.as_bytes()))?;
+        Some(if daa < deadline { Qf1OriginalVerification::AwaitingReplay } else { Qf1OriginalVerification::Unverified })
+    }
+
     pub fn qf1_terminal_verdict_pending(&self, marker: &[u8; 64], daa: u64) -> bool {
         self.kernel_route
             .as_ref()
@@ -49,6 +65,15 @@ pub(super) fn fold_terminal_court(
         return Err(mismatch("QF1 terminal Court outside the private profile"));
     }
     let (ruling, resolves) = match update {
+        Qf1TerminalUpdate::Original(original) if original.block == point.block && point.daa_score < original.deadline => {
+            super::palw_kernel_route_fold_v1::ensure_route_header(builder, point)?;
+            let key = key(b'R', &original.original.as_bytes());
+            if builder.state.qf1_original_verification_at(original.original, point.daa_score).is_some() {
+                return Ok(());
+            }
+            let receipt = borsh::to_vec(&(original.block, original.deadline)).expect("fixed QF1 Original receipt");
+            return builder.write_kernel_row(TABLE, key, Some(receipt));
+        }
         Qf1TerminalUpdate::Open(ruling) if ruling.case == point.block && point.daa_score < ruling.deadline => (ruling, false),
         Qf1TerminalUpdate::Verdict { block, marker } if block == point.block => {
             let ruling: Qf1TerminalRuling = builder
