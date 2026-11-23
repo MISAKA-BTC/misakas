@@ -1,0 +1,1 @@
+{"args": ["python3", "docs/maintenance/check_docs.py", "--json-out", "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/docs.json"], "exit_code": 1}

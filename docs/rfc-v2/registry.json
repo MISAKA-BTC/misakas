@@ -529,9 +529,23 @@
       "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0067",
+      "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-23 explicit dual-route model admission instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0235",
+      "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-23 explicit dual-route model admission instruction"
     }
   ],
-  "editorial_date": "2026-11-20",
+  "editorial_date": "2026-11-23",
   "legacy_file_count_at_revision": 51,
   "historical_source_snapshot": {
     "date": "2026-10-29",
@@ -694,6 +708,28 @@
       "unknown_mining_allowed": false,
       "bft_approval_replaces_cost_theorem": false,
       "moe2_changed": false
+    },
+    {
+      "date": "2026-11-23",
+      "revision": "2026-11-23-dual-route-admission",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction: two model admission routes; automatic kernel analysis or BFT YES/NO without proof submission.",
+      "rfc_records": [
+        "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md"
+      ],
+      "decision_records": [
+        "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md"
+      ],
+      "new_profile": "MAD2",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "bft_model_admission": true,
+      "bft_requires_collision_or_cost_proof": false,
+      "bft_approval_implies_mathematical_proof": false,
+      "unknown_assessments_may_receive_bft_approval": true,
+      "technical_compatibility_required": true,
+      "claim_verification_unchanged": true,
+      "moe2_changed": false
     }
   ],
   "latest_proposal": {
@@ -770,23 +806,25 @@
     }
   ],
   "latest_adoption": {
-    "date": "2026-11-20",
-    "revision": "2026-11-20-qwen-fow1",
+    "date": "2026-11-23",
+    "revision": "2026-11-23-dual-route-admission",
     "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
-    "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
+    "authority": "Explicit user instruction: two model admission routes; automatic kernel analysis or BFT YES/NO without proof submission.",
     "rfc_records": [
-      "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
+      "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md"
     ],
     "decision_records": [
-      "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
+      "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md"
     ],
-    "new_profile": "QF1",
+    "new_profile": "MAD2",
     "runtime_changed": false,
     "activation_changed": false,
-    "qwen_cost_theorem_proved": false,
-    "qwen_quality_measured": false,
-    "unknown_mining_allowed": false,
-    "bft_approval_replaces_cost_theorem": false,
+    "bft_model_admission": true,
+    "bft_requires_collision_or_cost_proof": false,
+    "bft_approval_implies_mathematical_proof": false,
+    "unknown_assessments_may_receive_bft_approval": true,
+    "technical_compatibility_required": true,
+    "claim_verification_unchanged": true,
     "moe2_changed": false
   }
 }

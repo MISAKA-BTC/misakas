@@ -27,7 +27,14 @@
     }
   },
   "kernel": {
-    "preconditions": ["R>=0 integer", "V>=0", "real_reserve>=seed_locked>=0", "X=V+real_reserve>0", "U>=1 integer", "checked native arithmetic"],
+    "preconditions": [
+      "R>=0 integer",
+      "V>=0",
+      "real_reserve>=seed_locked>=0",
+      "X=V+real_reserve>0",
+      "U>=1 integer",
+      "checked native arithmetic"
+    ],
     "X": "V+real_reserve",
     "X1": "X+B",
     "U1": "ceil(X*U/X1)",
@@ -78,5 +85,14 @@
   "both_market_legs_count_in_export_cap": true,
   "old_claim_terms_preserved": true,
   "tb1_fow1_gates_waived": false,
-  "future_price_or_mev_safety_proved": false
+  "future_price_or_mev_safety_proved": false,
+  "model_governance": {
+    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "GENESIS": "immutable original genesis; no BFT model management",
+    "ADDITIONAL": "automatic or BFT admission; BFT stop/resume applies to both",
+    "FORK_DESIGNATED": "BFT YES may add; core economics, BFT stop/resume applies",
+    "economic_rates_changed": false,
+    "genesis_origin_assignable_later": false,
+    "permanent_lp_core_promotion_allowed": false
+  }
 }

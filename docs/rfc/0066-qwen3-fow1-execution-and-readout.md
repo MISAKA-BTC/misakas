@@ -1,5 +1,19 @@
 # RFC-0066 — QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — 二経路モデル採用 MAD2
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0067](0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](../adr/0235-model-admission-kernel-auto-and-bft-decision.md)／[適用・移行](../governance/model-admission-dual-route-transition.md)を、MAD2対象のモデル採用について優先する。KERNEL_AUTOは対応kernelへの自動分解と採択済み審査、BFT_DECISIONは証明提出を要求しない所定quorumのYES/NOである。
+
+G-COLLの定理・G-COST/G-USEの証拠が未完成でも、共通の技術互換とq YESがあればBFT承認を記録できる。元のUNKNOWN/FAILを数学的PASSへ改変しない。未知kernel、壊れた実行仕様、個別claimの不正はYESで免除しない。Panel/Court、Final、独立Gate C、Ticket、一回会計、TB1、MOE2は維持する。
+
+以下の旧「UNKNOWNは一律採掘不可」「BFTは停止専用」「全モデルに定理・費用審査を必須」とする条項は、旧profileの履歴及びMAD2のKERNEL_AUTO側として読む。BFT_DECISIONへ再適用しない。実投票・native実装・公開activationの完了を意味せず、既存QF1のREVIEW_HOLDを文書だけで解除しない。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**（具体化した設計。Qwenの採掘資格・実測・native有効化は未成立）
 - 論理profile: **QF1-Q3-8B-A16-8K-v1**。native class ID、wire tag、activation値は未割当。
@@ -14,7 +28,7 @@ Qwenの「任意の内部状態」から採掘値を取るという未指定部�
 
 **選択する状態は、回答の各tokenを予測する位置における全36 blockの第二残差加算後の4096要素と、最終RMSNorm・gain・A16 narrowing後の4096要素である。** これら37本の整数vectorを順序どおりにhashする。最終hidden state一本だけ、8層おきのsample、全MACのprefix trace、外付けnonceだけのdigestへ置換しない。
 
-この選択は、どの関数を実行・再現・反証するかを確定する。**新しい正規Ticketを安く作れるかは、固定した仕事・経路・費用条件で繰り返し測る（G-COST）。異なる試行の数値状態が重なる確率には、別途G-COLLの適合条件を適用する。** G-EXEC/G-COLL/G-COST/G-USEとMAS1の全条件を残す。Qwen用のG-COLLの適合TheoremRuleが未完成の間は、非報酬評価だけを許し、採掘、credit、weight、受賞権利を発生させない。
+この選択はQwenの実行・再現・反証の仕様を固定する。MAD2対象の採用では、KERNEL_AUTOにG-COLL・反復G-COST・G-USEを要求し、BFT_DECISIONには共通技術互換と正規YES決定を要求する。Qwen用G-COLLの定理が未完成でもBFT経路を選べるが、未完の性質を証明済みへ変更しない。実投票と公開有効化前は既存REVIEW_HOLDを維持する。
 
 ### 0.1 採用した範囲と旧条項の限定置換
 
@@ -24,7 +38,7 @@ Qwenの「任意の内部状態」から採掘値を取るという未指定部�
 | RFC0059 §3.1の35-token byte frame／RFC0062 §3の継承 | **QF1だけ**は§3のHEX64 chat frameを使う。旧AN1と同じinput rootにはならない |
 | 未指定のQwen実行精度・kernel | §2/§4のPALW整数A16 graphと、登録済みの全scale/table/program bytesで固定 |
 | FOW1のhash/木形をprofileで固定する要求 | §6/§8の論理codecで固定。既存wireの意味は変更しない |
-| MAS1モデル追加・UNKNOWN停止 | 維持。QF1名、公式重み、有限testの成功からPASSを推定しない |
+| モデル採用 | 元genesisは不変manifest一致、追加モデルはMAD2のAUTO又はBFT YES、fork指定はBFT YES。QF1名・公式重みからgenesis免除・自動PASS・投票成立を推定しない |
 
 旧claimは受付時の規則でdrainする。TB1のEXEC/PANEL/MODEL_AUDITの独立性、MOE2の経済条件、burn停止と安全停止の独立性、モデル非保有Node、Panel＋Court、暗号学的な計算validity proofを使わない方針を維持する。QF1はモデル改善・画像動画の延期を解除しない。
 
@@ -61,7 +75,7 @@ Qwenの「任意の内部状態」から採掘値を取るという未指定部�
 2. QF1整数artifactの全weights、gain、scale、epsilon、RoPE table、変換manifestのinventory root。推論とCourtが使うのはこちらのroot。
 3. Canonical TIR program bytesとroot、primitive-set版、lowerer版、変換recipe・calibration資料のdigest、各数値parameterの意味。
 4. Tokenizerの登録済みprogram/rootと§3の固定token列、16個のHexToken表、job token化規則。
-5. §5のStateMap、全commit/tileのlayout、Readout/End checker、全資源上限、FOW1/MAS1 descriptor・policy・TheoremRuleへの参照。
+5. §5のStateMap、全commit/tileのlayout、Readout/End checker、全資源上限、FOW1/MAS1 descriptor・policy・AdmissionBasisへの参照。TheoremRuleはAUTO側で必須とし、BFT側はproposal/quorum参照を使用する。
 
 同一numeric graph/weightsの再包装、別URL、別owner、追加metadataだけで別仕事を作らない。FOW1のComputationalWorkKeyと登録alias規則を継承する。新しいscaleや変換recipeは別関数であり、固定EXECを見た後に選び直してはならない。
 
@@ -391,21 +405,25 @@ QF1の修正後にG-COSTを再判定するときは、旧世代で閾値を下�
 | Court | 全演算＋Readout＋Endの有界checker、最大case bytes/CPU、資料取得 | 永続検閲の解消 |
 | G-USE | この整数・HEX64・greedy実行の回答と資源 | G-COSTの代替 |
 
-省略されたlayer、readoutだけ別計算、ゼロscale等の**立証された違反**はFAIL。有効で安い短絡を発見した場合は該当WorkCostContractの不合格事例として採掘適格性を止める。単なる疎性・ランク・経験的速さだけから個々のMinerをslashしない。
+規定layerの欠落、規定外Readout、登録したscaleと異なる値等の**実行仕様違反**は両経路で拒否する。正しい出力を安く得る短絡は該当WorkCostContractの不合格事例として保存し、自動採用を止める。BFT採用の可否と既承認モデルの安全停止はRFC0067の別actionで処理する。元の意味・正規traceを満たす最適化や、単なる疎性・ランク・経験的速さだけから個々のMinerをslashしない。
 
 ### 10.2 実用性を保つ評価
+
+以下の固定suiteはKERNEL_AUTOの合格条件であり、BFT_DECISIONでは任意の判断資料として実施できる。BFTのYES成立にsuite・測定証拠提出を要求しない。
 
 PracticalSuiteは少なくとも、指示応答、QA/推論、日本語等の対象言語、実jobの長さ帯を含む。正確な公開dataset版、採点、正の閾値、適用タスク、被比較baseline、固定hardware/測定手順、最大latency・メモリ・Readout/trace overheadの許容値をMAS1 policyに**評価前に**設定する。未設定・空suiteはUNKNOWNであり通過させない。
 
 上流BF16、QF1整数＋同じchat/greedy、QF1＋Readout/trace、の差を分けて測る。実用性として通過すべき対象は最後の実際に提供する構成である。Readoutを止めた測定だけを性能保証にしない。登録時校正資料をtestの全体に使って一般化を主張しない。
 
-本RFCは測定値・架空の品質score・Qwen合格を提供しない。閾値未設定又は未実測なら一般登録状態を保ったまま非報酬評価とBFT risk reviewへ進む。市場作成を延期したり、停止中のtrialへ後から報酬を付けたりしない。
+本RFCは測定値・架空の品質score・Qwen合格を提供しない。閾値未設定又は未実測なら一般登録状態を保ち、自動採用に必要な非報酬評価、又はMAD2の証拠提出不要のBFT採否へ進む。既存risk reviewと安全停止は別のactionとして保持する。市場作成を延期したり、停止中のtrialへ後から報酬を付けたりしない。
 
 ### 10.3 UNKNOWNからの経路
 
-QF1 instanceのG-COLLの定理が未確認、又は[RFC-0062 §4.3の反復費用検査](0062-palw-function-output-and-work-admissibility.md#g-cost-review)が未完なら`REVIEW_HOLD`。MAS1のModelRiskCaseと限定BFT MODEL_STOP/RESOLVEへつなぐ。BFTは費用検査の欠落を多数決で埋めず、全必須PASS・正規停止解除・native inclusionなしに採掘を開始しない。自動検査で未判定のまま「まず報酬付きで動かして後からslash」はしない。
+QF1の自動審査でG-COLL又はG-COST/G-USEがUNKNOWNなら、自動採用は保留する。MAD2有効化後は、共通技術互換を満たす同一instanceをMODEL_ADMISSIONのYES/NOに付せる。数学的定理・反復測定・品質証明の提出は投票条件ではない。
 
-停止scopeはartifact/profile又はrule version。通常の固定prefix reuseや正しい速い算法を、過去の計算詐欺へ遡及再分類しない。既確定の決済、burn解除、BFTの台帳権限についてRFC0065を変更しない。
+q YESを通常状態へ記録し、現行停止がなく、個別claimの全検証条件を満たした場合に新規採掘へ進める。q NO・未決期限切れは採用しない。未知kernelや未実装の実行checkerはYESで免除しない。BFT結果はBFT_POLICY_APPROVALであり、G-COLL/G-COSTの元UNKNOWNを保持する。停止・再審・解除はRFC0067に従う。
+
+以下の過去実測とその時点のREVIEW_HOLDは履歴であり、今回の文書変更で過去の評価実行へ報酬を付与しない。
 
 ## 11. 追加量と有用仕事の会計
 
@@ -431,7 +449,7 @@ Readoutの数値bytesは1生成decisionあたり`37*4096*2=303104` byte（296 Ki
 | QF1-06 trace/court | 別重みindex、別layer/position、KV差替え、hash counter/padding/chain、End長とrootの違反を局所反証 |
 | QF1-07 roots/ticket | 木形、padding、kind、leaf数、D=1、target境界、再署名/別carrierで再抽選なし |
 | QF1-08 useful | 実artifact・実job・実hardwareでG-USEとoverhead上限。前処理・batch/cacheの条件を公開 |
-| QF1-09 eligibility | G-COLLの定理未確認、費用検査の未完・不合格、停止中、評価専用のclaimを全成功consumerで拒否 |
+| QF1-09 eligibility | AUTOの未合格を拒否。BFTは技術互換＋正規YESで未知評価のまま採用可。停止中・未知kernel・評価専用claimは両経路で拒否 |
 | QF1-10 end-to-end | 対話経路を無効または未実装とし、非報酬評価で元資料を取得してPanelが完全再実行する。一致時の承認、不一致時の直接反証と局所Court、資料欠落時の成功停止を個別に確認する。MAS1判定、同時停止・再起動/reorg/履歴復元も確認 |
 
 同梱の小規模Python参照の対象は、QF1-04/05/07の論理codecの一部と否定例である。
@@ -446,7 +464,7 @@ Round 15の非報酬算術評価では、同一バイナリの提出ノードと
 
 別の非報酬算術監査（Round 15）では、3台のholderが元のshareを公開した。復元したseedから生成した「1 + 3」と「2 − 1」に対し、登録済みQwen3-8Bの提出はそれぞれ「4」と「1」の直後にEOSとなり、事前に固定した正答条件を2件とも満たした。提出ブロックと正規Ticketを公開資料から照合した。独立したRound 16で選出するPanelの採点とG-USEの判定は残る。[提出結果](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-arithmetic-publisher.json)・[seedの復元](../evidence/palw/mas1-qf1-native-2026-11-21/qf1-arithmetic-publisher-seed.json)
 
-有効化までには、実artifactとtokenizer/変換/StateMapの作成、TIR lowererのstage schedule、Readout checker、Court/資源sizing、二実装、実用性、G-COLLの適合定理、G-COSTの反復費用検査、MAS1停止、native仕様・移行が全て必要である。これらが未完の間は**具体的設計済み・採掘未適格・公開未有効化**と表示する。
+有効化までには実artifact、tokenizer/StateMap、lowerer、全実行checker、資源条件、native移行と通常claim経路を完成させる。採用根拠はAUTOの定理・反復費用・実用性検査又はMAD2 BFTの正規YESである。実装・採用・有効化を別に表示し、BFT経路へ定理と測定の完成を再要求しない。
 
 ## 13. 一次資料と今回の確認範囲
 

@@ -61,6 +61,12 @@ status[('rfc','0066')]='ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・3
 status[('adr','0234')]='ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定'
 qf1_notice='> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。\n\n'
 moe2_notice=qf1_notice+moe2_notice
+status[('rfc','0067')]='ADOPTED_DESIGN_NOT_ACTIVATED / MAD2自動kernel採用又はBFT YES/NO・証明提出不要'
+status[('adr','0235')]='ADOPTED_DESIGN_NOT_ACTIVATED / MAD2二経路・技術互換とclaim検証を維持'
+status[('rfc','0065')]='MAS1自動審査・停止 / MAD2のBFT採用はRFC0067優先'
+status[('adr','0233')]='MAS1の履歴 / BFT採用の追加はADR0235優先'
+status[('adr','0180')]='台帳BFT禁止を維持 / モデル採用と停止はADR0235/0233'
+moe2_notice='> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。\n\n'+moe2_notice
 existing_catalog=D/'maintenance/decision-catalog.json'
 if existing_catalog.exists():
  for row in json.loads(existing_catalog.read_text()).get('records',[]):

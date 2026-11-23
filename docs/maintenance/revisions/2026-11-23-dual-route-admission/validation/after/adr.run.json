@@ -1,0 +1,1 @@
+{"args": ["python3", "docs/adr-v2/check_integrity.py", "--json", "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/adr.json"], "exit_code": 1}

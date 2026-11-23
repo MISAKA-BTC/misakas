@@ -1,0 +1,8 @@
+Scope: 2026-10-29 historical source audit, plus 20 current books. For preservation relative to the 2026-11-08 input, run docs/maintenance/revisions/2026-11-08/check_revision.py.
+FAIL: Original bytes changed or missing: RFC-0009
+FAIL: Original bytes changed or missing: RFC-0011
+FAIL: Original bytes changed or missing: RFC-0014
+FAIL: Original bytes changed or missing: RFC-0023
+FAIL: Original bytes changed or missing: RFC-0026
+FAIL: Original bytes changed or missing: RFC-0037
+FAIL: Original bytes changed or missing: RFC-0041

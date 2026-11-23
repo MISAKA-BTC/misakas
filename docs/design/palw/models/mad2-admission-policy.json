@@ -1,0 +1,184 @@
+{
+  "schema": "MISAKA-MAD2-admission-contract/1",
+  "logical_profile": "MAD2",
+  "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "date": "2026-11-23",
+  "timezone": "Asia/Tokyo",
+  "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+  "decision_record": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+  "runtime_enabled": false,
+  "wire_ids_assigned": false,
+  "native_implemented_here": false,
+  "actual_bft_vote_performed": false,
+  "qwen_approved_here": false,
+  "routes": [
+    "KERNEL_AUTO",
+    "BFT_DECISION"
+  ],
+  "shared_conditions": [
+    "immutable_authenticated_descriptor",
+    "active_known_kernel_semantics",
+    "deterministic_execution_and_codec",
+    "bounded_complete_claim_checker_contract",
+    "current_policy_and_generation",
+    "no_applicable_technical_failure_or_stop"
+  ],
+  "effective_model_admission": "execution_active AND base_compatible AND (immutable_genesis_bootstrap_match OR (MAD2_active AND current_context AND ((ADDITIONAL AND (valid_auto OR valid_bft_yes)) OR (FORK_DESIGNATED AND valid_bft_fork_yes)) AND no_applicable_stop))",
+  "claim_effect": "effective_model_admission AND existing_claim_verification_and_gate_c AND ticket_and_one_use_accounting",
+  "automatic": {
+    "mathematical_collision_rule_required": true,
+    "universal_cost_lower_bound_required": false,
+    "repeated_cost_review_required": true,
+    "practical_suite_required": true,
+    "structural_analysis_required": true,
+    "all_applicable_conditions_pass_required": true,
+    "unknown_to_auto_approved": false,
+    "individual_bft_vote_required": false,
+    "generated_kernel_requires_known_primitive_semantics": true,
+    "arbitrary_native_binary_loading": false
+  },
+  "bft": {
+    "decisions": [
+      "YES",
+      "NO"
+    ],
+    "authority": "MODEL_ADMISSION",
+    "roster": "native-fixed explicitly authorized roster; may reuse TB1 holders",
+    "n": "3*f+1",
+    "q": "2*f+1",
+    "minimum_f": 1,
+    "fault_budget": "at most f Byzantine signers in this fixed roster",
+    "yes_outcome": "BFT_APPROVED",
+    "no_outcome": "REJECTED_BY_VOTE",
+    "timeout_outcome": "EXPIRED_UNDECIDED",
+    "mathematical_proof_required": false,
+    "collision_theorem_required": false,
+    "cost_proof_required": false,
+    "cost_measurement_evidence_required": false,
+    "utility_evaluation_evidence_required": false,
+    "reason_or_evidence_attachment_required": false,
+    "theorem_rule_field_required": false,
+    "unknown_admission_assessments_allowed": true,
+    "soft_admission_failure_may_be_overridden": true,
+    "hard_technical_failure_may_be_overridden": false,
+    "signed_context_fields": [
+      "domain",
+      "version",
+      "action",
+      "chain_id",
+      "genesis_hash",
+      "proposal_id",
+      "canonical_open_anchor",
+      "immutable_descriptor_hash",
+      "active_kernel_contract_digest",
+      "policy_id",
+      "policy_version",
+      "admission_generation",
+      "roster_epoch",
+      "roster_root",
+      "deadline",
+      "decision",
+      "requested_model_class",
+      "immutable_origin"
+    ],
+    "vote_lock_persists_across_restart_and_reorg": true,
+    "raw_yes_string_without_signature_valid": false,
+    "one_honest_panel_implies_bft_fault_budget": false,
+    "quorum_implies_model_hardness": false,
+    "agreement_implies_review_liveness": false,
+    "ledger_finality_authority": false,
+    "creates_randomness": false,
+    "canonical_inclusion_required": true,
+    "requested_model_classes": [
+      "ADDITIONAL",
+      "FORK_DESIGNATED"
+    ]
+  },
+  "assurance": {
+    "automatic": "KERNEL_RULES_VERIFIED",
+    "bft": "BFT_POLICY_APPROVAL",
+    "unknown_assessments_rewritten_pass": false,
+    "claims_bypass_panel_court_or_gate_c": false,
+    "free_bft_certificate_fields_in_ticket": false
+  },
+  "control": {
+    "same_batch_stop_wins": true,
+    "yes_clears_stop": false,
+    "bft_resolution_requires_formal_collision_proof": false,
+    "bft_resolution_requires_current_yes_and_exact_stop_set": true,
+    "technical_checker_disable_blocks_both": true,
+    "no_vote_revokes_other_existing_admission": false,
+    "cheap_correct_computation_automatically_slashable": false,
+    "past_assets_confiscated_by_vote": false,
+    "only_original_genesis_exempt_from_bft_management": true,
+    "fork_designation_clears_stop": false,
+    "shared_rule_stop_excludes_original_genesis": true,
+    "permanent_lp_core_promotion_allowed": false
+  },
+  "compatibility": {
+    "legacy_mas1_record_reinterpreted": false,
+    "old_claim_deadlines_changed": false,
+    "moe2_changed": false,
+    "registration_market_atomic": true,
+    "permanent_lp_unlock": false,
+    "tb1_changed": false,
+    "cryptographic_execution_validity_proof": false
+  },
+  "state_api": [
+    "technical_compatibility",
+    "automatic_assessments",
+    "admission_basis",
+    "approval_state",
+    "proposal_id",
+    "policy_version",
+    "generation",
+    "stop_set",
+    "claim_certification"
+  ],
+  "parameter_defaults": null,
+  "validation_scope": "Document contract and source-preservation checks only; no native signatures, vote execution, deployment, Qwen safety or economic guarantee.",
+  "model_classes": {
+    "GENESIS": {
+      "origin": "GENESIS_ORIGINAL",
+      "admission": "immutable genesis manifest at chain creation",
+      "bft_add": false,
+      "bft_modify": false,
+      "bft_remove": false,
+      "bft_stop": false,
+      "bft_resolve": false,
+      "bft_rule_stop_applies": false,
+      "option_market": false,
+      "miner_permille_of_worker_R": 1000,
+      "claim_validation_exempt": false
+    },
+    "ADDITIONAL": {
+      "origin": "ADDITIONAL_REGISTERED",
+      "admission": [
+        "KERNEL_AUTO",
+        "BFT_DECISION"
+      ],
+      "bft_stop": true,
+      "bft_resolve": true,
+      "automatic_origin_is_bft_managed": true,
+      "option_market": true,
+      "economics": "MOE2"
+    },
+    "FORK_DESIGNATED": {
+      "origin": "FORK_BFT_DESIGNATED",
+      "admission": [
+        "BFT_DECISION"
+      ],
+      "bft_add": true,
+      "automatic_fork_designation": false,
+      "bft_stop": true,
+      "bft_resolve": true,
+      "option_market": false,
+      "miner_permille_of_worker_R": 1000,
+      "claim_validation_exempt": false,
+      "prior_additional_registration_required": false,
+      "atomic_registration_catalog_and_approval": true
+    }
+  },
+  "genesis_origin_immutable": true,
+  "genesis_origin_assignable_after_chain_creation": false
+}

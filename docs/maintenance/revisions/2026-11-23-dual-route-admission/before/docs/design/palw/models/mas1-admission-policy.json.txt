@@ -1,0 +1,169 @@
+{
+  "schema": "MISAKA-MAS1-admission-contract/1",
+  "logical_profile": "MAS1",
+  "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "adopted_date": "2026-11-20",
+  "timezone": "Asia/Tokyo",
+  "normative_rfc": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+  "decision_record": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+  "transition_spec": "docs/governance/model-admission-safety-transition.md",
+  "runtime_enabled": false,
+  "wire_ids_assigned": false,
+  "native_implemented_here": false,
+  "qwen_cost_theorem_proved": false,
+  "g_cost_admission": {
+    "revision": "2026-11-21",
+    "method": "repeated_empirical_comparison",
+    "normative_contract": "docs/rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review",
+    "universal_cost_proof_required": false,
+    "incomplete": "UNKNOWN"
+  },
+  "automatic_shortcut_detection_complete": false,
+  "states": [
+    "UNASSESSED",
+    "CHECKING",
+    "REVIEW_HOLD",
+    "REJECTED",
+    "PASSED"
+  ],
+  "automatic_verdicts": [
+    "PASS",
+    "FAIL",
+    "UNKNOWN"
+  ],
+  "gates": [
+    "G_EXEC",
+    "G_COLL",
+    "G_COST",
+    "G_USE",
+    "STRUCTURAL_ANALYSIS",
+    "CURRENT_RULES_AND_EVIDENCE"
+  ],
+  "unknown_policy": {
+    "new_model_mining_allowed": false,
+    "state": "REVIEW_HOLD",
+    "escalation": "ModelRiskCase",
+    "bft_timeout_auto_pass": false,
+    "deadline_terminal": "REJECTED_UNRESOLVED",
+    "terminal_implies_arithmetic_fraud": false
+  },
+  "evaluation": {
+    "mode": "NON_REWARDING_MODEL_EVALUATION",
+    "input_randomness": "TB1-MODEL_AUDIT",
+    "verifier_randomness": "separate subsequent TB1-PANEL",
+    "candidate_and_suite_frozen_before_first_honest_share": true,
+    "verifier_draw_after_result_commit": true,
+    "work_credit": false,
+    "consensus_weight": false,
+    "award_rights": false,
+    "moe2_reward_routing": false,
+    "requires_target_model_mining_eligibility": false,
+    "public_one_honest_replay_and_local_court_required": true,
+    "physical_measurements_are_cost_theorem": false
+  },
+  "analysis": {
+    "full_coverage_required": true,
+    "unknown_ops": "UNKNOWN",
+    "analysis_budget_exhaustion": "UNKNOWN",
+    "unverified_global_weight_predicate": "UNKNOWN",
+    "graph_dependency_implies_hardness": false,
+    "worker_signature_proves_global_properties": false,
+    "dedicated_mining_compute_as_useful_inference_cost": false,
+    "fast_correct_algorithm_is_automatically_slashable": false
+  },
+  "bft": {
+    "roster": "native-fixed TB1 holder roster with explicitly activated MODEL_STOP authority",
+    "n": "3*f+1",
+    "q": "2*f+1",
+    "fault_assumption": "at most f faulty; independent of one-honest claim Panel",
+    "scope": [
+      "ARTIFACT_PROFILE",
+      "THEOREM_RULE_VERSION"
+    ],
+    "signature_domain": "MODEL_STOP separate from TB1 shares; codec to be assigned before activation",
+    "certificate_creates_randomness": false,
+    "unknown_to_pass_operation": false,
+    "ledger_finality_authority": false,
+    "fork_choice_authority": false,
+    "reorg_veto": false,
+    "past_asset_confiscation_authority": false,
+    "mempool_receipt_changes_consensus": false,
+    "canonical_inclusion_required": true,
+    "applied_stop_auto_expires": false,
+    "false_positive_risk": true,
+    "unknown_attack_detection_guaranteed": false,
+    "minimum_f": 1
+  },
+  "stop_reasons": [
+    "ADMISSION_HOLD",
+    "STRUCTURAL_FAILURE",
+    "BFT_SAFETY_STOP",
+    "RULE_DISABLED",
+    "BURN_PAUSE"
+  ],
+  "release": {
+    "fresh_all_gates_pass": true,
+    "current_roster_quorum": true,
+    "bind_exact_stop_set": true,
+    "bind_previous_control_record": true,
+    "bind_admission_generation": true,
+    "same_batch_new_stop_wins": true,
+    "burn_clears_security_stop": false,
+    "owner_change_clears_security_stop": false,
+    "core_promotion_clears_security_stop": false,
+    "deadline_clears_security_stop": false,
+    "model_resolution_clears_rule_version_stop": false,
+    "rule_recovery": "new reviewed and adopted immutable rule version; every descriptor rechecked",
+    "generation_change_clears_stop_or_open_case": false
+  },
+  "blocked_new_effects": [
+    "mining_admission",
+    "success_final",
+    "work_credit_weight_permit_issuance",
+    "unspent_award_redemption",
+    "new_unvested_model_reward"
+  ],
+  "preserved_operations": [
+    "claim_materials",
+    "negative_court",
+    "original_deadlines",
+    "refunds",
+    "liability_close",
+    "vested_balances_and_payment_liabilities",
+    "normal_model_market_operations",
+    "non_mining_inference"
+  ],
+  "economic_compatibility": {
+    "registration_creates_market_atomically": true,
+    "safety_hold_means_market_unprepared": false,
+    "moe2_rates_changed": false,
+    "permanent_liquidity_unlock": false,
+    "burn_exemption_implies_mining_safety_exemption": false
+  },
+  "implementation_gate": [
+    "concrete cost and collision rules",
+    "complete bounded checkers",
+    "adopted PracticalSuite and thresholds",
+    "non-rewarding evaluation",
+    "TB1 MODEL_AUDIT",
+    "MODEL_STOP roster and fault budget",
+    "canonical control transport and reservations",
+    "all consumers and recovery",
+    "explicit activation"
+  ],
+  "parameter_defaults": null,
+  "parameter_default_policy": "No guessed production thresholds, roster size, timeout, wire ID or activation point.",
+  "concrete_execution_profiles": [
+    {
+      "profile": "QF1-Q3-8B-A16-8K-v1",
+      "descriptor": "docs/design/palw/models/qf1-qwen3-8b-profile.json",
+      "normative_rfc": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "automatic_mining_pass": false,
+      "G_COLL_proved": false,
+      "G_COST_proved": false,
+      "G_USE_measured": false,
+      "unknown_policy": "REVIEW_HOLD; no mining; MAS1 ModelRiskCase/BFT stop process"
+    }
+  ]
+}

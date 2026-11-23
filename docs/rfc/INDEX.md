@@ -4,9 +4,11 @@
 
 > **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。新規採掘の後続正本は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md)。RFC61/62・ADR229/230は設計採択済み・未有効化であり、旧sourceを新規受付へfallbackしない。
 
-> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。反復費用検査・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。
 
-> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用検査や台帳finalityを置換しません。
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
 
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
@@ -79,5 +81,6 @@
 | RFC-0062 | [PALW-FOW1：推論関数の採掘出力と新規仕事の適格性](0062-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1コア出力・費用適格性 |
 | RFC-0063 | [追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転](0063-additional-model-option-economics.md) | 旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
 | RFC-0064 | [報酬30%買付・20%永久流動性・余剰Position burn](0064-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn |
-| RFC-0065 | [MAS1：モデル追加時の構造検査・実用性条件とBFT停止](0065-model-admission-screening-and-bft-stop.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAS1構造・実用性検査・BFT安全停止 |
+| RFC-0065 | [MAS1：モデル追加時の構造検査・実用性条件とBFT停止](0065-model-admission-screening-and-bft-stop.md) | MAS1自動審査・停止 / MAD2のBFT採用はRFC0067優先 |
 | RFC-0066 | [QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout](0066-qwen3-fow1-execution-and-readout.md) | ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・37-vector Readout |
+| RFC-0067 | [MAD2：kernel自動追加とBFT YES/NOによるモデル採用](0067-model-admission-kernel-auto-and-bft-decision.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAD2自動kernel採用又はBFT YES/NO・証明提出不要 |

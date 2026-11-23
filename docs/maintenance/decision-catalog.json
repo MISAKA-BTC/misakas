@@ -1391,7 +1391,7 @@
       "path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
       "title": "ADR-0180 — PALW のみの合意:BFT の validator を使わない",
       "topic": "Consensus / architecture",
-      "status": "台帳BFT禁止を維持 / ADR0233のモデル安全停止を限定追加"
+      "status": "台帳BFT禁止を維持 / モデル採用と停止はADR0235/0233"
     },
     {
       "kind": "adr",
@@ -1831,7 +1831,7 @@
       "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
       "title": "ADR-0233 — モデル追加時の構造・実用性検査と限定BFT停止を採択する",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAS1限定停止権限・UNKNOWN閉鎖"
+      "status": "MAS1の履歴 / BFT採用の追加はADR0235優先"
     },
     {
       "kind": "adr",
@@ -1840,6 +1840,14 @@
       "title": "ADR-0234 — Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する",
       "topic": "Consensus / architecture",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定"
+    },
+    {
+      "kind": "adr",
+      "number": "0235",
+      "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "title": "ADR-0235 — モデル採用をkernel自動追加とBFT YES/NOへ分ける",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAD2二経路・技術互換とclaim検証を維持"
     },
     {
       "kind": "rfc",
@@ -2367,7 +2375,7 @@
       "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
       "title": "RFC-0065 — MAS1：モデル追加時の構造検査・実用性条件とBFT停止",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAS1構造・実用性検査・BFT安全停止"
+      "status": "MAS1自動審査・停止 / MAD2のBFT採用はRFC0067優先"
     },
     {
       "kind": "rfc",
@@ -2376,6 +2384,14 @@
       "title": "RFC-0066 — QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout",
       "topic": "Consensus / architecture",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・37-vector Readout"
+    },
+    {
+      "kind": "rfc",
+      "number": "0067",
+      "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "title": "RFC-0067 — MAD2：kernel自動追加とBFT YES/NOによるモデル採用",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAD2自動kernel採用又はBFT YES/NO・証明提出不要"
     }
   ]
 }

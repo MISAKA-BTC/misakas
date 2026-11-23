@@ -1,0 +1,169 @@
+# RFC-v2-0013 — 公開Bootstrap・Genesis・有効化とRelease接続
+
+<!-- MOE2-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
+
+永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
+
+旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
+<!-- MOE2-ADOPTED-20261120-END -->
+
+
+<!-- MOE1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。MOE1 activationには登録と市場作成の原子性、同期転送・同意・別役務原資・旧残高winddown・全consumer整合を要求する。旧合格記録を新仕様のnative実装完了にしない。
+
+追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
+
+[RFC0063](../rfc/0063-additional-model-option-economics.md) / [ADR0231](../adr/0231-additional-model-option-economics.md) / [適用と移行](../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
+<!-- MOE1-ADOPTED-20261120-END -->
+
+<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
+## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+
+新profileのactivationにはTB1 bootstrap、全suite/consumer、完全VSS/PQ通信、安定freeze、FOW1定理と有界適合checker、負荷/回復を要求する。新規入口を開く境界以後は旧採掘受付を閉じ、旧責任だけdrainする。
+
+[TB1の正本](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
+<!-- TB1-FOW1-ADOPTED-20261120-END -->
+
+<!-- AN1-DRAFT-20261118-BEGIN -->
+## 2026-11-18 AN1追加草案の担当範囲
+
+**DRAFT_NOT_ACTIVATED**。AN1の状態はDRAFT_NOT_ACTIVATED。文書・toy検証を本番model/native/DA/合意の完成と扱わず、公開activationにはRFC-0059の全gateを満たす証拠が必要である。
+
+[RFC-0059](../rfc/0059-palw-an1-input-binding-and-panel-court.md) / [ADR-0227](../adr/0227-palw-an1-input-binding-and-panel-court.md) / [改訂記録](../maintenance/revisions/2026-11-18-an1/README.md)。以下の既存採択本文・署名・過去snapshotは、その版の意味を保持する。本参照で実装・公開有効化を変更しない。
+<!-- AN1-DRAFT-20261118-END -->
+
+
+<!-- SWC1-PROPOSAL-BEGIN -->
+> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
+<!-- SWC1-PROPOSAL-END -->
+
+<!-- CAD1-PROPOSAL-BEGIN -->
+## 2026-11-17 受付難易度CAD1の設計案
+
+CAD1は全入口接続、共通clock/seedとready guard、capacity/料金/codec、同一claimの実経路・実機負荷が成立してから有効化を判定する。main2d8には将来TFO3の接続があるとは扱わない。
+
+本節は **PROPOSED_DESIGN_NOT_ACTIVATED** の設計案への入口であり、既存runtime・署名・fenceの意味や採択状態を変更しない。[RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) / [ADR-0224](../adr/0224-global-claim-admission-difficulty.md)。
+<!-- CAD1-PROPOSAL-END -->
+
+## 2026-11-09公開資料・一人前提の追加境界
+
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。初回claimから、commit後seed・モデル未保有のPanel取得・一件の完全承認・公開異議・初回creditまでを同じbinaryと設定で試験する。固定bootstrap seedの例外を後続未知乱数の証明にせず、Finalを先に必要とする循環を作らない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。設計採択、条件付き論証、抽象検査、native実装、実モデル実測、公開activationを区別し、未成立profileを有効化しない。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+> **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
+> **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+新profileは設計採択済みであり、実装・測定・公開有効化は未完了。[20](0020-verification-gated-final-and-adversarial-models.md)のgateを既存release手順へ接続し、preset・fence・genesis・旧claimの署名版を自動変更しない。bootstrap条件と新claimの検証条件を混同しない。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
+
+**原文収録元:** [旧0041](../rfc/0041-genesis-bond-free-bootstrap.md)。
+
+**関連RFC:** [03 モデル登録・変換・Artifact](0003-model-onboarding-and-artifacts.md) / [04 モデル二階層・年次カタログ](0004-model-tiers-and-annual-catalog.md) / [06 Panel参加・抽選・確率的検証・認証Receipt](0006-panels-and-probabilistic-verification.md) / [10 DAG合意・Gate C・Native EVM決済](0010-dag-consensus-and-native-settlement.md) / [11 Bond予算・配分・Fee同意・決済会計](0011-bond-budgets-fees-and-payments.md) / [12 認証State・保存・Pruning・IBD](0012-authenticated-state-storage-and-ibd.md) / [14 Court統合契約](0014-court-master-contract.md) / [15 設計凍結・延期・不採用・未採択・変更管理](0015-freeze-deferred-rejected-and-governance.md)。
+
+## 1. 新しいネットワークの立ち上げ
+
+旧0041の採択済みgenesis-bond-free方針を収録し、他RFCの有効化条件を集めるrelease上の入口とする。ここで新しい発行量、funding制度、特権役割、fence高さを決めない。
+
+## 2. Genesis Bondはゼロ
+
+新しいネットワークでは事前登録bondをゼロとする。初期参加者と後発参加者は同じ公開bond登録・担保・成熟・役割資格を使う。genesis UTXOの保有自体をPanel席や承認権限にしない。
+
+## 3. BASE回復からPALWへ
+
+PALWがない状態で約30分待ち、既存のBASE回復規則を利用するという採択済みの起動順序を維持する。BASEで得た資金または所有するgenesis UTXOを、通常の公開transactionでbondへ移す。
+
+合意上の時計、genesisからの待機起点、無bondで受理できる回復block、実際の報酬、登録と成熟を検査する。bondless heartbeatの存在だけで初期資金を得られると扱わず、DAA停止を壁時計の30分へ置き換えない。
+
+## 4. 有効化の境界
+
+新genesis、既存testnetのflag day、mainnetの設定確定は別の作業である。旧0041が参照する17,400をmainnetの高さに転用しない。15の除外・休眠・未採択台帳と、各機能のrecordを照合する。
+
+公開・配備は文書統合の効果ではない。最新候補のbuild・対象試験・複数node起動・復旧結果を、そのnetwork／artifact／設定へ結び付ける。
+
+## 5. 受入確認
+
+ゼロbondからBASE資金、genesis UTXOからの資金、公開登録、成熟、PALW開始、Panel参加、courtを含む処理までつなぐ。固定運営者の鍵や秘密の初期bondで不足を補わない。既存chainのgenesisや過去の権利は書き換えない。
+
+---
+
+## EXEC常設サービスと初期creditの追加採択
+
+EXEC producerは起動時から稼働し、有効scheduleがなければ待機する。
+最初の成功Finalだけを特別扱いせず、[07](0007-claims-exec-and-answer-accounting.md)の共通発行gateでcreditを得る。
+既存のBASE回復・公開bond登録・成熟・検証者資格を経て通常経路へ入る。
+genesis用の無償permit、認証省略、最初のFinalの先払いを追加しない。
+
+claim・証拠・work anchor・認証・schedule commit・回復をEXEC creditへ循環依存させない。
+[10](0010-dag-consensus-and-native-settlement.md)の1 BPSは、必要条件が成立した通常運用の目標であり、
+bootstrap開始直後やcredit不足の間の無条件生成保証ではない。
+新版署名・clock profile・lead／horizon／grace・credit期限・混合負荷の実測を確定し、
+旧schedule／既発行permitと会計が共存できることを確認してから公開有効化を判断する。
+
+---
+
+## 原条文の統合収録
+
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
+
+### 収録箇所
+
+| 原文 | 行 | 入口 |
+| --- | --- | --- |
+| 旧0041 | 1–30 | [RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる](#source-v1-0041-L00001) |
+
+---
+
+<a id="source-v1-0041-L00001"></a>
+
+### 旧RFC-0041 / 原文1–30行
+
+出典: [0041-genesis-bond-free-bootstrap.md](../rfc/0041-genesis-bond-free-bootstrap.md)。配置理由: 主題別統合。
+
+### RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる
+
+Status: **Adopted launch policy / 実装・立ち上げ検証未完**（2026-10-28、ユーザー決定）。[ADR-0209](../adr/0209-genesis-bond-free-bootstrap.md)。[RFC-0010 §3.2](../rfc/0010-permissionless-palw-panel-and-claim-completion.md#32-freeze-the-eligible-population-and-draw-policy) の分散性・公開参加要件を補足する。
+
+#### 決定と理由
+
+新しいネットワークの genesis にあらかじめ bond を登録する方式を廃止し、初期 bond 数をゼロにする。後から参加した人が取得できない genesis bond という役割・資格・優先権を置かない。最初の参加者も後からの参加者も、通常の公開された bond 登録経路を使う。これは [ADR-0061](../adr/0061-zero-seat-genesis-and-right-sized-collateral.md) の「ゼロ bond の genesis も可能」という方針を、新しい立ち上げではゼロを必須にする決定である。
+
+廃止するのは事前登録の bond とその特別な地位であり、genesis に入っている UTXO ではない。初期 bond の資金源には **BASE で得た資金と、所有する genesis UTXO の両方**を使える。genesis UTXO の所有だけで自動的に bond、検証席、anchor、承認権限を与えない。通常の支出署名、担保、登録、成熟、役割ごとの資格と会計を適用する。新しい資金配布・発行量・成熟免除をこの決定から追加しない。
+
+#### 立ち上げの順序
+
+1. genesis bond がゼロの状態で開始する。
+2. PALW ブロックがない状態で約30分待ち、既存の無 PALW 時の BASE 回復規則を使う。最初から BASE を30分採掘する特別な起動モードを新設する意味ではない。
+3. BASE で得た資金、または genesis UTXO を通常の公開トランザクションで bond にする。
+4. 適用される成熟・担保・参加条件を満たした参加者から PALW を開始する。Panel、claim ごとの認証、court、報酬枠の条件はそれぞれ維持する。
+
+この回復・登録経路は、運営者の秘密鍵、事前登録 seat、固定 operator 名簿、個別許可を必要としない。同じ条件を満たす後発参加者も同じ役割に参加できる。bond ゼロの起動と、claim 認証を省略する Panel=0 は別である。
+
+#### 実装との照合と完了条件
+
+約30分はユーザーが指定した起動順序の要件であり、現行の全 preset でこの動作を確認済みという記録ではない。既存コードの bonded BASE と bondless heartbeat を取り違えて、待つだけで資金を得られると結論しない。heartbeat の clock/fee 機能だけでは BASE の報酬経路の確認にならない。
+
+実装確認では、PALW が一度も生じていない genesis からの待機起点・合意上の時間判定、無 bond の回復ブロック受付、BASE の資金取得、genesis UTXO の支出、通常 bond 登録と成熟、PALW への移行を通して検査する。停止中に進まない DAA を壁時計30分と同一視せず、既存回復規則の実際の時計・境界を明示する。未接続があれば実装差分として閉じ、暗黙の特権 bond で代用しない。
+
+稼働済み chain の genesis、過去の bond 登録、担保 UTXO、過去の承認を履歴ごと書き換えない。既存ネットワークで残る genesis 身分への特権依存は、公開参加ルールへの versioned な移行として扱う。全項目実装の DAA 17,400 fence 方針と、新 genesis の起動手順を混同しない。
+
+#### 採択記録
+
+2026-10-28 のユーザー指示は、genesis bond の廃止、PALW ブロックが約30分ない状態で既存 BASE 回復を待ってから bond・PALW へ進む順序、初期資金源に BASE 収入と genesis UTXO を含めることを明示した。本 RFC はその決定の記録であり、実装・検証・ネットワーク起動の完了宣言ではない。

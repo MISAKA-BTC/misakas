@@ -1,5 +1,16 @@
 # ADR-v2-0022 — 登録時市場生成・reserve・永久流動性
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — MAD2の採用経路とBFT管理範囲
+
+[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)をモデル採用・管理の後続正本とする。追加モデルはkernel自動審査又は証明提出なしのBFT YES/NOで採用する。旧一律UNKNOWN禁止・BFT停止専用規則はAUTO側と旧profileの履歴に限定する。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+経済比率・永久LP・過去claimは保持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、実装・投票・公開activationの完了ではない。
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 編集統合日: 2026-10-30　|　MOE2規範改訂: 2026-11-20　|　名前空間: `ADR-v2`　|　履歴原文の主担当: 4本
 
 **現行状態: ADOPTED_DESIGN_NOT_ACTIVATED。** MOE2の経済改訂を本書の現在著述部へ反映する。native/EVM実装、移行、試験又は公開有効化が完了したという意味ではない。原文payload、TB1/FOW1、MOE1採択記録を保全し、旧実装の実績をMOE2の完成記録へ書き換えない。

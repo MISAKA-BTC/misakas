@@ -165,5 +165,16 @@
       "G_USE_measured": false,
       "unknown_policy": "REVIEW_HOLD; no mining; MAS1 ModelRiskCase/BFT stop process"
     }
-  ]
+  ],
+  "effective_successor": "docs/design/palw/models/mad2-admission-policy.json",
+  "scope_after_mad2_activation": "legacy MAS1 and KERNEL_AUTO subpolicy; not the effective gate for BFT_DECISION",
+  "usable_as_mad2_effective_gate": false,
+  "mad2_origin_policy": {
+    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "genesis_bft_management": false,
+    "genesis_requires_exact_original_manifest": true,
+    "additional_bft_management": true,
+    "fork_bft_add_and_stop": true,
+    "individual_claim_validation_unchanged": true
+  }
 }

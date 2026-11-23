@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "namespace": "ADR-v2",
-  "editorial_date": "2026-11-20",
+  "editorial_date": "2026-11-23",
   "current_count": 50,
   "legacy_namespace": "ADR",
   "legacy_file_count": 204,
@@ -239,7 +239,7 @@
       "related_rfcs": [
         "RFC-v2-0002"
       ],
-      "authored_section_sha256": "801f7b0ef8d279b67505d44d6514bd6348175fa01917f2bf76d54ce2cea18ed7"
+      "authored_section_sha256": "783119d8ec2231518647b522484e3decef1374c01e45f3bfa14bc4d841e2960a"
     },
     {
       "id": "ADR-v2-0014",
@@ -256,7 +256,7 @@
         "RFC-v2-0002",
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "f7b5da43fe23a7d86d4ecc80a0bc061645276293aa55dc4f72aefc1c92968e8d"
+      "authored_section_sha256": "c95cacd81412c76a2384f26bc44836acadc4370fea71d57072c4cab7bbad5c02"
     },
     {
       "id": "ADR-v2-0015",
@@ -273,7 +273,7 @@
       "related_rfcs": [
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "1701974d0f3d84849a2bbaeb1b2f39ca23f94d20630813a8f898bc4c8b66f0b7"
+      "authored_section_sha256": "8724eb5170f671b2e45dde2c03b8eccff397fb99e4a8d460479ef4b09160e2df"
     },
     {
       "id": "ADR-v2-0016",
@@ -288,7 +288,7 @@
       "related_rfcs": [
         "RFC-v2-0003"
       ],
-      "authored_section_sha256": "bacd8955d664db0fab4e3e6382dce6e56ccfb5448c3cafc4beea06993d448e97"
+      "authored_section_sha256": "d5d5e7e59cd63b098e6a4b2c768f4e130ca21f8c17483549c7c646d44b102aaf"
     },
     {
       "id": "ADR-v2-0017",
@@ -338,7 +338,7 @@
         "RFC-v2-0004",
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "bfd87eee2bc3b42473e538ca65e2bcf1576b32c10ebb32a5ffe9b5f06e6c0204"
+      "authored_section_sha256": "4116c2706ccf252597d77d3d365b25264bd754eb47b8483b2024fe50facbd72a"
     },
     {
       "id": "ADR-v2-0020",
@@ -358,7 +358,7 @@
         "RFC-v2-0004",
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "493476479c90085b9ccc6740b95b9f6e96ea7aff7846e3497ff858fb03e9db04"
+      "authored_section_sha256": "81954528d2e82f11f8998d5e93f90496d354c6c9b01de47ce94d1a28856f8ce4"
     },
     {
       "id": "ADR-v2-0021",
@@ -373,7 +373,7 @@
       "related_rfcs": [
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "cdfe59e1ba295e3eadb212f3f9a0d0a3913e6e6955e8c138e65d41856ca5a7da"
+      "authored_section_sha256": "f1c1cbf4074b2241f8b9ab3e6ba97032762b540bf1d67e768f036153762f833b"
     },
     {
       "id": "ADR-v2-0022",
@@ -389,7 +389,7 @@
       "related_rfcs": [
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "9dce6221937629707ab0c1ad78d4570bb84d6024a0080bd78340aee1421c7eef"
+      "authored_section_sha256": "9ba6235d9678af41904d18cd4cde77cdad486c660821a9d0cbea8f79a0304174"
     },
     {
       "id": "ADR-v2-0023",
@@ -403,7 +403,7 @@
       "related_rfcs": [
         "RFC-v2-0011"
       ],
-      "authored_section_sha256": "0d4545b2f518b237515dbca349a9e9d015639b5ddefb0d4496018ee7c953f405"
+      "authored_section_sha256": "3c64115efffc1e91295e2e9becbdb5209d79a6ca57984386c43afd768b3b5e8f"
     },
     {
       "id": "ADR-v2-0024",
@@ -470,7 +470,7 @@
       "related_rfcs": [
         "RFC-v2-0007"
       ],
-      "authored_section_sha256": "b86e8d3c361b93899d74ff4cfd2bf3fa03071e6325008c368d1f5c3318734381"
+      "authored_section_sha256": "3143e12423f3464967ca0c65630d2ff79d6375d17903106d198ddf9eee093ee6"
     },
     {
       "id": "ADR-v2-0028",
@@ -487,7 +487,7 @@
       "related_rfcs": [
         "RFC-v2-0007"
       ],
-      "authored_section_sha256": "82ef6d7437ecfd3bc47fab15401e2fd882b5a71fb45de8e09e1b3dadd3ad2a5b"
+      "authored_section_sha256": "aa2f45cd2357703be78c1735ec61111635729410e9c054e0284739ecf6c3023f"
     },
     {
       "id": "ADR-v2-0029",
@@ -517,7 +517,7 @@
         "RFC-v2-0003",
         "RFC-v2-0006"
       ],
-      "authored_section_sha256": "739317b04aaa766a6907750e13d28ae961e52eb59c4071d6826105a2e3c7822b"
+      "authored_section_sha256": "67e367340d0ba4e53a1b1d8ac24a570ea30f0345db1f93c762d788d75b53b932"
     },
     {
       "id": "ADR-v2-0031",
@@ -533,7 +533,7 @@
       "related_rfcs": [
         "RFC-v2-0006"
       ],
-      "authored_section_sha256": "90597b74552edef4e6f74789f763724f6d738eabdab93a92df99608ba7c9a52c"
+      "authored_section_sha256": "94cd3d639f0a02c7004611d8840f0fb82beab88c445402247f54e96bda19c48c"
     },
     {
       "id": "ADR-v2-0032",
@@ -550,7 +550,7 @@
         "RFC-v2-0006",
         "RFC-v2-0010"
       ],
-      "authored_section_sha256": "f39039601d3118cdf9dc80dee4942b1963adf9de443a17afeaa8ca6c3b5f0c7a"
+      "authored_section_sha256": "812cb5272585d69adfcc206249d623279eb41222ac278030a67de4843e71334c"
     },
     {
       "id": "ADR-v2-0033",
@@ -564,7 +564,7 @@
         "RFC-v2-0006",
         "RFC-v2-0014"
       ],
-      "authored_section_sha256": "defcb772429e32931543befe0bf1d629fb04a154a773b56aff8b467470ccd22c"
+      "authored_section_sha256": "b87d37a94d86d4fbfde853be10af68437ec53932384c404b9e6ced91aebe9536"
     },
     {
       "id": "ADR-v2-0034",
@@ -837,7 +837,7 @@
       "related_rfcs": [
         "RFC-v2-0015"
       ],
-      "authored_section_sha256": "bd545af6222835aa11aa102226556039dfea272fd8328e473e5a706164caa5ea"
+      "authored_section_sha256": "c1f758ff01802b87c51b97197cc17e8beee820d91c40b6afb4fcf8eb682d8607"
     }
   ],
   "post_consolidation_documents": [
@@ -1195,6 +1195,20 @@
       "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "provenance": "2026-11-20 explicit Qwen FOW1 profile instruction"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0067",
+      "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-23 explicit dual-route model admission instruction"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0235",
+      "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "provenance": "2026-11-23 explicit dual-route model admission instruction"
     }
   ],
   "current_revision": {
@@ -1389,26 +1403,50 @@
       "unknown_mining_allowed": false,
       "bft_approval_replaces_cost_theorem": false,
       "moe2_changed": false
+    },
+    {
+      "date": "2026-11-23",
+      "revision": "2026-11-23-dual-route-admission",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Explicit user instruction: two model admission routes; automatic kernel analysis or BFT YES/NO without proof submission.",
+      "rfc_records": [
+        "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md"
+      ],
+      "decision_records": [
+        "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md"
+      ],
+      "new_profile": "MAD2",
+      "runtime_changed": false,
+      "activation_changed": false,
+      "bft_model_admission": true,
+      "bft_requires_collision_or_cost_proof": false,
+      "bft_approval_implies_mathematical_proof": false,
+      "unknown_assessments_may_receive_bft_approval": true,
+      "technical_compatibility_required": true,
+      "claim_verification_unchanged": true,
+      "moe2_changed": false
     }
   ],
   "latest_adoption": {
-    "date": "2026-11-20",
-    "revision": "2026-11-20-qwen-fow1",
+    "date": "2026-11-23",
+    "revision": "2026-11-23-dual-route-admission",
     "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
-    "authority": "Explicit user instruction to make FOW1 concrete for a Qwen architecture in RFC.",
+    "authority": "Explicit user instruction: two model admission routes; automatic kernel analysis or BFT YES/NO without proof submission.",
     "rfc_records": [
-      "docs/rfc/0066-qwen3-fow1-execution-and-readout.md"
+      "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md"
     ],
     "decision_records": [
-      "docs/adr/0234-qwen3-fow1-execution-and-readout.md"
+      "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md"
     ],
-    "new_profile": "QF1",
+    "new_profile": "MAD2",
     "runtime_changed": false,
     "activation_changed": false,
-    "qwen_cost_theorem_proved": false,
-    "qwen_quality_measured": false,
-    "unknown_mining_allowed": false,
-    "bft_approval_replaces_cost_theorem": false,
+    "bft_model_admission": true,
+    "bft_requires_collision_or_cost_proof": false,
+    "bft_approval_implies_mathematical_proof": false,
+    "unknown_assessments_may_receive_bft_approval": true,
+    "technical_compatibility_required": true,
+    "claim_verification_unchanged": true,
     "moe2_changed": false
   },
   "revision_history": [

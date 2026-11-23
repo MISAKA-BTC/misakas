@@ -1,5 +1,16 @@
 # ADR-0231 — 追加モデル限定MisakaOptionと新しい報酬・売買・移転規則
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — MAD2の採用経路とBFT管理範囲
+
+[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)をモデル採用・管理の後続正本とする。追加モデルはkernel自動審査又は証明提出なしのBFT YES/NOで採用する。旧一律UNKNOWN禁止・BFT停止専用規則はAUTO側と旧profileの履歴に限定する。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+経済比率・永久LP・過去claimは保持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、実装・投票・公開activationの完了ではない。
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 <!-- MOE2-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
 
@@ -48,3 +59,7 @@ RFC0061/0062のTB1/FOW1、全実行検証、反証優先、一回会計、未完
 ## 実装と有効化
 
 この改訂は設計採択である。native/EVMの原子的移転、経済snapshot、二重支払防止、資金予約、残高移行、core市場の清算、復旧、負荷・攻撃検証を完了したとは記録しない。RFC0063の全gateと明示activationを満たすまでMOE1を有効化しない。
+
+## 2026-11-23 MAD2の分類と管理権限
+
+[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)に従い、元genesisはBFTの追加・変更・停止・解除の対象外とする。BFT YESでfork指定モデルを追加でき、Optionなし・対象worker報酬R100% Minerを継承するがBFT停止対象である。追加モデルも自動/BFTの採用経路にかかわらずBFT管理対象とする。永久LP付きmodel ID・同rootのcore指定禁止、既存市場と債務のdrain、既存停止はYESで免除しない。

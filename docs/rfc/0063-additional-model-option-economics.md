@@ -1,5 +1,16 @@
 # RFC-0063 — 追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — MAD2の採用経路とBFT管理範囲
+
+[RFC0067](0067-model-admission-kernel-auto-and-bft-decision.md)をモデル採用・管理の後続正本とする。追加モデルはkernel自動審査又は証明提出なしのBFT YES/NOで採用する。旧一律UNKNOWN禁止・BFT停止専用規則はAUTO側と旧profileの履歴に限定する。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+経済比率・永久LP・過去claimは保持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、実装・投票・公開activationの完了ではない。
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 <!-- MOE2-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
 
@@ -48,8 +59,8 @@ MisakaOption / ModelPositionを有効にする対象は**追加登録モデル�
 
 `ModelEconomicsClass`はnativeの登録identityと有効なcatalogから解決する論理分類であり、callerが任意に指定するenumではない。
 
-1. `GENESIS`: 固定model IDとartifact rootがgenesis editionに一致する。
-2. `FORK_DESIGNATED`: genesis以外で、有効化済みの正式catalogが同じmodel IDとartifact rootを指定する。softforkおよび既存制度の年次fork指定を含み、正式指定の1.0モデルを追加モデル扱いにしない。
+1. `GENESIS`: chain開始時の不変manifest entry、固定model ID、artifact rootがgenesis editionに一致する。BFTによる追加・変更・停止・解除の対象外であり、開始後のGENESIS追加や再分類を禁止する。
+2. `FORK_DESIGNATED`: genesis以外で、有効化済みの正式catalogが同じmodel IDとartifact rootを指定する。MAD2ではRFC0067のBFT YESで新しいforkモデルを指定でき、元genesisと同じOption対象外・Miner=Rを適用する。BFT停止・解除の対象であり、genesis免除は与えない。旧softfork/年次catalogは明示移行で根拠を保持し、正式指定の1.0モデルを追加モデル扱いにしない。
 3. `ADDITIONAL`: 有効な追加登録であり、上記二集合のいずれにも属さない。
 4. 不明なidentity、root不一致、未認証catalog、未知版は拒否する。ADDITIONAL又はGENESISへ推測で分類しない。
 
@@ -211,7 +222,7 @@ GENESIS/FORK_DESIGNATEDはMisakaOptionのmembership対象ではない。モデ�
 - ADDITIONALの既存残高・retired量・実reserve・元seed・既存支払権利は保存し、移行の前後で保存則を照合する。移行時点で全対象に§1.3の一意市場不変条件を確認する。旧snapshotに欠落があれば、明示したmigration検証・修復を有効化前に完了し、正常な後付け市場作成待ちへ移さない。過去の非譲渡残高を二重発行せず、新しい移転機能から同じnative残高を扱う。
 - **GENESIS/FORK_DESIGNATEDにはOption市場・残高・allowance・未清算義務を持ち越さない。** 旧状態にそれらがある場合は、明示した移行計画で既存権利と資金を清算し、その完了を新経済規則のactivation gateにする。未完了なら該当切替は有効化しない。
 - coreモデルの旧市場をsell-onlyとして新profileで残すこと、未知価格で保有者を強制償還すること、無同意の没収、reserve不足を新規発行で埋めることを本RFCから許可しない。旧履歴のread-only表示は保持できる。
-- ADDITIONALが将来FORK_DESIGNATEDになる場合も、正式指定が経済上有効になる前に旧additional claim・pair・holder/allowance・役務義務のdrainを完了する。未完了の正式指定を先に適用し、後で100%例外を作らない。
+- GENESISへの後付け指定は認めない。ADDITIONALが将来BFT指定によりFORK_DESIGNATEDになる場合も、正式指定が経済上有効になる前に旧additional claim・pair・holder/allowance・役務義務のdrainを完了する。未完了の正式指定を先に適用し、後で100%例外を作らない。
 
 直接移転、native/EVM原子実行、全consumer、資源・支払原資、既存残高移行、復旧を実装・検証するまでMOE1は未有効化である。各stageの実装・測定・採択・activationを別に記録する。
 

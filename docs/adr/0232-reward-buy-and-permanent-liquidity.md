@@ -1,5 +1,16 @@
 # ADR-0232 — 30%買付・20%永久流動性・余剰Position burnを採択する
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — MAD2の採用経路とBFT管理範囲
+
+[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)をモデル採用・管理の後続正本とする。追加モデルはkernel自動審査又は証明提出なしのBFT YES/NOで採用する。旧一律UNKNOWN禁止・BFT停止専用規則はAUTO側と旧profileの履歴に限定する。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+経済比率・永久LP・過去claimは保持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、実装・投票・公開activationの完了ではない。
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
 - 正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)
@@ -39,3 +50,7 @@ TB1/FOW1、全実行検証、一人の有効な反証、Court、旧claimの元�
 整数kernelは購入量の範囲でLPへ戻すPositionを決め、余剰burnと資金保存を一意にする。永久receiptに私的引出し権を与えず、市場内の流動性として利用する。
 
 この算術は、価格上昇、holder利益、任意売却数量へのreal reserve十分性、先回り取引の不採算、LLM仕事費用の下界を証明しない。整数dustは活性制約として残る。最小仕事・quote・amount/slippage上限と有限終端を測定・実装し、既存市場への移行、native/EVM、一回性、reorg/restart/IBDを確認するまで未有効化とする。
+
+## 2026-11-23 MAD2の分類と管理権限
+
+[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)に従い、元genesisはBFTの追加・変更・停止・解除の対象外とする。BFT YESでfork指定モデルを追加でき、Optionなし・対象worker報酬R100% Minerを継承するがBFT停止対象である。追加モデルも自動/BFTの採用経路にかかわらずBFT管理対象とする。永久LP付きmodel ID・同rootのcore指定禁止、既存市場と債務のdrain、既存停止はYESで免除しない。

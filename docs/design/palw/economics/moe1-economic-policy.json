@@ -11,7 +11,11 @@
   ],
   "classification": {
     "source": "authenticated native registration identity, artifact root and active catalog",
-    "classes": ["GENESIS", "FORK_DESIGNATED", "ADDITIONAL"],
+    "classes": [
+      "GENESIS",
+      "FORK_DESIGNATED",
+      "ADDITIONAL"
+    ],
     "caller_selectable": false,
     "unknown_or_mismatching_identity": "reject",
     "claim_class_and_rules": "authenticated admission EconomicsSnapshot; FOW1 context fixed before TB1 EXEC release",
@@ -31,8 +35,22 @@
   },
   "reward": {
     "R": "canonical successful claim's priced and capped worker reward before buyback and role distribution",
-    "GENESIS": {"buyback_permille": 0, "miner_permille": 1000, "panel_from_R": 0, "owner_from_R": 0, "other_role_from_R": 0, "option_enabled": false},
-    "FORK_DESIGNATED": {"buyback_permille": 0, "miner_permille": 1000, "panel_from_R": 0, "owner_from_R": 0, "other_role_from_R": 0, "option_enabled": false},
+    "GENESIS": {
+      "buyback_permille": 0,
+      "miner_permille": 1000,
+      "panel_from_R": 0,
+      "owner_from_R": 0,
+      "other_role_from_R": 0,
+      "option_enabled": false
+    },
+    "FORK_DESIGNATED": {
+      "buyback_permille": 0,
+      "miner_permille": 1000,
+      "panel_from_R": 0,
+      "owner_from_R": 0,
+      "other_role_from_R": 0,
+      "option_enabled": false
+    },
     "ADDITIONAL": {
       "buyback_permille": 500,
       "buyback_formula": "B = floor(500*R/1000)",
@@ -45,7 +63,15 @@
     },
     "core_verification_services": "separate pre-funded finite escrow and signed consent; no deductions from or double-pledging of R",
     "insufficient_service_funds": "reject new obligations, not verification waiver",
-    "preserved_constraints": ["Final", "maturity", "vesting", "liability hold", "common budgets", "export caps", "one-time settlement"]
+    "preserved_constraints": [
+      "Final",
+      "maturity",
+      "vesting",
+      "liability hold",
+      "common budgets",
+      "export caps",
+      "one-time settlement"
+    ]
   },
   "normal_amm_trade": {
     "eligible_class": "ADDITIONAL",
@@ -72,7 +98,13 @@
   },
   "direct_position_transfer": {
     "eligible_class": "ADDITIONAL",
-    "enabled_operations_after_activation": ["transfer", "receive", "approve", "allowance", "transferFrom"],
+    "enabled_operations_after_activation": [
+      "transfer",
+      "receive",
+      "approve",
+      "allowance",
+      "transferFrom"
+    ],
     "amm_burn_permille": 0,
     "owner_permille": 0,
     "network_fee_or_gas": "normal separate network rules",
@@ -91,5 +123,14 @@
     "core_live_sell_only_exception": false,
     "confiscation_or_new_issuance_to_cover_liquidity": false,
     "tb1_fow1_gates_waived": false
+  },
+  "model_governance": {
+    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "GENESIS": "immutable original genesis; no BFT model management",
+    "ADDITIONAL": "automatic or BFT admission; BFT stop/resume applies to both",
+    "FORK_DESIGNATED": "BFT YES may add; core economics, BFT stop/resume applies",
+    "economic_rates_changed": false,
+    "genesis_origin_assignable_later": false,
+    "permanent_lp_core_promotion_allowed": false
   }
 }

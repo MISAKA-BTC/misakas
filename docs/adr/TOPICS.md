@@ -4,9 +4,11 @@
 
 > **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。
 
-> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。反復費用検査・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。
 
-> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用検査や台帳finalityを置換しません。
+> **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
+
+> **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
 
 > **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
 
@@ -210,6 +212,7 @@
 - [ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md)
 - [ADR-0228 — モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md)
 - [ADR-0233 — モデル追加時の構造・実用性検査と限定BFT停止を採択する](0233-model-admission-screening-and-bft-stop.md)
+- [ADR-0235 — モデル採用をkernel自動追加とBFT YES/NOへ分ける](0235-model-admission-kernel-auto-and-bft-decision.md)
 
 ## Operations / interfaces / recovery
 

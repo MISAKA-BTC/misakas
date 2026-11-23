@@ -29,3 +29,9 @@ ZK などで LLM の計算を証明することは不可能である(ユーザ�
 ## 2026-11-21 ユーザー改定 — 新規採掘の MAS1
 
 新規採掘に限り [RFC-0065](docs/rfc/0065-model-admission-screening-and-bft-stop.md) を優先する。登録・既存係数・市場、旧 claim の責任と原期限を維持する。新規採掘の検査・停止は MAS1、Qwen3 の実行形式は [RFC-0066](docs/rfc/0066-qwen3-fow1-execution-and-readout.md) に従う。公開有効化は別途決定する。
+
+## 2026-11-23 ユーザー明示改定 — MAD2二経路モデル採用
+
+[RFC0067](docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md)をモデル採用の後続正本とする。ユーザーはkernel自動追加とBFT YES/NOによる追加の二経路を指示した。BFT経路では数学的定理・費用/品質の証拠提出を必要とせず、共通技術互換と正規quorumで採用を判断する。旧「BFTは停止専用」「UNKNOWNは全経路で採掘不可」はAUTO側と旧profileの規則に限定する。未実装kernel、個別claimの検証、独立Gate C、停止、一回会計を免除しない。計算validity proofは追加しない。この承認済みの文書改定について再確認を求めず、実投票・runtime・公開activationの完了には読み替えない。
+
+同日の追加指示により、元genesisだけをBFT管理（採用・変更・停止・解除）の対象外とする。追加モデルは採用経路を問わずBFT管理対象。BFTはforkモデルも追加でき、Optionなし・Miner=Rを継承するが停止対象とする。後付けGENESIS指定、rule停止、aliasで権限境界を迂回しない。個別claimの正当性検証と永久LP等の既存資産保護は維持する。

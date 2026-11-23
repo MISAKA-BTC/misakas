@@ -1,0 +1,133 @@
+{
+  "scope": "Current authored-section hashes only; frozen historical source manifests and checker baselines unchanged.",
+  "updates": [
+    {
+      "path": "docs/adr-v2/0013-tir-arithmetic-and-determinism.md",
+      "registered_before": "801f7b0ef8d279b67505d44d6514bd6348175fa01917f2bf76d54ce2cea18ed7",
+      "actual_before": "801f7b0ef8d279b67505d44d6514bd6348175fa01917f2bf76d54ce2cea18ed7",
+      "registered_after": "783119d8ec2231518647b522484e3decef1374c01e45f3bfa14bc4d841e2960a",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0014-versioned-kernels-and-backends.md",
+      "registered_before": "f7b5da43fe23a7d86d4ecc80a0bc061645276293aa55dc4f72aefc1c92968e8d",
+      "actual_before": "f7b5da43fe23a7d86d4ecc80a0bc061645276293aa55dc4f72aefc1c92968e8d",
+      "registered_after": "c95cacd81412c76a2384f26bc44836acadc4370fea71d57072c4cab7bbad5c02",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0015-permissionless-model-registration.md",
+      "registered_before": "1701974d0f3d84849a2bbaeb1b2f39ca23f94d20630813a8f898bc4c8b66f0b7",
+      "actual_before": "1701974d0f3d84849a2bbaeb1b2f39ca23f94d20630813a8f898bc4c8b66f0b7",
+      "registered_after": "8724eb5170f671b2e45dde2c03b8eccff397fb99e4a8d460479ef4b09160e2df",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0016-artifact-ownership-and-model-lineage.md",
+      "registered_before": "bacd8955d664db0fab4e3e6382dce6e56ccfb5448c3cafc4beea06993d448e97",
+      "actual_before": "bacd8955d664db0fab4e3e6382dce6e56ccfb5448c3cafc4beea06993d448e97",
+      "registered_after": "d5d5e7e59cd63b098e6a4b2c768f4e130ca21f8c17483549c7c646d44b102aaf",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0019-model-tiers-and-annual-catalog.md",
+      "registered_before": "bfd87eee2bc3b42473e538ca65e2bcf1576b32c10ebb32a5ffe9b5f06e6c0204",
+      "actual_before": "bfd87eee2bc3b42473e538ca65e2bcf1576b32c10ebb32a5ffe9b5f06e6c0204",
+      "registered_after": "4116c2706ccf252597d77d3d365b25264bd754eb47b8483b2024fe50facbd72a",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0020-class-share-and-allocation-evolution.md",
+      "registered_before": "493476479c90085b9ccc6740b95b9f6e96ea7aff7846e3497ff858fb03e9db04",
+      "actual_before": "493476479c90085b9ccc6740b95b9f6e96ea7aff7846e3497ff858fb03e9db04",
+      "registered_after": "81954528d2e82f11f8998d5e93f90496d354c6c9b01de47ce94d1a28856f8ce4",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0021-positions-and-membership.md",
+      "registered_before": "cdfe59e1ba295e3eadb212f3f9a0d0a3913e6e6955e8c138e65d41856ca5a7da",
+      "actual_before": "409ac0a165960c85f1458ca3aa58d75c45253c7456f69354652c9b4e3b3789f4",
+      "registered_after": "f1c1cbf4074b2241f8b9ab3e6ba97032762b540bf1d67e768f036153762f833b",
+      "preexisting_mismatch": true,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md",
+      "registered_before": "9dce6221937629707ab0c1ad78d4570bb84d6024a0080bd78340aee1421c7eef",
+      "actual_before": "92ce9d1b1547ce4018e664b615f77a757f11329f8cc5cd419084ee5be1300533",
+      "registered_after": "9ba6235d9678af41904d18cd4cde77cdad486c660821a9d0cbea8f79a0304174",
+      "preexisting_mismatch": true,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0023-model-reward-routing-and-owner-leg.md",
+      "registered_before": "0d4545b2f518b237515dbca349a9e9d015639b5ddefb0d4496018ee7c953f405",
+      "actual_before": "0d4545b2f518b237515dbca349a9e9d015639b5ddefb0d4496018ee7c953f405",
+      "registered_after": "3c64115efffc1e91295e2e9becbdb5209d79a6ca57984386c43afd768b3b5e8f",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0027-claim-lifecycle-and-liability.md",
+      "registered_before": "b86e8d3c361b93899d74ff4cfd2bf3fa03071e6325008c368d1f5c3318734381",
+      "actual_before": "b86e8d3c361b93899d74ff4cfd2bf3fa03071e6325008c368d1f5c3318734381",
+      "registered_after": "3143e12423f3464967ca0c65630d2ff79d6375d17903106d198ddf9eee093ee6",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0028-attempt-ticket-and-seed-anchor.md",
+      "registered_before": "82ef6d7437ecfd3bc47fab15401e2fd882b5a71fb45de8e09e1b3dadd3ad2a5b",
+      "actual_before": "82ef6d7437ecfd3bc47fab15401e2fd882b5a71fb45de8e09e1b3dadd3ad2a5b",
+      "registered_after": "aa2f45cd2357703be78c1735ec61111635729410e9c054e0284739ecf6c3023f",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0030-sharded-verification-and-model-measurement.md",
+      "registered_before": "739317b04aaa766a6907750e13d28ae961e52eb59c4071d6826105a2e3c7822b",
+      "actual_before": "739317b04aaa766a6907750e13d28ae961e52eb59c4071d6826105a2e3c7822b",
+      "registered_after": "67e367340d0ba4e53a1b1d8ac24a570ea30f0345db1f93c762d788d75b53b932",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0031-panel-independence-and-unavailability.md",
+      "registered_before": "90597b74552edef4e6f74789f763724f6d738eabdab93a92df99608ba7c9a52c",
+      "actual_before": "90597b74552edef4e6f74789f763724f6d738eabdab93a92df99608ba7c9a52c",
+      "registered_after": "94cd3d639f0a02c7004611d8840f0fb82beab88c445402247f54e96bda19c48c",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0032-sampling-beacon-and-receipts.md",
+      "registered_before": "f39039601d3118cdf9dc80dee4942b1963adf9de443a17afeaa8ca6c3b5f0c7a",
+      "actual_before": "f39039601d3118cdf9dc80dee4942b1963adf9de443a17afeaa8ca6c3b5f0c7a",
+      "registered_after": "812cb5272585d69adfcc206249d623279eb41222ac278030a67de4843e71334c",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0033-probabilistic-checks-and-exact-court.md",
+      "registered_before": "defcb772429e32931543befe0bf1d629fb04a154a773b56aff8b467470ccd22c",
+      "actual_before": "defcb772429e32931543befe0bf1d629fb04a154a773b56aff8b467470ccd22c",
+      "registered_after": "b87d37a94d86d4fbfde853be10af68437ec53932384c404b9e6ced91aebe9536",
+      "preexisting_mismatch": false,
+      "historical_payload_changed": false
+    },
+    {
+      "path": "docs/adr-v2/0050-freeze-deferred-rejected-and-governance.md",
+      "registered_before": "bd545af6222835aa11aa102226556039dfea272fd8328e473e5a706164caa5ea",
+      "actual_before": "a3968c73a4f8f75a01f8c3130c3766683d6cee0208cb87a7b99dd7b7db2a0398",
+      "registered_after": "c1f758ff01802b87c51b97197cc17e8beee820d91c40b6afb4fcf8eb682d8607",
+      "preexisting_mismatch": true,
+      "historical_payload_changed": false
+    }
+  ]
+}

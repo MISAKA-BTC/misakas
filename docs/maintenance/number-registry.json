@@ -254,10 +254,19 @@
       "adr_path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "audit": "QF1 fixed Qwen3 integer graph, token positions, Readout and logical codec; no native allocation or Qwen cost/quality certification."
+    },
+    {
+      "date": "2026-11-23",
+      "rfc": "0067",
+      "rfc_path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "adr": "0235",
+      "adr_path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "Allocation checked in supplied 7dddad729 archive only. MAD2 two routes; no runtime/wire allocation."
     }
   ],
   "next_post_consolidation": {
-    "rfc": "0067",
-    "adr": "0235"
+    "rfc": "0068",
+    "adr": "0236"
   }
 }

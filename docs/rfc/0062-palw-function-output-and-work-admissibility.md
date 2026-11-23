@@ -1,5 +1,19 @@
 # RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — 二経路モデル採用 MAD2
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0067](0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](../adr/0235-model-admission-kernel-auto-and-bft-decision.md)／[適用・移行](../governance/model-admission-dual-route-transition.md)を、MAD2対象のモデル採用について優先する。KERNEL_AUTOは対応kernelへの自動分解と採択済み審査、BFT_DECISIONは証明提出を要求しない所定quorumのYES/NOである。
+
+G-COLLの定理・G-COST/G-USEの証拠が未完成でも、共通の技術互換とq YESがあればBFT承認を記録できる。元のUNKNOWN/FAILを数学的PASSへ改変しない。未知kernel、壊れた実行仕様、個別claimの不正はYESで免除しない。Panel/Court、Final、独立Gate C、Ticket、一回会計、TB1、MOE2は維持する。
+
+以下の旧「UNKNOWNは一律採掘不可」「BFTは停止専用」「全モデルに定理・費用審査を必須」とする条項は、旧profileの履歴及びMAD2のKERNEL_AUTO側として読む。BFT_DECISIONへ再適用しない。実投票・native実装・公開activationの完了を意味せず、既存QF1のREVIEW_HOLDを文書だけで解除しない。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
@@ -31,11 +45,11 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 ユーザーは、監査で指摘された五項目の修正と、添付TB1方式への乱数生成の変更を明示した。本RFCは「LLM関数自体から得る採掘値」を保証対象にする。MOR1の回答・試行ID・識別値を組にした非重複性を、その代わりにしない。
 
-FOW1を有効化する新規採掘では、登録された推論関数の採掘出力の非衝突性、複数試行の新規評価費用、全実行関係の検証可能性を**全て採掘適格性の必須条件**とする。単にreceiptを付ける登録、入力が違うだけのAN1登録、通常のモデル名による登録は、この条件を満たさない。
+FOW1の全実行関係の検証可能性は共通技術条件として維持する。MAD2を適用するモデル採用は、KERNEL_AUTOの自動審査合格又はBFT_DECISIONの正規YES承認で成立する。登録済みという事実やreceiptだけから資格を付与しない。
 
-非衝突性には§4.2の定理、費用には§4.3の反復検査を要求する。既存Qwen又は任意のLLMについて、その定理が完成したと宣言するものではない。適合する具体的な関数系列・定理・検査器がない間はFOW1の採掘を有効化しない。適格性が空である状態を「実用的LLM-PoWが完成した」と表示しない。
+KERNEL_AUTOには§4.2の非衝突定理と§4.3の反復費用検査を要求する。BFT_DECISIONではそれらの提出を採否の必要条件にしない。技術互換な実LLMを、未知の性質を残したままBFT_POLICY_APPROVALとして採用できるが、その性質が証明されたとは表示しない。
 
-モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。Groth16等の実行validity proof、新しいBFT finality、HF取得可否の審査委員会は導入しない。後続MAS1では公開suiteに基づく実用性G-USEと限定BFT安全停止を追加するが、未確認の費用条件を多数決で承認しない。
+モデル本体を持たないNode、Panelの完全再実行、認証された局所反証、単独反証優先、資料未充足時の成功停止を維持する。計算validity proofや台帳BFT finalityは導入しない。MAS1の停止に加えてMAD2の限定モデル採用投票を認め、未確認の数学的性質を真とする証明にはしない。
 
 ## 1. 四つの値と二種類の一回性
 
@@ -54,13 +68,13 @@ $$\operatorname{CoreExec}_{M,P}(x)=(y,z,\tau),\qquad z=\operatorname{Readout}_{P
 
 `z`のcanonical符号化は、採用するsecurity profileで固定した32 byte以上の固定長とする。十分な長さは必要な形式条件であり、entropyや非衝突性の証明ではない。自然回答`y`が短い又は同じ内容でもよい。非衝突性を要求する正式な推論出力は`(y,z)`であり、`z`はその推論の計算対象に含まれる。`y`だけを表示するAPIも、認証された`z`とprofileへの参照を機械向け出力から失わない。
 
-同じ試行をMinerとPanelが再実行すると、同じ`y,z,tau`を得なければならない。異なる試行では`z`の衝突を§4.2の明示的上界へ抑える。別のnonce・owner・epochを付けるだけで同じ実行を新しい仕事にすることはできない。同一試行の再提出に対する追加報酬の拒否は、非衝突性ではなく§7の原子的消費で実施する。
+同じ試行をMinerとPanelが再実行すると同じy,z,tauを得る。異なる試行のz非衝突性はKERNEL_AUTOでは§4.2で確認し、BFT_DECISIONでは採用判断上のリスクとして扱う。別nonce等による同じ実仕事の二重会計は採用経路にかかわらず§7で拒否する。
 
 ## 2. 不変な登録と採掘適格性
 
 ### 2.1 登録と適格性を別の状態にする
 
-一般の`ModelRegistered`と、FOW1で仕事・報酬・合意資格を発生できる`FOW1Admissible`を分ける。前者はモデルの不変identity・形式・資源等に従うpermissionlessな登録である。後者は、全候補に同じ数学的・構造的規則を適用した結果であり、モデルの名前、人気、裁量的な品質評判、保有者数、HFの可用性、登録者の裁量で決めない。MAS1対象では別途、公開・共通の実用性G-USEと安全停止状態を確認する。
+一般のModelRegisteredと、採掘・報酬・合意資格に使えるFOW1Admissibleを分ける。MAD2対象の後者は、共通の技術互換に加え、KERNEL_AUTOの現行合格又はBFT_DECISIONの現行YESを必要とする。モデル名・市場・ownerの自己宣言を採用根拠にしない。BFTの裁量的な採否判断を許すが、判断を数学的保証に読み替えない。
 
 型・条件名は論理的状態でありnative enumを割当済みではない。新規の有償採掘・credit・weightを許す箇所はすべて後者を確認する。既存登録にflagを立てるだけで、既存のModel IDやprogramの意味を変更しない。
 
@@ -74,14 +88,16 @@ $$\operatorname{CoreExec}_{M,P}(x)=(y,z,\tau),\qquad z=\operatorname{Readout}_{P
 | 入力 | AN1の実token規則、許容jobと入力分布、長さ、position/mask、初期state・cache由来 |
 | コア関数 | kernel系列、全演算、生成・停止、`y`と`z`の役割、Readout・canonical符号化 |
 | trace | Init/全Step/Readout/End、四Root、canonical木、全局所checkerと資源上限 |
-| 数学的根拠 | TheoremRuleId、定理本文digest、証明・仮定、許容parameter、全適合predicate |
-| 費用 | 計算モデル、計数単位、前処理・共有・外注の会計、比較経路、反復試行、基準実装と閾値 |
+| 採用根拠 | 版付きAdmissionBasis。AUTOではTheoremRule等、BFTではproposal/generation/quorum record。BFTでは定理・評価証拠を必須fieldにしない |
+| 費用 | 自動経路では計数単位・共有・比較経路・反復・閾値を固定。BFT経路の測定は任意の判断資料であり必須添付ではない |
 | 乱数・時間 | TB1 suite、EXEC/PANELのRoundRef型と選択規則、role epoch制約、TimingPlan規則ID、freeze・公開gate |
 | consensus | 新Ticket domain、元claim署名、仕事キー、会計版、用途、移行・停止条件 |
 
 未知の実beacon、`s`、`y,z`、実行Root、receipt、閉鎖集合Root、将来のPanel結果をdescriptor自身のdigestへ循環的に入れない。descriptorが認める規則に従った具体的なepoch・EXEC/PANEL RoundRef・原期限・TimingPlan instanceは試行文脈`C`又はそこから一意に認証されるnative recordへ固定し、epochが変わるだけで重みのModel IDを再定義しない。先に確定するRoundRefと後から確定するcertificate／FreezeRecordも別型にする。
 
 ### 2.3 G-COLLのTheoremRuleと決定論的適合
+
+**本節の採用要件はKERNEL_AUTOに適用する。BFT_DECISIONにはRFC0067の共通技術条件と採否投票を適用し、TheoremRuleを必須にしない。**
 
 `TheoremRuleId`は、合意が有効とする具体的なモデル／kernel系列、数学的定理、前提の分類と適合検査器の不変recordを指す。任意の文書URL又は登録者の「証明済み」という署名を参照するIDではない。新しい定理系列の採択・rule更新は版を付けたプロトコル変更であり、実行ごとのSNARKを導入する手続きではない。
 
@@ -101,9 +117,9 @@ Nodeは全重みを取得せず、既存の認証されたregistration/program i
 
 ### 2.4 MAS1の解析・実用性・停止状態
 
-[RFC0065](0065-model-admission-screening-and-bft-stop.md)のKernelAnalysisProfile、LoweringManifest、UsefulStateMap、PracticalSuite、WorkCostContract、AdmissionPolicy、AdmissionGenerationをdescriptorへ結合する。ModelRegisteredからFOW1Admissibleへの遷移には、全必須検査PASS、G-USE及び安全停止なしを加える。
+KernelAnalysisProfile、LoweringManifest、UsefulStateMapと実行checkerは技術互換の範囲で共通利用する。PracticalSuite、WorkCostContract、TheoremRuleの自動審査根拠はKERNEL_AUTOで必要とする。BFT_DECISIONは証明提出なしの採否投票へ分岐し、未完の自動測定をPASSへ変更しない。
 
-UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否する。G-COLLは§4.2の適合条件、G-COSTは§4.3の反復費用検査で判定する。BFTは未確認の条件をPASSにできない。全重みの未認証属性は引き続き不適格であり、BFTはそれを認定する委員会ではない。評価実行は非報酬とし、採掘資格を前提にしない独立control経路で検査する。
+AdmissionPolicy、AdmissionGeneration、AdmissionBasis、現在の停止状態を共通recordへ結合する。自動FAIL/UNKNOWNのうち、採用判断の不足はBFT proposalの対象にできる。未知演算・壊れた実行契約は両経路で拒否する。非報酬評価と採掘claimは区別し、評価traceを後から報酬へ転用しない。
 
 ## 3. TB1を使う入力・実行・公開の順序
 
@@ -138,6 +154,8 @@ UNKNOWNは採掘不可のREVIEW_HOLDとしてBFTへ接続し、FAILは拒否す�
 FOW1の実装・受入試験・公開有効化に対話機能を要求しない。有効化前には、対話なしの構成で必要資料の取得、完全再実行、単独での有界な直接反証の構成・搬送・裁定、資料未充足時の成功停止が元期限内に機能することを確認する。新しいTicketの生成費用は§4.3の反復検査で独立に評価する。
 
 ## 4. 採掘適格性の三つの独立gate
+
+MAD2ではG-EXECの実行検査契約を共通技術条件に残す。§4.2/4.3の採用要件はKERNEL_AUTOへ適用する。BFT_DECISIONでは採否判断へ置換し、数学的な性質が成立したとは主張しない。
 
 ### 4.1 G-EXEC: 全コア実行の正当性と局所反証
 
@@ -175,11 +193,11 @@ MOR1の`rho`、`s`のhash、後付けnonceの非衝突性は本gateを満たさ�
 
 本改訂で、既存Qwen系列のG-COLLの適合定理又はG-COSTの採択済み実機検査結果を追加したとはしない。旧FULL1の部分和生成量、MOR1のreceipt衝突、TB1の乱数保証、Panelの正当性保証を結合して、その不足を解消したとは主張しない。
 
-新規採掘にはG-EXEC・G-COLL・G-COSTの各判定が必要である。G-COLLの根拠は§4.2、G-COSTの根拠は§4.3の反復費用検査に従う。判定記録では、確認できた生成経路と残った不確実性を区別する。局所Courtで確認した件数から採掘資格を付与することはできない。
+新規MAD2採掘にはBaseCompatibleと有効なAdmissionBasisを要求する。自動経路はG-COLLを§4.2、G-COSTを§4.3で確認する。BFT経路はRFC0067のq YESを用い、元の検査結果と採用判断を分ける。どちらも局所Courtの一件一致だけで採用や個別claimの全体正当性を認定しない。
 
 ### 4.5 MAS1対象の追加条件
 
-本節の三gateに、RFC0065のG-USE、構造検査、最新検査世代・rule・安全停止状態を追加する。有限の実用testは用途別の品質根拠であり、各gate固有の根拠を代替しない。採掘専用の無用な重い枝、巨大trace生成又は高価な証明を、コアLLMの有用計算費用として認定しない。
+KERNEL_AUTOでは本節にRFC0065のG-USE・構造検査・現在世代を追加する。BFT_DECISIONでは実用性と費用は審査者の採否判断とし、証拠提出を必須にしない。共通技術条件、現在の停止状態、有用計算と採掘専用枝の区別は維持する。
 
 ## 5. 四Root、Ticket、補助receipt
 
@@ -213,7 +231,7 @@ $$T=H_{\rm FOW1-ticket}\!\left(\operatorname{Enc}_{P}(s,R_x,R_y,R_z,R_\tau)\righ
 | --- | --- |
 | 同じモデル重み・固定programの保存/配布 | 内容認証を維持して共有できる。費用比較はその事前取得・前処理を含める |
 | 同じ試行の再送・Panel再実行 | 同じ`y,z`とRootを使う。追加Ticket・仕事creditなし |
-| 別試行でのprefix/KV/cache/batch | 規範意味とoriginを満たし、G-COSTがその共有・償却を含む場合に許す |
+| 別試行でのprefix/KV/cache/batch | 規範意味とoriginを満たす。自動経路はG-COSTへ共有・償却を含め、BFT経路は判断リスクとして扱う |
 | 別ownerによる成果のコピー | 入力・`z`・trace・帰属を新試行へ付け替えられない。同じ実仕事の二重会計も拒否する |
 | コア計算を省いて識別値だけ生成 | 正しい規範実行ではないか、G-COSTを破る系列である。単なるreceipt一致で受理しない |
 | 正しい出力を求める新しい高速アルゴリズム | 自動的に算術詐欺とはしない。定理の前提と安全性を再評価し、必要なrule停止・移行を公開手続きで行う |
@@ -226,7 +244,7 @@ $$T=H_{\rm FOW1-ticket}\!\left(\operatorname{Enc}_{P}(s,R_x,R_y,R_z,R_\tau)\righ
 
 ## 8. 全consumerの単一gate
 
-FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissible`、G-COLLの対応TheoremRuleと現世代の費用検査、TB1 certificate/FreezeRecord、正規`z`と四Root、唯一のTicket、一回消費を加える。MAS1対象ではさらにRFC0065のEffectiveMiningAllowedを必要とし、同batchの安全停止を成功sweep・発行・未消費受賞権利の消費より先に反映する。モデル登録画面、miner、Panel、Node、SDK、RPC、import/repair、snapshot/IBD、reorg、reward/credit/weightの全consumerが同じ型・版・gateを使う。
+FOW1の成功条件は、元claimの検証先行FinalにRFC0067のorigin別EffectiveModelAdmission（元genesisは不変bootstrap、追加はAUTO/BFT、forkはBFT）、正規TB1 certificate/FreezeRecord、zと四Root、唯一Ticket、一回会計、所定の独立Gate Cを組み合わせる。MAD2では共通条件の外へG-COLL/G-COST/G-USE全PASSをANDし直さない。全consumerは同じ版付きadmission recordと停止状態を読む。
 
 同batchでは適格notice/資料case、反証、失効、依存取消を成功・発行・消費より先に適用する。現在の適格性を過去snapshotの合格表示で代替しない。証拠不足、未知rule、未対応Readout、TB1不成立、元期限切れは成功にしない。
 
@@ -238,14 +256,14 @@ FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissibl
 
 | 旧条項・方式 | FOW1の扱い |
 | --- | --- |
-| RFC59 §3.2の「異なる出力を要求しない」 | 自然回答`y`には維持するが、コア採掘出力`z`にはG-COLLを必須化 |
+| RFC59 §3.2の「異なる出力を要求しない」 | 自然回答`y`には維持するが、コアzのG-COLLはKERNEL_AUTOで要求し、BFT_DECISIONは採否判断へ置換 |
 | RFC60 §4/§8の`O=(y,s,rho)`とreceipt衝突定理 | 補助的な識別保証として保持。コア関数の適格性を代替しない |
 | RFC59/60の三Root Ticket | 本RFC §5の四Root・新domainへ置換 |
 | 未指定の実行/Panel beacon、旧seal-reveal/anchor fold、BLS候補 | TB1の用途別RoundRefとcertificateへ置換。旧値へのfallbackなし |
 | ADR0044 F1のprompt-only規則 | 新profileは実challenge入力を必須とする。旧署名済みfree-promptには旧意味を保持 |
 | ADR0044/0074等のFinal後receipt抽選、旧quantum複数draw | 新規FOW1には適用せず、一試行一Ticketを使用 |
 | 旧sampled approval | FOW1の完全Panel再実行と全checker coverageへ置換。旧claim検査用は保持 |
-| 無条件に再利用を認めた費用解釈 | G-COSTが許容・計数する範囲を必要条件に追加。意味を保つ高速化自体は不正としない |
+| 無条件に再利用を認めた費用解釈 | KERNEL_AUTOはG-COSTの範囲を必要条件に追加し、BFT_DECISIONは採用判断を記録。意味を保つ高速化自体は不正としない |
 | 一般モデル登録・旧MOR1適合 | FOW1採掘適格性を自動付与しない |
 
 ### 9.2 activationとlegacy drain
@@ -256,22 +274,22 @@ FOW1の成功条件はAN1の検証先行Finalへ、現在有効な`FOW1Admissibl
 
 `A`前に正規受理された旧claimは、事前固定したlegacy drain規則と元期限・元責任で処理する。旧署名の再解釈、過去のRootの書換え、二重credit、pendingの新規試行化をしない。過去履歴検査のための旧beacon readerは保持できるが、新しい対象へ乱数を供給する入口にしてはならない。
 
-FOW1の有効なruleが一件もない、又はTB1のbootstrap・容量・安定性が成立しない場合は、`A`のactivation gateを満たさない。文書上の採択だけで既存networkを停止したり、代替の旧採掘経路を暗黙に有効化したりしない。
+MAD2で採用可能なinstanceがどちらの経路にも一件もない、又はTB1のbootstrap・容量・安定性が成立しない場合は、`A`のactivation gateを満たさない。文書上の採択だけで既存networkを停止したり、代替の旧採掘経路を暗黙に有効化したりしない。
 
 ## 10. 有効化前の必須確認
 
 | 群 | 必須の根拠又は否定試験 |
 | --- | --- |
 | 対話経路を実装しない構成 | 正常claimは完全再実行から既定の承認へ進む。不正なtraceは協力不要の直接反証で裁定でき、資料欠落や未解決caseのまま成功しない |
-| コア出力 | 同一試行の`y,z,tau`再現、別試行のz衝突上界、Readout/Endの完全な局所関係 |
-| 費用 | 前処理・shared seed・cache・batch・零/低rank・特殊入力・外注を含むG-COSTの反復測定、再現と独立review |
+| コア出力 | 同一試行のy,z,tau再現とReadout/Endを両経路で確認。z衝突上界はAUTOの要件、BFTは採用判断 |
+| 費用 | AUTOはG-COST反復測定。BFTは証拠提出なしで採否を判断でき、費用保証済みと表示しない |
 | 代替拒否 | `z=s`、`H(s)`、回答へのtag、receiptのrename、重い証明だけの仕事量認定を合格にしない |
-| 登録 | 偽TheoremRule、未確認のweights predicate、未知kernel、自己申告属性、同名旧profileを拒否 |
+| 登録 | AUTOは偽TheoremRule・未確認のweights predicateを合格にしない。BFTはそれらの証明提出を要求しない。未知kernel、技術互換の自己申告だけ、同名旧profileによる迂回は両経路で拒否 |
 | TB1 | EXEC/PANEL別秘密、最初の正直share前freeze、全Q、独立RoundRef、公開拒否、曝露reorg、no fallback |
 | Ticket | canonical四Root、固定target、再署名・share subset・Panel nonce・自由paddingからの再抽選を拒否 |
 | 会計 | 同一仕事の旧新alias、別slot、別model名、再送、import/reorg、全consumerでの一回消費 |
 | Court | z/Readout不正、入力/weight index不正、未充足資料、単独反証、悪意多数のpositiveと保護容量 |
 | 移行 | A以後の旧新規受付拒否、既受理旧claimのdrain、legacy乱数の新対象利用拒否 |
-| 実用 | 一つ以上の実LLMにおける全gate、品質、cold取得、最悪資源、native復旧・合意接続 |
+| 実用 | 一つ以上の実LLMで採用経路の条件、資料取得、最悪資源、native復旧・合意接続を確認する。品質・費用の評価証拠はAUTOで必須、BFTでは任意の採否資料 |
 
 これらは未完了の条件を含む。TB1参照モデルの試験やMOR1 receiptの参照試験を、FOW1コア関数・費用・実モデルの完成試験として合算しない。本RFCの採択後も、証明・実装・実測・公開有効化は各々の証拠で追跡する。

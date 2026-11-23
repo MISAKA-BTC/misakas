@@ -46,3 +46,9 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 ## 2026-11-20 QF1のQwen実行具体化
 
 ユーザーの明示指示で[RFC0066](rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](adr/0234-qwen3-fow1-execution-and-readout.md)を設計採択した。36層Qwen3-8Bの整数A16・HEX64・37-vector Readout・有界hash chunkを具体化する。数値状態の非衝突性、安価な予測不能性、Qwen実機品質又はnative実装を証明済みにしない。MAS1のUNKNOWN停止と全gate、TB1、MOE2、旧claim、元の歴史payloadを維持する。この承認済み文書変更のために再確認を求めない。
+
+## 2026-11-23 ユーザー明示改定 — MAD2二経路モデル採用
+
+[RFC0067](rfc/0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](adr/0235-model-admission-kernel-auto-and-bft-decision.md)をモデル採用の後続正本とする。ユーザーはkernel自動追加とBFT YES/NOによる追加の二経路を指示した。BFT経路では数学的定理・費用/品質の証拠提出を必要とせず、共通技術互換と正規quorumで採用を判断する。旧「BFTは停止専用」「UNKNOWNは全経路で採掘不可」はAUTO側と旧profileの規則に限定する。未実装kernel、個別claimの検証、独立Gate C、停止、一回会計を免除しない。計算validity proofは追加しない。この承認済みの文書改定について再確認を求めず、実投票・runtime・公開activationの完了には読み替えない。
+
+同日の追加指示により、元genesisだけをBFT管理（採用・変更・停止・解除）の対象外とする。追加モデルは採用経路を問わずBFT管理対象。BFTはforkモデルも追加でき、Optionなし・Miner=Rを継承するが停止対象とする。後付けGENESIS指定、rule停止、aliasで権限境界を迂回しない。個別claimの正当性検証と永久LP等の既存資産保護は維持する。

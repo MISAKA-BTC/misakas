@@ -1,5 +1,19 @@
 # PALW-TB1 / FOW1 — 関数出力・乱数・仕事会計の統一と移行
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — 二経路モデル採用 MAD2
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0067](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](../adr/0235-model-admission-kernel-auto-and-bft-decision.md)／[適用・移行](model-admission-dual-route-transition.md)を、MAD2対象のモデル採用について優先する。KERNEL_AUTOは対応kernelへの自動分解と採択済み審査、BFT_DECISIONは証明提出を要求しない所定quorumのYES/NOである。
+
+G-COLLの定理・G-COST/G-USEの証拠が未完成でも、共通の技術互換とq YESがあればBFT承認を記録できる。元のUNKNOWN/FAILを数学的PASSへ改変しない。未知kernel、壊れた実行仕様、個別claimの不正はYESで免除しない。Panel/Court、Final、独立Gate C、Ticket、一回会計、TB1、MOE2は維持する。
+
+以下の旧「UNKNOWNは一律採掘不可」「BFTは停止専用」「全モデルに定理・費用審査を必須」とする条項は、旧profileの履歴及びMAD2のKERNEL_AUTO側として読む。BFT_DECISIONへ再適用しない。実投票・native実装・公開activationの完了を意味せず、既存QF1のREVIEW_HOLDを文書だけで解除しない。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 2026-11-21改訂。新規採掘のG-COSTには、現世代の固定条件での反復費用検査を適用する。未検査はUNKNOWN、再現された安価な正規TicketはFAILとし、合格の範囲と未検査条件を記録する。[RFC-0062 §4.3](../rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review)
 
 
@@ -104,7 +118,7 @@ FOW1のTicketは、規定context、モデルと実入力、コア採掘値z、�
 ## 6. 移行と失敗
 
 1. **現在:** 設計採択のみ。現行ネットワークの受理・報酬をこの文書更新だけで変更しない。
-2. **準備:** 有効化するnetwork/profile、TB1全suite/codec、各purpose、安定freeze、holder bootstrap、資源予約、G-COLLのTheoremRuleIdと適合checker、G-COSTの反復検査suite、全consumer、原子的会計を固定する。
+2. **準備:** 有効化するnetwork/profile、TB1全suite/codec、各purpose、安定freeze、holder bootstrap、資源予約、共通実行checker、MAD2の採用basis（AUTOはTheoremRule/反復suite、BFTは正規YES）、全consumer、原子的会計を固定する。
 3. **適格性の確認:** 未完成の定理や未対応kernelを仮のPASSにしない。現在Qwenに対する必要な定理・適合検査が未完成なら、そのFOW1入口を開けない。
 4. **明示したactivation境界:** 新規PALW採掘・報酬・合意workはFOW1/TB1を必須とする。旧Attempt、FreePrompt、AN1/MOR1、SWC1、別API、import/repair経路を新規採掘fallbackとして受理しない。
 5. **旧責任のdrain:** 境界より前の有効なclaim/caseは受理時の署名・型・期限・予約で終える。既払い権利、旧signature、資料保持、再起動・reorg責任を新形式へ黙って変更しない。旧claimから新FOW1 creditを二重発行しない。

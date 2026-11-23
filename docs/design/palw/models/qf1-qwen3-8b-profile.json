@@ -187,24 +187,58 @@
     "free_signature_or_carrier_fields": false
   },
   "registration": {
-    "mandatory": [
+    "revision": "2026-11-23",
+    "normative_admission": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "base_mandatory": [
       "all artifact bytes and digests",
       "exact TIR program and all numeric parameters",
       "canonical tokenizer and frame tokens",
       "StateMap and trace schema",
       "bounded Court catalog and sizing",
-      "G_EXEC",
+      "G_EXEC execution/checker compatibility; no per-model cost/collision theorem"
+    ],
+    "admission_basis": [
+      "KERNEL_AUTO",
+      "BFT_DECISION"
+    ],
+    "automatic_required": [
       "G_COLL",
       "G_COST",
       "G_USE",
-      "MAS1 structural analysis and current safety state"
+      "MAS1 structural analysis and current evidence"
     ],
-    "unknown_result": "REVIEW_HOLD",
-    "unknown_mining_allowed": false,
-    "bft_resolve_replaces_theorem": false,
-    "evaluation_mode": "NON_REWARDING_MODEL_EVALUATION",
-    "evaluation_randomness": "TB1-MODEL_AUDIT plus separate later TB1-PANEL",
-    "economic_policy": "MOE2 unchanged; market created atomically at additional-model registration"
+    "bft_required": [
+      "BaseCompatible",
+      "current authorized q YES",
+      "current policy and generation",
+      "no applicable stops"
+    ],
+    "bft_theorem_or_evaluation_evidence_required": false,
+    "unknown_auto_admission_allowed": false,
+    "unknown_assessments_with_valid_bft_yes_allowed": true,
+    "unknown_assessments_rewritten_pass": false,
+    "legacy_mas1_registration": {
+      "mandatory": [
+        "all artifact bytes and digests",
+        "exact TIR program and all numeric parameters",
+        "canonical tokenizer and frame tokens",
+        "StateMap and trace schema",
+        "bounded Court catalog and sizing",
+        "G_EXEC",
+        "G_COLL",
+        "G_COST",
+        "G_USE",
+        "MAS1 structural analysis and current safety state"
+      ],
+      "unknown_result": "REVIEW_HOLD",
+      "unknown_mining_allowed": false,
+      "bft_resolve_replaces_theorem": false,
+      "evaluation_mode": "NON_REWARDING_MODEL_EVALUATION",
+      "evaluation_randomness": "TB1-MODEL_AUDIT plus separate later TB1-PANEL",
+      "economic_policy": "MOE2 unchanged; market created atomically at additional-model registration"
+    },
+    "economic_policy": "MOE2 unchanged; market created atomically at additional-model registration",
+    "actual_bft_approval_performed_here": false
   },
   "validation_scope": {
     "reference_program": "synthetic positions, bytes, tree, Ticket and BLAKE2b chunks only",
@@ -219,5 +253,13 @@
       "G_COST",
       "activation"
     ]
+  },
+  "mad2_origin_policy": {
+    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "genesis_bft_management": false,
+    "genesis_requires_exact_original_manifest": true,
+    "additional_bft_management": true,
+    "fork_bft_add_and_stop": true,
+    "individual_claim_validation_unchanged": true
   }
 }

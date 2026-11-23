@@ -1,5 +1,19 @@
 # RFC-0065 — MAS1：モデル追加時の構造検査・実用性条件とBFT停止
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — 二経路モデル採用 MAD2
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0067](0067-model-admission-kernel-auto-and-bft-decision.md)／[ADR0235](../adr/0235-model-admission-kernel-auto-and-bft-decision.md)／[適用・移行](../governance/model-admission-dual-route-transition.md)を、MAD2対象のモデル採用について優先する。KERNEL_AUTOは対応kernelへの自動分解と採択済み審査、BFT_DECISIONは証明提出を要求しない所定quorumのYES/NOである。
+
+G-COLLの定理・G-COST/G-USEの証拠が未完成でも、共通の技術互換とq YESがあればBFT承認を記録できる。元のUNKNOWN/FAILを数学的PASSへ改変しない。未知kernel、壊れた実行仕様、個別claimの不正はYESで免除しない。Panel/Court、Final、独立Gate C、Ticket、一回会計、TB1、MOE2は維持する。
+
+以下の旧「UNKNOWNは一律採掘不可」「BFTは停止専用」「全モデルに定理・費用審査を必須」とする条項は、旧profileの履歴及びMAD2のKERNEL_AUTO側として読む。BFT_DECISIONへ再適用しない。実投票・native実装・公開activationの完了を意味せず、既存QF1のREVIEW_HOLDを文書だけで解除しない。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 <!-- QF1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 後続採択 — QF1のQwen3具体profile
 
@@ -21,13 +35,13 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 
 ユーザーは、モデル追加経路において、実用性を持たず、又は採掘値を安価に予測・再利用できるモデルを事前に排除し、自動検査で安全性を確定できない場合をBFTによる停止へ接続するよう指示した。本RFCはこの入口と停止の契約を定める。
 
-既存の「モデル品質審査をしない」という規則を、MAS1採掘資格に関する公開・共通の実用性条件の範囲で改定する。一般のartifact保存登録はpermissionlessのまま維持する。「BFT validatorを使わない」は台帳finality・fork choice・reorgの決定権について維持し、限定されたモデル安全停止権限だけを今回追加する。旧DNS-BFT、HF取得可否の多数決、モデル名allowlist、任意の品質委員会を復活させない。
+既存の「モデル品質審査をしない」という規則を、MAS1採掘資格に関する公開・共通の実用性条件の範囲で改定する。一般のartifact保存登録はpermissionlessのまま維持する。「BFT validatorを使わない」は台帳finality・fork choice・reorgの決定権について維持し、限定されたモデル安全停止権限を追加し、後続MAD2では別用途のモデル採用YES/NO権限も認める。旧DNS-BFT、HF取得可否の多数決、モデル名allowlist、台帳finalityを判断する委員会を復活させない。モデル採否の裁量はMAD2 BFT経路の明示権限に限る。
 
-MAS1はFOW1のG-EXEC・G-COLL・G-COSTを弱めない。構造検査のPASS、実用テストの高得点、BFTの署名数は、Qwen又は任意のプログラムの計算費用下界を証明しない。未対応・不明・期限切れをPASSとして扱わない。BFTに「未知のG-COSTを承認して採掘を許す」操作は存在しない。
+MAD2対象のMAS1自動経路では従来の解析・G-COLL・反復G-COST・G-USEを維持する。BFT_DECISIONではG-COLL/G-COST/G-USEを採用判断へ置き換え、数学的証明・評価証拠を票の成立条件にしない。共通の技術互換とclaim検証は維持し、元UNKNOWN/FAILをPASSへ書き換えない。
 
 ## 1. 対象と二つの登録状態
 
-MAS1を有効化したFOW1 profileへ、新たに採掘資格を得ようとする全モデルを対象とする。モデル名・owner・genesis/softforkという分類で安全条件を免除しない。ただし既受理の旧profileを遡及的にMAS1へ変更せず、切替は第14節に従う。
+MAD2では、追加モデル及びfork指定モデルをBFTによる採用・停止管理の対象とする。元genesisは不変bootstrapにより識別し、BFTの再審・変更・停止・解除から除外する。genesisを含めて個別claimの正規実行・認証・当選・会計条件は維持する。後からGENESISへ分類して免除することはできない。既受理の旧profileを遡及変更せず、切替は第14節及びRFC0067に従う。
 
 `ModelRegistered`は不変artifactと登録情報の保存である。ADDITIONALの登録はMOE2の一意市場作成と同じ原子遷移で成功する。MAS1の審査待ちを「市場未準備」と呼ばず、登録後にseed待ちの市場状態を作らない。
 
@@ -47,7 +61,7 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 | `InputDomainId` | 許容job、challenge frame、長さ、sampling、cache origin、入力選別の範囲 |
 | `PracticalSuiteId` | 利用用途、客観的score、正確な閾値、資源上限、test生成規則、基準profile |
 | `WorkCostContractId` | 比較する経路・入力数・費用単位・閾値、前処理・共有・最適化・外注の会計 |
-| `AdmissionPolicyId` | 判定規則、署名suite、BFT停止scope、期限、受付・再検査・異議容量 |
+| `AdmissionPolicyId` | 判定規則、署名suite、BFT採用/停止の別権限とscope、期限、受付・再検査・異議容量 |
 | `AdmissionGeneration` | 同じdescriptorに対する検査世代。旧判定・旧解除の再利用を拒否する単調な識別 |
 
 全件coverage、入力依存、数値意味を維持するloweringを必須とする。許可されないcustom op、外部呼出、秘密の状態、未固定RNG、未bounded loop、未検査のMoE routing、未検査のcacheを「その他」として無視しない。未知のkernel・判定器・定理又は未認証の重み属性は`UNKNOWN`である。
@@ -56,11 +70,13 @@ FOW1のFunctionWorkDescriptorへ、次の版付き情報を追加する。全情
 
 ## 3. 自動検査の判定型
 
+本節から第5節の自動審査根拠はKERNEL_AUTOの要件である。BFT_DECISIONでは共通技術条件だけを必須とし、G-COLL/G-COST/G-USE等の採用判断をq YESへ分岐できる。元の検査結果は保持する。
+
 各判定器は`PASS`、`FAIL`、`UNKNOWN`のいずれかと、規則ID・認証した対象・coverage・資源消費・根拠を返す。
 
 - `PASS`: その判定器が担当する、明記された必要条件を確認した。モデル全体のG-COSTが自動的に証明されたという意味ではない。
 - `FAIL`: 認証付きの反例又は規則違反を確定した。その検査世代では採掘不可。
-- `UNKNOWN`: 未対応・上限超過・不完全なcoverage・証拠不足・推定だけの危険又は期限切れ。新規採掘は保留し、BFT review caseへ接続する。
+- `UNKNOWN`: 未対応・上限超過・不完全なcoverage・証拠不足・推定だけの危険又は期限切れ。自動追加は保留する。技術互換ならMAD2のBFT採否proposalへ接続できる。
 
 単なるtimeout、HTTP失敗、浮動小数点誤差、heuristicの警告を算術不正の確定に変えない。複数のPASSで一つのUNKNOWNを相殺しない。解析の打切り時点で発見がないこともPASSにしない。
 
@@ -133,36 +149,17 @@ test合格はそのsuiteについての実用性根拠に限定する。有限te
 
 ## 6. 採掘資格と保留の状態機械
 
-一般登録状態とは別に、検査世代ごとに`AdmissionState`を持つ。
+MAD2対象では自動審査の状態と採用状態を分ける。自動審査のPASS/FAIL/UNKNOWNはそのまま保存する。技術互換があり、AUTO全PASSならAUTO_APPROVED、又は正規のq YESならBFT_APPROVEDを記録できる。技術的拒否はどちらの経路でも採掘不可である。
 
-| 状態 | 意味 | 新規採掘 |
-| --- | --- | --- |
-| `UNASSESSED` | 登録直後、資料・検査・評価が未完 | 不可 |
-| `CHECKING` | 予約済み予算で検査中 | 不可 |
-| `REVIEW_HOLD` | 必須項目がUNKNOWN、又は有効なrisk hold | 不可 |
-| `REJECTED` | 違反確定、又は検査の原期限までに合格せず終端 | 不可 |
-| `PASSED` | 全必須項目が現行ruleに適合 | 他のgateも満たす場合だけ可能 |
+自動保留はBFTのNOではない。BFT proposalがq NOなら不採用、未決期限切れなら未承認で終了する。BFT不応答を承認にしない。登録artifactと市場は保持し、新世代の再審は旧記録を消さずに開始する。
 
-自動検査のFAILはBFTを待たずREJECTEDにする。UNKNOWNは直ちにREVIEW_HOLDにし、対象・理由・既確認項目・不足証拠・原期限を持つ`ModelRiskCase`をcanonicalに作る。BFTが止まっても、新規モデルを暫定PASSにしない。
+    EffectiveMiningAllowed =
+        RFC0067.EffectiveModelAdmission
+        AND AllExistingClaimAndAccountingGates
 
-期限満了はAdmissionStateをREJECTED、終端理由を`REJECTED_UNRESOLVED`とする。これは未適格終端であり、算術有罪・自動slashではない。待機caseは有限に閉じ、モデルのartifact保存と市場は維持する。再評価には新しい検査世代と予算を必要とし、旧UNKNOWN・停止・根拠を失わない。
+RFC0067の共通判定は、元genesisの不変bootstrap、追加モデルのAUTO又はBFT YES、forkモデルのBFT YESを区別する。元genesisはBFT停止を適用しない。非genesisの停止・世代・技術条件は両承認経路で共通に検査する。
 
-既にPASSEDのモデルについて、誰かが「怪しい」と送信しただけでは全ピアの採掘を停止しない。必須の再検査失効・有界な認証反例は自動hold/FAILへ、未確定の懸念は第7節のBFT停止証明へ進める。未署名packetや公開caseの受付だけを永久vetoにしない。
-
-有効な採掘述語を全consumerで共有する。
-
-```text
-EffectiveMiningAllowed =
-    ProfileActivated
-    AND AdmissionState == PASSED
-    AND G_EXEC AND G_COLL AND G_COST AND G_USE
-    AND CurrentRulesAndEvidence
-    AND NoAdmissionHold
-    AND NoStructuralFailure
-    AND NoBFTSafetyStop
-    AND NoApplicableBurnPause
-    AND AllExistingClaimAndAccountingGates
-```
+本式の外側でG-COLL/G-COST/G-USE全PASSを再要求しない。新規採用票と、稼働モデルを止める次節のMODEL_STOPは異なるactionである。未署名の通報又は一票のNOで全モデルを永久停止しない。
 
 ## 7. BFT停止権限の構成
 
@@ -180,7 +177,7 @@ roleの候補集合・選出・bootstrapはTB1-ROLEの規則を継承し、候�
 
 署名対象は少なくとも、domain/version、`action=STOP`、network/genesis、scope、artifact/program/profile/Readout digest、TheoremRule、AdmissionGeneration、CaseId、ReasonCode、EvidenceRoot、policy ID、roster epoch/root、caseのcanonical起点、受理期限を含む。すべて長さ・順序・codecを固定する。署名者の重複、別purpose、別network、旧roster、別世代、別branchの起点、期限切れを拒否する。停止と解除は別action・別message subtypeとし、相互に署名を流用できない。
 
-scopeは`ARTIFACT_PROFILE`又は事前採択済みの`THEOREM_RULE_VERSION`に限定する。後者は同ruleに依存するモデルだけを対象とし、全ネットワーク停止、fork選択、既確定残高の変更又はclaimの真偽判断へ拡張しない。rule依存indexと全入口を同じnative状態へ結合する。
+scopeは`ARTIFACT_PROFILE`又は事前採択済みの`THEOREM_RULE_VERSION`に限定する。どちらも元genesisを対象集合から除外する。GENESIS_ORIGINALだけを対象とする停止は権限外として拒否し、shared ruleの停止をgenesisへ波及させない。後者は同ruleに依存するモデルだけを対象とし、全ネットワーク停止、fork選択、既確定残高の変更又はclaimの真偽判断へ拡張しない。rule依存indexと全入口を同じnative状態へ結合する。
 
 ScopeRefは識別付きunionとする。ARTIFACT_PROFILEはartifact/program/profile/ReadoutとAdmissionGenerationを、THEOREM_RULE_VERSIONは不変RuleId/versionとRuleControlGenerationを束縛する。無関係なfieldをwildcardにしない。rule停止は現在の依存モデルと、その後同じ停止versionへ登録されるモデルの両方へ効く。
 
@@ -194,7 +191,7 @@ ReasonCodeは`UNRESOLVED_ADMISSION`、`SHORTCUT_RISK`、`WORK_RULE_RISK`、`USEF
 
 Nodeは署名権限・threshold・scope・世代・資料契約・native状態を検証する。自動判定不能な危険の実体判断はBFT担当者の責任であり、署名が数学的真実性を証明したとは扱わない。正直な担当者も誤った危険判断をし得るため、誤停止の可用性リスクは残る。
 
-BFTは未証明モデルを承認する役ではない。新規UNKNOWNはすでに採掘不可であり、certificateは停止理由と責任を共有状態へ確定する。稼働後に初めて発見された未知の短絡については、発見・分析・署名収集・canonical包含までの期間が残る。未知の全攻撃を事前又は瞬時に排除した保証はしない。
+本節のMODEL_STOPは停止担当の契約である。MAD2のMODEL_ADMISSIONは別用途として未証明のモデル採用をYES/NOで判断できる。STOPの署名をYESへ流用せず、採否の主観判断と計算不正の裁定を区別する。
 
 一人の正直者が危険を報告することと、q署名で停止を確定することは別である。公的な局所反例があれば自動反証経路を使えるが、数学的に未確定の懸念ではBFTの賛同・包含条件が必要になる。
 
@@ -212,11 +209,11 @@ BFTは未証明モデルを承認する役ではない。新規UNKNOWNはすで�
 
 ## 9. 解除と迂回防止
 
-安全停止とburn停止は別の理由集合である。ownerのResume burnは`BURN_PAUSE`だけを解除し、`ADMISSION_HOLD`、`STRUCTURAL_FAILURE`、`BFT_SAFETY_STOP`、`RULE_DISABLED`を解除しない。genesis/fork指定によるburn対象外化も安全停止を消さない。
+安全停止とburn停止は別の理由集合である。ownerのResume burnは`BURN_PAUSE`だけを解除し、`ADMISSION_HOLD`、`STRUCTURAL_FAILURE`、`BFT_SAFETY_STOP`、`RULE_DISABLED`を解除しない。fork指定によるburn対象外化も安全停止を消さない。元genesisは初めからBFT安全停止の対象外であり、後付けGENESIS指定は許可しない。
 
-同じdescriptorについての誤停止解除には、再検査世代の全必須項目PASS、有効なG-EXEC/G-COLL/G-COST/G-USE、未解決caseなしを必要とする。そのうえで、現在有効な停止担当rosterによるq署名の`ModelSafetyResolutionCertificate`を必要とする。
+同じdescriptorの解除は採用basisに応じる。AUTOでは現在世代の全自動要件、BFTでは共通技術互換と現在のYES決定を確認する。両方とも現在の停止担当rosterのq署名、未解決の技術caseなし、正確なStopId集合と直前control recordへの束縛を必要とする。BFT経路へ定理又は評価証拠を再要求しない。
 
-解除bodyは、専用subtypeと`action=RESOLVE`、network/genesis、対象descriptor、最新検査世代、最新PASS record digest、取り消すStopId集合とそのroot、期待する直前control record、policy、roster、起点、期限を束縛する。Nodeはこれらを現在のcanonical状態と照合する。署名だけの解除、旧PASS、古い停止集合、timeout、少数署名、owner変更からの解除を拒否する。q署名があってもG-COSTがUNKNOWNなら採掘不可である。
+解除bodyは、専用subtypeと`action=RESOLVE`、network/genesis、対象descriptor、最新検査世代、最新AdmissionBasis record digest（AUTOは合格、BFTはYES）、取り消すStopId集合とそのroot、期待する直前control record、policy、roster、起点、期限を束縛する。Nodeはこれらを現在のcanonical状態と照合する。署名だけの解除、旧PASS、古い停止集合、timeout、少数署名、owner変更からの解除を拒否する。AUTOではG-COST UNKNOWNのまま採掘不可。BFTでは正規YESと技術条件・明示解除が揃えば、UNKNOWNを保持したまま採用できる。
 
 重み・kernel・Readout・入力規則を変更して危険を解消する場合は、新しい不変descriptorとして全検査をやり直す。旧Model IDをmutableにしない。停止したTheoremRuleを変名して同じrule versionとして通さない。
 
@@ -230,17 +227,17 @@ THEOREM_RULE_VERSION停止は、一つのモデルのPASSやModelSafetyResolutio
 
 無効な報告は棄却し、同一caseの重複は統合して上限を管理する。証拠付き反証とBFT停止証明に保護容量を設ける。ただしこれだけで無条件の包含を証明したとはせず、nativeの包含・サービス・fault前提をactivation資料へ記載する。
 
-BFTが停止した場合、新規UNKNOWN/失効済みモデルは閉じたまま期限終端へ進む。既PASSEDで未知の危険がまだ証明もcertificationもされていないモデルを、何もないのに全停止したとは扱わない。停止の活性には、必要な署名者の賛同と稼働、資料取得、期限内包含が必要である。
+BFT担当者又は投票サービスが稼働しない場合、採用未成立の新規候補・失効済みモデルは閉じたまま期限終端へ進む。既に有効なAUTO_APPROVED又はBFT_APPROVEDがあるモデルを、投票サービス不在や元の自動評価UNKNOWNだけで全停止したとは扱わない。適用停止・共通技術条件・承認の有効期間は引き続き検査する。停止の活性には、必要な署名者の賛同と稼働、資料取得、期限内包含が必要である。
 
 reorgはcontrol状態、admission、case、権利消費、会計をnative journalで原子的にundo/redoする。証明のキャッシュだけを別のconsensus状態として適用しない。旧起点がcanonicalでなくなった証明は再検査し、再提出には有効な起点と期限を必要とする。公開済みTB1乱数のfreshnessはundoで回復しない。DAGの分断・再合流・深いreorgをBFT停止証明だけで解決したとはしない。
 
-pruning/snapshot/IBDでは、有効なAdmissionPolicy、descriptor、最新generation、PASS/hold、停止集合と解除根拠、rule依存index、roster/case起点を再検査可能な形で保持する。古いPASSEDだけをimportして停止を消す経路を禁止する。
+pruning/snapshot/IBDでは、有効なAdmissionPolicy、descriptor、最新generation、自動評価とAdmissionBasis、採否結果、停止集合と解除根拠、rule依存index、roster/case起点を再検査可能な形で保持する。古いPASSED又はBFT承認だけをimportして現在の停止を消す経路を禁止する。
 
 ## 11. 条件付きで示せる性質
 
-### 11.1 未確認モデルの成功阻止
+### 11.1 未承認の追加・forkモデルの成功阻止
 
-全consumerが第6節の同じ述語を検査し、初期状態がUNASSESSED、PASS以外からの成功遷移が存在しないなら、必須項目がUNKNOWN/FAILのモデルから新しい成功効果は発生しない。これは状態遷移の帰納法による。BFT timeoutにもPASSへの遷移がないため、BFT停止時にもこの性質を維持する。
+全consumerが第6節の共通述語を検査すれば、非genesisでは有効なAUTO又は対象分類のBFT YESがない状態から新しい成功効果は発生しない。元genesisは不変bootstrapを根拠とし、この採用投票を必要としない。UNKNOWNからAUTO_APPROVEDへの遷移はないが、技術互換とq YESを伴うBFT_APPROVEDへの遷移は許す。承認未成立のtimeoutにも成功遷移はない。これは採用状態についての性質であり、モデルの費用を証明しない。
 
 ### 11.2 少数の不正署名だけではBFT停止証明を作れない
 
@@ -258,11 +255,11 @@ pruning/snapshot/IBDでは、有効なAdmissionPolicy、descriptor、最新gener
 
 | 旧方針 | MAS1での扱い |
 | --- | --- |
-| RFC0062/ADR0230の品質審査をしない | 一般登録は維持。採掘に限り公開・共通のG-USEを追加。名前・人気・裁量的allowlistは不使用 |
-| FOW1の三gate | 三gateを維持し、構造検査・G-USE・現在の停止状態をAND条件へ追加 |
-| ADR0180のBFT不使用 | 台帳finality等の禁止を維持。モデル/ruleの安全停止と条件付き解除だけを後続の例外として追加 |
+| RFC0062/ADR0230の品質審査をしない | 一般登録は維持。AUTOには共通G-USE、MAD2 BFTには証拠不要の採否判断を適用する |
+| FOW1の採用gate | AUTOは従来条件を維持。MAD2 BFTは技術互換とYES判断を使用。停止・個別claim条件は共通 |
+| ADR0180のBFT不使用 | 台帳finality等の禁止を維持。安全停止・条件付き解除に加え、MAD2のモデル採用YES/NOだけを後続例外として追加 |
 | RFC0053のburn Resume | burn理由だけを解除。安全停止は第9節の条件を必要とする |
-| coreのburn対象外 | 経済的burn停止の対象外は維持。MAS1採掘の安全適格性までは免除しない |
+| coreのburn対象外 | 経済的burn停止の対象外は維持。BFT管理はforkに適用し、元genesisだけ対象外。個別claimの検証は全分類で必要 |
 | TB1の用途集合 | 独立MODEL_AUDITを追加。MODEL_STOPは新乱数ではなく用途別署名権限 |
 | モデル単位検査不採用 | MAS1の採掘資格に関する限定検査へ明示改定。HF可用性認定や一般のモデル品質委員会は復活しない |
 
@@ -274,23 +271,23 @@ pruning/snapshot/IBDでは、有効なAdmissionPolicy、descriptor、最新gener
 | --- | --- |
 | 解析 | 定数Readout、challenge脱落、死んだ重い枝、既知の短絡、未対応op、MoE分岐、打切りUNKNOWNを区別できる |
 | 有界性 | 全重みの自己申告、欠落coverage、偽manifest、解析上限超過をPASSにしない |
-| 有用性 | 固定suite/閾値、nonce後の品質、非報酬評価、評価の採掘転用拒否、費用分離 |
-| 数学 | G-COLLの具体TheoremRuleと全適合predicate。G-COSTは別途、固定したsuiteで反復検査 |
+| 有用性 | AUTOは固定suite/閾値とnonce後の品質を確認。BFTは評価資料なしで採否を決定できる。非報酬評価を行う場合は採掘転用拒否・費用分離を共通適用 |
+| 採用経路 | AUTOはG-COLL規則と反復G-COST。BFTは証拠提出なしのYES/NOと共通技術互換 |
 | BFT | roster権限・fault仮定・署名suite、重複署名、別purpose/branch/epoch、拒否・交替、証明搬送 |
-| 遷移 | UNKNOWN待機中の採掘拒否、timeout終端、停止優先、burn/owner/alias迂回、stale解除、再検査 |
+| 遷移 | 有効なAUTOもBFT YESもない待機中の採掘拒否、BFT YESによるUNKNOWNのままの採用、timeout終端、停止優先、burn/owner/alias迂回、stale解除、再検査 |
 | 消費 | Final/credit/weight/permit/受賞権利/報酬の全入口、停止中の元期限と責任継続 |
 | 回復 | 3ピア再生、restart、reorg、IBD、pruningでadmissionと停止集合が一致 |
-| 運用 | 実suiteと実モデルの実測、trace/Panelを含む負担、保護容量、bootstrap、明示activation |
+| 運用 | AUTOの実suite、又はBFTの実instanceへの正規投票。両経路のnative接続、trace/Panelの運用、保護容量、bootstrap、明示activation。BFTへ費用・品質証明を再要求しない |
 
-検査器又はsuiteが未完成であることを理由に「BFTがあるので暫定有効」としない。現在のQwenが合格済みであると宣言しない。
+実行checkerが未完成なら両経路とも採掘不可。自動審査の定理又はsuiteだけが未完成なら、MAD2 BFT経路で採否を決められる。今回の文書だけで特定のQwenがYES承認済みとはしない。
 
 ## 14. 移行
 
 現在は設計採択のみで、公開設定・配備・支払を変更しない。将来のactivation recordで対象network、profile、適用境界、rule/suite/roster policy、旧pendingのdrain、検査予算、実装gateを固定する。
 
-適用境界以後の新規MAS1/FOW1採掘資格は全条件を必須とする。既登録モデルにも同じ事前検査を行い、単に登録済みという理由でPASSEDを付けない。旧版で正規受理済みのclaimは元の規則・責任・期限でdrainし、新profileへ付け替えない。
+適用境界以後のMAD2採掘資格は共通技術条件といずれか一つの有効な採用basisを必要とする。既登録という事実だけで承認せず、旧profileで受理済みのclaimは元規則でdrainする。
 
-有効なTheoremRule、実用suite、bounded checker、非報酬評価、TB1-MODEL_AUDIT、BFT controlと搬送がそろわなければactivationは成立しない。旧AN1/MOR1、旧beacon、burnだけの解除へfallbackしない。MAS1を将来有効化できることと、現在の稼働網をこの文書だけで止めることを区別する。
+AUTOの開始には有効なTheoremRule・suite等を必要とする。BFT経路の開始には技術互換なkernel/checker、採否権限・quorum・native controlとclaim経路を必要とし、TheoremRuleや費用/品質証拠を必須にしない。旧採掘や旧乱数へfallbackせず、公開activationは別途決定する。
 
 ## 15. 理論上の参照と検証範囲
 

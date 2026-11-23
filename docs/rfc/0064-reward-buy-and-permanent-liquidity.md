@@ -1,5 +1,16 @@
 # RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn
 
+<!-- MAD2-ADOPTED-20261123-BEGIN -->
+## 2026-11-23 後続採択 — MAD2の採用経路とBFT管理範囲
+
+[RFC0067](0067-model-admission-kernel-auto-and-bft-decision.md)をモデル採用・管理の後続正本とする。追加モデルはkernel自動審査又は証明提出なしのBFT YES/NOで採用する。旧一律UNKNOWN禁止・BFT停止専用規則はAUTO側と旧profileの履歴に限定する。
+
+**モデル管理の範囲。** 元のGENESIS_ORIGINALはBFTの採用・変更・停止・解除の対象外とする。ADDITIONALは自動/BFTの採用経路にかかわらずBFT管理対象。BFT YESでFORK_DESIGNATEDを追加でき、genesis同様のOptionなし・Miner=Rを適用するが、BFT停止・正規解除の対象である。停止免除を後付けGENESIS指定やaliasから作らず、個別claimの検証は全分類で維持する。
+
+経済比率・永久LP・過去claimは保持する。状態はADOPTED_DESIGN_NOT_ACTIVATEDであり、実装・投票・公開activationの完了ではない。
+<!-- MAD2-ADOPTED-20261123-END -->
+
+
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。設計採択であり、native実装、経済的安全性の実測、公開有効化の完了ではない。
 - 論理profile: **MOE2**。wire値、native object tag、codec、ABI、fence、activation位置は未割当。
@@ -195,6 +206,8 @@ canonical履歴上のLP成功により`hasPermanentLP(model_id)`と、そのcano
 成熟後の不正claimに責任精算が必要になっても、このreceiptを特別に引き出す権限を作らない。元のbond、liability hold、徴収可能責任を維持し、永久投入済みLPをslash原資として二重担保化しない。
 
 ## 8. core指定と旧cohortの移行
+
+MAD2ではBFT YESでFORK_DESIGNATEDを追加できる。新forkはOption市場なし・Miner=Rを継承するが、BFT安全停止・正規解除の対象である。GENESIS_ORIGINALだけがBFT管理対象外であり、後付けGENESIS指定は認めない。BFT YESでも以下の永久LP保護・旧市場drain・既存停止の継承を免除しない。
 
 **永久LPを一度でも成功記録したmodel IDを、GENESIS/FORK_DESIGNATEDへ変更してはならない。** MOE1の「旧市場をwinddownしてcoreへ指定する」経路は、永久LPを持たない旧cohortだけに限定する。
 

@@ -2,6 +2,8 @@
 
 通常は [総合入口](../README.md) から目的別に読んでください。以下は全Markdownの一覧です。新規採掘の後続採択は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) に従います。旧記録の掲載は新profileでの有効性を意味しません。
 
+> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。
+
 > **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
 
 > **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
@@ -248,6 +250,7 @@
 - [adr/0232-reward-buy-and-permanent-liquidity.md](../adr/0232-reward-buy-and-permanent-liquidity.md)
 - [adr/0233-model-admission-screening-and-bft-stop.md](../adr/0233-model-admission-screening-and-bft-stop.md)
 - [adr/0234-qwen3-fow1-execution-and-readout.md](../adr/0234-qwen3-fow1-execution-and-readout.md)
+- [adr/0235-model-admission-kernel-auto-and-bft-decision.md](../adr/0235-model-admission-kernel-auto-and-bft-decision.md)
 - [adr/INDEX.md](../adr/INDEX.md)
 - [adr/README.md](../adr/README.md)
 - [adr/TOPICS.md](../adr/TOPICS.md)
@@ -437,6 +440,7 @@
 - [design/palw/consensus/rfc9-l2-fork-choice.md](../design/palw/consensus/rfc9-l2-fork-choice.md)
 - [design/palw/consensus/rule-e-leaf-v2-note.md](../design/palw/consensus/rule-e-leaf-v2-note.md)
 - [design/palw/consensus/t12-replay-memory-1001.md](../design/palw/consensus/t12-replay-memory-1001.md)
+- [design/palw/consensus/verification-responsibilities-and-simplification-2026-11-23.md](../design/palw/consensus/verification-responsibilities-and-simplification-2026-11-23.md)
 - [design/palw/economics/README.md](../design/palw/economics/README.md)
 - [design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md](../design/palw/economics/adr-0176-cap-derivation-and-measurement-plan-2026-10-15.md)
 - [design/palw/economics/bond-budget-and-model-allocation.md](../design/palw/economics/bond-budget-and-model-allocation.md)
@@ -726,6 +730,9 @@
 - [evidence/palw/legacy-tfp1-public-replay-2026-11-11/README.md](../evidence/palw/legacy-tfp1-public-replay-2026-11-11/README.md)
 - [evidence/palw/legacy-tfp1-public-replay-2026-11-11/remaining-connections.md](../evidence/palw/legacy-tfp1-public-replay-2026-11-11/remaining-connections.md)
 - [evidence/palw/manifest-ordered-replay-2026-11-11/README.md](../evidence/palw/manifest-ordered-replay-2026-11-11/README.md)
+- [evidence/palw/mas1-qf1-native-2026-11-21/README.md](../evidence/palw/mas1-qf1-native-2026-11-21/README.md)
+- [evidence/palw/mas1-qf1-native-2026-11-21/t12-handoff-2026-11-22.md](../evidence/palw/mas1-qf1-native-2026-11-21/t12-handoff-2026-11-22.md)
+- [evidence/palw/mas1-qf1-native-2026-11-21/t12-implementation-checkpoint.md](../evidence/palw/mas1-qf1-native-2026-11-21/t12-implementation-checkpoint.md)
 - [evidence/palw/model-burn-pause-planner-2026-11-11/README.md](../evidence/palw/model-burn-pause-planner-2026-11-11/README.md)
 - [evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/README.md](../evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/README.md)
 - [evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/remaining-connections.md](../evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/remaining-connections.md)
@@ -739,6 +746,9 @@
 - [evidence/palw/selection-native-notice-2026-11-11/README.md](../evidence/palw/selection-native-notice-2026-11-11/README.md)
 - [evidence/palw/selection-preclaim-common-booking-2026-11-11/README.md](../evidence/palw/selection-preclaim-common-booking-2026-11-11/README.md)
 - [evidence/palw/selection-source-duty-2026-11-11/README.md](../evidence/palw/selection-source-duty-2026-11-11/README.md)
+- [evidence/palw/studio-main-claim-2026-11-20/README.md](../evidence/palw/studio-main-claim-2026-11-20/README.md)
+- [evidence/palw/studio-winning-receipt-2026-11-20/README.md](../evidence/palw/studio-winning-receipt-2026-11-20/README.md)
+- [evidence/palw/tb1-moe2-native-2026-11-21/README.md](../evidence/palw/tb1-moe2-native-2026-11-21/README.md)
 - [evidence/palw/tfo3-native-pairing-2026-11-11/README.md](../evidence/palw/tfo3-native-pairing-2026-11-11/README.md)
 - [evidence/palw/tfo3-native-pairing-2026-11-11/complete-profile-gaps.md](../evidence/palw/tfo3-native-pairing-2026-11-11/complete-profile-gaps.md)
 - [evidence/palw/tfo3-native-pairing-2026-11-11/prompt-form-replay-notes.md](../evidence/palw/tfo3-native-pairing-2026-11-11/prompt-form-replay-notes.md)
@@ -786,6 +796,7 @@
 - [governance/README.md](../governance/README.md)
 - [governance/design-freeze.md](../governance/design-freeze.md)
 - [governance/document-lifecycle.md](../governance/document-lifecycle.md)
+- [governance/model-admission-dual-route-transition.md](../governance/model-admission-dual-route-transition.md)
 - [governance/model-admission-safety-transition.md](../governance/model-admission-safety-transition.md)
 - [governance/model-option-economics-transition.md](../governance/model-option-economics-transition.md)
 - [governance/palw-tb1-fow1-transition.md](../governance/palw-tb1-fow1-transition.md)
@@ -973,6 +984,7 @@
 - [maintenance/revisions/2026-11-20-tb1-fow1/README.md](revisions/2026-11-20-tb1-fow1/README.md)
 - [maintenance/revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md](revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md)
 - [maintenance/revisions/2026-11-20-tb1-fow1/VALIDATION.md](revisions/2026-11-20-tb1-fow1/VALIDATION.md)
+- [maintenance/revisions/2026-11-23-dual-route-admission/README.md](revisions/2026-11-23-dual-route-admission/README.md)
 - [maintenance/v2-integration-2026-10-31.md](v2-integration-2026-10-31.md)
 - [maintenance/validation-report.md](validation-report.md)
 
@@ -1118,6 +1130,7 @@
 - [rfc/0064-reward-buy-and-permanent-liquidity.md](../rfc/0064-reward-buy-and-permanent-liquidity.md)
 - [rfc/0065-model-admission-screening-and-bft-stop.md](../rfc/0065-model-admission-screening-and-bft-stop.md)
 - [rfc/0066-qwen3-fow1-execution-and-readout.md](../rfc/0066-qwen3-fow1-execution-and-readout.md)
+- [rfc/0067-model-admission-kernel-auto-and-bft-decision.md](../rfc/0067-model-admission-kernel-auto-and-bft-decision.md)
 - [rfc/INDEX.md](../rfc/INDEX.md)
 - [rfc/README.md](../rfc/README.md)
 - [rfc/TOPICS.md](../rfc/TOPICS.md)
