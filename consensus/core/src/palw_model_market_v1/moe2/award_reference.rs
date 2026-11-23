@@ -165,6 +165,10 @@ impl<'a> Moe2AwardSource<'a> {
         Ok(Self { reference: Moe2AwardReference::read_fields(payload), context: Some(context) })
     }
 
+    pub(crate) fn registration_context(&self) -> Option<&'a [u8]> {
+        self.context
+    }
+
     /// Caller first checks the reservation in the selected parent. An invalid
     /// supplied preimage is refused without retrying through the close archive.
     pub fn open_registration(&self, close_daa: u64) -> Result<Option<(Hash64, Moe2ExecSlot)>, Moe2AwardReferenceError> {

@@ -11996,6 +11996,8 @@ pub struct PalwChainStateV2 {
 }
 
 mod chain_state;
+mod qf1_terminal_court;
+pub use qf1_terminal_court::Qf1TerminalUpdate;
 pub(crate) mod private_moe2_settlement;
 pub use private_moe2_settlement::{Moe2ExecAwardInputV1, Moe2ExecAwardV1, Moe2ExecCloseV1, Moe2ExecWorkerPayees, Moe2QuoteAnchorV1};
 mod evm_replay_settlements_owned_v2;
@@ -16017,6 +16019,7 @@ pub fn apply_palw_transition_retained_v7(
             extras,
             None,
             None,
+            None,
         )
     })?;
     if !materials.is_empty() {
@@ -16057,6 +16060,7 @@ pub fn apply_palw_transition_retained_v8(
     extras: &PalwTransitionExtrasV1,
     positive_replays: PositiveCaseReplayInputV2<'_>,
     private_moe2_award: Option<Moe2ExecAwardInputV1<'_>>,
+    private_qf1_court: Option<Qf1TerminalUpdate>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -16083,6 +16087,7 @@ pub fn apply_palw_transition_retained_v8(
             extras,
             Some(positive_replays),
             private_moe2_award,
+            private_qf1_court,
         )
     })
 }
@@ -16109,6 +16114,7 @@ fn apply_palw_transition_v7_inner(
     extras: &PalwTransitionExtrasV1,
     positive_replays: Option<PositiveCaseReplayInputV2<'_>>,
     private_moe2_award: Option<Moe2ExecAwardInputV1<'_>>,
+    private_qf1_court: Option<Qf1TerminalUpdate>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -16133,6 +16139,9 @@ fn apply_palw_transition_v7_inner(
         extras,
     )?;
     ordered_prefix::apply_ordered_prefix_v1(&mut builder, parent, ctx, accepted_objects)?;
+    if let Some(court) = private_qf1_court {
+        qf1_terminal_court::fold_terminal_court(&mut builder, ctx, court)?;
+    }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
     // service profile only (none is pinned).

@@ -236,6 +236,9 @@ pub(super) fn fold_exec_award_v1(
         return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"));
     }
     let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC award: {why:?}"));
+    if builder.state.qf1_terminal_blocks_award(award.claim) {
+        return Err(PalwStateV2Error::DeltaMismatch("native QF1 terminal Court blocks this MOE2 award"));
+    }
     if builder.state.private_moe2_attempt_work(&attempt).is_some() {
         return Err(refuse(Moe2SettlementError::AttemptAlreadyConsumed));
     }

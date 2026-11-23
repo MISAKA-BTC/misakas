@@ -199,6 +199,7 @@ fn fold_retained_award(
             load: &mut |_, _| panic!("MOE2 fixture has no positive Assignment cases"),
         },
         Some(Moe2ExecAwardInputV1 { config, quote_anchor: anchor, price, block, attempt, award }),
+        None,
     )
     .map(|(state, delta, _, _)| (state, delta))
 }
@@ -217,7 +218,43 @@ pub(super) fn check_exec_settlement_rewind(
     let store = vp.palw_state_v2_store.read();
     let (_, close_delta) = store.delta_of(close).unwrap();
     drop(store);
-    let slot = Moe2ExecSlot { registration: [24; 64], slot: 1, close, close_daa: close_delta.point.daa_score, quote };
+    use kaspa_consensus_core::palw_tb1::exec_registration::{MOE2_QUOTE_DOMAIN, QF1_LOCAL_CONTEXT_DOMAIN, registration_key};
+    let keys = libcrux_ml_dsa::ml_dsa_65::generate_key_pair([31; 32]);
+    let mut court_registration = QF1_LOCAL_CONTEXT_DOMAIN.to_vec();
+    court_registration.extend_from_slice(&[0; 128]); // descriptor and source commitments
+    for field in [
+        quote.quote_anchor,
+        Hash64::default(),
+        quote.quote_anchor,
+        Hash64::default(),
+        Hash64::default(),
+        quote.artifact_root,
+        quote.model,
+        Hash64::default(),
+        Hash64::default(),
+        quote.policy,
+        Hash64::default(),
+        Hash64::default(),
+    ] {
+        court_registration.extend_from_slice(field.as_byte_slice());
+    }
+    court_registration.extend_from_slice(keys.verification_key.as_slice());
+    court_registration.extend_from_slice(&[0; 32 + 33]); // nonce and target; this Court fixture has no winning Ticket
+    for field in [1u32, kaspa_consensus_core::palw_qf1::VOCAB, kaspa_consensus_core::palw_qf1::CONTEXT, 1] {
+        court_registration.extend_from_slice(&field.to_be_bytes());
+    }
+    for field in [100u64, close_delta.point.daa_score, quote.deadline.checked_add(1).unwrap()] {
+        court_registration.extend_from_slice(&field.to_be_bytes());
+    }
+    court_registration.extend_from_slice(MOE2_QUOTE_DOMAIN);
+    borsh::BorshSerialize::serialize(&quote, &mut court_registration).unwrap();
+    let slot = Moe2ExecSlot {
+        registration: registration_key(&court_registration),
+        slot: 1,
+        close,
+        close_daa: close_delta.point.daa_score,
+        quote,
+    };
     let wire_digest = kaspa_hashes::blake2b_512_keyed(b"misaka-palw/private/moe2/exec-admission/v1", &borsh::to_vec(&slot).unwrap());
     assert_eq!(
         slot.reservation_key(),
@@ -377,20 +414,21 @@ pub(super) fn check_exec_settlement_rewind(
         reference.check_parent_reservation(&reserved, slot.quote.deadline + 1),
         Err("private MOE2 reservation is no longer available at this DAA")
     );
-    let reference_tx = |payload| {
-        let funding = &env.floats[3];
+    let funded_carrier = |payload, payer: usize| {
+        let funding = &env.floats[payer];
         let mut tx = Transaction::new(
             crate::constants::TX_VERSION,
             vec![TransactionInput::new(funding.0, vec![], 0, 1)],
-            vec![TransactionOutput::new(funding.1.amount - 2_000_000, card_payout_spk(3))],
+            vec![TransactionOutput::new(funding.1.amount - 2_000_000, card_payout_spk(payer))],
             0,
             kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
             0,
             payload,
         );
-        sign_spend(&mut tx, funding.1.clone(), 3, config.storage_mass_parameter);
+        sign_spend(&mut tx, funding.1.clone(), payer, config.storage_mass_parameter);
         tx
     };
+    let reference_tx = |payload| funded_carrier(payload, 3);
     let carrier = reference_tx(reference.encode().to_vec());
     let candidate_with_references = |workers: &[TransactionOutput], marker: &[u8], references: &[Transaction]| {
         let mut transactions: Vec<_> = execution.transactions.iter().cloned().collect();
@@ -413,6 +451,136 @@ pub(super) fn check_exec_settlement_rewind(
         let (state, delta) = apply_palw_transition_v2(&reserved, params, &point, &[], None).unwrap();
         (state, delta, Moe2Position { point, ..position })
     };
+    {
+        use kaspa_consensus_core::palw_model_market_v1::moe2::award_reference::Moe2AwardSource;
+        use kaspa_consensus_core::{
+            palw_qf1::{TreeBuilder, TreeKind, TreeRoot, readout_chunks::record_count, ticket},
+            palw_state_v2::Qf1TerminalUpdate,
+            palw_tb1::{
+                qf1_original_carrier::{QF1_ORIGINAL_BODY_BYTES, Qf1OriginalCarrier, signing_id},
+                qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRelation, Qf1TerminalRuling},
+            },
+        };
+        use sha3::{Digest, Sha3_512};
+        let chain = vp.palw_network_domain_v2().as_bytes();
+        let token = 151645u32.to_le_bytes();
+        let trace_count = u64::from(record_count(1).unwrap()) + 4;
+        let stop_index = trace_count - 2 - u64::from(record_count(1).unwrap());
+        let mut stop = [0; 18];
+        stop[0] = 3;
+        stop[1..5].copy_from_slice(&13u32.to_le_bytes());
+        stop[5..9].copy_from_slice(&1u32.to_le_bytes());
+        stop[9..13].copy_from_slice(&1u32.to_le_bytes());
+        stop[13..17].copy_from_slice(&token);
+        stop[17] = 1; // contradicts the committed EOS token
+        let mut trace = TreeBuilder::new(attempt, TreeKind::Trace, trace_count, trace_count, Some(stop_index)).unwrap();
+        for i in 0..trace_count {
+            trace.push(if i == stop_index { &stop } else { &[1u8][..] }).unwrap();
+        }
+        let (trace, path) = trace.finish().unwrap();
+        let input = 1u32.to_le_bytes();
+        let readout = [0u8; 64];
+        let roots = [
+            TreeRoot::build(attempt, TreeKind::Input, std::iter::once(input.as_slice()), 1).unwrap(),
+            TreeRoot::build(attempt, TreeKind::Answer, std::iter::once(token.as_slice()), 1).unwrap(),
+            TreeRoot::build(attempt, TreeKind::Readout, std::iter::once(readout.as_slice()), 1).unwrap(),
+            trace,
+        ];
+        let mut body = [0; QF1_ORIGINAL_BODY_BYTES];
+        let mut writer = body.as_mut_slice();
+        borsh::BorshSerialize::serialize(&roots.each_ref().map(|root| root.count()), &mut writer).unwrap();
+        borsh::BorshSerialize::serialize(&roots.each_ref().map(|root| root.digest), &mut writer).unwrap();
+        borsh::BorshSerialize::serialize(&ticket(roots.each_ref()).unwrap(), &mut writer).unwrap();
+        let original = signing_id(&chain, &slot.registration, slot.slot, &attempt, &body);
+        let signature = libcrux_ml_dsa::ml_dsa_65::sign(
+            &keys.signing_key,
+            original.as_byte_slice(),
+            b"MISAKA/private/QF1/local-original-signature/v1",
+            [32; 32],
+        )
+        .unwrap();
+        let original_tx =
+            funded_carrier(Qf1OriginalCarrier { body: &body, signature: signature.as_slice().try_into().unwrap() }.encode(), 1);
+        let original_block = candidate_with_references(&[], original.as_byte_slice(), &[original_tx]);
+        let mut witness = Vec::from(token);
+        witness.extend_from_slice(&stop);
+        let mut case_hash = Sha3_512::new()
+            .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/v1")
+            .chain_update(chain)
+            .chain_update(original_block.hash().as_bytes())
+            .chain_update(original.as_bytes())
+            .chain_update(token)
+            .chain_update(stop)
+            .chain_update([0, path.len() as u8]);
+        for sibling in path {
+            witness.extend_from_slice(&sibling);
+            case_hash.update(sibling);
+        }
+        let witness_tx = funded_carrier(
+            Qf1TerminalCarrier { relation: Qf1TerminalRelation::Stop, original_block: original_block.hash(), disclosure: &witness }
+                .encode()
+                .unwrap(),
+            2,
+        );
+        let source = Moe2AwardReference::for_slot(original, attempt, &slot);
+        let source_tx = reference_tx(source.encode_with_registration(&court_registration).unwrap());
+        let case_marker: [u8; 64] = case_hash.finalize().into();
+        let case = candidate_with_references(&[], &case_marker, &[witness_tx, source_tx]);
+        let source = Moe2AwardSource::from_transactions(case.transactions.iter()).unwrap();
+        let ruling = Qf1TerminalRuling::prepare(chain, &reserved, source, slot.close_daa, &original_block, &case).unwrap();
+        let verdict: [u8; 64] = Sha3_512::new()
+            .chain_update(b"MISAKA/private/QF1/court/last-answer-stop/verdict/v1")
+            .chain_update(case.hash().as_bytes())
+            .chain_update(case_marker)
+            .chain_update([1])
+            .finalize()
+            .into();
+        let apply = |parent: &PalwChainStateV2, point: PalwBlockContextV2, event| {
+            let extras = vp.palw_test_resolved_transition_extras_v1(&point);
+            apply_palw_transition_retained_v8(
+                parent,
+                params,
+                None,
+                &point,
+                &[],
+                PalwBlockWorkV3::None,
+                &[],
+                Hash64::default(),
+                false,
+                false,
+                false,
+                false,
+                &PalwTransitionExtrasV1 {
+                    private_moe2_registration: true,
+                    kernel_route: extras.kernel_route,
+                    ..Default::default()
+                },
+                PositiveCaseReplayInputV2 {
+                    selected_parent: parent.last_point().unwrap().block,
+                    live_case_cap: 0,
+                    load: &mut |_, _| panic!("no Assignment cases"),
+                },
+                None,
+                Some(event),
+            )
+        };
+        let case_point = PalwBlockContextV2 { block: case.hash(), ..position.point };
+        let (pending, open, _, _) = apply(&reserved, case_point, Qf1TerminalUpdate::Open(ruling)).unwrap();
+        assert!(pending.qf1_terminal_blocks_award(original));
+        assert!(pending.qf1_terminal_verdict_pending(&verdict, case_point.daa_score));
+        let verdict_point =
+            PalwBlockContextV2 { block: Hash64::from_u64_word(726), blue_score: case_point.blue_score + 1, ..case_point };
+        let (decided, decision, _, _) =
+            apply(&pending, verdict_point, Qf1TerminalUpdate::Verdict { block: verdict_point.block, marker: verdict }).unwrap();
+        assert!(decided.qf1_terminal_blocks_award(original));
+        assert!(!decided.qf1_terminal_verdict_pending(&verdict, verdict_point.daa_score));
+        let reopened = revert_delta_v2(&decided, &decision, params).unwrap();
+        assert_eq!(reopened.state_root(), pending.state_root());
+        assert!(reopened.qf1_terminal_verdict_pending(&verdict, case_point.daa_score));
+        assert!(!reopened.qf1_terminal_blocks_award(claim));
+        assert_eq!(apply_delta_v2(&reopened, &decision, params).unwrap().state_root(), decided.state_root());
+        assert_eq!(revert_delta_v2(&reopened, &open, params).unwrap().state_root(), reserved.state_root());
+    }
     let candidate_with_marker = |workers, marker| candidate_with_references(workers, marker, std::slice::from_ref(&carrier));
     let candidate = |workers| candidate_with_marker(workers, &marker);
     let award_block = candidate(&outputs);

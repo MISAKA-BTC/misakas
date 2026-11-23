@@ -857,6 +857,7 @@ impl VirtualStateProcessor {
             // authoritative fold below may publish state and UTXO effects.
         }
         let selected_parent = ctx.ghostdag_data.selected_parent;
+        let private_qf1_court = if projecting { None } else { self.prepare_private_qf1_court(header, selected_parent, state)? };
         let live_case_cap = self
             .palw_positive_assignment_params_v2
             .as_ref()
@@ -904,6 +905,7 @@ impl VirtualStateProcessor {
                         load: &mut load_positive_case,
                     },
                     None,
+                    private_qf1_court.clone(),
                 )
             })
         };

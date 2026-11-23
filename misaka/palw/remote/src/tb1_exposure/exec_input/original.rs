@@ -284,18 +284,15 @@ impl LocalOriginalBody {
 
     /// Canonical signature message for the received fields and this EXEC instance.
     pub fn signing_id(&self, input: &DerivedExecInput<'_>) -> Hash64 {
-        let mut hash = Sha3_512::new()
-            .chain_update(b"MISAKA/private/QF1/local-original/v1")
-            .chain_update(input.chain)
-            .chain_update(input.registration_key)
-            .chain_update(input.slot.to_be_bytes())
-            .chain_update(input.attempt);
-        for (&n, h) in self.counts.iter().zip(&self.roots) {
-            hash.update(n.to_le_bytes());
-            hash.update(h.as_byte_slice());
-        }
-        hash.update(self.ticket);
-        Hash64::from_bytes(hash.finalize().into())
+        let mut body = [0; QF1_ORIGINAL_BODY_BYTES];
+        borsh::BorshSerialize::serialize(self, &mut body.as_mut_slice()).expect("fixed-size QF1 Original body");
+        kaspa_consensus_core::palw_tb1::qf1_original_carrier::signing_id(
+            &input.chain,
+            &input.registration_key,
+            input.slot,
+            &input.attempt,
+            &body,
+        )
     }
 }
 

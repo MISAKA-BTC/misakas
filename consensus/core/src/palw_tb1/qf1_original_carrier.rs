@@ -1,6 +1,7 @@
 //! Body evidence for an isolated QF1 Original. The reader still authenticates
 //! the Original against its EXEC input and the source block's commitment.
-use crate::{block::Block, subnets::SUBNETWORK_ID_PALW_LIFECYCLE};
+use crate::{Hash64, block::Block, subnets::SUBNETWORK_ID_PALW_LIFECYCLE};
+use sha3::{Digest, Sha3_512};
 
 const TAG: &[u8; 8] = b"TB1ORG01";
 pub const QF1_ORIGINAL_BODY_BYTES: usize = 4 * (8 + 64) + 32;
@@ -44,4 +45,28 @@ impl<'a> Qf1OriginalCarrier<'a> {
         }
         Self::decode(&carrier.payload)
     }
+}
+
+/// Canonical private Original identifier shared by production and Court.
+pub fn signing_id(
+    chain: &[u8; 64],
+    registration: &[u8; 64],
+    slot: u64,
+    attempt: &[u8; 32],
+    body: &[u8; QF1_ORIGINAL_BODY_BYTES],
+) -> Hash64 {
+    // The fixed carrier body stores counts then roots. The historical signing
+    // input interleaves each count and its corresponding root.
+    let mut hash = Sha3_512::new()
+        .chain_update(b"MISAKA/private/QF1/local-original/v1")
+        .chain_update(chain)
+        .chain_update(registration)
+        .chain_update(slot.to_be_bytes())
+        .chain_update(attempt);
+    for (count, root) in body[..32].chunks_exact(8).zip(body[32..288].chunks_exact(64)) {
+        hash.update(count);
+        hash.update(root);
+    }
+    hash.update(&body[288..]);
+    Hash64::from_bytes(hash.finalize().into())
 }

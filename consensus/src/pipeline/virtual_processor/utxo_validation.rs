@@ -2440,6 +2440,65 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
+    /// The private Court uses the existing case carrier and funded award
+    /// reference. A plain private replay transcript cannot write native state.
+    pub(super) fn prepare_private_qf1_court(
+        &self,
+        header: &std::sync::Arc<Header>,
+        selected_parent: BlockHash,
+        state: &PalwChainStateV2,
+    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::Qf1TerminalUpdate>, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::{
+            block::Block,
+            coinbase::{coinbase_payload_extra_data, palw_coinbase_marker},
+            palw_state_v2::Qf1TerminalUpdate,
+            palw_tb1::qf1_terminal_carrier::{Qf1TerminalCarrier, Qf1TerminalRuling},
+        };
+        if self.private_moe2_registration_from.is_none_or(|from| header.daa_score < from) {
+            return Ok(None);
+        }
+        let missing = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
+        let txs = self.block_transactions_store.get(header.hash).map_err(missing)?;
+        let candidate = Block::from_arcs(header.clone(), txs);
+        let Some(marker) = candidate
+            .transactions
+            .first()
+            .filter(|tx| tx.is_coinbase())
+            .and_then(|tx| coinbase_payload_extra_data(&tx.payload))
+            .and_then(palw_coinbase_marker)
+        else {
+            return Ok(None);
+        };
+        if state.qf1_terminal_verdict_pending(&marker, header.daa_score) {
+            return Ok(Some(Qf1TerminalUpdate::Verdict { block: header.hash, marker }));
+        }
+        let (Ok(case), Ok(source)) =
+            (Qf1TerminalCarrier::from_block(&candidate), Moe2AwardSource::from_transactions(candidate.transactions.iter()))
+        else {
+            return Ok(None);
+        };
+        if source.reference.check_parent_reservation(state, header.daa_score).is_err() {
+            return Ok(None);
+        }
+        let history = |_| PalwLocalTransitionFaultV1::Context(PalwSourceBootstrapContextFaultV1::HistoryUnavailable);
+        if source.reference.close == case.original_block
+            || !self.reachability_service.try_is_chain_ancestor_of(source.reference.close, case.original_block).map_err(history)?
+            || !self.reachability_service.try_is_chain_ancestor_of(case.original_block, selected_parent).map_err(history)?
+        {
+            return Ok(None);
+        }
+        let close = self.headers_store.get_header(source.reference.close).map_err(missing)?;
+        if !source.open_registration(close.daa_score).is_ok_and(|preimage| preimage.is_some()) {
+            return Ok(None);
+        }
+        let origin = self.headers_store.get_header(case.original_block).map_err(missing)?;
+        let body = self.block_transactions_store.get(case.original_block).map_err(missing)?;
+        let original = Block::from_arcs(origin, body);
+        Ok(Qf1TerminalRuling::prepare(self.palw_network_domain_v2().as_bytes(), state, source, close.daa_score, &original, &candidate)
+            .ok()
+            .map(Qf1TerminalUpdate::Open))
+    }
+
     /// The reservation row has already authenticated the exact close and slot.
     /// Use the candidate's preimage when present, or the legacy close archive.
     pub(super) fn read_private_moe2_reserved_terms(
