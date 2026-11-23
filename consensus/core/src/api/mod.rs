@@ -2601,6 +2601,11 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// A read-only diagnosis for one claim pinned to the selected parent.
+    fn palw_claim_diagnostic_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_claim_diagnostic_v1::PalwClaimDiagnosticV1> {
+        None
+    }
+
     /// ADR-0132: every attempt-lane claim in the tip state, as the end-to-end ledger observes it
     /// (phase marks, escrow, the duty row's seats). `None` off `ConsensusV2`.
     fn palw_claim_ledger_observations_v1(&self) -> Option<Vec<crate::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {

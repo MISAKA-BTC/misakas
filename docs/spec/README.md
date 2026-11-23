@@ -1,12 +1,12 @@
 # 仕様 — 規則と適用条件から読む
 
-> **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
+> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) と [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
 
 採用済み部分は [原則凍結](../governance/design-freeze.md)。この整理は仕様の実装・検証・本番有効化を宣言しません。
 
 ## 2026-11-08 採択の新しい claim 版
 
-現行の設計入口は [RFC 20本](../rfc-v2/README.md)。新規0016〜0020の採択は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) に記録し、**ADOPTED_DESIGN_NOT_ACTIVATED** とします。新しい claim / profile の規範は [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) から参照してください。
+現行の設計入口は [RFC](../rfc/README.md)。2026-11-08の採択は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) に記録し、**ADOPTED_DESIGN_NOT_ACTIVATED** とします。新しい claim / profile の規範は [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) から参照してください。
 
 新版では Node にモデル本体・全推論・GPU を要求せず、モデル未共有とモデル内 Miner／Panel の全結託を想定します。Miner の資料供給、global pool から独立選出した Panel の非対話 positive、不一致時の対話 negative を組み合わせます。結果固定後に検証を始め、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等も満たした claim だけを成功 Final に進めます。資料不足は成功不可とし、global な正直者の前提、局所証拠と全体承認の区別を維持します。
 

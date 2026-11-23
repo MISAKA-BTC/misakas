@@ -106,7 +106,7 @@ impl Qf1TerminalRuling {
         if parent.tb1_exec_close_receipt(source.reference.close).is_some() {
             return Err("recorded QF1 EXEC close requires its certificate");
         }
-        source.reference.check_parent_reservation(parent, candidate.header.daa_score)?;
+        source.reference.check_parent_reservation(parent, candidate.header.daa_score).map_err(|error| error.reason())?;
         let (original, registration) = authenticate_original(&chain, source, slot_close_daa, original_block)?;
         Self::judge(chain, source.reference, original_block.hash(), original, &registration, candidate)
     }

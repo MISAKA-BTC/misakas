@@ -26,8 +26,8 @@
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。経済規範の採択であり、native/EVM実装、検証、既存市場の移行、公開有効化の完了ではない。
 - 論理profile: **MOE1**（MisakaOption Economics）。wire値、object tag、fence、activation heightは未割当。
 - 判断記録: [ADR-0231](../adr/0231-additional-model-option-economics.md)
-- 現行会計の正本: [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
-- 接続: [モデル階層04](../rfc-v2/0004-model-tiers-and-annual-catalog.md)、[会計07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、[Final20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)、[TB1](0061-palw-internal-threshold-beacon.md)、[FOW1](0062-palw-function-output-and-work-admissibility.md)
+- 現行会計の正本: [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)
+- 接続: [モデル階層04](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0004-model-tiers-and-annual-catalog.md)、[会計07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md)、[Final20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)、[TB1](0061-palw-internal-threshold-beacon.md)、[FOW1](0062-palw-function-output-and-work-admissibility.md)
 
 ## 0. 採択する経済契約
 

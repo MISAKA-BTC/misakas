@@ -43,17 +43,30 @@ pub fn palw_kernel_claim_request_v1(request: &GetPalwKernelClaimRequest) -> RpcR
 
 /// Op 210's answer on a ConsensusV2 network.
 pub fn palw_kernel_claim_response_v1(c: &dyn ConsensusApi, claim: Hash64) -> RpcResult<GetPalwKernelClaimResponse> {
+    let diagnostic_json = c
+        .palw_claim_diagnostic_v1(claim)
+        .map(|reading| serde_json::to_string(&reading))
+        .transpose()
+        .map_err(|error| RpcError::General(error.to_string()))?
+        .unwrap_or_default();
     let tip_daa = c.get_virtual_daa_score();
     let kernel_claim = claim.as_bytes();
     let Some(read) = c.palw_kernel_route_v1().map(|route| route.claim_read_v1(&kernel_claim)) else {
-        return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), tip_daa, ..Default::default() });
+        return Ok(GetPalwKernelClaimResponse { claim_id: claim.to_string(), tip_daa, diagnostic_json, ..Default::default() });
     };
     let Some(read) = read.map_err(RpcError::General)? else {
-        return Ok(GetPalwKernelClaimResponse { available: true, claim_id: claim.to_string(), tip_daa, ..Default::default() });
+        return Ok(GetPalwKernelClaimResponse {
+            available: true,
+            claim_id: claim.to_string(),
+            tip_daa,
+            diagnostic_json,
+            ..Default::default()
+        });
     };
     Ok(GetPalwKernelClaimResponse {
         available: true,
         found: true,
+        diagnostic_json,
         tip_daa,
         claim_id: claim.to_string(),
         kind: read.kind.to_string(),

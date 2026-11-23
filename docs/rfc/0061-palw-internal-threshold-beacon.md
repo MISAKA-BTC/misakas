@@ -29,7 +29,7 @@ G-COLLの定理・G-COST/G-USEの証拠が未完成でも、共通の技術互�
 - Scheme: **PALW-TB1 / TB1-BGW-PQ**（設計識別名。native wire tagの割当ではない）
 - 対応ADR: [ADR-0229](../adr/0229-palw-internal-threshold-beacon.md)
 - 実行契約: [AN1](0059-palw-an1-input-binding-and-panel-court.md)、[MOR1](0060-model-registration-and-attempt-output-binding.md)、[FOW1](0062-palw-function-output-and-work-admissibility.md)
-- 規範所有先: [06 Panel](../rfc-v2/0006-panels-and-probabilistic-verification.md)、[10 合意・schedule](../rfc-v2/0010-dag-consensus-and-native-settlement.md)、[16 original](../rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[20 Final](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- 規範所有先: [06 Panel](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0006-panels-and-probabilistic-verification.md)、[10 合意・schedule](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md)、[16 original](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[20 Final](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
 
 ## 0. 採択範囲と来歴
 

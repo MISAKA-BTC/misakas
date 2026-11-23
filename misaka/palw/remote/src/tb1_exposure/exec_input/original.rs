@@ -46,6 +46,20 @@ pub(super) fn decode_published_qf1_original(
     Ok((borsh::from_slice(carrier.body)?, MLDSA65Signature::new(*carrier.signature)))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Qf1AwardPreparationError {
+    #[error("QF1 claim {claim} on {parent} did not meet its signed EXEC target")]
+    TicketLost { claim: Hash64, parent: Hash64 },
+    #[error("QF1 claim {claim} on {parent} has already settled this work")]
+    WorkAlreadyConsumed { claim: Hash64, parent: Hash64 },
+}
+
+impl From<Qf1AwardPreparationError> for io::Error {
+    fn from(error: Qf1AwardPreparationError) -> Self {
+        Self::new(io::ErrorKind::InvalidData, error)
+    }
+}
+
 /// The envelope, target evaluation and numerical work identity on a
 /// candidate branch. Independent replay and Gate C precede reward authority.
 pub struct BranchQf1Execution {
@@ -111,11 +125,13 @@ impl PanelApprovedQf1Execution {
             close_daa: close.daa_score,
             quote,
         };
-        reference.check_execution_slot(execution.original, execution.attempt, &slot).map_err(invalid)?;
-        reference.check_parent_reservation(parent, daa).map_err(invalid)?;
-        reference.check_parent_unspent(parent).map_err(invalid)?;
+        reference
+            .check_execution_slot(execution.original, execution.attempt, &slot)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        reference.check_parent_reservation(parent, daa).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        reference.check_parent_unspent(parent).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if parent.private_moe2_work_claim(&execution.work).is_some() {
-            return Err(invalid("private MOE2 work has already settled on this branch"));
+            return Err(Qf1AwardPreparationError::WorkAlreadyConsumed { claim: execution.original, parent: execution.parent }.into());
         }
         Ok(slot)
     }
@@ -195,7 +211,7 @@ impl BranchExecInput<'_> {
         }
         let execution = self.read_published_qf1_execution(native, approval.original_block(), approval.original(), work)?;
         if !execution.ticket_meets_target() {
-            return Err(invalid("PANEL Original does not meet its signed EXEC target"));
+            return Err(Qf1AwardPreparationError::TicketLost { claim: execution.original, parent: self.parent }.into());
         }
         Ok(PanelApprovedQf1Execution { execution, approval })
     }

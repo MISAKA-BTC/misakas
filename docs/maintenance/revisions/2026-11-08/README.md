@@ -4,7 +4,7 @@
 RFCを修正して20本に整理するよう明示的に指示したこと。
 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。変更対象は文書と文書検査ツールである。
 
-[現行20本の入口](../../../rfc-v2/README.md) /
+[現行20本の入口](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md) /
 [採択ADR-0215](../../../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) /
 [検査結果](VALIDATION.md) / [変更ファイル台帳](changes.json)。
 
@@ -47,14 +47,14 @@ Panelが同じcanonical traceを再構成すれば、自分の木のopeningを�
 | 範囲 | 担当 |
 | --- | --- |
 | RFC-v2-0001〜0015 | 既存のjob・TIR・登録・階層・資源・参加・会計・依存・API・合意・資金・保存・release・共通court・変更管理を保持し、新profileの適用範囲を追加 |
-| [16](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md) | Miner original、canonical trace、署名、有限の資料供給義務 |
-| [17](../../../rfc-v2/0017-noninteractive-positive-verification.md) | 非対話positive、独立全再実行、元rootとの一致、局所検査計画、承認scope |
-| [18](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md) | 対話negative、局所court、公開第三者、qualified default、未検証終了 |
-| [19](../../../rfc-v2/0019-model-free-node-and-bounded-evidence.md) | Node非保有の境界、自己完結する局所証拠、資源・保存・cold再検査 |
-| [20](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) | 非共有・寡占脅威、global選出、事前認証、成功Final、時計、保証限界 |
+| [16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md) | Miner original、canonical trace、署名、有限の資料供給義務 |
+| [17](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md) | 非対話positive、独立全再実行、元rootとの一致、局所検査計画、承認scope |
+| [18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) | 対話negative、局所court、公開第三者、qualified default、未検証終了 |
+| [19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) | Node非保有の境界、自己完結する局所証拠、資源・保存・cold再検査 |
+| [20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) | 非共有・寡占脅威、global選出、事前認証、成功Final、時計、保証限界 |
 
-旧番号RFC48ファイルの現行担当は[対応表](../../../rfc-v2/MAPPING.md)と
-[adoption-map.json](../../../rfc-v2/adoption-map.json)で追える。
+旧番号RFC48ファイルの現行担当は[対応表](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/MAPPING.md)と
+[adoption-map.json](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/adoption-map.json)で追える。
 旧0042は二つの異なるファイルをそのまま保持し、完全パスで区別する。
 旧41原文→15冊の歴史source-mapと、89の原付録区間は保存する。
 

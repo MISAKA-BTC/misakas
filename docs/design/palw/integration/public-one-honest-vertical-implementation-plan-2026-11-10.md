@@ -39,7 +39,7 @@
 9. 原受理`a`、notice `a+3,120`、hard `a+10,000`を保持する。取得・receipt・交代で時計をresetしない。`hard+1`の排他的終了、保持期限と訴追権の違いも実装する。
 10. 反証、Qによるhold、依存失効は、同じcanonical処理単位のFinal、credit発行・予約、schedule、permit消費、関連fee・取引効果より先に反映する。
 
-旧署名、旧claim、旧75/41、旧`PositiveChecked`、旧Gate C、既存の二階層1.0／0.3は各版の意味を維持する。モデルの公開状況を登録資格審査やtier変更にしない。計算validity proofや新しい汎用proof VMを導入しない。規範は[PRINCIPLES §13–14](../../../PRINCIPLES.md)、[RFC20](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)、[公開裁定v0.4](../consensus/public-adjudication-policy-v0.4.md)に置く。
+旧署名、旧claim、旧75/41、旧`PositiveChecked`、旧Gate C、既存の二階層1.0／0.3は各版の意味を維持する。モデルの公開状況を登録資格審査やtier変更にしない。計算validity proofや新しい汎用proof VMを導入しない。規範は[PRINCIPLES §13–14](../../../PRINCIPLES.md)、[RFC20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)、[公開裁定v0.4](../consensus/public-adjudication-policy-v0.4.md)に置く。
 
 ## 3. 入力の基準と現在のコード
 
@@ -83,7 +83,7 @@
 
 ### 4.1 全scopeの資料取得と検査機会
 
-**最優先の未確立事項は、大容量の公開資料について、選択的秘匿と悪意の虚偽未着申告を、小さなNodeの根拠で区別して有限に処理するprofile別手順である。** 現行採択は`PROFILE PROCEDURE NOT ESTABLISHED`を明記している。これはテストを後ろへ回すだけでは解消しない設計課題である。[RFC18 §2.4](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)と[最新レビュー](../../../maintenance/revisions/2026-11-09-public-panel/REVIEW.md)を基準に、次の成果物を作る。
+**最優先の未確立事項は、大容量の公開資料について、選択的秘匿と悪意の虚偽未着申告を、小さなNodeの根拠で区別して有限に処理するprofile別手順である。** 現行採択は`PROFILE PROCEDURE NOT ESTABLISHED`を明記している。これはテストを後ろへ回すだけでは解消しない設計課題である。[RFC18 §2.4](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)と[最新レビュー](../../../maintenance/revisions/2026-11-09-public-panel/REVIEW.md)を基準に、次の成果物を作る。
 
 | 設計成果物 | 必ず具体化する内容 |
 | --- | --- |
@@ -215,28 +215,28 @@ can_success_final =
 
 | RFC | 実装へ反映する項目 | 主工程 | 検証で確かめる出口 |
 | --- | --- | --- | --- |
-| [01 推論・生成Job](../../../rfc-v2/0001-inference-and-generative-jobs.md) | prompt/tokenizer/token列、seed、decode、停止、入出力をoriginalへ束縛 | I0–I1 | V2/V3/V5: 別入力・別tokenizer・偽停止を受理しない |
-| [02 TIR・Kernel](../../../rfc-v2/0002-tensor-ir-and-shared-query-data.md) | 数値意味、全関係、初回区間trace、query identity | I0–I2 | V2/V5: 採用全関係の正例と偽の元recordを裁く |
-| [03 登録・Artifact](../../../rfc-v2/0003-model-onboarding-and-artifacts.md) | 不変artifact/program/layoutと公開chunkの認証 | I1/I3 | V2/V5: すり替え拒否、初取得・再配布から検証可能 |
-| [04 二階層・年次カタログ](../../../rfc-v2/0004-model-tiers-and-annual-catalog.md) | 1.0/0.3、係数一回、全tierのclaim検証 | I4–I5 | V4: tierを検証免除にせず既存会計を保つ |
-| [05 資源・長文脈](../../../rfc-v2/0005-bounded-resources-and-long-context.md) | cold取得、全再実行、trace保持、全case・包含予約 | I0/I3–I6 | V5/V6: 最悪合法工程とEXEC共用負荷を収容 |
-| [06 Panel・抽選](../../../rfc-v2/0006-panels-and-probabilistic-verification.md) | commit後global抽選、成熟bond、再抽選禁止、モデル未保有者 | I1/I3 | V2/V3: 独立選出、非選出署名・旧署名を数えない |
-| [07 Claim・EXEC会計](../../../rfc-v2/0007-claims-exec-and-answer-accounting.md) | 有限ExecCredit、一回mint、reserved/consumed/revoked/expired | I1/I4 | V3/V4: 二重仕事・同単位消費逃れ・期限切れを拒否 |
-| [08 依存・責任](../../../rfc-v2/0008-claim-dependencies-and-liability.md) | KV/prefix/source由来、依存期限、失効伝播 | I1–I5 | V2/V4: 別源を拒否し、取消と責任を分離 |
-| [09 Remote・SDK](../../../rfc-v2/0009-remote-client-and-sdk.md) | 公開commit/要求/応答/証拠/承認/状態API | I1–I5 | V3: 実transportとcanonical包含から終端へ到達 |
-| [10 DAG・Native決済](../../../rfc-v2/0010-dag-consensus-and-native-settlement.md) | pre-Final認証、反証優先、ScheduleId、現在slot、settlement | I1/I4–I5 | V4/V6: 単一gate、取消、1 BPSとの共存条件 |
-| [11 Bond・Fee](../../../rfc-v2/0011-bond-budgets-fees-and-payments.md) | 予算、同意、役割別帰責、返金、留保、会計保存則 | I1–I5 | V2/V4: 未検証と有罪を分離し、支払目的を保つ |
-| [12 State・IBD](../../../rfc-v2/0012-authenticated-state-storage-and-ibd.md) | 新全状態、delta、journal、pruning、IBD/reorg | 各IとI5 | V4/V6: 同state再現、Q/責任を失わずNodeモデル不要 |
-| [13 Bootstrap・Release](../../../rfc-v2/0013-permissionless-bootstrap-and-release.md) | 公開参加、BASE回復、登録・成熟、初回PALW/credit | I0/I5 | V4: 起動循環と認証免除を作らず、未決gateを報告 |
-| [14 Court統合契約](../../../rfc-v2/0014-court-master-contract.md) | 受付、duties、資金、時計、default、残存責任 | I2–I5 | V2/V3/V6: 全合法分岐の有限終結と帰責 |
-| [15 凍結・延期・管理](../../../rfc-v2/0015-freeze-deferred-rejected-and-governance.md) | 版分離、延期入口、未採択案、activationの分離 | 全工程 | V1/V4: 旧意味保持、延期機能の迂回有効化なし |
-| [16 Miner commit・供給](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md) | Miner初回trace、全manifest、有限供給/保持 | I0–I3 | V2/V5: 元claimへの帰責とcold取得 |
-| [17 Positive](../../../rfc-v2/0017-noninteractive-positive-verification.md) | 全scope再実行、一括承認、最低1件、必須局所検査 | I1 | V2/V3/V5: 部分承認で全体成功にしない |
-| [18 Negative・Default](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md) | 一人要求、Q/CaseId、取得後検査、直接反証、客観default | I2–I3 | V2/V3/V5/V6: 秘匿を成功にせず虚偽caseも有界終結 |
-| [19 小さなNode](../../../rfc-v2/0019-model-free-node-and-bounded-evidence.md) | 全関係の局所証拠、native上限、全モデルfetch禁止 | I0–I3/I5 | V2/V5/V6: bytes/hash/parse/heap/IO込みで上限内 |
-| [20 成功gate](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) | 状態遷移、公開検査機会、Q、Final/Abort/Revoked、全consumer | 全工程 | V3–V6: 一人反証優先と正常claimの条件付き完了 |
+| [01 推論・生成Job](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0001-inference-and-generative-jobs.md) | prompt/tokenizer/token列、seed、decode、停止、入出力をoriginalへ束縛 | I0–I1 | V2/V3/V5: 別入力・別tokenizer・偽停止を受理しない |
+| [02 TIR・Kernel](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md) | 数値意味、全関係、初回区間trace、query identity | I0–I2 | V2/V5: 採用全関係の正例と偽の元recordを裁く |
+| [03 登録・Artifact](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md) | 不変artifact/program/layoutと公開chunkの認証 | I1/I3 | V2/V5: すり替え拒否、初取得・再配布から検証可能 |
+| [04 二階層・年次カタログ](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0004-model-tiers-and-annual-catalog.md) | 1.0/0.3、係数一回、全tierのclaim検証 | I4–I5 | V4: tierを検証免除にせず既存会計を保つ |
+| [05 資源・長文脈](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md) | cold取得、全再実行、trace保持、全case・包含予約 | I0/I3–I6 | V5/V6: 最悪合法工程とEXEC共用負荷を収容 |
+| [06 Panel・抽選](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0006-panels-and-probabilistic-verification.md) | commit後global抽選、成熟bond、再抽選禁止、モデル未保有者 | I1/I3 | V2/V3: 独立選出、非選出署名・旧署名を数えない |
+| [07 Claim・EXEC会計](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md) | 有限ExecCredit、一回mint、reserved/consumed/revoked/expired | I1/I4 | V3/V4: 二重仕事・同単位消費逃れ・期限切れを拒否 |
+| [08 依存・責任](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0008-claim-dependencies-and-liability.md) | KV/prefix/source由来、依存期限、失効伝播 | I1–I5 | V2/V4: 別源を拒否し、取消と責任を分離 |
+| [09 Remote・SDK](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0009-remote-client-and-sdk.md) | 公開commit/要求/応答/証拠/承認/状態API | I1–I5 | V3: 実transportとcanonical包含から終端へ到達 |
+| [10 DAG・Native決済](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md) | pre-Final認証、反証優先、ScheduleId、現在slot、settlement | I1/I4–I5 | V4/V6: 単一gate、取消、1 BPSとの共存条件 |
+| [11 Bond・Fee](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md) | 予算、同意、役割別帰責、返金、留保、会計保存則 | I1–I5 | V2/V4: 未検証と有罪を分離し、支払目的を保つ |
+| [12 State・IBD](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md) | 新全状態、delta、journal、pruning、IBD/reorg | 各IとI5 | V4/V6: 同state再現、Q/責任を失わずNodeモデル不要 |
+| [13 Bootstrap・Release](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0013-permissionless-bootstrap-and-release.md) | 公開参加、BASE回復、登録・成熟、初回PALW/credit | I0/I5 | V4: 起動循環と認証免除を作らず、未決gateを報告 |
+| [14 Court統合契約](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0014-court-master-contract.md) | 受付、duties、資金、時計、default、残存責任 | I2–I5 | V2/V3/V6: 全合法分岐の有限終結と帰責 |
+| [15 凍結・延期・管理](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md) | 版分離、延期入口、未採択案、activationの分離 | 全工程 | V1/V4: 旧意味保持、延期機能の迂回有効化なし |
+| [16 Miner commit・供給](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md) | Miner初回trace、全manifest、有限供給/保持 | I0–I3 | V2/V5: 元claimへの帰責とcold取得 |
+| [17 Positive](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md) | 全scope再実行、一括承認、最低1件、必須局所検査 | I1 | V2/V3/V5: 部分承認で全体成功にしない |
+| [18 Negative・Default](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) | 一人要求、Q/CaseId、取得後検査、直接反証、客観default | I2–I3 | V2/V3/V5/V6: 秘匿を成功にせず虚偽caseも有界終結 |
+| [19 小さなNode](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) | 全関係の局所証拠、native上限、全モデルfetch禁止 | I0–I3/I5 | V2/V5/V6: bytes/hash/parse/heap/IO込みで上限内 |
+| [20 成功gate](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) | 状態遷移、公開検査機会、Q、Final/Abort/Revoked、全consumer | 全工程 | V3–V6: 一人反証優先と正常claimの条件付き完了 |
 
-延期対象の「旧RFC-0003の画像・動画」「旧RFC-0004のモデル改善」と、現行v2-03の登録・v2-04の二階層を混同しない。画像・動画・改善protocolは`DEFERRED_POST_MAINNET / DISABLED`を維持し、共有入口からの迂回を検査する。Panel=0、未採択のAccount Bondや新報酬案、provider custody移管案を新profileへ混入させない。[RFC15](../../../rfc-v2/0015-freeze-deferred-rejected-and-governance.md)を区分の正本にする。
+延期対象の「旧RFC-0003の画像・動画」「旧RFC-0004のモデル改善」と、現行v2-03の登録・v2-04の二階層を混同しない。画像・動画・改善protocolは`DEFERRED_POST_MAINNET / DISABLED`を維持し、共有入口からの迂回を検査する。Panel=0、未採択のAccount Bondや新報酬案、provider custody移管案を新profileへ混入させない。[RFC15](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md)を区分の正本にする。
 
 ## 8. 通し実装の出口
 
@@ -363,8 +363,6 @@ bash scripts/ci/positive-accounting-node-ci.sh
 
 ```sh
 python3 -B docs/maintenance/check_docs.py
-python3 -B docs/rfc-v2/check_integrity.py
-python3 -B docs/adr-v2/check_integrity.py
 ```
 
 採択snapshotを照合するときは、変更を許可された箇所と歴史保全の範囲を分ける。既存のリンク欠損やsnapshot不一致を隠すためにbaselineを一括更新しない。過去の有限モデルrunnerが既存JSONを上書きする場合は、検証用コピーと新しい出力先で実行する。抽象モデルのPASSはnative runtimeのPASSではない。
@@ -428,7 +426,7 @@ binary/profile/configが変わった場合、旧候補の長時間測定を新�
 
 ### 根拠となる文書とコード
 
-- [上位原則](../../../PRINCIPLES.md)、[現行RFC索引](../../../rfc-v2/README.md)、[RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md)、[ADR-0218](../../../adr/0218-public-materials-and-one-honest-panel.md)。
+- [上位原則](../../../PRINCIPLES.md)、[現行RFC索引](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)、[RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md)、[ADR-0218](../../../adr/0218-public-materials-and-one-honest-panel.md)。
 - [最新改訂のREADME](../../../maintenance/revisions/2026-11-09-public-panel/README.md)、[独立レビュー](../../../maintenance/revisions/2026-11-09-public-panel/REVIEW.md)、[検査記録](../../../maintenance/revisions/2026-11-09-public-panel/VALIDATION.md)。過去の条件付き規範PASSと有限モデル結果は、新コードの検証結果ではない。
 - [Miner/Panel旧署名契約](../../../../misaka/palw/positive-contract/src/messages.rs)、[旧PositiveChecked契約](../../../../misaka/palw/positive-contract/src/certification.rs)、[Result固定後の既存native認証](../../../../consensus/core/src/palw_state_v2/positive_assignment_certification.rs)、[旧Final後の認証](../../../../consensus/core/src/palw_security_certification_fold_v1.rs)。
 - [共有資料intake](../../../../consensus/core/src/palw_court_shared_material_intake_v1.rs)、[小型局所証拠](../../../../consensus/core/src/palw_public_evidence_package_v1.rs)、[live processor](../../../../consensus/src/pipeline/virtual_processor/processor.rs)、[native settlement](../../../../consensus/src/pipeline/virtual_processor/native_settlement.rs)。

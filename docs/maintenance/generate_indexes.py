@@ -75,7 +75,7 @@ records=[]
 for kind in ['adr','rfc']:
  files=sorted(p for p in (D/kind).glob('*.md') if re.match(r'^\d{4}-',p.name));groups=defaultdict(list)
  index='# '+kind.upper()+' 番号順索引\n\n[入口](README.md) / [トピック別](TOPICS.md) / [番号台帳](../maintenance/numbering.md)。自動生成の探索用索引です。原文の過去のStatusを現在の稼働保証へ昇格させません。\n\n'
- index+='> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。新規採掘の後続正本は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md)。RFC61/62・ADR229/230は設計採択済み・未有効化であり、旧sourceを新規受付へfallbackしない。\n\n'
+ index+='> 新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を参照してください。\n\n'
  index+=moe2_notice
  index+='**画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。\n\n| 番号 | 文書 | 状態の入口 |\n| --- | --- | --- |\n'
  for p in files:
@@ -84,7 +84,7 @@ for kind in ['adr','rfc']:
   index+='| '+kind.upper()+'-'+n+' | '+ref('docs/'+kind+'/INDEX.md',p,short[:90]+('…' if len(short)>90 else ''))+' | '+st+' |\n'
  (D/kind/'INDEX.md').write_text(index)
  text='# '+kind.upper()+' トピック別索引\n\n[番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。\n\n'
- text+='> **旧番号の履歴索引と後続採択。** 現行の閲覧・更新先は ['+kind.upper()+' v2](../'+kind+'-v2/README.md)。[旧→新対応表](../'+kind+'-v2/MAPPING.md)。新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を優先する。\n\n'
+ text+='> 新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を参照してください。\n\n'
  text+=moe2_notice
  for top,items in sorted(groups.items()):
   text+='## '+top+'\n\n'+'\n'.join('- '+ref('docs/'+kind+'/TOPICS.md',p,kind.upper()+'-'+n+' — '+short[:100]) for p,n,short in items)+'\n\n'

@@ -2,7 +2,7 @@
 
 - 改訂日: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。MOE2の設計改訂であり、native/EVM実装、測定、移行又は公開有効化の完了ではない。
-- 共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)。
+- 共通正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md) / [ADR0232](0232-reward-buy-and-permanent-liquidity.md) / [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)。
 - 直前MOE1版の完全原本: [改訂前の原本](../maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0177-model-bond-allocation-without-availability-consensus.md.txt)。さらに古い原本への参照も保存原本に保持する。
 
 本書の現行決定をMOE2へ適用する。MOE1の「50%全額でPosition購入・全取得分retire」を「30%購入・20%BILIと必要Positionの永久LP・余剰Positionのみburn」へ置換する。通常5%/3%、追加モデル限定、登録と市場の原子生成、直接転送、coreのMiner100%は維持する。旧claim・署名・決済・過去の試験結果はその版の記録であり、新規範で遡及再解釈しない。TB1/FOW1の実行・登録・完全検証・責任条件を免除しない。
@@ -13,7 +13,7 @@
 
 同じ拘束元本を複数model、role、claim、key、root、receiptへ重複計上しない。Position購入・市場reserve・owner seed・allowanceはminer bond元本ではなく、送金可能化から担保・合意weightを生成しない。
 
-配分関数、α=1.5、平均期間、tier係数、κ、縮小分等は、[RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)と現在のparameter policyの版に従う。過去の30日例を、後続の平均期間改訂を無視して復活させない。今回の30%購入・20%永久LPでこれらの未解決会計を勝手に補完したり、追加mintしたりしない。
+配分関数、α=1.5、平均期間、tier係数、κ、縮小分等は、[RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)と現在のparameter policyの版に従う。過去の30日例を、後続の平均期間改訂を無視して復活させない。今回の30%購入・20%永久LPでこれらの未解決会計を勝手に補完したり、追加mintしたりしない。
 
 継承する資本集計は、同じ資金単位を重複なく数えた`S_m = C_miner_claim(m) + C_verifier_claim(m)`である。複数claimのreserved exposureの単純和やkey数を資本へ数えない。現行の採択済み平均期間は7日相当DAAであり、実時間7日を保証する時計ではない。平均資本を`S̄_m`、階層係数を`c_m`とすると、縮小規則適用前の重みは`A_m = c_m · S̄_m^1.5`である。coreの`c_m=1.0`、additionalの`c_m=0.3`をこの段階で一度だけ適用する。
 

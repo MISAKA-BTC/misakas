@@ -10,12 +10,12 @@
 
 ## 規範の入口
 
-- [RFC20: 一人前提・最低承認1・Final・正常完了・atomic batch](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
-- [RFC16: 公開検証パッケージとMiner供給責務](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md)
-- [RFC17: 全体検証・最低1件の承認・検査窓](../../../rfc-v2/0017-noninteractive-positive-verification.md)
-- [RFC18: 資料要求・検査前提・case終結](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)
-- [RFC19: 上限付き整数区間と全kernelの局所反証](../../../rfc-v2/0019-model-free-node-and-bounded-evidence.md)
-- [RFC05: cold取得と全合法係争の容量](../../../rfc-v2/0005-bounded-resources-and-long-context.md)／[RFC12: 状態更新と復元](../../../rfc-v2/0012-authenticated-state-storage-and-ibd.md)
+- [RFC20: 一人前提・最低承認1・Final・正常完了・atomic batch](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- [RFC16: 公開検証パッケージとMiner供給責務](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)
+- [RFC17: 全体検証・最低1件の承認・検査窓](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)
+- [RFC18: 資料要求・検査前提・case終結](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)
+- [RFC19: 上限付き整数区間と全kernelの局所反証](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)
+- [RFC05: cold取得と全合法係争の容量](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md)／[RFC12: 状態更新と復元](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md)
 - [採択RFC0050](../../../rfc/0050-public-materials-and-one-honest-panel.md)／[ADR0218](../../../adr/0218-public-materials-and-one-honest-panel.md)／[公開裁定v0.4](../../../design/palw/consensus/public-adjudication-policy-v0.4.md)
 
 ## 今回の変更

@@ -42,21 +42,21 @@
 | [adr/0177-model-bond-allocation-without-availability-consensus.md](../../../adr/0177-model-bond-allocation-without-availability-consensus.md) | 2 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
 | [adr/INDEX.md](../../../adr/INDEX.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
 | [adr/TOPICS.md](../../../adr/TOPICS.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0005-palw-consensus-architecture.md](../../../adr-v2/0005-palw-consensus-architecture.md) | 2 | 統合された旧原条文をbyte保全。適用は新しい経済正本で制限 |
-| [adr-v2/0007-evm-exec-lane-and-anchors.md](../../../adr-v2/0007-evm-exec-lane-and-anchors.md) | 15 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0015-permissionless-model-registration.md](../../../adr-v2/0015-permissionless-model-registration.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0016-artifact-ownership-and-model-lineage.md](../../../adr-v2/0016-artifact-ownership-and-model-lineage.md) | 7 | 統合された旧原条文をbyte保全。適用は新しい経済正本で制限 |
-| [adr-v2/0019-model-tiers-and-annual-catalog.md](../../../adr-v2/0019-model-tiers-and-annual-catalog.md) | 2 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0021-positions-and-membership.md](../../../adr-v2/0021-positions-and-membership.md) | 19 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0022-liquidity-seeding-and-virtual-reserves.md](../../../adr-v2/0022-liquidity-seeding-and-virtual-reserves.md) | 12 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0023-model-reward-routing-and-owner-leg.md](../../../adr-v2/0023-model-reward-routing-and-owner-leg.md) | 40 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0026-canonical-work-and-answer-accounting.md](../../../adr-v2/0026-canonical-work-and-answer-accounting.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0037-fee-escrow-and-role-consent.md](../../../adr-v2/0037-fee-escrow-and-role-consent.md) | 5 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/0050-freeze-deferred-rejected-and-governance.md](../../../adr-v2/0050-freeze-deferred-rejected-and-governance.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/MAPPING.md](../../../adr-v2/MAPPING.md) | 3 | 統合時の対応・Status履歴を保全。新規範は経済移行契約で指定 |
-| [adr-v2/PRECEDENCE.md](../../../adr-v2/PRECEDENCE.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/README.md](../../../adr-v2/README.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [adr-v2/STATUS-LEDGER.md](../../../adr-v2/STATUS-LEDGER.md) | 8 | 統合時の対応・Status履歴を保全。新規範は経済移行契約で指定 |
+| [adr-v2/0005-palw-consensus-architecture.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0005-palw-consensus-architecture.md) | 2 | 統合された旧原条文をbyte保全。適用は新しい経済正本で制限 |
+| [adr-v2/0007-evm-exec-lane-and-anchors.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0007-evm-exec-lane-and-anchors.md) | 15 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0015-permissionless-model-registration.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0015-permissionless-model-registration.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0016-artifact-ownership-and-model-lineage.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0016-artifact-ownership-and-model-lineage.md) | 7 | 統合された旧原条文をbyte保全。適用は新しい経済正本で制限 |
+| [adr-v2/0019-model-tiers-and-annual-catalog.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0019-model-tiers-and-annual-catalog.md) | 2 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0021-positions-and-membership.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0021-positions-and-membership.md) | 19 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0022-liquidity-seeding-and-virtual-reserves.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md) | 12 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0023-model-reward-routing-and-owner-leg.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0023-model-reward-routing-and-owner-leg.md) | 40 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0026-canonical-work-and-answer-accounting.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0026-canonical-work-and-answer-accounting.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0037-fee-escrow-and-role-consent.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0037-fee-escrow-and-role-consent.md) | 5 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/0050-freeze-deferred-rejected-and-governance.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0050-freeze-deferred-rejected-and-governance.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/MAPPING.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/MAPPING.md) | 3 | 統合時の対応・Status履歴を保全。新規範は経済移行契約で指定 |
+| [adr-v2/PRECEDENCE.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/PRECEDENCE.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/README.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/README.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [adr-v2/STATUS-LEDGER.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/STATUS-LEDGER.md) | 8 | 統合時の対応・Status履歴を保全。新規範は経済移行契約で指定 |
 | [architecture/palw-specification.md](../../../architecture/palw-specification.md) | 14 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
 | [audit/adr/STATUS-AUDIT-2026-09-18.md](../../../audit/adr/STATUS-AUDIT-2026-09-18.md) | 3 | 過去の監査・証拠・履歴をbyte保全。新規範の実装実績にはしない |
 | [audit/palw/design-reviews/emission-audit-2026-10-04.md](../../../audit/palw/design-reviews/emission-audit-2026-10-04.md) | 1 | 過去の監査・証拠・履歴をbyte保全。新規範の実装実績にはしない |
@@ -98,10 +98,10 @@
 | [rfc/0007-palw-verification-certificates-and-algebraic-checks.md](../../../rfc/0007-palw-verification-certificates-and-algebraic-checks.md) | 2 | 旧採択を保全。経済条項はMOE1の追加モデル限定・比率・移転規則が優先 |
 | [rfc/0015-panel-free-permissionless-verification.md](../../../rfc/0015-panel-free-permissionless-verification.md) | 4 | 旧採択を保全。経済条項はMOE1の追加モデル限定・比率・移転規則が優先 |
 | [rfc/0018-dag-parallel-multi-model-consensus.md](../../../rfc/0018-dag-parallel-multi-model-consensus.md) | 1 | 旧採択を保全。経済条項はMOE1の追加モデル限定・比率・移転規則が優先 |
-| [rfc-v2/0006-panels-and-probabilistic-verification.md](../../../rfc-v2/0006-panels-and-probabilistic-verification.md) | 2 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [rfc-v2/0010-dag-consensus-and-native-settlement.md](../../../rfc-v2/0010-dag-consensus-and-native-settlement.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [rfc-v2/0011-bond-budgets-fees-and-payments.md](../../../rfc-v2/0011-bond-budgets-fees-and-payments.md) | 4 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
-| [rfc-v2/0015-freeze-deferred-rejected-and-governance.md](../../../rfc-v2/0015-freeze-deferred-rejected-and-governance.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [rfc-v2/0006-panels-and-probabilistic-verification.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0006-panels-and-probabilistic-verification.md) | 2 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [rfc-v2/0010-dag-consensus-and-native-settlement.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [rfc-v2/0011-bond-budgets-fees-and-payments.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md) | 4 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
+| [rfc-v2/0015-freeze-deferred-rejected-and-governance.md](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md) | 1 | 現行本文、適用節又は索引を改訂。旧原本を別保存 |
 
 ## 取り違えない境界
 

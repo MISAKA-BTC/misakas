@@ -10,13 +10,13 @@ use super::{
 };
 use crate::{
     errors::{
-        BlockProcessResult,
+        BlockProcessResult, RuleError,
         RuleError::{
             BadAcceptedIDMerkleRoot, BadCoinbasePayload, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape,
             BadUTXOCommitment, ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
-            LocalNativeCapacityUnavailable, LocalNativeStateContextUnavailable, PrivateMoe2AwardMalformed, PrivateMoe2AwardUnresolved,
-            UnauthorizedUnbondRequestInBlock, UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock,
-            WrongHeaderPruningPoint,
+            LocalNativeCapacityUnavailable, LocalNativeStateContextUnavailable, PrivateMoe2AwardMalformed, PrivateMoe2AwardReference,
+            PrivateMoe2AwardUnresolved, UnauthorizedUnbondRequestInBlock, UnverifiablePrecommitEvidenceInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::services::reachability::ReachabilityService,
@@ -2290,18 +2290,38 @@ impl VirtualStateProcessor {
                     None
                 };
                 if private_moe2_award_marker(extra).map_err(PrivateMoe2AwardMalformed)?.is_some() {
-                    let source =
-                        Moe2AwardSource::from_transactions(txs.iter()).map_err(|error| PrivateMoe2AwardMalformed(error.reason()))?;
-                    let reference = &source.reference;
-                    let parent = parent_state
-                        .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
-                        .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
-                    reference.check_parent_reservation(parent, header.daa_score).map_err(PrivateMoe2AwardMalformed)?;
-                    reference.check_parent_unspent(parent).map_err(PrivateMoe2AwardMalformed)?;
-                    let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), source)?;
-                    self.restore_private_moe2_price_state(parent, price)?;
-                    // The resolved terms still require an independently certified winning right.
-                    return Err(PrivateMoe2AwardUnresolved);
+                    let source = Moe2AwardSource::from_transactions(txs.iter()).map_err(|source| PrivateMoe2AwardReference {
+                        claim: None,
+                        candidate: header.hash,
+                        selected_parent: ctx.selected_parent(),
+                        source,
+                    })?;
+                    let reference = source.reference;
+                    let result: BlockProcessResult<()> = (|| {
+                        let parent = parent_state
+                            .filter(|state| state.last_point().is_some_and(|point| point.block == ctx.selected_parent()))
+                            .ok_or(LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::HistoryUnavailable))?;
+                        let reference_error = |source| PrivateMoe2AwardReference {
+                            claim: Some(reference.claim),
+                            candidate: header.hash,
+                            selected_parent: ctx.selected_parent(),
+                            source,
+                        };
+                        reference.check_parent_reservation(parent, header.daa_score).map_err(reference_error)?;
+                        reference.check_parent_unspent(parent).map_err(reference_error)?;
+                        let (_, price) = self.read_private_moe2_reserved_terms(ctx.selected_parent(), source)?;
+                        self.restore_private_moe2_price_state(parent, price)?;
+                        // The resolved terms still require an independently certified winning right.
+                        Err(PrivateMoe2AwardUnresolved {
+                            claim: reference.claim,
+                            candidate: header.hash,
+                            selected_parent: ctx.selected_parent(),
+                        })
+                    })();
+                    return result.map_err(|error| {
+                        self.observe_private_moe2_award_refusal(reference.claim, ctx.selected_parent(), header, &error);
+                        error
+                    });
                 }
             }
         }
@@ -2438,6 +2458,54 @@ impl VirtualStateProcessor {
         }
 
         Ok(())
+    }
+
+    fn observe_private_moe2_award_refusal(&self, claim: BlockHash, selected_parent: BlockHash, header: &Header, error: &RuleError) {
+        use kaspa_consensus_core::{
+            palw_claim_diagnostic_v1::{ClaimAttemptFailure, ClaimDisposition::*, ClaimStage::*},
+            palw_model_market_v1::moe2::award_reference::Moe2AwardReferenceError as Reference,
+        };
+        let (stage, disposition, code, next) = match error {
+            PrivateMoe2AwardUnresolved { .. } => {
+                (Ticket, NotImplemented, "PALW.MOE2_WINNING_RIGHT_NOT_CONNECTED", "requires_native_integration")
+            }
+            LocalNativeCapacityUnavailable(_) => {
+                (AwardBlock, LocalFailure, "PALW.NATIVE_CAPACITY_UNAVAILABLE", "restore_read_capacity")
+            }
+            LocalNativeStateContextUnavailable(PalwSourceBootstrapContextFaultV1::StoreUnreadable) => {
+                (AwardBlock, LocalFailure, "PALW.MOE2_PRICE_STATE_UNREADABLE", "inspect_native_storage")
+            }
+            LocalNativeStateContextUnavailable(_) => {
+                (AwardBlock, LocalFailure, "PALW.MOE2_HISTORY_UNAVAILABLE", "restore_native_history")
+            }
+            PrivateMoe2AwardReference { source: Reference::ReservationWindowNotOpen { .. }, .. } => {
+                (RightConsumption, Waiting, "PALW.MOE2_RESERVATION_WINDOW_NOT_OPEN", "wait_for_reservation_window")
+            }
+            PrivateMoe2AwardReference { source: Reference::ReservationWindowExpired { .. }, .. } => {
+                (RightConsumption, Rejected, "PALW.MOE2_RESERVATION_WINDOW_EXPIRED", "end_candidate")
+            }
+            PrivateMoe2AwardReference { source: Reference::MissingReservation, .. } => {
+                (RightConsumption, Rejected, "PALW.MOE2_RESERVATION_MISSING", "check_candidate_reservation")
+            }
+            PrivateMoe2AwardReference { source: Reference::ClaimAlreadySettled | Reference::AttemptAlreadySettled, .. } => {
+                (RightConsumption, Rejected, "PALW.MOE2_RIGHT_ALREADY_CONSUMED", "end_candidate")
+            }
+            PrivateMoe2AwardReference { .. } => {
+                (RightConsumption, Rejected, "PALW.MOE2_RESERVATION_REFUSED", "check_candidate_reservation")
+            }
+            _ => (AwardBlock, Rejected, "PALW.MOE2_CANDIDATE_REFUSED", "inspect_candidate_context"),
+        };
+        self.palw_claim_attempt_failures.lock().record(ClaimAttemptFailure {
+            claim,
+            selected_parent,
+            candidate: header.hash,
+            daa: header.daa_score,
+            stage,
+            disposition,
+            code,
+            next,
+            repetitions: 1,
+        });
     }
 
     /// The private Court uses the existing case carrier and funded award

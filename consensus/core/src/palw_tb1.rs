@@ -70,10 +70,27 @@ pub enum Tb1PolynomialError {
     QualifiedSet,
     PreparationContext,
     PreparationBudget,
-    ReleaseContext,
+    ReleaseRoundMismatch,
+    ReleaseQualificationMismatch,
+    ReleaseFreezeMismatch,
+    ReleaseHolder,
+    ReleaseSigningKeyMismatch,
+    ReleaseDealerColumns,
+    ReleaseEncoding,
+    ReleaseMessageTooLarge,
+    ReleaseSignature,
+    MissingReleaseReference,
     ReleaseTiming,
     ReconstructionBudget,
 }
+
+impl std::fmt::Display for Tb1PolynomialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for Tb1PolynomialError {}
 
 /// Check the disclosed candidate polynomial at every signed supporting point.
 /// Coordinates are those of the frozen roster. The same share cannot count for

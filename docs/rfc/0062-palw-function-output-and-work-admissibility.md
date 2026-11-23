@@ -39,7 +39,7 @@ QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実�
 - 対応ADR: [ADR-0230](../adr/0230-palw-function-output-and-work-admissibility.md)
 - 乱数正本: [RFC-0061 PALW-TB1](0061-palw-internal-threshold-beacon.md)／[ADR-0229](../adr/0229-palw-internal-threshold-beacon.md)
 - 継承元: [RFC-0059 AN1](0059-palw-an1-input-binding-and-panel-court.md)、[RFC-0060 MOR1](0060-model-registration-and-attempt-output-binding.md)
-- 現行担当: [入出力01](../rfc-v2/0001-inference-and-generative-jobs.md)、[TIR02](../rfc-v2/0002-tensor-ir-and-shared-query-data.md)、[登録03](../rfc-v2/0003-model-onboarding-and-artifacts.md)、[会計07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、[元claim16](../rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[Final20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- 現行担当: [入出力01](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0001-inference-and-generative-jobs.md)、[TIR02](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md)、[登録03](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md)、[会計07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md)、[元claim16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[Final20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
 
 ## 0. 今回採択する変更
 

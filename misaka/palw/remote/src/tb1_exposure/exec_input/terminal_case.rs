@@ -187,12 +187,10 @@ impl BranchExecInput<'_> {
         let parent_header = native.get_header(self.parent).map_err(io::Error::other)?;
         let window = self.input.terms.open_daa..self.input.terms.deadline_exclusive_daa;
         let mut cursor = self.parent;
-        let mut remaining = max_blocks;
+        let mut budget = HistoryScanBudget::new("qf1_terminal", self.parent, max_blocks);
         let mut timely = Vec::new();
         while cursor != self.input.certificate {
-            remaining = remaining
-                .checked_sub(1)
-                .ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "QF1 terminal history scan budget exhausted"))?;
+            budget.visit(cursor)?;
             let header = native.get_header(cursor).map_err(io::Error::other)?;
             if header.hash != cursor {
                 return Err(invalid("QF1 terminal history header hash differs"));

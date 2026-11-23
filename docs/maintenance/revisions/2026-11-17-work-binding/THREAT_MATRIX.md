@@ -106,9 +106,9 @@ SWC1の順序は、経済TrialSlotとowner/funding/beneficiaryを持つ`WorkOppo
 
 ## 8. 固定source・既存規範の参照
 
-- [RFC-v2-0010](../../../rfc-v2/0010-dag-consensus-and-native-settlement.md): PALW authority、DNS-BFT退役、included/provisional/BASE accepted/settledの区別。
-- [RFC-v2-0018](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md): MaterialRequest、取得後検査、InspectionPrerequisitesEstablished、客観default。
-- [RFC-v2-0020](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md): 同batch反証優先、成功停止、全consumerの取消、Final後権利、非循環。
+- [RFC-v2-0010](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md): PALW authority、DNS-BFT退役、included/provisional/BASE accepted/settledの区別。
+- [RFC-v2-0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md): MaterialRequest、取得後検査、InspectionPrerequisitesEstablished、客観default。
+- [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md): 同batch反証優先、成功停止、全consumerの取消、Final後権利、非循環。
 - [RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md): 資料手順未確立時のprofile有効化禁止。
 - [palw_native_settlement_v1.rs](https://github.com/MISAKA-BTC/misakas/blob/2d8212b634880b0967fbf24b00b41936c2322c14/consensus/core/src/palw_native_settlement_v1.rs): canonical snapshot、maturity、依存責任、settlement fact。
 - [palw_security_certification_v1.rs](https://github.com/MISAKA-BTC/misakas/blob/2d8212b634880b0967fbf24b00b41936c2322c14/consensus/core/src/palw_security_certification_v1.rs): 旧認証の前提、frontier再計算、floor、pruning rollback bound。

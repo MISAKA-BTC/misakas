@@ -46,7 +46,7 @@ negative・資料要求・応答にはActionNonceを使い、新しいseed待ち
 
 全体肯定への客観的反証と、別対象のLocalHoldsに対する反証を区別している。SlotConflictだけで二重署名罪にせず、相互排他的な署名命題と事前責任契約を必要とする。資料不足、seed障害、service不足を算術有罪・コピー罪へ変換しない。
 
-既存[0018](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)と[0020](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の反証/Q優先を維持し、positive再送や多数署名でRefutedを取り消せない。訂正を受け付けることと、過去の肯定署名責任を消すことも分けている。
+既存[0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)と[0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の反証/Q優先を維持し、positive再送や多数署名でRefutedを取り消せない。訂正を受け付けることと、過去の肯定署名責任を消すことも分けている。
 
 ### 3.4 有限な処理・復旧・移行
 

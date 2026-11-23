@@ -1,6 +1,6 @@
 # RFC・ADR統合版の取り込み — 2026-10-31
 
-現行の閲覧・更新先を [RFC 15本](../rfc-v2/README.md) と [ADR 50本](../adr-v2/README.md) に切り替えた。入力はユーザー指定の `misakas-adr-v2-50`。配布物ではフォルダ名が `adr/`・`rfc/` だが、文書内の識別子・manifest・リンクは `adr-v2/`・`rfc-v2/` を前提としていたため、その名前空間で導入した。
+現行の閲覧・更新先を [RFC 15本](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md) と [ADR 50本](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/README.md) に切り替えた。入力はユーザー指定の `misakas-adr-v2-50`。配布物ではフォルダ名が `adr/`・`rfc/` だが、文書内の識別子・manifest・リンクは `adr-v2/`・`rfc-v2/` を前提としていたため、その名前空間で導入した。
 
 旧204 ADRの48,236行・bytesと旧41 RFCの既存パスを保持した。RFC-0018の作業中の2026-10-31検証記録リンク1行をRFC-v2-0010へ継承し、原文430行を対応表へ反映した。既存のコード・実装記録・証拠の作業差分は保持した。
 

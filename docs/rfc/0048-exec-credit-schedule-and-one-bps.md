@@ -3,7 +3,7 @@
 Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-08
 Decision: [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)
-Current owners: [RFC-v2-0007](../rfc-v2/0007-claims-exec-and-answer-accounting.md) / [RFC-v2-0010](../rfc-v2/0010-dag-consensus-and-native-settlement.md)
+Current owners: [RFC-v2-0007](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md) / [RFC-v2-0010](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md)
 
 本書は、ユーザーが提示したEXEC二層構成をRFCへ反映し、ブロック生成の1 BPS目標と、
 添付分析が指摘したcourtの待機・搬送・予約問題の解消条件を追加する採択記録である。
@@ -67,10 +67,10 @@ BASE／Heartbeatを含む総block rate、既存DAA換算、報酬・裁定時計
 
 ## 5. court予算の膨張を解消する条件
 
-[05](../rfc-v2/0005-bounded-resources-and-long-context.md)を資源計画、
-[18](../rfc-v2/0018-interactive-negative-court-and-defaults.md)を公開対話・帰責、
-[19](../rfc-v2/0019-model-free-node-and-bounded-evidence.md)をNode境界、
-[20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)を成功条件の正本とする。
+[05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md)を資源計画、
+[18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)を公開対話・帰責、
+[19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)をNode境界、
+[20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)を成功条件の正本とする。
 
 依存DAGの最長経路が期限以内であることに加えて、各資源の全必要量が保証供給内であり、
 応答の開始可能時刻・期限・既存予約を満たす具体的な予約scheduleが存在することを受理条件にする。

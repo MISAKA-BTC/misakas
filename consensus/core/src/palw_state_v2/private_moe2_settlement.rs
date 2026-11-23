@@ -222,29 +222,34 @@ pub(super) fn fold_exec_award_v1(
 ) -> Result<(), PalwStateV2Error> {
     use super::{native_writers::NativeWriteQuoteV1, palw_bond_budget_fold_v1::PalwBudgetGrowthV1};
     let Moe2ExecAwardInputV1 { config, quote_anchor, price, block, attempt, award } = input;
+    let refuse = |source| PalwStateV2Error::PrivateMoe2Settlement {
+        claim: award.claim,
+        block: point.block,
+        selected_parent: price.parent,
+        source,
+    };
     let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else {
-        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award has no consensus configuration"));
+        return Err(refuse(Moe2SettlementError::ProfileInactive));
     };
     if !builder.extras.private_moe2_registration || &bundle.state != builder.params || award.position.point != *point {
-        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from candidate context"));
+        return Err(refuse(Moe2SettlementError::CandidateContextMismatch));
     }
     if parent.last_point().map(|point| point.block) != Some(price.parent)
         || quote_anchor.last_point().map(|point| point.block) != Some(price.anchor)
         || award.slot.reservation_key() != price.reservation
         || builder.native_reservation.state_root_v2(quote_anchor).map_err(PalwStateV2Error::NativeResource)? != price.root
     {
-        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"));
+        return Err(refuse(Moe2SettlementError::PriceAnchorMismatch));
     }
-    let refuse = |why| PalwStateV2Error::BondBudgetRefused(format!("MOE2 EXEC award: {why:?}"));
     if builder.state.qf1_terminal_blocks_award(award.claim) {
-        return Err(PalwStateV2Error::DeltaMismatch("native QF1 terminal Court blocks this MOE2 award"));
+        return Err(refuse(Moe2SettlementError::CourtBlocked));
     }
     match builder.state.qf1_original_verification_at(award.claim, point.daa_score) {
         Some(Qf1OriginalVerification::ReplayApproved) => {
-            return Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no successful Final"));
+            return Err(refuse(Moe2SettlementError::SuccessfulFinalMissing));
         }
         Some(Qf1OriginalVerification::AwaitingReplay | Qf1OriginalVerification::Unverified) => {
-            return Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"));
+            return Err(refuse(Moe2SettlementError::PanelReplayMissing));
         }
         None => {}
     }
@@ -290,12 +295,18 @@ pub(super) fn fold_exec_award_v1(
         .flatten();
     let expected = award.coinbase_marker(config.genesis.hash, price.parent, &attempt);
     if marker.as_ref().map(|hash| hash.as_slice()) != Some(&expected[MOE2_EXEC_AWARD_MARKER_TAG.len()..]) {
-        return Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker"));
+        return Err(refuse(Moe2SettlementError::CoinbaseMarkerMismatch));
     }
     let source = Moe2AwardSource::from_transactions(block.transactions.iter())
         .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
-    source.reference.check_execution_slot(award.claim, attempt, award.slot).map_err(PalwStateV2Error::DeltaMismatch)?;
-    source.reference.check_parent_reservation(parent, point.daa_score).map_err(PalwStateV2Error::DeltaMismatch)?;
+    source
+        .reference
+        .check_execution_slot(award.claim, attempt, award.slot)
+        .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
+    source
+        .reference
+        .check_parent_reservation(parent, point.daa_score)
+        .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?;
     if source
         .open_registration(award.slot.close_daa)
         .map_err(|error| PalwStateV2Error::DeltaMismatch(error.reason()))?
@@ -492,9 +503,9 @@ impl PalwChainStateV2 {
         release: Moe2WorkerRelease,
         payees: Moe2ExecWorkerPayees<'_>,
     ) -> Result<Vec<TransactionOutput>, Moe2SettlementError> {
-        use Moe2SettlementError::{UnknownClaimContext, WorkerOutputsMismatch};
+        use Moe2SettlementError::{ProfileInactive, WorkerOutputsMismatch};
         if config.private_moe2_registration_from().is_none_or(|from| award_daa < from) {
-            return Err(UnknownClaimContext);
+            return Err(ProfileInactive);
         }
         let count = usize::from(release.miner_now > 0).saturating_add(payees.panel.len());
         let mut recipients = BTreeSet::from([payees.miner]);
@@ -659,21 +670,29 @@ impl PalwChainStateV2 {
         block: &Block,
     ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::*;
-        let parent_point = parent.last_point().ok_or(UnknownClaimContext)?;
-        let anchor_point = quote_anchor.last_point().ok_or(UnknownClaimContext)?;
-        if anchor_point.block != slot.quote.quote_anchor
-            || anchor_point.blue_score > parent_point.blue_score
+        let parent_point = parent.last_point().ok_or(MissingExecutionPoint)?;
+        let anchor_point = quote_anchor.last_point().ok_or(MissingQuoteAnchor)?;
+        if anchor_point.block != slot.quote.quote_anchor {
+            return Err(QuoteAnchorMismatch);
+        }
+        if anchor_point.blue_score > parent_point.blue_score
             || !(anchor_point.daa_score..=parent_point.daa_score).contains(&slot.close_daa)
-            || !(slot.quote.valid_from..=slot.quote.deadline).contains(&anchor_point.daa_score)
-            || !prefix.iter().any(|entry| {
-                matches!(entry, PalwDeltaEntryV2::LastPoint { old: Some(old), new: Some(new) }
-                    if old == parent_point && *new == point)
-            })
-            || crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&block.header, point.block)
-                .map_err(|_| UnknownClaimContext)?
-                != parent_root
         {
-            return Err(UnknownClaimContext);
+            return Err(PositionOutOfOrder);
+        }
+        if !(slot.quote.valid_from..=slot.quote.deadline).contains(&anchor_point.daa_score) {
+            return Err(OutsideWindow);
+        }
+        if !prefix.iter().any(|entry| {
+            matches!(entry, PalwDeltaEntryV2::LastPoint { old: Some(old), new: Some(new) }
+                if old == parent_point && *new == point)
+        }) {
+            return Err(MissingStateTransition);
+        }
+        let actual =
+            crate::palw_state_proof_v1::state_root_of_pinned_header_v1(&block.header, point.block).map_err(HeaderStateRoot)?;
+        if actual != parent_root {
+            return Err(StateRootMismatch { expected: parent_root, actual });
         }
         if self.private_moe2_work_claim(&work).is_some() {
             return Err(WorkAlreadyConsumed);
@@ -742,13 +761,13 @@ impl PalwChainStateV2 {
         block: &Block,
         worker_start: usize,
     ) -> Result<(), Moe2SettlementError> {
-        use Moe2SettlementError::{UnknownClaimContext, WorkerOutputsMismatch};
+        use Moe2SettlementError::{StatePointMismatch, WorkerOutputsMismatch};
         if position.point != point
             || self.last_point() != Some(&point)
             || (block.hash(), block.header.daa_score, block.header.blue_score) != (point.block, point.daa_score, point.blue_score)
             || crate::hashing::header::hash(&block.header) != block.hash()
         {
-            return Err(UnknownClaimContext);
+            return Err(StatePointMismatch);
         }
         let expected = self.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees)?;
         let coinbase = block.transactions.first().filter(|tx| tx.is_coinbase()).ok_or(WorkerOutputsMismatch)?;
@@ -848,7 +867,7 @@ impl PalwChainStateV2 {
             self.private_moe2_funding(config, book, delta.point, &delta.entries, claim, position, release, slot, work)?;
         let mut writes = Vec::new();
         let budget = self.bond_budget.as_mut().ok_or(Moe2SettlementError::ReservationMismatch)?;
-        let anchor = book.admitted_terms(&claim).ok_or(Moe2SettlementError::UnknownClaimContext)?.quote_anchor;
+        let anchor = book.admitted_terms(&claim).ok_or(Moe2SettlementError::ClaimNotAdmitted)?.quote_anchor;
         let (reward, undo) = book.settle_from_reservation(claim, position, anchor, &funding, budget, &mut writes, slot)?;
         delta.entries.extend(writes.into_iter().map(PalwDeltaEntryV2::from));
         self.write_private_moe2_settlement(&mut delta.entries, before, book, &undo, reward, slot, work, None);
@@ -868,10 +887,13 @@ impl PalwChainStateV2 {
         work: Option<Hash64>,
     ) -> Result<(Option<crate::palw_model_market_v1::PalwModelMarketV1>, Moe2SettlementFunding), Moe2SettlementError> {
         use Moe2SettlementError::*;
-        let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
-        if position.point != point || self.last_point() != Some(&point) || !bundle.state.bond_budget_active_at(point.daa_score) {
-            return Err(UnknownClaimContext);
+        let from = config.private_moe2_registration_from().ok_or(ProfileInactive)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(ProfileInactive) };
+        if position.point != point || self.last_point() != Some(&point) {
+            return Err(StatePointMismatch);
+        }
+        if !bundle.state.bond_budget_active_at(point.daa_score) {
+            return Err(BudgetPolicyMismatch);
         }
         if book.entitlement(&claim).is_some() || (slot.is_some() && self.private_moe2_exec_settlement(&claim).is_some()) {
             return Err(AlreadySettled);
@@ -879,7 +901,7 @@ impl PalwChainStateV2 {
         if work.is_some_and(|key| self.private_moe2_work_claim(&key).is_some()) {
             return Err(WorkAlreadyConsumed);
         }
-        let terms = *book.admitted_terms(&claim).ok_or(UnknownClaimContext)?;
+        let terms = *book.admitted_terms(&claim).ok_or(ClaimNotAdmitted)?;
         let model = *book.model(&terms.model).ok_or(UnknownRegistration)?;
         let class = self.class(&terms.model).ok_or(UnknownRegistration)?;
         if terms.valid_from < from

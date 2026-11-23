@@ -604,6 +604,8 @@ pub struct VirtualStateProcessor {
     /// other. Empty on every shipped preset — the walk is gated on `ConsensusV2`.
     pub(super) palw_state_v2_store: Arc<RwLock<crate::model::stores::palw_state_v2::DbPalwStateV2Store>>,
     palw_court_observations: parking_lot::Mutex<kaspa_consensus_core::palw_court_observation_v1::CourtObservationCacheV1>,
+    pub(super) palw_claim_attempt_failures:
+        parking_lot::Mutex<kaspa_consensus_core::palw_claim_diagnostic_v1::ClaimAttemptFailureCache>,
     /// The V2 state parameters, `Some` exactly when this network's mode is `ConsensusV2`. It is
     /// the ONE gate on the state walk: a network without a V2 bundle has no V2 state to keep, and
     /// a dead handle in a blue-work pipeline would be surface without semantics (ADR-0042
@@ -1570,6 +1572,7 @@ impl VirtualStateProcessor {
             palw_class_carriage_store: storage.palw_class_carriage_store.clone(),
             palw_state_v2_store: storage.palw_state_v2_store.clone(),
             palw_court_observations: parking_lot::Mutex::new(Default::default()),
+            palw_claim_attempt_failures: parking_lot::Mutex::new(Default::default()),
             palw_state_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
                 _ => None,

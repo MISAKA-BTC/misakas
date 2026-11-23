@@ -8,7 +8,7 @@
 [TB1](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
 <!-- TB1-FOW1-ADOPTED-20261120-END -->
 
-> **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
+> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) と [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
 
 **このページは設計の構成であり、全機能が稼働済みとの主張ではありません。** [状態](../STATUS.md) / [設計凍結](../governance/design-freeze.md)。
 
@@ -18,7 +18,7 @@
 
 モデルが事前共有されているとは仮定せず、モデル内 Miner／Panel の全結託と資料秘匿を脅威に含めます。正常時は非対話 positive、不一致時は negative の対話で局所化し、必要資料・肯定検証が成立しなければ成功 Final を認めません。新版は結果固定後に検証を始め、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等の成立後に Final へ進みます。global pool の独立選出と正直な検証者の前提は残ります。
 
-規範入口は [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)、採択記録は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) です。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下の共通構成と旧版の記録を保持し、新版の設計を旧署名済み claim へ遡及適用しません。
+規範入口は [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)、採択記録は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) です。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下の共通構成と旧版の記録を保持し、新版の設計を旧署名済み claim へ遡及適用しません。
 
 ## 共通構成の入口
 

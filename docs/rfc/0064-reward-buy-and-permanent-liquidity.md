@@ -15,7 +15,7 @@
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。設計採択であり、native実装、経済的安全性の実測、公開有効化の完了ではない。
 - 論理profile: **MOE2**。wire値、native object tag、codec、ABI、fence、activation位置は未割当。
 - 判断記録: [ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)
-- 現行会計: [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
+- 現行会計: [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)
 - 適用・移行: [共通経済移行](../governance/model-option-economics-transition.md)
 - 先行規範: [MOE1/RFC0063](0063-additional-model-option-economics.md)、[TB1](0061-palw-internal-threshold-beacon.md)、[FOW1](0062-palw-function-output-and-work-admissibility.md)
 - 数学的範囲: [整数kernelの証明・検査](../maintenance/revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md)

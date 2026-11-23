@@ -4876,6 +4876,19 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_class_census_v1_impl()
     }
 
+    fn palw_claim_diagnostic_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_claim_diagnostic_v1::PalwClaimDiagnosticV1> {
+        let params = &self.config.params;
+        let mut reading = self.virtual_processor.palw_claim_diagnostic_v1_impl(claim)?;
+        reading.network = params.net.to_string();
+        reading.genesis = params.genesis.hash;
+        reading.config_id = params.consensus_params_id().to_string();
+        reading.build_commit = kaspa_utils::git::hash_str();
+        Some(reading)
+    }
+
     fn palw_claim_ledger_observations_v1(
         &self,
     ) -> Option<Vec<kaspa_consensus_core::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {

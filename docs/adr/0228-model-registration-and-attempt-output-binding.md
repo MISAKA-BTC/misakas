@@ -29,7 +29,7 @@ MOR1初版への指示は設計文書の追加を認めるものであり、そ�
 
 ## 現行方針との整合
 
-1. [RFC-v2-0003](../rfc-v2/0003-model-onboarding-and-artifacts.md)と[ADR-v2-0015](../adr-v2/0015-permissionless-model-registration.md)は、permissionlessな登録と、形式・構造・資源等の技術的検査を区別している。廃止済みのモデル資格審査を、非重複性の名目で復活させない。
+1. [RFC-v2-0003](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md)と[ADR-v2-0015](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0015-permissionless-model-registration.md)は、permissionlessな登録と、形式・構造・資源等の技術的検査を区別している。廃止済みのモデル資格審査を、非重複性の名目で復活させない。
 2. [RFC-0053](../rfc/0053-additional-model-burn-pause.md)は、RFC-0052の独立した取得検査、定期可用性認定、HF可用性裁定を置き換えている。MOR1は取得検査員の署名、公開・gated判定、HFへのNodeからのアクセスを登録や復帰の条件にしない。固定revision/hashによる実bytesの同一性確認と、claim単位の資料義務は維持する。
 3. 登録済みModel ID、artifact root、tokenizer、実行仕様等のimmutableな同一性を維持する。新しい入出力規則を既存の識別子へ上書きしない。
 4. モデル非保有Node、Panelの完全再実行、単独の有効反証、未充足の資料・適格異議による成功停止を維持する。計算validity proofをFinal必須条件にする方式へ変更しない。

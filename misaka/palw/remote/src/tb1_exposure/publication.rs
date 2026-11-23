@@ -1,5 +1,5 @@
 //! Live holder publication and the shared branch-scoped release verifier.
-use super::{AnchorState, Tb1HolderFreeze, anchor_state, invalid};
+use super::{AnchorState, Tb1CustodyError, Tb1HolderFreeze, anchor_state, invalid};
 pub(super) use kaspa_consensus_core::palw_tb1::publication::with_published_batch;
 pub use kaspa_consensus_core::palw_tb1::publication::{PublicationLimits, PublishedRelease, batch_commitment, release_batch_payload};
 use kaspa_consensus_core::{
@@ -11,7 +11,7 @@ use kaspa_consensus_core::{
         freeze::Tb1MiningClosure, publication::BranchPublicationGate, qualification::Tb1Qualification, releases::Tb1BeaconSeed,
     },
 };
-use std::io::{self, Error, ErrorKind};
+use std::io::{self, Error};
 
 pub struct NativePublicationGate {
     freeze: Tb1HolderFreeze,
@@ -49,13 +49,15 @@ impl NativePublicationGate {
         let (state, daa, stable_block) = anchor_state(native, close)?;
         freeze.check_deadline(daa)?;
         if !matches!(state, AnchorState::Finalized) {
-            return Err(Error::new(ErrorKind::WouldBlock, "TB1 close has not finalized"));
+            return Err(Tb1CustodyError::NotFinalized.into());
         }
         let snapshot = native
             .get_native_settlement_snapshot()
             .map_err(Error::other)?
-            .filter(|snapshot| snapshot.generation == stable_block)
-            .ok_or_else(|| Error::new(ErrorKind::WouldBlock, "TB1 publication view moved"))?;
+            .ok_or(Tb1CustodyError::NativeUnavailable("native settlement unavailable"))?;
+        if snapshot.generation != stable_block {
+            return Err(Tb1CustodyError::ViewChanged { tip: stable_block }.into());
+        }
         let branch = BranchPublicationGate::observe(native, close, closure, q, &snapshot)?;
         let gate = Self { freeze, chain: closure.round.chain_id, branch };
         gate.require_tip(native, stable_block)?;
@@ -96,8 +98,11 @@ impl NativePublicationGate {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn require_tip(&self, native: &dyn ConsensusApi, expected: Hash64) -> io::Result<()> {
         let (state, _, tip) = anchor_state(native, self.freeze.accepting_block)?;
-        if !matches!(state, AnchorState::Finalized) || tip != expected {
-            return Err(Error::new(ErrorKind::WouldBlock, "TB1 publication view moved"));
+        if tip != expected {
+            return Err(Tb1CustodyError::ViewChanged { tip: expected }.into());
+        }
+        if !matches!(state, AnchorState::Finalized) {
+            return Err(Tb1CustodyError::NotFinalized.into());
         }
         Ok(())
     }

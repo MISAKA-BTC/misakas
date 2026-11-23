@@ -52,7 +52,6 @@ GENESIS / FORK_DESIGNATEDはOption対象外、対象worker報酬Rの100%をMiner
  docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md
  docs/adr/0232-reward-buy-and-permanent-liquidity.md
  docs/rfc/0064-reward-buy-and-permanent-liquidity.md
- docs/rfc-v2/0011-bond-budgets-fees-and-payments.md
  docs/governance/model-option-economics-transition.md
 
 検証・変更一覧:

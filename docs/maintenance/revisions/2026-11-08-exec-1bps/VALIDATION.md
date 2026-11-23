@@ -1,7 +1,7 @@
 # EXEC・1 BPS追加改訂の検査結果
 
 対象は直前の `misaka_docs_rfc20_20261108.zip` の1867ファイルから作成した追加改訂である。
-[改訂内容](README.md) / [変更台帳](changes.json) / [現行RFC20冊](../../../rfc-v2/README.md)。
+[改訂内容](README.md) / [変更台帳](changes.json) / [現行RFC20冊](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)。
 
 **今回入力に対する8項目の文書検査はすべてPASS。**
 歴史snapshotに対する既存監査はFAILを残す。各判定の対象を以下に分けて記録する。

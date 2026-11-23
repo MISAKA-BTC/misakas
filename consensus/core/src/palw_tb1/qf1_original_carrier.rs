@@ -91,7 +91,7 @@ impl Qf1OriginalAdmission {
         if parent.tb1_exec_close_receipt(source.reference.close).is_some() {
             return Err("recorded QF1 EXEC close requires its certificate");
         }
-        source.reference.check_parent_reservation(parent, block.header.daa_score)?;
+        source.reference.check_parent_reservation(parent, block.header.daa_score).map_err(|error| error.reason())?;
         let (_, registration) = authenticate_original(chain, source, close_daa, block)?;
         Ok(Self {
             original: source.reference.claim,

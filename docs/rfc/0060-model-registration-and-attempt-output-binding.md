@@ -25,7 +25,7 @@ FOW1では補助envelopeを`(y,z,s,rho)`とし、四Root TicketとTB1の独立EX
 - 提案系列: **PALW-MOR1**（Model Output Registration、設計上の名称。native wire IDの割当ではない）
 - 対応ADR: [ADR-0228](../adr/0228-model-registration-and-attempt-output-binding.md)
 - 依存する実行方式: [RFC-0059 PALW-AN1](0059-palw-an1-input-binding-and-panel-court.md)
-- 現行の担当: [モデル登録03](../rfc-v2/0003-model-onboarding-and-artifacts.md)、[入出力01](../rfc-v2/0001-inference-and-generative-jobs.md)、[元claim16](../rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[Final20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- 現行の担当: [モデル登録03](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md)、[入出力01](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0001-inference-and-generative-jobs.md)、[元claim16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[Final20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
 - 改訂記録: [README](../maintenance/revisions/2026-11-20-model-output-binding/README.md)、[検証](../maintenance/revisions/2026-11-20-model-output-binding/VALIDATION.md)
 
 ## 0. 要求と適用状態

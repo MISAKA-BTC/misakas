@@ -14,7 +14,7 @@
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
 - 正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)
-- 現行会計: [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
+- 会計の統合時点の記録: [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)
 - 共通移行: [経済profileの適用・移行](../governance/model-option-economics-transition.md)
 - 前版: [RFC0063](../rfc/0063-additional-model-option-economics.md)／[ADR0231](0231-additional-model-option-economics.md)
 

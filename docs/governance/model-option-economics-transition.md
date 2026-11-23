@@ -23,7 +23,8 @@
 
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。native/ABI/state版、activation位置は未割当。
-- 正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)、[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)、[RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)
+- 正本: [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)、[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)
+- 会計の統合時点の記録: [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)
 - 前版: [MOE1 RFC0063](../rfc/0063-additional-model-option-economics.md)／[ADR0231](../adr/0231-additional-model-option-economics.md)。旧claimは元版の意味を保持する。
 - 継承: [TB1/FOW1](palw-tb1-fow1-transition.md)の正当性、乱数、採掘適格性、元claim、Panel・Court・資料・合意条件。
 

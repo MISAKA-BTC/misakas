@@ -101,10 +101,10 @@ pub(super) fn observe(
                 holder_slot: slot,
                 shares: &shares,
             };
-            assert_eq!(
-                journal.reserve_signing_message(api, freeze, qualified[i], &row, 2048).unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
-            );
+            assert!(matches!(
+                journal.reserve_signing_message(api, freeze, qualified[i], &row, 2048),
+                Err(Tb1CustodyError::NotFinalized | Tb1CustodyError::NativeUnavailable(_))
+            ));
         }
     }
     peer_log!(

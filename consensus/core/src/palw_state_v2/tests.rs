@@ -18673,6 +18673,10 @@ fn the_state_root_preimage_is_exactly_the_adr_0043_list() {
         exec_v2_reward_holds: _,
         exec_v2_origins: _,
         exec_v2_job_uses: _,
+        // Private MOE2 adds these sections only when populated. This fixture predates the profile.
+        private_moe2_exec_settlements: _,
+        private_moe2_work_uses: _,
+        private_moe2_attempt_uses: _,
     } = &PalwStateCarriageV2::from_state(&full);
 }
 

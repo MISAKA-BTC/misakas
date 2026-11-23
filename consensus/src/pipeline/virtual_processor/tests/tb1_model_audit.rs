@@ -132,7 +132,10 @@ pub(super) async fn registered_cut(
     };
     Tb1ExposureJournal::provision(dir, &ids[0], key, slot as u32).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir, &ids[0], key, slot as u32).unwrap();
-    assert_eq!(journal.reserve_signing_message(api, freeze, &q, &row, 2048).unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    assert!(matches!(
+        journal.reserve_signing_message(api, freeze, &q, &row, 2048),
+        Err(Tb1CustodyError::NotFinalized | Tb1CustodyError::NativeUnavailable(_))
+    ));
     peer_log!(
         "MAS1 audit plan pid={} audit={} panel={} generation={} suite={} reservation={} candidates={} tests={} case_deadline={}",
         std::process::id(),
@@ -184,7 +187,7 @@ pub(super) async fn registered_cut(
     }
     let at = node.chain.sink();
     let api = node.api().as_ref();
-    assert_eq!(journal.reserve_signing_message(api, freeze, &q, &row, 2048).unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+    assert!(matches!(journal.reserve_signing_message(api, freeze, &q, &row, 2048), Err(Tb1CustodyError::DeadlineElapsed)));
     assert_eq!(cut.observe(api, close.hash(), &q).err().unwrap().kind(), std::io::ErrorKind::TimedOut);
     peer_log!(
         "MAS1 audit expiry pid={} tip={} daa={} blocks={} close_daa={} prosecution_daa={} earliest_attempt_cert_daa={} finalized=none",

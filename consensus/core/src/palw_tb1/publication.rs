@@ -373,10 +373,24 @@ impl BranchPublicationGate {
             deadline_exclusive: daa_start(self.deadline_exclusive_daa)?,
             certificate_at: position(header.daa_score, header.blue_score, 3)?,
         };
+        let publication_error = |error| Error::new(ErrorKind::InvalidData, error);
         let set = Tb1ReleaseSet::new(&cut, q, &signed, limits.records, limits.message_bytes)
-            .map_err(|_| invalid("invalid TB1 release cut"))?;
-        let cert = set.assemble(limits.matrix_cells).map_err(|_| invalid("TB1 batch lacks reconstructible quorum"))?;
-        let seed = set.verify_seed(&cert).map_err(|_| invalid("TB1 certificate verification failed"))?;
+            .map_err(|source| publication_error(Tb1ReleasePublicationError::Cut(source)))?;
+        let cert = set.assemble(limits.matrix_cells).map_err(|source| {
+            let mut accepted = 0;
+            let mut rejected = Vec::<(super::Tb1PolynomialError, usize)>::new();
+            for (_, outcome) in set.candidate_outcomes() {
+                match outcome {
+                    Ok(()) => accepted += 1,
+                    Err(error) => match rejected.iter_mut().find(|(reason, _)| *reason == error) {
+                        Some((_, count)) => *count += 1,
+                        None => rejected.push((error, 1)),
+                    },
+                }
+            }
+            publication_error(Tb1ReleasePublicationError::Assembly { source, accepted, rejected })
+        })?;
+        let seed = set.verify_seed(&cert).map_err(|source| publication_error(Tb1ReleasePublicationError::Certificate(source)))?;
         let marker = certificate_commitment(batch, &cert)?;
         Ok((marker, seed))
     }
@@ -459,6 +473,22 @@ impl BranchPublicationGate {
             self.read_seed_at_parent(native, parent, settlement, batch, certificate, rows, q, limits)
         })
     }
+}
+
+/// Release failures exposed through the existing publication I/O API.
+#[derive(Debug, thiserror::Error)]
+pub enum Tb1ReleasePublicationError {
+    #[error("invalid TB1 release cut: {0}")]
+    Cut(#[source] super::Tb1PolynomialError),
+    #[error("TB1 release assembly failed: {source}; accepted {accepted}; rejected {rejected:?}")]
+    Assembly {
+        #[source]
+        source: super::Tb1PolynomialError,
+        accepted: usize,
+        rejected: Vec<(super::Tb1PolynomialError, usize)>,
+    },
+    #[error("TB1 certificate verification failed: {0}")]
+    Certificate(#[source] super::Tb1PolynomialError),
 }
 
 fn invalid(message: &'static str) -> Error {

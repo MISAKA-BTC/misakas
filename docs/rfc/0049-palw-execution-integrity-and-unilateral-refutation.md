@@ -3,7 +3,7 @@
 Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-09
 Decision: [ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)
-Current owner: [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+Current owner: [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
 
 本書は、ユーザーが指定した「一人の正直な検証者が有効な反証を提出すれば、多数のPanelの承認にかかわらず誤ったclaimを無効化する」「必要な検証承認が成立しなければ成功させない」という新claim版の追加採択記録である。現行の通常編集先はRFC-v2の20冊を維持し、本書を21冊目の独立した規範所有者にしない。番号0049は今回添付内で未使用だった範囲の割当であり、未取得branchの予約を保証しない。
 
@@ -23,13 +23,13 @@ Current owner: [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversa
 
 | 変更 | 規範所有者 |
 | --- | --- |
-| Minerが初期状態・全状態遷移・終端と結果の対応を含む実行記録を先に固定する | [16](../rfc-v2/0016-miner-execution-commit-and-material-supply.md) |
-| データ、演算規則、座標、依存、数値意味を認証し、有界なnative検査へ落とす | [19](../rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
-| 肯定承認の検証範囲と保証を限定する。署名や抜き取りを全体証明へ昇格しない | [17](../rfc-v2/0017-noninteractive-positive-verification.md) |
-| 一人の適格noticeをnative未解決状態へ入れ、完成反証を他のPanelやMinerの許可なしに裁く | [18](../rfc-v2/0018-interactive-negative-court-and-defaults.md) |
-| 必要承認・未解決異議・裁定結果・期限・依存・経済効果を一つの成功gateで判定する | [20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
-| 一人の検証者の合法経路を攻撃者の予約占有から保護し、総負荷とcold取得を予算化する | [05](../rfc-v2/0005-bounded-resources-and-long-context.md)・18・19・20 |
-| 取消を仕事報酬・未消費credit・permit・依存へ伝播し、既存取引の一括rollbackとは分ける | [07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)・[08](../rfc-v2/0008-claim-dependencies-and-liability.md)・[10](../rfc-v2/0010-dag-consensus-and-native-settlement.md) |
+| Minerが初期状態・全状態遷移・終端と結果の対応を含む実行記録を先に固定する | [16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md) |
+| データ、演算規則、座標、依存、数値意味を認証し、有界なnative検査へ落とす | [19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
+| 肯定承認の検証範囲と保証を限定する。署名や抜き取りを全体証明へ昇格しない | [17](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md) |
+| 一人の適格noticeをnative未解決状態へ入れ、完成反証を他のPanelやMinerの許可なしに裁く | [18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) |
+| 必要承認・未解決異議・裁定結果・期限・依存・経済効果を一つの成功gateで判定する | [20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
+| 一人の検証者の合法経路を攻撃者の予約占有から保護し、総負荷とcold取得を予算化する | [05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md)・18・19・20 |
+| 取消を仕事報酬・未消費credit・permit・依存へ伝播し、既存取引の一括rollbackとは分ける | [07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md)・[08](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0008-claim-dependencies-and-liability.md)・[10](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md) |
 
 不正な実行に必ず裁ける矛盾が存在するという命題は、初期状態・遷移・終端の関係集合が完全で、各関係に認証付きの有界なwitnessがあり、その取得と提出が可能である受理profileについてのみ成立する。巨大な演算を名称だけで一primitiveと呼ばず、profileの全relation familyを具体化する。
 

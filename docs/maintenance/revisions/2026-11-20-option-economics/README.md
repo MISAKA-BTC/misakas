@@ -8,7 +8,7 @@
 
 ## 正本と読む順序
 
-1. [RFC-v2-0011 会計・手数料・支払](../../../rfc-v2/0011-bond-budgets-fees-and-payments.md) — 現行入口の本文改訂。
+1. [RFC-v2-0011 会計・手数料・支払](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md) — 現行入口の本文改訂。
 2. [RFC-0063](../../../rfc/0063-additional-model-option-economics.md) — 分類、原子登録、snapshot、配分、transfer、移行の統合規範。
 3. [ADR-0231](../../../adr/0231-additional-model-option-economics.md) — 採択理由と置換範囲。
 4. [経済移行契約](../../../governance/model-option-economics-transition.md) — 旧条項との優先順位、旧claim、既存市場、実装・有効化条件。

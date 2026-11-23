@@ -1,7 +1,7 @@
 # 2026-11-08改訂の検査結果
 
 対象: 今回添付されたdocs(2).zipから作成した文書更新版。
-[変更記録](README.md) / [現行RFC20本](../../../rfc-v2/README.md) /
+[変更記録](README.md) / [現行RFC20本](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md) /
 [変更ファイル台帳](changes.json)。
 
 **今回入力に対する文書保全・目録・対応表・リンク回帰の7検査はPASS。**

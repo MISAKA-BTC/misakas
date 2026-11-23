@@ -3677,6 +3677,37 @@ impl VirtualStateProcessor {
     }
 
     /// ADR-0132: the attempt-lane claims of the tip state as the end-to-end ledger observes them.
+    pub fn palw_claim_diagnostic_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_claim_diagnostic_v1::PalwClaimDiagnosticV1> {
+        use kaspa_consensus_core::palw_claim_diagnostic_v1::PalwClaimDiagnosticV1;
+        let params = self.palw_state_params_v2.as_ref()?;
+        let Ok(Some((parent, state))) = self.palw_v2_reader_state(params) else {
+            let mut reading = PalwClaimDiagnosticV1::new(claim, self.lkg_virtual_state.load().ghostdag_data.selected_parent);
+            reading.unavailable();
+            return Some(reading);
+        };
+        let mut reading = PalwClaimDiagnosticV1::new(claim, parent);
+        reading.observe(&state, params);
+        reading.last_local_failure = self.palw_claim_attempt_failures.lock().current(claim, parent);
+        if reading.evaluated_daa.is_some() {
+            match self.palw_state_v2_store.read().state_root_of(parent) {
+                Ok(root) => {
+                    reading.state_root = Some(root);
+                    reading.state_root_code = "PALW.STATE_ROOT_RECORDED";
+                }
+                Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => {
+                    reading.state_root_code = "PALW.STATE_ROOT_NOT_RETAINED";
+                }
+                Err(_) => {
+                    reading.state_root_code = "PALW.STATE_ROOT_UNREADABLE";
+                }
+            }
+        }
+        Some(reading)
+    }
+
     pub fn palw_claim_ledger_observations_v1_impl(
         &self,
     ) -> Option<Vec<kaspa_consensus_core::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {

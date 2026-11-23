@@ -11058,6 +11058,14 @@ pub enum PalwStateV2Error {
     /// stands.
     #[error("a bond-budget move is refused: {0}")]
     BondBudgetRefused(String),
+    #[error("MOE2 claim {claim} in candidate {block} at selected parent {selected_parent}: {source}")]
+    PrivateMoe2Settlement {
+        claim: Hash64,
+        block: Hash64,
+        selected_parent: Hash64,
+        #[source]
+        source: crate::palw_model_market_v1::moe2::settlement::Moe2SettlementError,
+    },
     /// **ADR-0176 D1: the producer bond's budget refuses this claim** (its window has no room, or it holds its open-claim cap) — checked
     /// before the path's first write, so step 4 skips a refused own attempt (its carve withheld as a skipped attempt's, never minted) and
     /// 4b a merged one; a free-prompt commitment or a rider batch is refused by name.

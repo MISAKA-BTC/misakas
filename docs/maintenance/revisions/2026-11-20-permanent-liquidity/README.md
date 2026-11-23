@@ -8,7 +8,7 @@
 
 1. [ADR0091](../../../adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) — 報酬の中心規則。
 2. [新ADR0232](../../../adr/0232-reward-buy-and-permanent-liquidity.md)／[新RFC0064](../../../rfc/0064-reward-buy-and-permanent-liquidity.md) — 採択と固定kernel。
-3. [RFC-v2-0011](../../../rfc-v2/0011-bond-budgets-fees-and-payments.md)／[経済移行契約](../../../governance/model-option-economics-transition.md)。
+3. [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)／[経済移行契約](../../../governance/model-option-economics-transition.md)。
 4. [数学証明と反例](MATH_PROOF.md)／[検証記録](VALIDATION.md)。
 
 ## 実際に固定した構成

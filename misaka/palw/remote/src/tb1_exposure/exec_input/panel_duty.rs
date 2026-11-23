@@ -445,7 +445,7 @@ impl LocalReplayDraw {
     pub fn unverified_expiry_marker(&self, native: &dyn ConsensusApi, boundary: Hash64, scan_limit: usize) -> io::Result<[u8; 64]> {
         let (daa, tip) = self.branch(native)?;
         if daa < self.deadline {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Err(Tb1HistoryError::WindowNotOpen { daa, deadline: self.deadline }.into());
         }
         let parent = |block| native.get_ghostdag_data(block).map(|v| v.selected_parent).map_err(io::Error::other);
         let score = |block| native.get_header(block).map(|h| h.daa_score).map_err(io::Error::other);
@@ -457,17 +457,16 @@ impl LocalReplayDraw {
         {
             return Err(invalid("wrong local PANEL deadline boundary"));
         }
-        let mut remaining = scan_limit;
+        let mut budget = HistoryScanBudget::new("panel_deadline", tip, scan_limit);
         while cursor != self.certificate {
-            remaining =
-                remaining.checked_sub(1).ok_or_else(|| io::Error::new(io::ErrorKind::WouldBlock, "deadline scan budget exhausted"))?;
+            budget.visit(cursor)?;
             if native.palw_coinbase_commitment(cursor).map_err(io::Error::other)?.is_some() {
-                return Err(io::Error::new(io::ErrorKind::WouldBlock, format!("unresolved timely PANEL commitment at {cursor}")));
+                return Err(Tb1HistoryError::UnresolvedCommitment { block: cursor }.into());
             }
             cursor = parent(cursor)?;
         }
         if self.branch(native)?.1 != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Err(Tb1HistoryError::ViewChanged { parent: tip }.into());
         }
         Ok(Sha3_512::new()
             .chain_update(b"MISAKA/private/TB1/PANEL/unverified-expiry/v1")
@@ -497,7 +496,7 @@ impl LocalReplayDraw {
             return Err(invalid("unverified expiry outside committed PANEL history"));
         }
         if self.branch(native)?.1 != tip {
-            return Err(io::ErrorKind::WouldBlock.into());
+            return Err(Tb1HistoryError::ViewChanged { parent: tip }.into());
         }
         Ok(())
     }

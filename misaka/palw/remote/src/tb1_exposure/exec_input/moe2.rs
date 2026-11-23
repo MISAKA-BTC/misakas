@@ -117,7 +117,7 @@ impl ClosedMoe2Quote {
         self.slot
             .quote
             .preview_at_anchor(config, state, reward)
-            .map_err(|_| invalid("MOE2 preview outside signed quote or market policy"))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     /// Recheck the signed economic terms against the pre-state committed by
@@ -148,11 +148,11 @@ impl ClosedMoe2Quote {
         if native.get_sink() != tip {
             return Err(io::Error::new(io::ErrorKind::WouldBlock, "MOE2 execution view moved"));
         }
-        result.map_err(|err| match err {
-            kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2SettlementError::OutsideWindow => {
-                io::Error::new(io::ErrorKind::TimedOut, "MOE2 quote outside its original window")
-            }
-            _ => invalid("MOE2 reward outside original market terms or active rules"),
+        result.map_err(|error| {
+            use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2SettlementError;
+            let kind =
+                if matches!(error, Moe2SettlementError::OutsideWindow) { io::ErrorKind::TimedOut } else { io::ErrorKind::InvalidData };
+            io::Error::new(kind, error)
         })
     }
 }

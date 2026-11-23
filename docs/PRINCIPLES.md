@@ -436,7 +436,7 @@ mainnet 後に、機能別の実装・試験・影響・互換性・移行とレ
 <a id="model-free-adversarial-verification"></a>
 ## 13. モデル非保有Node・公開資料・一人の正直な検証者 — 2026-11-09限定改定
 
-本節はユーザーの明示指示に基づく新claim/profileへの限定改定である。[ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)のモデル非保有・検証先行Final、[RFC-0049](rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](adr/0217-palw-execution-integrity-and-unilateral-refutation.md)の反証完全性・一人の異議・経済効果を維持し、[RFC-0050](rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](adr/0218-public-materials-and-one-honest-panel.md)により公開資料、cold取得、最低一件の完全承認、条件付き正常完了を採択する。詳細の所有者は[RFC-v2-0016〜0020](rfc-v2/README.md)。新profileに限り§0、§1–2、2026-10-15の§0追記、§10、旧Positive Court R2の衝突箇所に優先する。旧claim、旧profile、model-epoch配分を遡及変更しない。
+本節はユーザーの明示指示に基づく新claim/profileへの限定改定である。[ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)のモデル非保有・検証先行Final、[RFC-0049](rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](adr/0217-palw-execution-integrity-and-unilateral-refutation.md)の反証完全性・一人の異議・経済効果を維持し、[RFC-0050](rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](adr/0218-public-materials-and-one-honest-panel.md)により公開資料、cold取得、最低一件の完全承認、条件付き正常完了を採択する。詳細の所有者は[RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)。新profileに限り§0、§1–2、2026-10-15の§0追記、§10、旧Positive Court R2の衝突箇所に優先する。旧claim、旧profile、model-epoch配分を遡及変更しない。
 
 ### 13.1 Nodeのモデル非保有
 
@@ -446,7 +446,7 @@ Nodeが扱うのは固定claim・root・有界な実行定義、選出・署名�
 
 ### 13.2 Minerの主張と反証の完全性
 
-Minerはモデル・program・入力・規則・seed・依存・出力と、canonical executionのWellFormed・初期状態・全遷移・終端を初回に署名固定する。全ての計算関係が有界なnative検査へ接続され、誤った実行なら少なくとも一つの元claimに結び付いた関係を反証できるprofileだけを受理する。関係の省略、後付けの細分trace、巨大演算の名称だけによる有界性を認めない。[16](rfc-v2/0016-miner-execution-commit-and-material-supply.md)と[19](rfc-v2/0019-model-free-node-and-bounded-evidence.md)が定義する。
+Minerはモデル・program・入力・規則・seed・依存・出力と、canonical executionのWellFormed・初期状態・全遷移・終端を初回に署名固定する。全ての計算関係が有界なnative検査へ接続され、誤った実行なら少なくとも一つの元claimに結び付いた関係を反証できるprofileだけを受理する。関係の省略、後付けの細分trace、巨大演算の名称だけによる有界性を認めない。[16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)と[19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)が定義する。
 
 この「計算証明」は固定されたLLM実行の整合性と、その反証・認証の契約を意味する。Miner本人または各Panel本人が特定GPUで新規に全演算を実行した物理的行為、非外注、非共有、実作業時間を証明しない。
 
@@ -462,17 +462,17 @@ claim固有資料は独立provider・cache・再配布者から認証付きchunk
 
 global poolからclaim固定後の乱数で選出し、モデル事前保有や取得成功者だけへ母集団を狭めない。選出者はcold取得を含め必要資料を取得し、全体を独立再実行する。この新profileに限り§1–2の通常全量再実行不要という一般方針を置き換える。全Nodeの再実行義務にはせず、旧sampled profileは保持する。少人数への任意委任・layer分担で一人の全体coverageを失わない。
 
-正常時の資料・承認は[17](rfc-v2/0017-noninteractive-positive-verification.md)に従い一括提出できる。必要資料を取得し所定の検証を完了できなければ肯定しない。資料公開をモデル登録時審査・登録取消・tier昇格へ変換しない。
+正常時の資料・承認は[17](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)に従い一括提出できる。必要資料を取得し所定の検証を完了できなければ肯定しない。資料公開をモデル登録時審査・登録取消・tier昇格へ変換しない。
 
 ### 13.4 一人の異議と有効な反証の優先
 
-一人の適格notice・資料要求はnative未解決状態を作り、他Panelの肯定署名数にかかわらず解決まで成功を止める。資料要求に算術反証を前提としない。資料供給履行と検査完了を分け、InspectionPendingを同じCaseId・scope・原時計で継続する。一人の完成反証がnative検査で成立すれば、元claimを無効化する。Minerの再署名・通常Panelの許可・悪意側の共同提出・追加quorumを必要としない。[18](rfc-v2/0018-interactive-negative-court-and-defaults.md)が入口・対話・直接証拠・帰責を所有する。
+一人の適格notice・資料要求はnative未解決状態を作り、他Panelの肯定署名数にかかわらず解決まで成功を止める。資料要求に算術反証を前提としない。資料供給履行と検査完了を分け、InspectionPendingを同じCaseId・scope・原時計で継続する。一人の完成反証がnative検査で成立すれば、元claimを無効化する。Minerの再署名・通常Panelの許可・悪意側の共同提出・追加quorumを必要としない。[18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)が入口・対話・直接証拠・帰責を所有する。
 
 root不一致、私的未受信申告、未認証資料は算術有罪としない。反証成立、客観的な供給義務違反、偽異議、Panel停止、未検証終了を区別する。一人の合法経路を他者の先着予約・重複claimで排除しない。無効packetの棄却で既存caseを閉じず、共有資料のIDで申立人ごとの権利を吸収しない。
 
 ### 13.5 最低一件の完全承認と検証先行Final
 
-今回採択した新profileのlogicalな最低肯定数を **k_min = 1** とする。選出された有資格者の完全検証承認一件以上、必須局所検査、cold取得から全体検査・異議提出までの機会、Qの解消、依存・資金・原期限がそろった場合だけ、[20](rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の単一gateで成功Finalへ進む。一件の署名直後に成功へ進めず、全員の受領・署名を別名で必須条件へ戻さない。最低承認数1はPanel人数1の採択ではない。旧75／41、旧抽選上限、旧署名と稼働設定を変更しない。
+今回採択した新profileのlogicalな最低肯定数を **k_min = 1** とする。選出された有資格者の完全検証承認一件以上、必須局所検査、cold取得から全体検査・異議提出までの機会、Qの解消、依存・資金・原期限がそろった場合だけ、[20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の単一gateで成功Finalへ進む。一件の署名直後に成功へ進めず、全員の受領・署名を別名で必須条件へ戻さない。最低承認数1はPanel人数1の採択ではない。旧75／41、旧抽選上限、旧署名と稼働設定を変更しない。
 
 資料不足や検証未完了は、反証を完成できなくても成功不可である。規定期限で未検証Abortと契約別精算へ進め、計算不正と推定しない。原受理a、notice a+3,120、係争hard a+10,000を維持し、取得・receipt・交代で時計をresetしない。収集と保持は別の義務である。
 
@@ -503,14 +503,14 @@ cache、固定後抽選の有限batch、初回commitされた上限付き計算�
 EXEC_TXの生成目標を1 BPS、slot幅を1,000 ms、global slotの正規ブロックを最大1つとする。
 有効credit、事前公開schedule、適格producer、検証・伝播・包含容量を前提とする。
 modelごと・producerごとの1 BPSを合算せず、重複候補・再送を達成数へ数えない。
-目標は[10](rfc-v2/0010-dag-consensus-and-native-settlement.md)の運用条件と測定分母を付けて評価する。
+目標は[10](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md)の運用条件と測定分母を付けて評価する。
 
 1 BPS、TPS、暫定実行の遅延、本体受理の遅延、不可逆決済の遅延は別の指標である。
 既存の本体／Heartbeat、DAA、報酬周期、court期限を1秒へ置き換えない。
 
 ### 14.2 PALW仕事から有限creditへ
 
-[07](rfc-v2/0007-claims-exec-and-answer-accounting.md)の単一gateで、成功Final、有効認証、
+[07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md)の単一gateで、成功Final、有効認証、
 成熟、依存、資本・bond予算、失効を確認して期限付きExecCreditを一度だけ発行する。
 Finalの一覧・snapshot・slice・scheduleを別の発行根拠にしない。
 空slotや供給不足を解消するために、未認証仕事や期限切れの権利を復活させない。
@@ -530,7 +530,7 @@ validatorの包含規則はlocalな受信秒から独立させ、1秒の署名�
 
 ### 14.4 courtとEXECを合算した資源計画
 
-[05](rfc-v2/0005-bounded-resources-and-long-context.md)に従い、依存DAGの最長経路、
+[05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md)に従い、依存DAGの最長経路、
 全合法分岐・複数claimの総需要、保証供給、期限内に実行可能な予約scheduleを同時に確認する。
 owner専有枠の順番待ちを公開者の必須経路にせず、認証共通資料と独立処理の並列化を使う。
 真の依存、cold取得、包含、reorg・再起動、保持義務は残す。

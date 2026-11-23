@@ -4,7 +4,7 @@ Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-09
 Authority: この会話のユーザーによる、モデル未保有の一人の正直なPanel・公開資料・条件付き正常完了を含む提示方針に基づくdocs修正の明示指示。
 RFC: [RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)
-Current owners: [RFC-v2-0016〜0020](../rfc-v2/README.md)
+Current owners: [RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)
 
 本書は統合後の追加採択記録であり、ADR-v2の51冊目を作らない。0218は利用できた資料内で未使用の番号を割り当てた。未取得branchの番号予約は保証しない。以前の0049／0217の反証完全性・単独異議・経済効果を維持して、新profileに次の条件を加える。
 

@@ -177,11 +177,14 @@ pub struct GetPalwKernelClaimResponse {
     pub settlement: String,
     /// The first DAA the claim is (or, absent a conviction or default, will be) settled at; 0 before Final.
     pub settled_from_daa: u64,
+    /// Versioned JSON for the same claim, with its own authoritative selected-parent stamp.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub diagnostic_json: String,
 }
 
 impl Serializer for GetPalwKernelClaimResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &if self.diagnostic_json.is_empty() { 2 } else { 3 }, writer)?;
         store!(bool, &self.available, writer)?;
         store!(bool, &self.found, writer)?;
         store!(u64, &self.tip_daa, writer)?;
@@ -218,6 +221,9 @@ impl Serializer for GetPalwKernelClaimResponse {
         store!(String, &self.final_statement, writer)?;
         store!(String, &self.settlement, writer)?;
         store!(u64, &self.settled_from_daa, writer)?;
+        if !self.diagnostic_json.is_empty() {
+            store!(String, &self.diagnostic_json, writer)?;
+        }
         Ok(())
     }
 }
@@ -262,10 +268,14 @@ impl Deserializer for GetPalwKernelClaimResponse {
             final_statement: load!(String, reader)?,
             settlement: String::new(),
             settled_from_daa: 0,
+            diagnostic_json: String::new(),
         };
         if version >= 2 {
             out.settlement = load!(String, reader)?;
             out.settled_from_daa = load!(u64, reader)?;
+        }
+        if version >= 3 {
+            out.diagnostic_json = load!(String, reader)?;
         }
         Ok(out)
     }

@@ -45,11 +45,11 @@
 
 | 領域 | 既存の契約・実装上の足場 | RFC-0058で必要な追加接続 | この作業から導けない結論 |
 | --- | --- | --- | --- |
-| 初回実行commit | [RFC-v2-0016](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md)の元実行・完全trace・依存の束縛 | 段階commit、ComputationalWorkKey、ticket、後続Panel抽選の参照を一つにする | 実行の最小実費が証明された |
+| 初回実行commit | [RFC-v2-0016](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)の元実行・完全trace・依存の束縛 | 段階commit、ComputationalWorkKey、ticket、後続Panel抽選の参照を一つにする | 実行の最小実費が証明された |
 | 全claim受付 | 0055の全工程予約、0056のTrialSlot／Preseal／公表済みDと有限prefix | 新しいstageごとの先行費用・保持・再開・失敗終了を同じ予算へ入れる | ticket不合格packetの無限到着をネットワーク層で無費用化できる |
-| Panelとcourt | [RFC-v2-0017](../../../rfc-v2/0017-noninteractive-positive-verification.md)の完全承認、0057のnonce／scope | 最終実行commit後の独立した抽選contextと、元rootへの肯定・反証を接続 | 全Panelが独立に再計算したと物理的に証明できる |
-| 資料と検査機会 | [RFC-v2-0018](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md) §2.3–2.4、[RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md) | 元scopeの取得・検査・包含・裁定を元時計で完了できる具体的なnative手順 | URL、ACK、別人の受領証だけで当人の全検査機会が成立する |
-| Finalと成功資格 | [RFC-v2-0020](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) §5.2・§11A、0048 | 新仕事版のhold／反証／成熟を全credit・fork-choice consumerへ渡す | 旧wire Finalが新たな不可逆確定になる |
+| Panelとcourt | [RFC-v2-0017](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)の完全承認、0057のnonce／scope | 最終実行commit後の独立した抽選contextと、元rootへの肯定・反証を接続 | 全Panelが独立に再計算したと物理的に証明できる |
+| 資料と検査機会 | [RFC-v2-0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) §2.3–2.4、[RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md) | 元scopeの取得・検査・包含・裁定を元時計で完了できる具体的なnative手順 | URL、ACK、別人の受領証だけで当人の全検査機会が成立する |
+| Finalと成功資格 | [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) §5.2・§11A、0048 | 新仕事版のhold／反証／成熟を全credit・fork-choice consumerへ渡す | 旧wire Finalが新たな不可逆確定になる |
 | Native settlement | `palw_native_settlement_v1.rs`の成熟変換、依存責任、canonical snapshot | 新WorkKeyと新責任時計を既存成熟変換・fact出力へ正しく写像する | 過去fork-choiceへの一時的不正weightの影響が証明済みになる |
 | 取消とpruning | `palw_security_certification_v1.rs`のfrontier再計算とrollback bound | 新版の資格取消、歴史cut、保持、reorgとfloorの対応を閉じる | frontierの再計算だけで分断後の安全な収束が保証される |
 

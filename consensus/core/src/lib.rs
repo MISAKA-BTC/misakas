@@ -293,6 +293,7 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 // Scoped historical-context storage is typechecked before production wiring.
 mod palw_claim_local_context_nodes_v2;
+pub mod palw_claim_diagnostic_v1;
 pub mod palw_claim_local_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;

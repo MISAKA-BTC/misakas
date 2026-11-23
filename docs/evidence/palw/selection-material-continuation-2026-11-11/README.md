@@ -6,7 +6,7 @@
 
 ## 前回の接続方針の訂正
 
-[元計画](../../../design/palw/integration/public-one-honest-vertical-implementation-plan-2026-11-10.md)I3と[RFC18](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)は、初回MaterialRequestをnotice窓内に受理すれば、資料到着後の検査・局所化・反証を同じCaseId・scope・原時計でhard内まで継続することを要求している。
+[元計画](../../../design/palw/integration/public-one-honest-vertical-implementation-plan-2026-11-10.md)I3と[RFC18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)は、初回MaterialRequestをnotice窓内に受理すれば、資料到着後の検査・局所化・反証を同じCaseId・scope・原時計でhard内まで継続することを要求している。
 
 したがって、[前回記録](../selection-native-notice-2026-11-11/README.md)の「Selection行も常に元notice期限前に固定する」という接続上の見立てを訂正する。初回MismatchNoticeと、受理済みMaterialRequestの後続行指定は別の操作である。後者を新規notice扱いして締め切ったり、資料を取得する前に行指定を強制したりしない。期限後の新規case作成は許可しない。これは採択済み設計への実装修正であり、期限を延長する設計変更ではない。
 

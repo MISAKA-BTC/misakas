@@ -2978,6 +2978,7 @@ mod mockery {
                 opv_max_gain_sompi: mock(),
                 final_statement: "Final under optimistic public verification".to_string(),
                 settlement: "final-revocable".to_string(),
+                diagnostic_json: "{\"schema_version\":1}".into(),
                 settled_from_daa: mock(),
             }
         }

@@ -32,6 +32,10 @@ pub fn ready_message(row: &Tb1Ready<'_>, byte_limit: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
+pub(super) fn release_message_size(row: &Tb1HolderRelease<'_>) -> Option<usize> {
+    (4 + FIXED_SUFFIX).checked_add(row.context.round_ref.len())?.checked_add(SHARE_BYTES.checked_mul(row.shares.len())?)
+}
+
 pub fn release_message(row: &Tb1HolderRelease<'_>, byte_limit: usize) -> Option<Vec<u8>> {
     let count = u32::try_from(row.shares.len()).ok()?;
     let mut bytes =

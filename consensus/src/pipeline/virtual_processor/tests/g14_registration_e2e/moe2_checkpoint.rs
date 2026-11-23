@@ -381,7 +381,7 @@ pub(super) async fn check_exec_settlement_rewind(
             release,
             payees,
         ),
-        Err(Moe2SettlementError::UnknownClaimContext),
+        Err(Moe2SettlementError::ProfileInactive),
     );
     let outputs = reserved.private_moe2_exec_worker_outputs(config, position.point.daa_score, release, payees).unwrap();
     for (output, (bond, amount)) in outputs.iter().zip([(payees.miner, release.miner_now), panel[0]]) {
@@ -399,7 +399,7 @@ pub(super) async fn check_exec_settlement_rewind(
     assert!(reference.check_parent_reservation(&reserved, position.point.daa_score).is_ok());
     assert_eq!(
         reference.check_parent_reservation(&unreserved, position.point.daa_score),
-        Err("private MOE2 reservation is absent from the selected parent")
+        Err(Moe2AwardReferenceError::MissingReservation)
     );
     for changed in [
         Moe2AwardReference { close: Hash64::from_u64_word(700), ..reference },
@@ -408,12 +408,18 @@ pub(super) async fn check_exec_settlement_rewind(
     ] {
         assert_eq!(
             changed.check_parent_reservation(&reserved, position.point.daa_score),
-            Err("private MOE2 reservation names a different EXEC close or slot")
+            Err(Moe2AwardReferenceError::ReservationSlotMismatch)
         );
     }
+    let row = reserved.bond_budget().unwrap().claim_row(&reference.reservation).unwrap();
+    let PalwBudgetOriginV1::Moe2ExecBound { expires_at, .. } = row.origin else { panic!("expected bound reservation") };
     assert_eq!(
-        reference.check_parent_reservation(&reserved, slot.quote.deadline + 1),
-        Err("private MOE2 reservation is no longer available at this DAA")
+        reference.check_parent_reservation(&reserved, row.accepted_daa - 1),
+        Err(Moe2AwardReferenceError::ReservationWindowNotOpen { opens_at: row.accepted_daa })
+    );
+    assert_eq!(
+        reference.check_parent_reservation(&reserved, expires_at),
+        Err(Moe2AwardReferenceError::ReservationWindowExpired { expires_at })
     );
     let funded_carrier_from = |payload, payer: usize, funding: &(TransactionOutpoint, UtxoEntry)| {
         let mut tx = Transaction::new(
@@ -656,7 +662,7 @@ pub(super) async fn check_exec_settlement_rewind(
                         native_award(original, &slot, work, position),
                         true,
                     ),
-                    Err(PalwStateV2Error::DeltaMismatch("native QF1 Original has no authenticated replay"))
+                    Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::PanelReplayMissing, .. })
                 ));
                 let panel = [[61; 32], [62; 32]].map(libcrux_ml_dsa::ml_dsa_65::generate_key_pair);
                 let selected = panel.each_ref().map(|key| actor_id(&key.verification_key));
@@ -729,6 +735,17 @@ pub(super) async fn check_exec_settlement_rewind(
                 assert!(approval_block.transactions.iter().any(|tx| tx.id() == lookup_id));
                 let (_, approved) = court.tip_state();
                 assert_eq!(approved.qf1_original_verification(original), Some(Qf1OriginalVerification::ReplayApproved));
+                let diagnosis = court.ctx.consensus.palw_claim_diagnostic_v1(original).unwrap();
+                assert_eq!(diagnosis.selected_parent, approval_block.hash());
+                assert_eq!(diagnosis.state_root, Some(approved.state_root()));
+                assert_eq!(diagnosis.original_deadline_daa, Some(court_deadline));
+                assert_eq!(diagnosis.stages[1].code, "PALW.REPLAY_APPROVED");
+                assert_eq!(diagnosis.stages[3].code, "PALW.QF1_SUCCESSFUL_FINAL_NOT_CONNECTED");
+                assert_eq!(diagnosis.stages[5].code, "PALW.MOE2_WINNING_RIGHT_NOT_CONNECTED");
+                let rpc =
+                    kaspa_rpc_core::convert::palw_kernel::palw_kernel_claim_response_v1(&**court.ctx.consensus, original).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&rpc.diagnostic_json).unwrap();
+                assert_eq!(json["stages"][5]["disposition"], "not_implemented");
                 let rows = &approved.kernel_route_state_v1().unwrap().aux;
                 for prefix in [b'D', b'A'] {
                     let key = [&[prefix][..], original.as_byte_slice()].concat();
@@ -955,9 +972,23 @@ pub(super) async fn check_exec_settlement_rewind(
     for (block, parent, price_state, start, expected) in [
         (&detached, &reserved, registration, worker_start, Moe2SettlementError::WorkerOutputsMismatch),
         (&award_block, &reserved, registration, usize::MAX, Moe2SettlementError::WorkerOutputsMismatch),
-        (&execution, &reserved, registration, worker_start, Moe2SettlementError::UnknownClaimContext),
-        (&award_block, &unreserved, registration, worker_start, Moe2SettlementError::UnknownClaimContext),
-        (&award_block, &reserved, &unreserved, worker_start, Moe2SettlementError::UnknownClaimContext),
+        (
+            &execution,
+            &reserved,
+            registration,
+            worker_start,
+            Moe2SettlementError::HeaderStateRoot(
+                kaspa_consensus_core::palw_state_proof_v1::PalwProofErrorV1::HeaderIsNotThePinnedBlock,
+            ),
+        ),
+        (
+            &award_block,
+            &unreserved,
+            registration,
+            worker_start,
+            Moe2SettlementError::StateRootMismatch { expected: unreserved.state_root(), actual: reserved.state_root() },
+        ),
+        (&award_block, &reserved, &unreserved, worker_start, Moe2SettlementError::QuoteAnchorMismatch),
     ] {
         assert_eq!(
             child.settle_private_moe2_exec_award(
@@ -1073,13 +1104,15 @@ pub(super) async fn check_exec_settlement_rewind(
         fold_retained_award(config, params, parent, registration, price, block, attempt, input, enabled)
     };
     let input = || native_award(claim, &slot, work, position);
-    assert!(matches!(retained(&restored, &award_block, input(), false), Err(PalwStateV2Error::DeltaMismatch(_))));
+    assert!(matches!(
+        retained(&restored, &award_block, input(), false),
+        Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::CandidateContextMismatch, .. })
+    ));
     let missing = candidate_with_marker(&outputs, &[]);
     let (_, _, missing_position) = fold(&missing);
     let wrong_branch = native_award(claim, &slot, work, position).coinbase_marker(config.genesis.hash, Hash64::default(), &attempt);
     let with_wrong_branch = candidate_with_marker(&outputs, &wrong_branch);
     let (_, _, wrong_branch_position) = fold(&with_wrong_branch);
-    let mismatch = || PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the candidate coinbase marker");
     for (block, award) in [
         (&missing, native_award(claim, &slot, work, missing_position)),
         (&with_wrong_branch, native_award(claim, &slot, work, wrong_branch_position)),
@@ -1090,17 +1123,29 @@ pub(super) async fn check_exec_settlement_rewind(
             Moe2ExecAwardV1 { release: Moe2WorkerRelease { liability_until: release.liability_until - 1, ..release }, ..input() },
         ),
     ] {
-        assert!(matches!(retained(&restored, block, award, true), Err(error) if error == mismatch()));
+        assert!(matches!(
+            retained(&restored, block, award, true),
+            Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::CoinbaseMarkerMismatch, .. })
+        ));
     }
     assert!(matches!(
         fold_retained_award(config, params, &restored, registration, price, &award_block, [99; 32], input(), true),
-        Err(error) if error == mismatch()
+        Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::CoinbaseMarkerMismatch, .. })
     ));
     let alias_price = Moe2QuoteAnchorV1::resolve(api, close, close, &alias_slot).unwrap();
     assert!(matches!(
-        fold_retained_award(config, params, &restored, registration, alias_price, &award_block, attempt,
-            native_award(claim, &alias_slot, work, position), true),
-        Err(error) if error == mismatch()
+        fold_retained_award(
+            config,
+            params,
+            &restored,
+            registration,
+            alias_price,
+            &award_block,
+            attempt,
+            native_award(claim, &alias_slot, work, position),
+            true
+        ),
+        Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::CoinbaseMarkerMismatch, .. })
     ));
     let missing_ref = candidate_with_references(&outputs, &marker, &[]);
     let (_, _, missing_ref_at) = fold(&missing_ref);
@@ -1139,13 +1184,22 @@ pub(super) async fn check_exec_settlement_rewind(
     trailing.push(0);
     assert_eq!(Moe2AwardReference::decode(&trailing), Err(Moe2AwardReferenceError::Encoding));
     let (retained_child, retained_delta) = retained(&restored, &award_block, input(), true).unwrap();
+    use kaspa_consensus_core::palw_claim_diagnostic_v1::{ClaimDisposition, PalwClaimDiagnosticV1};
+    let mut settled_diagnostic = PalwClaimDiagnosticV1::new(claim, award_block.hash());
+    settled_diagnostic.observe(&retained_child, params);
+    assert_eq!(settled_diagnostic.stages[8].disposition, ClaimDisposition::Observed);
+    assert_eq!(settled_diagnostic.stages[8].block, Some(award_block.hash()));
+    let mut other_branch = PalwClaimDiagnosticV1::new(claim, restored.last_point().unwrap().block);
+    other_branch.observe(&restored, params);
+    assert_ne!(other_branch.selected_parent, settled_diagnostic.selected_parent);
+    assert_ne!(other_branch.stages[8].disposition, ClaimDisposition::Observed);
     assert!(reference.check_parent_unspent(&restored).is_ok());
-    assert_eq!(reference.check_parent_unspent(&retained_child), Err("private MOE2 claim has already settled on this branch"));
+    assert_eq!(reference.check_parent_unspent(&retained_child), Err(Moe2AwardReferenceError::ClaimAlreadySettled));
     let another_claim = Moe2AwardReference { claim: alias_claim, ..reference };
-    assert_eq!(another_claim.check_parent_unspent(&retained_child), Err("private MOE2 attempt has already settled on this branch"));
+    assert_eq!(another_claim.check_parent_unspent(&retained_child), Err(Moe2AwardReferenceError::AttemptAlreadySettled));
     assert_eq!(
         reference.check_parent_reservation(&retained_child, position.point.daa_score),
-        Err("private MOE2 reservation is no longer available at this DAA")
+        Err(Moe2AwardReferenceError::ReservationUnavailable)
     );
     let mut expected_delta = award_delta.clone();
     let last = expected_delta.entries.last_mut().unwrap();
@@ -1212,7 +1266,7 @@ pub(super) async fn check_exec_settlement_rewind(
     let competing_root = competing_parent.state_root();
     assert!(matches!(
         retained(&competing_parent, &award_block, input(), true),
-        Err(PalwStateV2Error::BondBudgetRefused(reason)) if reason.contains("AttemptAlreadyConsumed")
+        Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::AttemptAlreadyConsumed, .. })
     ));
     assert!(matches!(
         apply_delta_v2(&competing_parent, &retained_delta, params),
@@ -1232,7 +1286,7 @@ pub(super) async fn check_exec_settlement_rewind(
     ));
     assert!(matches!(
         fold_retained_award(config, params, &restored, &changed, price, &award_block, attempt, input(), true),
-        Err(PalwStateV2Error::DeltaMismatch("MOE2 EXEC award differs from the committed price anchor"))
+        Err(PalwStateV2Error::PrivateMoe2Settlement { source: Moe2SettlementError::PriceAnchorMismatch, .. })
     ));
     if std::env::var_os("MISAKA_TEST_MOE2_REGISTRATION_BLOCKS").is_none() {
         run_resource_probes(
@@ -1619,7 +1673,7 @@ impl<'a> NativeSettlement<'a> {
         let public = kaspa_consensus_core::config::params::palw_t12_shipped_params();
         assert_eq!(
             child.settle_private_moe2(&public, book, &mut executed, terms.claim, at, release),
-            Err(Moe2SettlementError::UnknownClaimContext)
+            Err(Moe2SettlementError::ProfileInactive)
         );
         assert_eq!((child.state_root(), executed.entries.len(), &*book), (before_settlement, base_len, &admitted));
         let (reward, undo) = child.settle_private_moe2(&env.config.params, book, &mut executed, terms.claim, at, release).unwrap();

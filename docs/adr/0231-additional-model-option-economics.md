@@ -25,7 +25,7 @@
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
 - 正本: [RFC0063](../rfc/0063-additional-model-option-economics.md)
-- 現行所有先: [RFC-v2-0011](../rfc-v2/0011-bond-budgets-fees-and-payments.md)、[ADR-v2-0021](../adr-v2/0021-positions-and-membership.md)、[ADR-v2-0023](../adr-v2/0023-model-reward-routing-and-owner-leg.md)
+- 現行所有先: [RFC-v2-0011](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)、[ADR-v2-0021](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0021-positions-and-membership.md)、[ADR-v2-0023](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/adr-v2/0023-model-reward-routing-and-owner-leg.md)
 
 ## 背景
 

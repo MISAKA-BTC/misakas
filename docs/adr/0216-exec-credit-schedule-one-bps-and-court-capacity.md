@@ -72,12 +72,12 @@ EXECの目標rateを、実供給未確認のcourt予約容量として計上し�
 
 | 規範 | 担当 |
 | --- | --- |
-| ExecCredit・root work・EXEC_TX／SLICE会計 | [RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md) |
-| ScheduleId・slot・attachment・順序・1 BPS | [RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md) |
-| 依存DAG・全分岐資源計画・測定 | [RFC05](../rfc-v2/0005-bounded-resources-and-long-context.md) |
-| 公開negative・owner非依存・供給失敗 | [RFC18](../rfc-v2/0018-interactive-negative-court-and-defaults.md) |
-| Node非保有・局所証拠・合算資源上限 | [RFC19](../rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
-| 成功Finalとcreditの境界 | [RFC20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
+| ExecCredit・root work・EXEC_TX／SLICE会計 | [RFC07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md) |
+| ScheduleId・slot・attachment・順序・1 BPS | [RFC10](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md) |
+| 依存DAG・全分岐資源計画・測定 | [RFC05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md) |
+| 公開negative・owner非依存・供給失敗 | [RFC18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) |
+| Node非保有・局所証拠・合算資源上限 | [RFC19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
+| 成功Finalとcreditの境界 | [RFC20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
 
 RFC-v2の現行20冊とADR-v2の統合50冊を維持する。
 RFC-0048と本ADRは後続採択記録として登録する。

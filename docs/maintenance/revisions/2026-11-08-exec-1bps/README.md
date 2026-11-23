@@ -2,7 +2,7 @@
 
 入力は直前のRFC20本更新版と、今回のユーザー指示・添付court予算分析である。
 状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
-[現行RFC20本](../../../rfc-v2/README.md) /
+[現行RFC20本](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md) /
 [追加採択RFC-0048](../../../rfc/0048-exec-credit-schedule-and-one-bps.md) /
 [ADR-0216](../../../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) /
 [検査結果](VALIDATION.md) / [変更ファイル台帳](changes.json)。
@@ -16,12 +16,12 @@ EXECを常設の高速取引経路として維持し、
 
 | 主題 | 現行の担当 |
 | --- | --- |
-| credit発行gate、数量保存、予約、期限、carry、消費、失効 | [RFC07](../../../rfc-v2/0007-claims-exec-and-answer-accounting.md) |
-| ScheduleId、slot、authorityとattachment、順序、暫定実行、1 BPS | [RFC10](../../../rfc-v2/0010-dag-consensus-and-native-settlement.md) |
-| courtの依存DAG、全合法分岐・複数claimの容量予約、測定 | [RFC05](../../../rfc-v2/0005-bounded-resources-and-long-context.md) |
-| 公開取得、negative、期限、提供機会と失敗終了 | [RFC18](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md) |
-| Node非保有、有界証拠、EXEC・court・BASEの共用資源 | [RFC19](../../../rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
-| 成功Final、認証、credit発行の境界 | [RFC20](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
+| credit発行gate、数量保存、予約、期限、carry、消費、失効 | [RFC07](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md) |
+| ScheduleId、slot、authorityとattachment、順序、暫定実行、1 BPS | [RFC10](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md) |
+| courtの依存DAG、全合法分岐・複数claimの容量予約、測定 | [RFC05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md) |
+| 公開取得、negative、期限、提供機会と失敗終了 | [RFC18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) |
+| Node非保有、有界証拠、EXEC・court・BASEの共用資源 | [RFC19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
+| 成功Final、認証、credit発行の境界 | [RFC20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
 
 API、共通会計、保存・IBD、bootstrap・release、共通court、変更管理の冊子にも接続条件を追加した。
 PRINCIPLES §14と設計パラメーター台帳へ明示採択を記録した。

@@ -4,7 +4,7 @@ Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-09
 Authority: この会話のユーザーによるRFC改訂と独立エージェントの反復レビューの明示指示。
 RFC: [RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)
-Current owners: [RFC-v2-0016〜0020](../rfc-v2/README.md)
+Current owners: [RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)
 
 本書は統合後の新規採択記録である。ADR-v2の51冊目を作らず、50冊の本文・歴史付録、既存ADRの採択記録を変更しない。番号0217は添付内で未使用だった範囲の割当であり、未取得branchの予約を保証しない。
 

@@ -9,7 +9,7 @@
 - 判断記録: [ADR-0225](../adr/0225-court-nonce-and-panel-challenges.md)
 - 基準source: MISAKA-BTC/misakas main@2d8212b634880b0967fbf24b00b41936c2322c14。直前のRFC-0055/0056文書成果を継承する。
 - 新policy呼称: CourtNonceBindingV1 / CPN1。既存wire ID、署名domain、CaseId、WorkId、旧claimの意味を上書きしない。
-- 規範入口: [RFC-v2-0017](../rfc-v2/0017-noninteractive-positive-verification.md)、[0018](../rfc-v2/0018-interactive-negative-court-and-defaults.md)、[0019](../rfc-v2/0019-model-free-node-and-bounded-evidence.md)、[0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)。
+- 規範入口: [RFC-v2-0017](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)、[0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)、[0019](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)、[0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)。
 
 ## 0. 目的と保証の境界
 

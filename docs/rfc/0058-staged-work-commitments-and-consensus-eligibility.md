@@ -482,8 +482,8 @@ G1〜G5は設計・実装・運用の接続証拠であり、それだけで新S
 ## 15. 参考
 
 - [固定sourceの監査](../maintenance/revisions/2026-11-17-work-binding/SOURCE_AUDIT.md)
-- [既存の検証先行Final](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
-- [既存のDAG／native settlement](../rfc-v2/0010-dag-consensus-and-native-settlement.md)
+- [既存の検証先行Final](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- [既存のDAG／native settlement](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md)
 - [既存の公開資料・一人の正直Panel](0050-public-materials-and-one-honest-panel.md)
 - [drand Cryptography](https://docs.drand.love/docs/cryptography/) — threshold署名の一意性等の参照。MISAKA採用の根拠ではない。
 - [drand Security Model](https://docs.drand.love/docs/security-model/) — DKG、早期取得、停止、threshold侵害の区別。

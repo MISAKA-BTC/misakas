@@ -74,7 +74,7 @@ pub struct Tb1ReleaseSet<'a, R> {
     roster: &'a [Tb1Field],
     f: usize,
     qualified: &'a [usize],
-    releases: BTreeMap<R, Tb1HolderRelease<'a>>,
+    releases: BTreeMap<R, Result<Tb1HolderRelease<'a>, Tb1PolynomialError>>,
 }
 
 impl Tb1Qualification<'_> {
@@ -86,15 +86,24 @@ impl Tb1Qualification<'_> {
         key: &libcrux_ml_dsa::ml_dsa_65::MLDSA65VerificationKey,
         byte_limit: usize,
     ) -> Result<Vec<u8>, Tb1PolynomialError> {
-        if row.context.round_ref != self.round_ref
-            || row.context.qual_root != self.qual_root
-            || self.roster.holder_keys.get(row.holder_slot).is_none_or(|registered| registered.as_slice() != key.as_slice())
-            || row.shares.len() != self.dealers.len()
-            || !row.shares.iter().map(|(dealer, _)| dealer).eq(self.dealers)
-        {
-            return Err(Tb1PolynomialError::ReleaseContext);
+        use Tb1PolynomialError::*;
+        if row.context.round_ref != self.round_ref {
+            return Err(ReleaseRoundMismatch);
         }
-        signatures::release_message(row, byte_limit).ok_or(Tb1PolynomialError::ReleaseContext)
+        if row.context.qual_root != self.qual_root {
+            return Err(ReleaseQualificationMismatch);
+        }
+        let registered = self.roster.holder_keys.get(row.holder_slot).ok_or(ReleaseHolder)?;
+        if registered.as_slice() != key.as_slice() {
+            return Err(ReleaseSigningKeyMismatch);
+        }
+        if !row.shares.iter().map(|(dealer, _)| dealer).eq(self.dealers) {
+            return Err(ReleaseDealerColumns);
+        }
+        if signatures::release_message_size(row).ok_or(ReleaseEncoding)? > byte_limit {
+            return Err(ReleaseMessageTooLarge);
+        }
+        signatures::release_message(row, byte_limit).ok_or(ReleaseEncoding)
     }
 }
 
@@ -109,8 +118,12 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
         max_message_bytes: usize,
     ) -> Result<Self, Tb1PolynomialError> {
         let context = cut.context;
-        if context.round_ref != qualified.round_ref || context.qual_root != qualified.qual_root {
-            return Err(Tb1PolynomialError::ReleaseContext);
+        use Tb1PolynomialError::*;
+        if context.round_ref != qualified.round_ref {
+            return Err(ReleaseRoundMismatch);
+        }
+        if context.qual_root != qualified.qual_root {
+            return Err(ReleaseQualificationMismatch);
         }
         if qualified.preparation_deadline > cut.closed_at
             || cut.closed_at > cut.stable_at
@@ -122,19 +135,33 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
         if resolved.len() > max_release_records {
             return Err(Tb1PolynomialError::ReconstructionBudget);
         }
-        let releases = resolved
-            .iter()
-            .filter_map(|(&id, signed)| {
-                let row = signed.row;
-                let key = qualified.roster.holder_keys.get(row.holder_slot)?;
-                if row.context != context || !(cut.release_from..cut.certificate_at).contains(&signed.accepted_position) {
-                    return None;
-                }
-                let msg = qualified.holder_release_message(&row, key, max_message_bytes).ok()?;
-                signatures::verify(key, signed.signature, &msg, signatures::RELEASE_CONTEXT).then_some((id, row))
-            })
-            .collect();
+        let validate = |signed: &Tb1SignedRelease<'a, '_>| {
+            let row = signed.row;
+            if row.context.freeze_id != context.freeze_id {
+                return Err(ReleaseFreezeMismatch);
+            }
+            if !(cut.release_from..cut.certificate_at).contains(&signed.accepted_position) {
+                return Err(ReleaseTiming);
+            }
+            let key = qualified.roster.holder_keys.get(row.holder_slot).ok_or(ReleaseHolder)?;
+            let msg = qualified.holder_release_message(&row, key, max_message_bytes)?;
+            if !signatures::verify(key, signed.signature, &msg, signatures::RELEASE_CONTEXT) {
+                return Err(ReleaseSignature);
+            }
+            Ok(row)
+        };
+        let releases = resolved.iter().map(|(&id, signed)| (id, validate(signed))).collect();
         Ok(Self { context, roster: qualified.roster.coordinates, f: qualified.roster.f, qualified: qualified.dealers, releases })
+    }
+
+    /// Return the validation outcome for a release reference at this cut.
+    pub fn release(&self, id: &R) -> Result<&Tb1HolderRelease<'a>, Tb1PolynomialError> {
+        self.releases.get(id).ok_or(Tb1PolynomialError::MissingReleaseReference)?.as_ref().map_err(|&error| error)
+    }
+
+    /// Inspect each candidate outcome without copying payloads or changing quorum selection.
+    pub fn candidate_outcomes(&self) -> impl Iterator<Item = (R, Result<(), Tb1PolynomialError>)> + '_ {
+        self.releases.iter().map(|(&id, result)| (id, result.as_ref().map(|_| ()).map_err(|&error| error)))
     }
 
     /// Build all dealer witnesses. Identical retransmissions count once. An equivocating
@@ -142,13 +169,14 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
     /// an existing certificate whose own references still have distinct holders and agree.
     pub fn assemble(&self, max_total_matrix_cells: usize) -> Result<Tb1BeaconCertificate<'a, R>, Tb1PolynomialError> {
         let mut holders = BTreeMap::new();
-        for (&id, row) in &self.releases {
+        for (&id, result) in &self.releases {
+            let Ok(row) = result else { continue };
             match holders.entry(row.holder_slot) {
                 Entry::Vacant(entry) => {
                     entry.insert(Some(id));
                 }
                 Entry::Occupied(mut entry) => {
-                    if entry.get().is_some_and(|prior| self.releases[&prior].shares != row.shares) {
+                    if entry.get().is_some_and(|prior| self.release(&prior).is_ok_and(|earlier| earlier.shares != row.shares)) {
                         entry.insert(None);
                     }
                 }
@@ -169,8 +197,8 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
             .map(|(i, &dealer_slot)| {
                 let points: Vec<_> = selected
                     .iter()
-                    .map(|(&holder_slot, id)| Tb1DealerPoint { holder_slot, value: self.releases[id].shares[i].1 })
-                    .collect();
+                    .map(|(&holder_slot, id)| Ok(Tb1DealerPoint { holder_slot, value: self.release(id)?.shares[i].1 }))
+                    .collect::<Result<_, Tb1PolynomialError>>()?;
                 let recovered = reconstruct_dealer(self.roster, self.f, &points, per_dealer)?;
                 let supporting_releases = recovered.support.iter().map(|p| selected[&p.holder_slot]).collect();
                 Ok(Tb1DealerCertificate { dealer_slot, coefficients: recovered.coefficients, supporting_releases })
@@ -182,9 +210,15 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
     /// Check each polynomial directly against the shares actually signed by its cited holders.
     /// The complete ordered constants are the input for the profile's subsequent seed encoding.
     pub fn verify(&self, certificate: &Tb1BeaconCertificate<'_, R>) -> Result<Vec<(usize, Tb1Field)>, Tb1PolynomialError> {
-        use Tb1PolynomialError::{QualifiedSet, Support};
-        if certificate.context != self.context {
-            return Err(Tb1PolynomialError::ReleaseContext);
+        use Tb1PolynomialError::*;
+        if certificate.context.round_ref != self.context.round_ref {
+            return Err(ReleaseRoundMismatch);
+        }
+        if certificate.context.qual_root != self.context.qual_root {
+            return Err(ReleaseQualificationMismatch);
+        }
+        if certificate.context.freeze_id != self.context.freeze_id {
+            return Err(ReleaseFreezeMismatch);
         }
         let certificates = &certificate.dealers;
         if certificates.len() != self.qualified.len() {
@@ -205,7 +239,7 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
                     .supporting_releases
                     .iter()
                     .map(|id| {
-                        let row = self.releases.get(id).ok_or(Support)?;
+                        let row = self.release(id)?;
                         Ok(Tb1DealerPoint { holder_slot: row.holder_slot, value: row.shares[i].1 })
                     })
                     .collect::<Result<Vec<_>, Tb1PolynomialError>>()?;
@@ -230,7 +264,7 @@ impl<'a, R: Ord + Copy> Tb1ReleaseSet<'a, R> {
         let constants = self.verify(certificate)?;
         let mut hash = Shake256::default();
         for bytes in [b"PALW-TB1/beacon".as_slice(), self.context.round_ref] {
-            hash.update(&u32::try_from(bytes.len()).map_err(|_| Tb1PolynomialError::ReleaseContext)?.to_be_bytes());
+            hash.update(&u32::try_from(bytes.len()).map_err(|_| Tb1PolynomialError::ReleaseEncoding)?.to_be_bytes());
             hash.update(bytes);
         }
         hash.update(&self.context.qual_root);
@@ -423,7 +457,7 @@ mod tests {
         assert_eq!(set.verify(&set.assemble(336).unwrap()).unwrap(), Q.map(|d| (d, field(100 + d))));
         assert!(matches!(
             signed_set(Tb1ReleaseCut { context: Tb1ReleaseContext { qual_root: [3; 64], ..EXEC }, ..CUT }, &qualified, &released, 7),
-            Err(ReleaseContext)
+            Err(ReleaseQualificationMismatch)
         ));
         ready.push(fourth);
         let cut = Tb1PreparationCut {
@@ -476,10 +510,14 @@ mod tests {
             (Tb1HolderRelease { shares: &forged_values, ..row }, 17, &signatures[4]),
         ] {
             releases.insert(24, Tb1SignedRelease { row: candidate, accepted_position: position, signature: sig });
-            assert!(matches!(
-                Tb1ReleaseSet::new(&CUT, &qualified, &releases, 5, BYTE_LIMIT).unwrap().assemble(336),
-                Err(Tb1PolynomialError::Support)
-            ));
+            let set = Tb1ReleaseSet::new(&CUT, &qualified, &releases, 5, BYTE_LIMIT).unwrap();
+            let error = if (CUT.release_from..CUT.certificate_at).contains(&position) {
+                Tb1PolynomialError::ReleaseSignature
+            } else {
+                Tb1PolynomialError::ReleaseTiming
+            };
+            assert!(matches!(set.release(&24), Err(reason) if reason == error));
+            assert!(matches!(set.assemble(336), Err(Tb1PolynomialError::Support)));
         }
         releases.insert(24, Tb1SignedRelease { row, accepted_position: 23, signature: &signatures[4] });
         for cut in [
@@ -532,7 +570,7 @@ mod tests {
         assert_eq!(set.verify_seed(&cert), Err(Tb1PolynomialError::QualifiedSet));
         cert.dealers.push(last);
         cert.context.freeze_id = [44; 64];
-        assert_eq!(set.verify(&cert), Err(Tb1PolynomialError::ReleaseContext));
+        assert_eq!(set.verify(&cert), Err(Tb1PolynomialError::ReleaseFreezeMismatch));
         cert.context = EXEC;
         cert.dealers.swap(0, 1);
         assert_eq!(set.verify(&cert), Err(Tb1PolynomialError::QualifiedSet));
@@ -573,9 +611,19 @@ mod tests {
         let set = signed_set(CUT, &fixture_qualification(&roster), &rows, rows.len()).unwrap();
         let mut cert = set.assemble(336).unwrap();
         let expected = Q.map(|d| (d, field(100 + d)));
-        for id in 40..=46 {
+        use Tb1PolynomialError::*;
+        for (id, expected) in [
+            (40, ReleaseRoundMismatch),
+            (41, ReleaseQualificationMismatch),
+            (42, ReleaseFreezeMismatch),
+            (43, ReleaseDealerColumns),
+            (44, ReleaseDealerColumns),
+            (45, ReleaseHolder),
+            (46, Support),
+            (99, MissingReleaseReference),
+        ] {
             cert.dealers[0].supporting_releases = vec![20, 21, 22, 23, id];
-            assert_eq!(set.verify(&cert), Err(Tb1PolynomialError::Support));
+            assert_eq!(set.verify(&cert), Err(expected));
         }
         cert.dealers[0].supporting_releases = vec![46, 21, 22, 23, 24];
         assert_eq!(set.verify(&cert).unwrap(), expected);

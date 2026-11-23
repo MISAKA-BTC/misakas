@@ -30,6 +30,15 @@ pub enum Moe2AwardReferenceError {
     Multiple,
     Encoding,
     Context,
+    ExecutionMismatch,
+    ClaimAlreadySettled,
+    AttemptAlreadySettled,
+    MissingReservation,
+    ReservationOrigin,
+    ReservationSlotMismatch,
+    ReservationWindowNotOpen { opens_at: u64 },
+    ReservationWindowExpired { expires_at: u64 },
+    ReservationUnavailable,
 }
 
 impl Moe2AwardReferenceError {
@@ -39,9 +48,31 @@ impl Moe2AwardReferenceError {
             Self::Multiple => "multiple private MOE2 award references in the candidate",
             Self::Encoding => "invalid private MOE2 award reference encoding",
             Self::Context => "private MOE2 award context does not open its EXEC reservation",
+            Self::ExecutionMismatch => "private MOE2 award differs from its candidate reference",
+            Self::ClaimAlreadySettled => "private MOE2 claim has already settled on this branch",
+            Self::AttemptAlreadySettled => "private MOE2 attempt has already settled on this branch",
+            Self::MissingReservation => "private MOE2 reservation is absent from the selected parent",
+            Self::ReservationOrigin => "private MOE2 reservation has no bound EXEC close and slot",
+            Self::ReservationSlotMismatch => "private MOE2 reservation names a different EXEC close or slot",
+            Self::ReservationWindowNotOpen { .. } => "private MOE2 reservation window has not opened",
+            Self::ReservationWindowExpired { .. } => "private MOE2 reservation window has expired",
+            Self::ReservationUnavailable => "private MOE2 reservation is no longer available at this DAA",
         }
     }
 }
+
+impl std::fmt::Display for Moe2AwardReferenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.reason())?;
+        match self {
+            Self::ReservationWindowNotOpen { opens_at } => write!(f, " (opens at DAA {opens_at})"),
+            Self::ReservationWindowExpired { expires_at } => write!(f, " (expired at DAA {expires_at})"),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl std::error::Error for Moe2AwardReferenceError {}
 
 impl Moe2AwardReference {
     pub fn for_slot(claim: Hash64, attempt: [u8; 32], slot: &Moe2ExecSlot) -> Self {
@@ -49,45 +80,46 @@ impl Moe2AwardReference {
     }
 
     /// Check every lookup key against the authenticated Original and slot.
-    pub fn check_execution_slot(&self, claim: Hash64, attempt: [u8; 32], slot: &Moe2ExecSlot) -> Result<(), &'static str> {
+    pub fn check_execution_slot(&self, claim: Hash64, attempt: [u8; 32], slot: &Moe2ExecSlot) -> Result<(), Moe2AwardReferenceError> {
         if *self != Self::for_slot(claim, attempt, slot) {
-            return Err("private MOE2 award differs from its candidate reference");
+            return Err(Moe2AwardReferenceError::ExecutionMismatch);
         }
         Ok(())
     }
 
     /// Check the selected parent's replay indexes before loading archived
     /// evidence. The numerical key is checked once the EXEC input is resolved.
-    pub fn check_parent_unspent(&self, parent: &PalwChainStateV2) -> Result<(), &'static str> {
+    pub fn check_parent_unspent(&self, parent: &PalwChainStateV2) -> Result<(), Moe2AwardReferenceError> {
         if parent.private_moe2_exec_settlement(&self.claim).is_some() {
-            return Err("private MOE2 claim has already settled on this branch");
+            return Err(Moe2AwardReferenceError::ClaimAlreadySettled);
         }
         if parent.private_moe2_attempt_work(&self.attempt).is_some() {
-            return Err("private MOE2 attempt has already settled on this branch");
+            return Err(Moe2AwardReferenceError::AttemptAlreadySettled);
         }
         Ok(())
     }
 
     /// Resolve the reference against the selected parent's committed reservation.
     /// The reservation admits no claim or winner; Gate C remains a separate read.
-    pub fn check_parent_reservation(&self, parent: &PalwChainStateV2, daa: u64) -> Result<(), &'static str> {
+    pub fn check_parent_reservation(&self, parent: &PalwChainStateV2, daa: u64) -> Result<(), Moe2AwardReferenceError> {
         let row = parent
             .bond_budget()
             .and_then(|budget| budget.claim_row(&self.reservation))
-            .ok_or("private MOE2 reservation is absent from the selected parent")?;
+            .ok_or(Moe2AwardReferenceError::MissingReservation)?;
         let PalwBudgetOriginV1::Moe2ExecBound { expires_at, close, slot } = row.origin else {
-            return Err("private MOE2 reservation has no bound EXEC close and slot");
+            return Err(Moe2AwardReferenceError::ReservationOrigin);
         };
         if (close, slot) != (self.close, self.slot) {
-            return Err("private MOE2 reservation names a different EXEC close or slot");
+            return Err(Moe2AwardReferenceError::ReservationSlotMismatch);
         }
-        if !(row.accepted_daa..expires_at).contains(&daa)
-            || !row.open
-            || !row.live
-            || row.reserved.claims != 1
-            || row.consumed != PalwBudgetVectorV1::ZERO
-        {
-            return Err("private MOE2 reservation is no longer available at this DAA");
+        if daa < row.accepted_daa {
+            return Err(Moe2AwardReferenceError::ReservationWindowNotOpen { opens_at: row.accepted_daa });
+        }
+        if daa >= expires_at {
+            return Err(Moe2AwardReferenceError::ReservationWindowExpired { expires_at });
+        }
+        if !row.open || !row.live || row.reserved.claims != 1 || row.consumed != PalwBudgetVectorV1::ZERO {
+            return Err(Moe2AwardReferenceError::ReservationUnavailable);
         }
         Ok(())
     }

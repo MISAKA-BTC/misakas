@@ -193,7 +193,7 @@ impl Moe2PreDrawQuote {
         state: &crate::palw_state_v2::PalwChainStateV2,
         reward: u64,
     ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
-        let point = state.last_point().ok_or(Moe2SettlementError::UnknownClaimContext)?;
+        let point = state.last_point().ok_or(Moe2SettlementError::MissingQuoteAnchor)?;
         self.preview_at_position(config, state, state, point.daa_score, reward)
     }
 
@@ -208,10 +208,13 @@ impl Moe2PreDrawQuote {
         reward: u64,
     ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
         use Moe2SettlementError::*;
-        let a = anchor.last_point().ok_or(UnknownClaimContext)?;
-        let b = current.last_point().ok_or(UnknownClaimContext)?;
-        if a.block != self.quote_anchor || a.blue_score > b.blue_score || a.daa_score > b.daa_score || b.daa_score > execution_daa {
-            return Err(UnknownClaimContext);
+        let a = anchor.last_point().ok_or(MissingQuoteAnchor)?;
+        let b = current.last_point().ok_or(MissingExecutionPoint)?;
+        if a.block != self.quote_anchor {
+            return Err(QuoteAnchorMismatch);
+        }
+        if a.blue_score > b.blue_score || a.daa_score > b.daa_score || b.daa_score > execution_daa {
+            return Err(PositionOutOfOrder);
         }
         if self.deadline == u64::MAX
             || !(self.valid_from..=self.deadline).contains(&a.daa_score)
@@ -246,9 +249,9 @@ impl Moe2PreDrawQuote {
         daa: u64,
     ) -> Result<(u64, crate::palw_bond_budget_v1::PalwBudgetAskV1), Moe2SettlementError> {
         use crate::palw_mode_v2::PalwConsensusMode;
-        use Moe2SettlementError::UnknownClaimContext;
-        let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
+        use Moe2SettlementError::ProfileInactive;
+        let from = config.private_moe2_registration_from().ok_or(ProfileInactive)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(ProfileInactive) };
         self.budget_ask_at_state(&bundle.state, from, state, daa)
     }
 
@@ -289,9 +292,9 @@ impl Moe2PreDrawQuote {
         daa: u64,
     ) -> Result<Moe2ModelAllocation, Moe2SettlementError> {
         use crate::palw_mode_v2::PalwConsensusMode;
-        use Moe2SettlementError::UnknownClaimContext;
-        let from = config.private_moe2_registration_from().ok_or(UnknownClaimContext)?;
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(UnknownClaimContext) };
+        use Moe2SettlementError::ProfileInactive;
+        let from = config.private_moe2_registration_from().ok_or(ProfileInactive)?;
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.palw_consensus_mode else { return Err(ProfileInactive) };
         self.allocation_at_state(&bundle.state, from, state, daa)
     }
 
@@ -306,14 +309,22 @@ impl Moe2PreDrawQuote {
         use Moe2SettlementError::*;
         let catalog = params.model_tier_v1().filter(|c| c.active_at(daa)).ok_or(UnknownRegistration)?;
         let class = state.class(&self.model).ok_or(UnknownRegistration)?;
-        if self.valid_from < from
-            || class.artifact_root != self.artifact_root
-            || self.valid_from < class.registered_daa
-            || params.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
+        if self.valid_from < from {
+            return Err(ProfileInactive);
+        }
+        if class.artifact_root != self.artifact_root {
+            return Err(ArtifactRootMismatch);
+        }
+        if self.valid_from < class.registered_daa {
+            return Err(OutsideWindow);
+        }
+        if params.bond_budget().is_none_or(|b| !b.active_at(daa) || b.policy.digest() != self.policy)
             || state.bond_budget().is_none_or(|b| b.header.policy_digest != self.policy)
-            || state.bond(&self.funding_bond).is_none()
         {
-            return Err(UnknownClaimContext);
+            return Err(BudgetPolicyMismatch);
+        }
+        if state.bond(&self.funding_bond).is_none() {
+            return Err(MissingFundingBond);
         }
         let approved =
             palw_model_tier_of_v1(Some(catalog), &self.model, &self.artifact_root, class.registrant_bond.is_none(), daa).is_approved();
@@ -557,24 +568,97 @@ impl Moe2SettlementFunding {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Moe2QuoteReadError {
+    #[error("quote state {anchor} is unavailable")]
+    Unavailable { anchor: Hash64 },
+    #[error("quote read changed from {expected_parent} to {actual_parent}")]
+    ViewChanged { expected_parent: Hash64, actual_parent: Hash64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Moe2SettlementError {
+    #[error("unknown registration")]
     UnknownRegistration,
+    #[error("duplicate registration")]
     DuplicateRegistration,
+    #[error("permanent liquidity history")]
     PermanentLiquidityHistory,
-    UnknownClaimContext,
+    #[error("award candidate differs from the private MOE2 profile")]
+    CandidateContextMismatch,
+    #[error("award differs from its committed quote anchor")]
+    PriceAnchorMismatch,
+    #[error("QF1 terminal Court blocks this award")]
+    CourtBlocked,
+    #[error("the QF1 Original has no authenticated Panel replay")]
+    PanelReplayMissing,
+    #[error("the QF1 Original has no successful Final")]
+    SuccessfulFinalMissing,
+    #[error("award differs from its candidate coinbase marker")]
+    CoinbaseMarkerMismatch,
+    #[error("profile inactive")]
+    ProfileInactive,
+    #[error("missing quote anchor")]
+    MissingQuoteAnchor,
+    #[error("quote anchor mismatch")]
+    QuoteAnchorMismatch,
+    #[error("missing execution point")]
+    MissingExecutionPoint,
+    #[error("artifact root mismatch")]
+    ArtifactRootMismatch,
+    #[error("quote model mismatch")]
+    QuoteModelMismatch,
+    #[error("quote curve mismatch")]
+    QuoteCurveMismatch,
+    #[error("budget policy mismatch")]
+    BudgetPolicyMismatch,
+    #[error("missing funding bond")]
+    MissingFundingBond,
+    #[error("funding claim mismatch")]
+    FundingClaimMismatch,
+    #[error("funding position mismatch")]
+    FundingPositionMismatch,
+    #[error("funding clock mismatch")]
+    FundingClockMismatch,
+    #[error("state point mismatch")]
+    StatePointMismatch,
+    #[error("missing state transition")]
+    MissingStateTransition,
+    #[error("cannot obtain the selected parent state root from the candidate header: {0}")]
+    HeaderStateRoot(#[source] crate::palw_state_proof_v1::PalwProofErrorV1),
+    #[error("candidate parent root differs (expected {expected}, found {actual})")]
+    StateRootMismatch { expected: Hash64, actual: Hash64 },
+    #[error("cannot resolve the MOE2 quote reference: {0}")]
+    QuoteRead(#[source] Moe2QuoteReadError),
+    #[error("claim not admitted")]
+    ClaimNotAdmitted,
+    #[error("missing quote reference")]
+    MissingQuoteReference,
+    #[error("already admitted")]
     AlreadyAdmitted,
+    #[error("already settled")]
     AlreadySettled,
+    #[error("work already consumed")]
     WorkAlreadyConsumed,
+    #[error("attempt already consumed")]
     AttemptAlreadyConsumed,
+    #[error("reservation mismatch")]
     ReservationMismatch,
+    #[error("worker outputs mismatch")]
     WorkerOutputsMismatch,
+    #[error("position out of order")]
     PositionOutOfOrder,
+    #[error("undo mismatch")]
     UndoMismatch,
+    #[error("checkpoint mismatch")]
     CheckpointMismatch,
+    #[error("outside window")]
     OutsideWindow,
+    #[error("bond budget refused: {0:?}")]
     Budget(PalwBudgetRefusalV1),
+    #[error("quoted market terms refused: {0:?}")]
     Quote(Moe2QuoteRefusal),
+    #[error("settlement liability refused: {0:?}")]
     Liability(PalwSettlementLiabilityRefusalV1),
 }
 
@@ -688,7 +772,7 @@ impl Moe2SettlementBook {
         use crate::palw_state_v2::PalwDeltaEntryV2;
         use Moe2SettlementError::*;
         if state.last_point() != Some(&delta.point) {
-            return Err(UnknownClaimContext);
+            return Err(StatePointMismatch);
         }
         let parent = delta
             .entries
@@ -697,7 +781,7 @@ impl Moe2SettlementBook {
                 PalwDeltaEntryV2::LastPoint { old, new } if new.as_ref() == Some(&delta.point) => Some(*old),
                 _ => None,
             })
-            .ok_or(UnknownClaimContext)?;
+            .ok_or(MissingStateTransition)?;
         let mut registered = BTreeMap::new();
         for entry in &delta.entries {
             let PalwDeltaEntryV2::Class { key, old: None, new: Some(class) } = entry else {
@@ -848,14 +932,22 @@ impl Moe2SettlementBook {
         terms: Moe2SettlementTerms,
         resolve: impl FnOnce(Hash64, Hash64) -> Option<Moe2RegisteredModel>,
     ) -> Result<(), Moe2SettlementError> {
+        self.try_admit(terms, |anchor, model| Ok(resolve(anchor, model)))
+    }
+
+    /// A historical reader can report a read failure independently of a missing entry.
+    pub fn try_admit(
+        &mut self,
+        terms: Moe2SettlementTerms,
+        resolve: impl FnOnce(Hash64, Hash64) -> Result<Option<Moe2RegisteredModel>, Moe2QuoteReadError>,
+    ) -> Result<(), Moe2SettlementError> {
         use Moe2SettlementError::*;
         let model = self.models.get(&terms.model).ok_or(UnknownRegistration)?;
-        if terms.artifact_root != model.artifact_root
-            || terms.valid_from < model.registration_daa
-            || terms.deadline < terms.valid_from
-            || terms.deadline == u64::MAX
-        {
-            return Err(UnknownClaimContext);
+        if terms.artifact_root != model.artifact_root {
+            return Err(ArtifactRootMismatch);
+        }
+        if terms.valid_from < model.registration_daa || terms.deadline < terms.valid_from || terms.deadline == u64::MAX {
+            return Err(OutsideWindow);
         }
         if self.admitted.contains_key(&terms.claim) || self.settled.contains_key(&terms.claim) {
             return Err(AlreadyAdmitted);
@@ -864,14 +956,17 @@ impl Moe2SettlementBook {
             if u128::from(terms.price_limits.max_output_slippage_bps) > BASIS_POINTS {
                 return Err(Quote(Moe2QuoteRefusal::OutsideQuote));
             }
-            let historical = resolve(terms.quote_anchor, terms.model).ok_or(UnknownClaimContext)?;
-            let Moe2ModelAllocation::Additional(market) = historical.allocation else { return Err(UnknownClaimContext) };
-            if (historical.model, historical.artifact_root, historical.registration_daa, historical.owner)
-                != (model.model, model.artifact_root, model.registration_daa, model.owner)
-                || market.opened_daa != current.opened_daa
-                || market.virtual_sompi != current.virtual_sompi
+            let historical = resolve(terms.quote_anchor, terms.model).map_err(QuoteRead)?.ok_or(MissingQuoteAnchor)?;
+            if historical.artifact_root != model.artifact_root {
+                return Err(ArtifactRootMismatch);
+            }
+            if (historical.model, historical.registration_daa, historical.owner) != (model.model, model.registration_daa, model.owner)
             {
-                return Err(UnknownClaimContext);
+                return Err(QuoteModelMismatch);
+            }
+            let Moe2ModelAllocation::Additional(market) = historical.allocation else { return Err(QuoteModelMismatch) };
+            if (market.opened_daa, market.virtual_sompi) != (current.opened_daa, current.virtual_sompi) {
+                return Err(QuoteCurveMismatch);
             }
             Some(PurchaseCurve::from_market(&market).map_err(Quote)?)
         } else {
@@ -975,12 +1070,18 @@ impl Moe2SettlementBook {
         if self.settled.contains_key(&claim) {
             return Err(AlreadySettled);
         }
-        let (terms, reference) = *self.admitted.get(&claim).ok_or(UnknownClaimContext)?;
+        let (terms, reference) = *self.admitted.get(&claim).ok_or(ClaimNotAdmitted)?;
         if self.exec_claims.get(&claim).copied() != slot.map(Moe2ExecSlot::binding) {
             return Err(ReservationMismatch);
         }
-        if funding.claim != claim || funding.position != position || funding.liability.now != position.point.daa_score {
-            return Err(UnknownClaimContext);
+        if funding.claim != claim {
+            return Err(FundingClaimMismatch);
+        }
+        if funding.position != position {
+            return Err(FundingPositionMismatch);
+        }
+        if funding.liability.now != position.point.daa_score {
+            return Err(FundingClockMismatch);
         }
         if self.last_settlement.is_some_and(|last| !position.follows(last)) {
             return Err(PositionOutOfOrder);
@@ -989,13 +1090,19 @@ impl Moe2SettlementBook {
             return Err(OutsideWindow);
         }
         let model = self.models.get_mut(&terms.model).ok_or(UnknownRegistration)?;
-        if model.artifact_root != terms.artifact_root || anchor != terms.quote_anchor || terms.valid_from < model.registration_daa {
-            return Err(UnknownClaimContext);
+        if model.artifact_root != terms.artifact_root {
+            return Err(ArtifactRootMismatch);
+        }
+        if anchor != terms.quote_anchor {
+            return Err(QuoteAnchorMismatch);
+        }
+        if terms.valid_from < model.registration_daa {
+            return Err(OutsideWindow);
         }
         let allocation = model.allocation.quote_reward(funding.liability.payment, terms.plan, terms.limits).map_err(Quote)?;
         let payment = funding.check(allocation)?;
         if let (Moe2ModelAllocation::Additional(before), Some(q)) = (model.allocation, allocation.market) {
-            terms.price_limits.check(reference.ok_or(UnknownClaimContext)?, &before, &q).map_err(Quote)?;
+            terms.price_limits.check(reference.ok_or(MissingQuoteReference)?, &before, &q).map_err(Quote)?;
         }
 
         // Only the original model-bound mining reservation can fund this move.
@@ -1236,10 +1343,14 @@ mod tests {
             plan: Moe2WorkerPlan::MinerAndPanel20,
             price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 3004 },
         };
-        assert_eq!(book.admit(terms, |_, _| None), Err(Moe2SettlementError::UnknownClaimContext));
+        assert_eq!(book.admit(terms, |_, _| None), Err(Moe2SettlementError::MissingQuoteAnchor));
+        let before = book.clone();
+        let unavailable = Moe2QuoteReadError::Unavailable { anchor: terms.quote_anchor };
+        assert_eq!(book.try_admit(terms, |_, _| Err(unavailable)), Err(Moe2SettlementError::QuoteRead(unavailable)));
+        assert_eq!(book, before);
         assert_eq!(
             book.admit(terms, |_, _| Some(Moe2RegisteredModel { artifact_root: h(90), ..model })),
-            Err(Moe2SettlementError::UnknownClaimContext)
+            Err(Moe2SettlementError::ArtifactRootMismatch)
         );
         let different_curve = PalwModelMarketV1 { virtual_sompi: 1, ..market() };
         assert_eq!(
@@ -1247,7 +1358,7 @@ mod tests {
                 allocation: Moe2ModelAllocation::Additional(different_curve),
                 ..model
             })),
-            Err(Moe2SettlementError::UnknownClaimContext)
+            Err(Moe2SettlementError::QuoteCurveMismatch)
         );
         let mut core_book = Moe2SettlementBook::default();
         core_book.models.insert(model.model, Moe2RegisteredModel { allocation: Moe2ModelAllocation::Core, ..model });
@@ -1512,17 +1623,14 @@ mod tests {
         parent.models.insert(model.model, model);
         let anchor = |id, line| (id == h(5) && line == model.model).then_some(model);
         let before = parent.clone();
-        assert_eq!(
-            parent.admit(Moe2SettlementTerms { deadline: u64::MAX, ..terms }, anchor),
-            Err(Moe2SettlementError::UnknownClaimContext)
-        );
+        assert_eq!(parent.admit(Moe2SettlementTerms { deadline: u64::MAX, ..terms }, anchor), Err(Moe2SettlementError::OutsideWindow));
         assert_eq!(parent, before);
         parent.admit(terms, anchor).unwrap();
         let mut child = parent.clone();
         let block = PalwBlockContextV2 { block: h(20), blue_score: 10, daa_score: 3, subsidy: 1000 };
         let at = Moe2Position { point: block, ordinal: 1 };
         let funds = funding(terms.claim, at, 1000);
-        assert_eq!(settle_fixture(&mut child, terms.claim, at, h(6), &funds), Err(Moe2SettlementError::UnknownClaimContext));
+        assert_eq!(settle_fixture(&mut child, terms.claim, at, h(6), &funds), Err(Moe2SettlementError::QuoteAnchorMismatch));
         let high_min = Moe2SettlementTerms { claim: h(11), limits: Moe2QuantityLimits { min_out: 2308, ..LIMITS }, ..terms };
         child.admit(high_min, anchor).unwrap();
         assert_eq!(
@@ -1586,7 +1694,7 @@ mod tests {
         );
         assert_eq!(
             settle_fixture(&mut child, second.claim, successor, h(6), &funding(second.claim, sibling, 1000)),
-            Err(Moe2SettlementError::UnknownClaimContext)
+            Err(Moe2SettlementError::FundingPositionMismatch)
         );
         settle_fixture(&mut child, second.claim, successor, h(6), &funding(second.claim, successor, 1000)).unwrap();
         assert_eq!(child.receipt(&second.claim).unwrap().position, successor);

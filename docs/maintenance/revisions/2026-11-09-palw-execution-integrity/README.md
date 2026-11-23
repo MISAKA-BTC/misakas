@@ -7,11 +7,11 @@
 
 ## 現行の入口
 
-- [RFC20: 保証・状態遷移・成功gate](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
-- [RFC16: Minerの実行記録と全関係](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md)
-- [RFC17: 完全再実行の承認と局所positive](../../../rfc-v2/0017-noninteractive-positive-verification.md)
-- [RFC18: 単独異議・取得後検査・局所化・責任](../../../rfc-v2/0018-interactive-negative-court-and-defaults.md)
-- [RFC19: 有界なnative検査と局所反証の健全性・完全性](../../../rfc-v2/0019-model-free-node-and-bounded-evidence.md)
+- [RFC20: 保証・状態遷移・成功gate](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)
+- [RFC16: Minerの実行記録と全関係](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)
+- [RFC17: 完全再実行の承認と局所positive](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)
+- [RFC18: 単独異議・取得後検査・局所化・責任](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)
+- [RFC19: 有界なnative検査と局所反証の健全性・完全性](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)
 - [追加採択RFC-0049](../../../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)／[ADR-0217](../../../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)
 - [公開裁定の方針v0.3](../../../design/palw/consensus/public-adjudication-policy-v0.3.md)
 

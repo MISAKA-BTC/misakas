@@ -28,6 +28,84 @@ use std::{
     sync::Arc,
 };
 
+/// Typed reasons retained by the history readers' I/O-compatible APIs.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Tb1HistoryError {
+    #[error("selected view changed during PANEL history read ({parent})")]
+    ViewChanged { parent: Hash64 },
+    #[error("{component} history scan limit {limit} reached at {cursor}")]
+    ScanBudgetExceeded { component: &'static str, parent: Hash64, cursor: Hash64, limit: usize },
+    #[error("PANEL deadline {deadline} has not been reached at {daa}")]
+    WindowNotOpen { daa: u64, deadline: u64 },
+    #[error("unresolved timely PANEL commitment at {block}")]
+    UnresolvedCommitment { block: Hash64 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tb1HistoryAction {
+    ReadNewView,
+    InspectScanBudget,
+    WaitForWindow,
+    ObtainCommitmentOpening,
+}
+
+impl Tb1HistoryError {
+    pub fn action(&self) -> Tb1HistoryAction {
+        match self {
+            Self::ViewChanged { .. } => Tb1HistoryAction::ReadNewView,
+            Self::ScanBudgetExceeded { .. } => Tb1HistoryAction::InspectScanBudget,
+            Self::WindowNotOpen { .. } => Tb1HistoryAction::WaitForWindow,
+            Self::UnresolvedCommitment { .. } => Tb1HistoryAction::ObtainCommitmentOpening,
+        }
+    }
+}
+
+impl From<Tb1HistoryError> for io::Error {
+    fn from(error: Tb1HistoryError) -> Self {
+        Self::new(io::ErrorKind::WouldBlock, error)
+    }
+}
+
+struct HistoryScanBudget {
+    component: &'static str,
+    parent: Hash64,
+    limit: usize,
+    remaining: usize,
+}
+
+impl HistoryScanBudget {
+    fn new(component: &'static str, parent: Hash64, limit: usize) -> Self {
+        Self { component, parent, limit, remaining: limit }
+    }
+
+    fn visit(&mut self, cursor: Hash64) -> Result<(), Tb1HistoryError> {
+        self.remaining = self.remaining.checked_sub(1).ok_or(Tb1HistoryError::ScanBudgetExceeded {
+            component: self.component,
+            parent: self.parent,
+            cursor,
+            limit: self.limit,
+        })?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod history_budget_tests {
+    use super::*;
+
+    #[test]
+    fn scan_exhaustion_preserves_the_next_cursor_without_retrying_the_same_budget() {
+        let parent = Hash64::from_u64_word(3);
+        let next = Hash64::from_u64_word(2);
+        let mut budget = HistoryScanBudget::new("qf1_terminal", parent, 1);
+        budget.visit(parent).unwrap();
+        let error = budget.visit(next).unwrap_err();
+        assert_eq!(error, Tb1HistoryError::ScanBudgetExceeded { component: "qf1_terminal", parent, cursor: next, limit: 1 });
+        assert_eq!(error.action(), Tb1HistoryAction::InspectScanBudget);
+        assert_eq!(io::Error::from(error).kind(), io::ErrorKind::WouldBlock);
+    }
+}
+
 pub mod moe2;
 use kaspa_consensus_core::palw_model_market_v1::moe2::settlement::Moe2PreDrawQuote;
 pub use kaspa_consensus_core::palw_tb1::qualification::QualifiedExecPanel;
@@ -726,7 +804,9 @@ impl DerivedExecInput<'_> {
 #[cfg(feature = "private-tb1-tir")]
 mod original;
 #[cfg(feature = "private-tb1-tir")]
-pub use original::{BranchQf1Execution, LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody, PanelApprovedQf1Execution};
+pub use original::{
+    BranchQf1Execution, LOCAL_ORIGINAL_DOMAIN, LocalOriginal, LocalOriginalBody, PanelApprovedQf1Execution, Qf1AwardPreparationError,
+};
 
 #[cfg(feature = "private-tb1-tir")]
 pub mod panel_cut;

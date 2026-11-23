@@ -5,7 +5,7 @@
 Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-11
 Decision: [ADR-0220](../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)
-Current owners: [RFC03](../rfc-v2/0003-model-onboarding-and-artifacts.md)、[RFC16](../rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[RFC17](../rfc-v2/0017-noninteractive-positive-verification.md)、[RFC18](../rfc-v2/0018-interactive-negative-court-and-defaults.md)、[RFC20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)。
+Current owners: [RFC03](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md)、[RFC16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)、[RFC17](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)、[RFC18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)、[RFC20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)。
 
 ## 1. 明示指示と修正範囲
 

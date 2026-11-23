@@ -12,14 +12,14 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 
 編集後は `python3 docs/maintenance/check_docs.py` を実行する。既知の未解決参照を隠すために baseline を一括更新しない。リンク検査は仕様の意味や実際の無効化を保証しない。
 
-現行の閲覧・通常編集先は `rfc-v2/`（20本、0001〜0020）と `adr-v2/`（統合50本）。旧 `rfc/`・`adr/` の本文・番号・パスは互換参照と履歴として保持し、統合後の新規採択記録は別に識別する。旧番号・wire ID・fence名を新番号へ一括置換しない。統合版も PRINCIPLES を上位とし、未採択・延期・不採用を復活させない。対応表とregistryを参照し、変更時は両統合版の `check_integrity.py` も実行する。
+ADRとRFCの閲覧・通常編集先は [ADR](adr/README.md) と [RFC](rfc/README.md)。既存の番号、主文書パス、wire ID、fence名を維持する。統合版の記録は整理直前のGitコミットを参照する。[保守手順](maintenance/README.md)。
 
-2026-11-08 に [RFC-v2-0016〜0020](rfc-v2/README.md) の設計を明示採択した。[ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) は post-consolidation の採択記録であり、ADR-v2 の51冊目ではない。新しい claim / profile の規範入口は [RFC-v2-0020](rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](design/palw/consensus/public-adjudication-policy-v0.2.md)。状態は `ADOPTED_DESIGN_NOT_ACTIVATED` であり、設計採択を実装・測定・activation 完了へ変更しない。旧署名済み claim の意味、採択対象外の設計、過去の統合 snapshot を維持する。
+2026-11-08 のclaim設計は [ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) と [公開裁定の方針 v0.2](design/palw/consensus/public-adjudication-policy-v0.2.md) を参照する。状態は `ADOPTED_DESIGN_NOT_ACTIVATED`。旧署名済みclaimの意味と採択対象外の設計はその版の記録に従う。
 
 2026-11-08の追加採択は[新RFC-0048](rfc/0048-exec-credit-schedule-and-one-bps.md)と
 [ADR-0216](adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に記録する。
-通常編集先は20冊を維持し、07はcredit、10はScheduleId・slot・1 BPS、05/18/19/20はcourt容量と成功境界を所有する。
-今回の入力基準の保全検査は maintenance/revisions/2026-11-08-exec-1bps/check_revision.py を使う。
+EXEC credit、ScheduleId、slot、1 BPS、court容量と成功境界は上記の原文を参照する。
+当時の入力基準の保全検査は、当該改訂時点のツリーで実行する。
 以前の2026-11-08改訂フォルダはその時点の検査・採択記録としてbytesを保持する。
 新profileの1 BPSを実測・決済保証・DAA換算へ昇格させない。
 
@@ -29,7 +29,7 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 
 ## 2026-11-20 TB1/FOW1の明示改定
 
-ユーザーの今回の修正指示に基づき、[RFC0061/ADR0229](rfc/0061-palw-internal-threshold-beacon.md)と[RFC0062/ADR0230](rfc/0062-palw-function-output-and-work-admissibility.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加した。[共通移行契約](governance/palw-tb1-fow1-transition.md)が新profileの乱数、コア採掘値、登録適格性、Ticket、旧受付drainを所有する。旧beaconへfallbackせず、receiptの非衝突性をLLM関数の費用証明にしない。古い凍結条項を今回承認済み変更の再確認要求へ読み替えない。過去のsource hash・履歴・測定を保持し、現行20 RFC/50 ADRと全旧path適用台帳を更新する。本番activation・未完成のQwen定理は承認済みとしない。
+ユーザーの今回の修正指示に基づき、[RFC0061/ADR0229](rfc/0061-palw-internal-threshold-beacon.md)と[RFC0062/ADR0230](rfc/0062-palw-function-output-and-work-admissibility.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加した。[共通移行契約](governance/palw-tb1-fow1-transition.md)が新profileの乱数、コア採掘値、登録適格性、Ticket、旧受付drainを所有する。旧beaconへfallbackせず、receiptの非衝突性をLLM関数の費用証明にしない。古い凍結条項を今回承認済み変更の再確認要求へ読み替えない。過去のsource hash・履歴・測定と全旧path適用台帳を保持する。本番activation・未完成のQwen定理は承認済みとしない。
 
 ## 2026-11-20 MOE1経済の明示改定
 

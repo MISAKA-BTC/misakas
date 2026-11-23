@@ -1573,6 +1573,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwKernelClaimResponse>, protowire::G
         final_statement: item.final_statement.clone(),
         settlement: item.settlement.clone(),
         settled_from_daa: item.settled_from_daa,
+        diagnostic_json: item.diagnostic_json.clone(),
         error: None,
     }
 });
@@ -4115,6 +4116,7 @@ try_from!(item: &protowire::GetPalwKernelClaimResponseMessage, RpcResult<kaspa_r
         final_statement: item.final_statement.clone(),
         settlement: item.settlement.clone(),
         settled_from_daa: item.settled_from_daa,
+        diagnostic_json: item.diagnostic_json.clone(),
     }
 });
 try_from!(item: &protowire::RpcPalwKernelRow, kaspa_rpc_core::RpcPalwKernelRow, {
@@ -5849,6 +5851,7 @@ mod palw_kernel_route_grpc_tests {
             final_statement: "Final under optimistic public verification".to_string(),
             settlement: "final-revocable".to_string(),
             settled_from_daa: 291,
+            diagnostic_json: "{\"schema_version\":1}".into(),
         };
         let wire: protowire::GetPalwKernelClaimResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwKernelClaimResponse = (&wire).try_into().unwrap();

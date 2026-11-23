@@ -134,6 +134,18 @@ async fn private_moe2_marked_coinbase_requires_a_winning_right_on_normal_accepta
         assert_eq!(node.chain.tip_state().1.state_root(), root);
     }
 
+    let diagnostic = node.api().palw_claim_diagnostic_v1(reference.claim).unwrap();
+    assert_eq!(diagnostic.selected_parent, parent);
+    assert_eq!(diagnostic.state_root, Some(root));
+    let last = diagnostic.last_local_failure.unwrap();
+    assert_eq!(last.code, "PALW.MOE2_RESERVATION_MISSING");
+    assert_eq!(last.repetitions, 2);
+    assert_eq!(last.stage, kaspa_consensus_core::palw_claim_diagnostic_v1::ClaimStage::RightConsumption);
+    let advance = stable_panel::next(&mut node, 0).await;
+    let new_diagnostic = node.api().palw_claim_diagnostic_v1(reference.claim).unwrap();
+    assert_eq!(new_diagnostic.selected_parent, advance.hash());
+    assert!(new_diagnostic.last_local_failure.is_none());
+
     let original_profile = parts(Some(FENCE));
     let mut original = Rig::new(&original_profile, 0x12_c500_2000);
     assert_eq!(original.config.params.private_moe2_registration_from(), None);
@@ -157,7 +169,7 @@ use kaspa_consensus_core::palw_tb1::{
     signatures::{READY_CONTEXT, RELEASE_CONTEXT, ready_message},
 };
 use libcrux_ml_dsa::ml_dsa_65;
-use misaka_palw_remote::tb1_exposure::{Tb1ExposureJournal, Tb1HolderFreeze};
+use misaka_palw_remote::tb1_exposure::{Tb1CustodyError, Tb1ExposureJournal, Tb1HolderFreeze};
 
 use kaspa_consensus_core::{
     api::ConsensusApi, errors::consensus::ConsensusResult, header::Header, palw_native_settlement_v1::NativeSettlementSnapshotV1,
@@ -1823,7 +1835,7 @@ async fn run(stable: bool, registered: bool) {
         Tb1ExposureJournal::provision(dir.path(), round_ref, &public[slot], slot as u32).unwrap();
         let mut journal = Tb1ExposureJournal::resume(dir.path(), round_ref, &public[slot], slot as u32).unwrap();
         let signing = journal.reserve_signing_message(api, freeze, &q, &row, 2048).unwrap_err();
-        assert_eq!(signing.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(matches!(signing, Tb1CustodyError::NativeUnavailable(_)));
         let observation = (model_block, parent, anchor, before.generation);
         peer_log!(
             "TB1 pending registered freeze pid={} slot={} registration={} preparation={} close={} generation={} daa={} from={} deadline={} publication={:?} signing={:?}",
@@ -1837,7 +1849,7 @@ async fn run(stable: bool, registered: bool) {
             round.release_from_daa,
             round.deadline_exclusive_daa,
             err.kind(),
-            signing.kind()
+            std::io::Error::from(signing).kind()
         );
         let mut parent_socket = child_dir.as_ref().map(|_| UnixStream::from(std::io::stdin().as_fd().try_clone_to_owned().unwrap()));
         let mut peers = Vec::new();
@@ -2673,11 +2685,9 @@ async fn run(stable: bool, registered: bool) {
     }
     assert!(gate.read_seed(node.api().as_ref(), batch.hash(), certificate.hash(), &rows, &q, LIMITS).is_err());
     assert_eq!(readiness_of(&node).finalized.withdrawn_from, Some(anchor));
-    assert!(journal.observe_branch(node.api().as_ref()).unwrap_err().to_string().contains("halted"));
+    assert!(matches!(journal.observe_branch(node.api().as_ref()), Err(Tb1CustodyError::Halted)));
     drop(journal);
-    assert!(
-        matches!(Tb1ExposureJournal::resume(dir.path(),context.round_ref,&public[0],0),Err(err) if err.to_string().contains("halted"))
-    );
+    assert!(matches!(Tb1ExposureJournal::resume(dir.path(), context.round_ref, &public[0], 0), Err(Tb1CustodyError::Halted)));
     peer_log!(
         "TB1 native custody: anchor {anchor}, prior sink {}, replacement {}, stop {:?}",
         before.generation,

@@ -32,7 +32,7 @@ TB1のshare保持者はLLMの正しさや台帳Finalを投票で決めない。q
 
 Panelは登録された実入力、y、z、canonical traceの全必須関係を再実行して照合する。Nodeは元claimと固定programへ認証された有界な局所関係を検査する。局所positive、rho一致、share certificate、署名一件だけで成功Finalにしない。
 
-[RFC-v2-0016](../../../rfc-v2/0016-miner-execution-commit-and-material-supply.md)〜[0020](../../../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の資料・完全承認・一人の有効反証優先・未解決caseによる成功停止を維持する。最低完全承認数1と、選出Panel人数や正直者の実在は別の条件である。
+[RFC-v2-0016](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)〜[0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の資料・完全承認・一人の有効反証優先・未解決caseによる成功停止を維持する。最低完全承認数1と、選出Panel人数や正直者の実在は別の条件である。
 
 negative、資料要求・応答、局所Court、終端は新beaconを待たない。元期限・元予約・元の署名責任を使い、TB1の準備負荷が既受理の救済容量を消費しない。取得不能は計算不正の自動判定ではない。
 

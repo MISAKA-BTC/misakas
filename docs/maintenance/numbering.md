@@ -1,5 +1,7 @@
 # 文書番号の台帳
 
+新規文書は [RFC](../rfc/README.md) と [ADR](../adr/README.md) の既存番号系列に追加します。以下の統合冊数と割当は各改訂時点の履歴です。
+
 ## 2026-11-08 EXEC・1 BPSの追加採択
 
 新規記録は[RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md)と
@@ -9,9 +11,9 @@
 旧番号系列の実ファイルはRFC49・ADR212となる。旧原文・衝突パスは保持する。
 以下の記録にある冊数・次番号は各時点の履歴である。
 
-## 2026-11-08 の現行入口と採択記録
+## 2026-11-08 の統合と採択の記録
 
-現在の RFC は **RFC-v2-0001〜RFC-v2-0020 の20本**として整理する。[RFC 一覧](../rfc-v2/README.md)。新規の0016〜0020はこの名前空間で割り当て、旧 `RFC-0016`〜`RFC-0020` の意味・主文書パスを変更しない。統合 ADR は **ADR-v2-0001〜ADR-v2-0050 の50本**を維持する。
+当時の統合RFCは **RFC-v2-0001〜RFC-v2-0020 の20本**として整理する。[RFC 一覧](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)。新規の0016〜0020はこの名前空間で割り当て、旧 `RFC-0016`〜`RFC-0020` の意味・主文書パスを変更しない。統合 ADR は **ADR-v2-0001〜ADR-v2-0050 の50本**を維持する。
 
 新しい採択記録は [ADR-0215 — Model-free Node, Noninteractive Positive and Adversarial Availability](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)。添付 `docs(2).zip` 内で同番号の既存主文書がないことを確認した範囲の割当であり、他 branch・未取得 remote・将来予約まで含めた一意性は確認していない。ADR-v2 50本とは別の post-consolidation 文書として識別する。
 

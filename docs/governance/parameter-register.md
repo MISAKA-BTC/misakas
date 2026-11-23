@@ -332,13 +332,13 @@ courtの実供給率、1 DAA＝1秒を意味しない。仕事量→credit量の
 | atomic batch | 既存original・署名の意味を維持 | 同Miner・同model・同profileの有限execution leaf群を受理前に封印し、一つの新originalとするoptional経路 | 封印後の未知seedで選出、全leaf検証、一leaf反証で全体Refuted、部分creditなし。envelope・上限・実装・測定がそろうまで有効化なし |
 | 全合法caseの処理枠 | 既存の有限要求・費用・court予約 | 各選出主体の保護枠と、悪意多数による最大の合法虚偽case・最遅手番を合算 | 正直者の位置を知らなくても枠を維持。料金・bondだけで物理容量が増えたと扱わない |
 
-新profileの設計上の成功条件は、最低1件の完全検証承認に加え、[RFC20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の公開検証機会、Q、局所計画、資料義務、依存、原期限、資金・予約の全条件である。一人前提はruntimeが署名数から観測できる事実ではなく、資料・能力・期限内包含とともに明示する脅威モデルである。全員共謀や唯一正直者の全通信検閲まで安全だという数値評価へ変換しない。
+新profileの設計上の成功条件は、最低1件の完全検証承認に加え、[RFC20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の公開検証機会、Q、局所計画、資料義務、依存、原期限、資金・予約の全条件である。一人前提はruntimeが署名数から観測できる事実ではなく、資料・能力・期限内包含とともに明示する脅威モデルである。全員共謀や唯一正直者の全通信検閲まで安全だという数値評価へ変換しない。
 
 ### 容量と安全性評価の再設定
 
 旧54claim／日と旧75／41に結び付いた誤認証・grinding・費用評価は、過去の対象policyに保持する。新profileの人数・受付量・batch価値へそのまま流用しない。新profileは各選出結果に正直な検証者がいる条件、全体coverage、cold取得、共通障害・買収・選択的秘匿、抽選の反復、最大同時case、期限内包含を評価する。抽選上の悪意多数が生じる確率と、不正claimが反証を逃れて成功する確率を同一視しない。
 
-5万モデル×1claim／日の約0.579claim／秒、同モデル数×1claim／時の約13.89claim／秒は、活動量を定義する算術例であり、承認済みの処理量や達成実測ではない。初期Panel人数、各資源の処理率・容量、batchのleaf／価値／仕事上限、費用額を、この例だけから採択しない。対象binary、最低要件機材、profile、到着・burst、cold比、全合法係争をそろえ、[RFC05](../rfc-v2/0005-bounded-resources-and-long-context.md)と[19](../rfc-v2/0019-model-free-node-and-bounded-evidence.md)に従って測定する。
+5万モデル×1claim／日の約0.579claim／秒、同モデル数×1claim／時の約13.89claim／秒は、活動量を定義する算術例であり、承認済みの処理量や達成実測ではない。初期Panel人数、各資源の処理率・容量、batchのleaf／価値／仕事上限、費用額を、この例だけから採択しない。対象binary、最低要件機材、profile、到着・burst、cold比、全合法係争をそろえ、[RFC05](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0005-bounded-resources-and-long-context.md)と[19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)に従って測定する。
 
 ### 必須試験と残る決定
 

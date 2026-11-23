@@ -26,12 +26,12 @@ Status: **Accepted design / implementation and activation pending**
 
 | 項目 | 採用する規則 | 主RFC |
 | --- | --- | --- |
-| Minerのoriginal | 一回の推論で記録したcanonical trace／execution root、出力、model、input、rules等を先に署名固定する | [RFC-v2-0016](../rfc-v2/0016-miner-execution-commit-and-material-supply.md) |
+| Minerのoriginal | 一回の推論で記録したcanonical trace／execution root、出力、model、input、rules等を先に署名固定する | [RFC-v2-0016](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md) |
 | 資料供給 | モデル事前共有を仮定せず、選出検証者と適格なpublic outsiderへclaim固有資料を供給する有限の義務を定める | 同16 |
-| 正常positive | 独立再実行で元のrootと出力を照合し、Panel自身のtraceから局所証拠を一括作成する。Minerの追加承認を要求しない | [RFC-v2-0017](../rfc-v2/0017-noninteractive-positive-verification.md) |
-| negative | 不一致を固定された原claimへ局所化し、Nodeが有界な計算で裁く。既に完成した反証の直接提出を妨げない | [RFC-v2-0018](../rfc-v2/0018-interactive-negative-court-and-defaults.md) |
-| Node | 全重み・checkpoint・全推論・GPU・モデル外部取得を必要とせず、認証された局所断片とboundedな実行定義だけを検査する | [RFC-v2-0019](../rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
-| 成功Final | 結果固定からglobal独立認証を開始し、肯定認証・公開異議・依存・経済条件が成立した後に成功Finalを置く | [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
+| 正常positive | 独立再実行で元のrootと出力を照合し、Panel自身のtraceから局所証拠を一括作成する。Minerの追加承認を要求しない | [RFC-v2-0017](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md) |
+| negative | 不一致を固定された原claimへ局所化し、Nodeが有界な計算で裁く。既に完成した反証の直接提出を妨げない | [RFC-v2-0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) |
+| Node | 全重み・checkpoint・全推論・GPU・モデル外部取得を必要とせず、認証された局所断片とboundedな実行定義だけを検査する | [RFC-v2-0019](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md) |
+| 成功Final | 結果固定からglobal独立認証を開始し、肯定認証・公開異議・依存・経済条件が成立した後に成功Finalを置く | [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) |
 
 新profileの正常基準は**選出Panelによる全体の独立再実行**である。これはNodeに全再実行を要求する変更でも、既存のsampled profileを無断で変更するものでもない。局所positiveの成立と全体承認は別の型・scopeとして扱う。
 

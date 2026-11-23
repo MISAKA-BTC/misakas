@@ -3,7 +3,7 @@
 - 対象: 2026-11-20に指定されたMOE2の算術と参照状態遷移。
 - 状態: **設計に対する数学的検証。native実装・公開activationの完了ではない。**
 - 再現コード: [check_liquidity_math.py](check_liquidity_math.py)。結果: [liquidity-math-check.json](liquidity-math-check.json)。Python標準ライブラリのみを使用する。
-- 継承元: [ADR0162のvirtual reserve・whole Position・ceil売買](../../../adr/0162-the-pair-opens-on-a-virtual-reserve.md)、[共通会計と原資・責任の境界](../../../rfc-v2/0011-bond-budgets-fees-and-payments.md)。本資料は旧資料・旧試験結果を書き換えない。
+- 継承元: [ADR0162のvirtual reserve・whole Position・ceil売買](../../../adr/0162-the-pair-opens-on-a-virtual-reserve.md)、[共通会計と原資・責任の境界](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md)。本資料は旧資料・旧試験結果を書き換えない。
 
 ## 1. 結論と証明範囲
 

@@ -6,7 +6,7 @@ use kaspa_consensus_core::palw_tb1::{Tb1DealerPoint, reconstruction::reconstruct
 use kaspa_math::Uint576;
 use misaka_palw_remote::tb1_exposure::exec_input::panel_cut::LocalPanelCut;
 use misaka_palw_remote::tb1_exposure::exec_input::{
-    BranchExecInput, DerivedExecInput, LocalOriginalBody,
+    BranchExecInput, DerivedExecInput, LocalOriginalBody, Tb1HistoryAction, Tb1HistoryError,
     panel_cut::{LocalReplayPolicy, REPLAY_SIGNATURE_DOMAIN, actor_id},
 };
 use misaka_palw_tir_exec::node::qf1::LocalInstance;
@@ -787,7 +787,11 @@ pub(super) async fn release<'t>(
                 node.chain.sink()
             );
             assert!(draw.unverified_expiry_marker(api, early.hash(), 128).is_err());
-            assert_eq!(draw.unverified_expiry_marker(api, boundary.hash(), 1).unwrap_err().kind(), ErrorKind::WouldBlock);
+            let budget = draw.unverified_expiry_marker(api, boundary.hash(), 1).unwrap_err();
+            assert!(matches!(
+                budget.get_ref().and_then(|error| error.downcast_ref::<Tb1HistoryError>()),
+                Some(Tb1HistoryError::ScanBudgetExceeded { component: "panel_deadline", limit: 1, .. })
+            ));
             let marker = draw.unverified_expiry_marker(api, boundary.hash(), 128).unwrap();
             assert!(draw.read_unverified_expiry(api, boundary.hash(), boundary.hash(), 128).is_err());
             let terminal = local_carrier(node, parent, peers, 0, marker, "unverified PANEL expiry").await;
@@ -876,7 +880,10 @@ pub(super) async fn release<'t>(
             let api = node.api().as_ref();
             let unresolved = draw.unverified_expiry_marker(api, late.hash(), 128).unwrap_err();
             assert_eq!(unresolved.kind(), std::io::ErrorKind::WouldBlock);
-            assert_eq!(unresolved.to_string(), format!("unresolved timely PANEL commitment at {}", accepted.hash()));
+            assert_eq!(
+                unresolved.get_ref().and_then(|error| error.downcast_ref::<Tb1HistoryError>()),
+                Some(&Tb1HistoryError::UnresolvedCommitment { block: accepted.hash() })
+            );
             peer_log!("QF1 expiry withheld pid={} boundary={} pending={}", std::process::id(), late.hash(), accepted.hash());
             draw.read_replies(api, accepted.hash(), &replies).unwrap();
             let recorded = |block, signatures| {
@@ -1245,10 +1252,10 @@ pub(super) async fn release<'t>(
     assert_eq!(pending.cases(), &[stop, PublishedTerminalCase { verdict: None, ..end }]);
     let before = earlier.read_terminal_court_at_parent(&branch, original, original_receipt, 128).unwrap();
     assert_eq!(before.cases(), &[stop]);
-    assert_eq!(
-        historical.read_terminal_court_at_parent(&branch, original, original_receipt, 1).unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock,
-    );
+    let exhausted = historical.read_terminal_court_at_parent(&branch, original, original_receipt, 1).unwrap_err();
+    let reason = exhausted.get_ref().and_then(|error| error.downcast_ref::<Tb1HistoryError>()).unwrap();
+    assert!(matches!(reason, Tb1HistoryError::ScanBudgetExceeded { component: "qf1_terminal", limit: 1, .. }));
+    assert_eq!(reason.action(), Tb1HistoryAction::InspectScanBudget);
     // Only this reopened test copy loses the case body. Missing history must
     // not turn an unresolved or refuted claim into a cleared one.
     let vp = recovered.virtual_processor();

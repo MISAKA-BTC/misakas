@@ -86,12 +86,12 @@ pub(super) async fn exercise(
     let before_profile = Moe2PreDrawQuote { valid_from: 0, ..core };
     assert_eq!(
         before_profile.preview_at_anchor(&env.config.params, state, reward),
-        Err(Moe2SettlementError::UnknownClaimContext),
+        Err(Moe2SettlementError::ProfileInactive),
         "even a registered genesis model cannot start MOE2 terms before activation"
     );
     assert!(matches!(
         before_profile.budget_ask_at(&env.config.params, state, point.daa_score),
-        Err(Moe2SettlementError::UnknownClaimContext)
+        Err(Moe2SettlementError::ProfileInactive)
     ));
     let (funding_capital, ask) = core.budget_ask_at(&env.config.params, state, point.daa_score).unwrap();
     assert_eq!((funding_capital, ask.reward_sompi), (capital, reward));

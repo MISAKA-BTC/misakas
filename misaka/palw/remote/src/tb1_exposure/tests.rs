@@ -218,7 +218,11 @@ fn round16_close_requires_its_fixed_position_and_a_stable_selected_view() {
     assert!(resolve(&CloseView { blue: round.close_blue_score + 1, ..view() }).is_err());
     assert!(resolve(&CloseView { daa: round.release_from_daa, ..view() }).is_err());
     assert!(resolve(&CloseView { marker: closure.commitment(block(4)), ..view() }).is_err());
-    assert!(resolve(&CloseView { branch: B, ..view() }).unwrap_err().to_string().contains("outside selected history"));
+    let detached = resolve(&CloseView { branch: B, ..view() }).unwrap_err();
+    assert!(matches!(
+        detached.get_ref().and_then(|error| error.downcast_ref::<Tb1CustodyError>()),
+        Some(Tb1CustodyError::DifferentBranch)
+    ));
     assert_eq!(resolve(&CloseView { move_at_commitment: true, ..view() }).unwrap_err().kind(), ErrorKind::WouldBlock);
     observe(&view()).unwrap();
     assert_eq!(observe(&CloseView { lose_finality_at_second_tip_header: true, ..view() }).unwrap_err().kind(), ErrorKind::WouldBlock);
@@ -247,7 +251,7 @@ fn custody_process() {
             unreachable!();
         }
         "competing-freeze" => {
-            assert!(message.unwrap_err().to_string().contains("different exposure"));
+            assert!(matches!(message, Err(Tb1CustodyError::Conflict)));
         }
         "sign-original" => {
             let sig = ml_dsa_65::sign(&KEYS[slot].signing_key, &message.unwrap(), RELEASE_CONTEXT, [53; 32]).unwrap();
@@ -281,7 +285,10 @@ fn three_holders_killed_before_signing_recover_only_the_original_release() {
         Tb1ExposureJournal::provision(dir, ROUND, key, slot as u32).unwrap();
         child(dir, slot, "kill-before-signature");
         assert!(!dir.join(format!("holder-{slot}.sig")).exists());
-        assert_eq!(Tb1ExposureJournal::provision(dir, ROUND, key, slot as u32).unwrap_err().kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            io::Error::from(Tb1ExposureJournal::provision(dir, ROUND, key, slot as u32).unwrap_err()).kind(),
+            ErrorKind::AlreadyExists
+        );
         child(dir, slot, "competing-freeze");
         child(dir, slot, "sign-original");
     }
@@ -327,9 +334,9 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     let row = Tb1HolderRelease { context: original(), holder_slot: 0, shares: &shares };
     assert!(Tb1ExposureJournal::resume(dir, ROUND, key, 0).is_err());
     Tb1ExposureJournal::provision(dir, ROUND, key, 0).unwrap();
-    assert!(Tb1ExposureJournal::resume(dir, ROUND, key, 1).is_err());
+    assert!(matches!(Tb1ExposureJournal::resume(dir, ROUND, key, 1), Err(Tb1CustodyError::EnrollmentMismatch)));
     let mut journal = Tb1ExposureJournal::resume(dir, ROUND, key, 0).unwrap();
-    assert!(matches!(Tb1ExposureJournal::resume(dir, ROUND, key, 0), Err(e) if e.kind() == ErrorKind::WouldBlock));
+    assert!(matches!(Tb1ExposureJournal::resume(dir, ROUND, key, 0), Err(Tb1CustodyError::JournalInUse)));
     assert!(
         journal
             .reserve_signing_message(&A, freeze(original()), &qualified, &Tb1HolderRelease { shares: &shares[..2], ..row }, LIMIT)
@@ -343,9 +350,7 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     let mut journal = Tb1ExposureJournal::resume(dir, ROUND, key, 0).unwrap();
     assert_eq!(expected, journal.reserve_signing_message(&A, freeze(original()), &qualified, &row, LIMIT).unwrap());
     let extended = Tb1HolderFreeze { deadline_exclusive_daa: 26, ..freeze(original()) };
-    assert!(
-        journal.reserve_signing_message(&A, extended, &qualified, &row, LIMIT).unwrap_err().to_string().contains("different exposure")
-    );
+    assert!(matches!(journal.reserve_signing_message(&A, extended, &qualified, &row, LIMIT), Err(Tb1CustodyError::Conflict)));
     let mut changed = shares.clone();
     changed[0].1 = field(73);
     assert!(
@@ -357,11 +362,16 @@ fn incomplete_substitution_contention_and_cold_import_cannot_reset_custody() {
     assert_eq!(fs::read(&file).unwrap(), bytes);
     let mut corrupted = bytes.clone();
     corrupted[HEADER] ^= 1;
-    for bad in [&bytes[..HEADER - 1], &bytes[..HEADER + 1], &bytes[..bytes.len() - 1], &corrupted[..]] {
+    for bad in [&bytes[..HEADER - 1], &bytes[..HEADER + 1], &bytes[..bytes.len() - 1]] {
         fs::write(&file, bad).unwrap();
-        assert!(Tb1ExposureJournal::resume(dir, ROUND, key, 0).is_err());
+        assert!(matches!(Tb1ExposureJournal::resume(dir, ROUND, key, 0), Err(Tb1CustodyError::Corrupt(_))));
         assert_eq!(fs::read(&file).unwrap(), bad);
     }
+    fs::write(&file, &corrupted).unwrap();
+    let Err(error) = Tb1ExposureJournal::resume(dir, ROUND, key, 0) else { panic!("bad checksum accepted") };
+    assert!(matches!(error, Tb1CustodyError::ChecksumMismatch));
+    assert_eq!(error.action(), Tb1CustodyAction::InspectStorage);
+    assert_eq!(fs::read(&file).unwrap(), corrupted);
 }
 
 #[test]
@@ -375,7 +385,10 @@ fn observed_finality_loss_halts_across_branch_return_and_restart() {
     let unavailable = Branch { tip: 3, finalized: None };
     Tb1ExposureJournal::provision(dir.path(), ROUND, key, 0).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0).unwrap();
-    assert!(journal.reserve_signing_message(&pending, freeze(original()), &q, &row, LIMIT).is_err());
+    assert!(matches!(
+        journal.reserve_signing_message(&pending, freeze(original()), &q, &row, LIMIT),
+        Err(Tb1CustodyError::NotFinalized)
+    ));
     assert!(journal.reserve_signing_message(&B, freeze(original()), &q, &row, LIMIT).is_err());
     for closed in [
         Tb1HolderFreeze { release_from_daa: 20, ..freeze(original()) },
@@ -385,17 +398,19 @@ fn observed_finality_loss_halts_across_branch_return_and_restart() {
     }
     assert!(journal.read_record().unwrap().is_none());
     journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap();
-    assert!(journal.observe_branch(&unavailable).is_err());
+    assert!(matches!(journal.observe_branch(&unavailable), Err(Tb1CustodyError::NativeUnavailable(_))));
     journal.observe_branch(&A).unwrap();
     assert!(
         journal
             .reserve_signing_message(&A, Tb1HolderFreeze { accepting_block: block(1), ..freeze(original()) }, &q, &row, LIMIT)
             .is_err()
     );
-    assert!(journal.observe_branch(&B).unwrap_err().to_string().contains("halted"));
-    assert!(journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap_err().to_string().contains("halted"));
+    let halt = journal.observe_branch(&B).unwrap_err();
+    assert!(matches!(halt, Tb1CustodyError::Halted));
+    assert_eq!(halt.action(), Tb1CustodyAction::KeepHalted);
+    assert!(matches!(journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT), Err(Tb1CustodyError::Halted)));
     drop(journal);
-    assert!(matches!(Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0), Err(e) if e.to_string().contains("halted")));
+    assert!(matches!(Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0), Err(Tb1CustodyError::Halted)));
 }
 
 #[test]
@@ -432,15 +447,15 @@ fn generation_change_during_read_neither_reserves_nor_halts() {
     Tb1ExposureJournal::provision(dir.path(), ROUND, key, 0).unwrap();
     let mut journal = Tb1ExposureJournal::resume(dir.path(), ROUND, key, 0).unwrap();
     let moved = MovingView { first: &A, next: &B, calls: AtomicUsize::new(0) };
-    assert_eq!(
-        journal.reserve_signing_message(&moved, freeze(original()), &q, &row, LIMIT).unwrap_err().kind(),
-        ErrorKind::WouldBlock
-    );
+    assert!(matches!(
+        journal.reserve_signing_message(&moved, freeze(original()), &q, &row, LIMIT),
+        Err(Tb1CustodyError::ViewChanged { .. })
+    ));
     assert!(journal.read_record().unwrap().is_none());
     journal.reserve_signing_message(&A, freeze(original()), &q, &row, LIMIT).unwrap();
     let saved = journal.read_record().unwrap().unwrap();
     let moved = MovingView { first: &B, next: &A, calls: AtomicUsize::new(0) };
-    assert_eq!(journal.observe_branch(&moved).unwrap_err().kind(), ErrorKind::WouldBlock);
+    assert!(matches!(journal.observe_branch(&moved), Err(Tb1CustodyError::ViewChanged { .. })));
     assert_eq!(journal.read_record().unwrap(), Some(saved));
     journal.observe_branch(&A).unwrap();
 }

@@ -174,6 +174,12 @@ impl PalwChainStateV2 {
             .is_some_and(|ruling| daa < ruling.deadline)
     }
 
+    /// Positive observations for the diagnostic reader from the same Court row.
+    pub(crate) fn qf1_terminal_outcome_for_diagnostic(&self, original: Hash64) -> Option<(u32, bool)> {
+        let status: CourtStatus = self.kernel_route.as_ref()?.aux_row(TABLE, &key(b'O', &original.as_bytes()))?;
+        Some((status.pending, status.refuted))
+    }
+
     pub fn qf1_terminal_blocks_award(&self, original: Hash64) -> bool {
         self.kernel_route
             .as_ref()

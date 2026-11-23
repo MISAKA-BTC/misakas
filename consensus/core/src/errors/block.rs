@@ -274,8 +274,19 @@ pub enum RuleError {
     #[error("invalid private MOE2 award in coinbase: {0}")]
     PrivateMoe2AwardMalformed(&'static str),
 
-    #[error("private MOE2 award in coinbase has no authenticated winning right")]
-    PrivateMoe2AwardUnresolved,
+    #[error(
+        "invalid private MOE2 award reference for candidate {candidate} at selected parent {selected_parent} (claim {claim:?}): {source}"
+    )]
+    PrivateMoe2AwardReference {
+        claim: Option<BlockHash>,
+        candidate: BlockHash,
+        selected_parent: BlockHash,
+        #[source]
+        source: crate::palw_model_market_v1::moe2::award_reference::Moe2AwardReferenceError,
+    },
+
+    #[error("PALW.MOE2_WINNING_RIGHT_NOT_CONNECTED for claim {claim} in candidate {candidate} at selected parent {selected_parent}")]
+    PrivateMoe2AwardUnresolved { claim: BlockHash, candidate: BlockHash, selected_parent: BlockHash },
 
     #[error("coinbase blue score of {0} is not the expected value of {1}")]
     BadCoinbasePayloadBlueScore(u64, u64),
