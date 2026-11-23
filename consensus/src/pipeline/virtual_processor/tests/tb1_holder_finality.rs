@@ -1496,7 +1496,8 @@ async fn run(stable: bool, registered: bool) {
         Some(
             branch
                 .verify_published_candidate(&history, batch.hash(), &batch_settlement, batch.hash(), &certificate, &q, LIMITS)
-                .unwrap(),
+                .unwrap()
+                .seed(),
         )
     } else {
         None

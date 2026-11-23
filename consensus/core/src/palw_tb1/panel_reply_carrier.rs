@@ -1,11 +1,22 @@
 //! Signed PANEL replies in a lifecycle transaction. The caller supplies the
 //! draw's seat count and verifies the selected duty and its block commitment.
-use crate::{Hash64, api::ConsensusApi, block::Block, subnets::SUBNETWORK_ID_PALW_LIFECYCLE};
+use crate::{
+    Hash64,
+    api::ConsensusApi,
+    block::Block,
+    palw_panel_v2::{
+        PALW_DRAW_WEIGHT_MAX_MSK_V1, palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1,
+        palw_panel_stake_ticket_v1,
+    },
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+};
 use libcrux_ml_dsa::ml_dsa_65::{self, MLDSA65Signature, MLDSA65VerificationKey};
 use sha3::{Digest, Sha3_512};
 use std::io;
 
-use super::qf1_original_carrier::qf1_marker;
+use super::{
+    freeze::Tb1MiningClosure, publication::VerifiedTb1Publication, qf1_original_carrier::qf1_marker, releases::Tb1BeaconSeed,
+};
 
 const TAG: &[u8; 8] = b"TB1RPL01";
 pub const PANEL_REPLY_KEY_BYTES: usize = 1952;
@@ -25,6 +36,85 @@ fn invalid(message: &str) -> io::Error {
 
 pub fn replay_message(duty: &[u8; 64], actor: Hash64) -> [u8; 64] {
     Sha3_512::new().chain_update(duty).chain_update(actor.as_bytes()).finalize().into()
+}
+
+pub fn replay_policy_id(seats: u32) -> Hash64 {
+    Hash64::from_bytes(
+        Sha3_512::new()
+            .chain_update(b"MISAKA/private/TB1/PANEL/stake-ticket/full-replay/v1")
+            .chain_update(seats.to_be_bytes())
+            .finalize()
+            .into(),
+    )
+}
+
+/// Inputs from the authenticated PANEL cut. The owner resolves the eligible
+/// Original and the roster committed by the close before constructing this view.
+pub struct PanelReplayCut<'a> {
+    pub closure: &'a Tb1MiningClosure,
+    pub close: Hash64,
+    pub freeze_id: [u8; 64],
+    pub original: Hash64,
+    pub original_block: Hash64,
+    pub deadline: u64,
+    pub candidates: &'a [(Hash64, u64)],
+    pub seats: u32,
+}
+
+impl PanelReplayCut<'_> {
+    pub fn draw_for_candidate(&self, publication: &VerifiedTb1Publication) -> io::Result<PanelReplayDuty> {
+        let (certificate, seed) = publication.panel_seed(self.close, self.closure, self.freeze_id)?;
+        self.draw(certificate, seed)
+    }
+
+    /// Draw from a seed already checked by the branch publication reader.
+    pub fn draw(&self, certificate: Hash64, seed: Tb1BeaconSeed) -> io::Result<PanelReplayDuty> {
+        let seats = self.seats as usize;
+        if seats == 0
+            || seats > self.candidates.len()
+            || replay_policy_id(self.seats).as_bytes() != self.closure.policy_root
+            || self.candidates.iter().any(|(_, weight)| *weight == 0 || *weight > PALW_DRAW_WEIGHT_MAX_MSK_V1)
+            || self.candidates.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        {
+            return Err(invalid("different PANEL policy or population"));
+        }
+        let anchor = Hash64::from_bytes(
+            Sha3_512::new()
+                .chain_update(b"MISAKA/private/TB1/PANEL/draw-anchor/v1")
+                .chain_update(self.freeze_id)
+                .chain_update(seed.as_bytes())
+                .finalize()
+                .into(),
+        );
+        let mut ranked: Vec<_> = self
+            .candidates
+            .iter()
+            .map(|(id, weight)| {
+                let ticket = palw_panel_stake_ticket_v1(anchor, &self.original, id);
+                (palw_draw_neg_log2_q64_v1(palw_draw_ticket_u64_v1(&ticket)), *weight, *id)
+            })
+            .collect();
+        ranked.sort_unstable_by(|a, b| palw_draw_key_cmp_v1(a.0, a.1, &a.2, b.0, b.1, &b.2));
+        let selected = ranked.into_iter().take(seats).map(|(_, _, id)| id).collect();
+        let duty = Sha3_512::new()
+            .chain_update(REPLAY_SIGNATURE_DOMAIN)
+            .chain_update(self.freeze_id)
+            .chain_update(self.original.as_bytes())
+            .chain_update(self.original_block.as_bytes())
+            .chain_update(certificate.as_bytes())
+            .chain_update(anchor.as_bytes())
+            .finalize()
+            .into();
+        Ok(PanelReplayDuty {
+            chain: self.closure.round.chain_id,
+            original: self.original,
+            original_block: self.original_block,
+            certificate,
+            deadline: self.deadline,
+            selected,
+            duty,
+        })
+    }
 }
 
 pub fn panel_reply_commitment(
@@ -52,7 +142,7 @@ pub fn panel_reply_commitment(
 
 /// Duty reconstructed by the owner from the authenticated PANEL close and seed.
 /// The reply payload supplies signatures. It cannot install a duty.
-#[derive(Clone, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PanelReplayDuty {
     pub chain: [u8; 64],
     pub original: Hash64,

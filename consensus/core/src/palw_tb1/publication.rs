@@ -8,7 +8,7 @@ use crate::{
     header::Header,
     palw_native_settlement_v1::NativeSettlementSnapshotV1,
     palw_tb1::{
-        freeze::Tb1MiningClosure,
+        freeze::{Tb1MiningClosure, Tb1MiningPurpose},
         qualification::Tb1Qualification,
         release_batch_carrier::{encode_release_batch, release_batch_from_block},
         releases::{Tb1BeaconCertificate, Tb1BeaconSeed, Tb1ReleaseContext, Tb1ReleaseCut, Tb1ReleaseSet, Tb1SignedRelease},
@@ -106,6 +106,7 @@ pub struct BranchPublicationGate {
     close: Hash64,
     chain: [u8; 64],
     round: [u8; 64],
+    closure: Tb1MiningClosure,
     qual_root: [u8; 64],
     freeze_id: [u8; 64],
     release_from_daa: u64,
@@ -113,6 +114,41 @@ pub struct BranchPublicationGate {
     stable_block: Hash64,
     closed_at: u64,
     stable_at: u64,
+}
+
+/// Result of verifying the candidate's own certificate commitment against
+/// the original branch-owned observation and qualification.
+pub struct VerifiedTb1Publication {
+    certificate: Hash64,
+    close: Hash64,
+    closure: Tb1MiningClosure,
+    freeze_id: [u8; 64],
+    seed: Tb1BeaconSeed,
+}
+
+impl VerifiedTb1Publication {
+    pub fn seed(&self) -> Tb1BeaconSeed {
+        self.seed
+    }
+
+    pub(super) fn panel_seed(
+        &self,
+        close: Hash64,
+        closure: &Tb1MiningClosure,
+        freeze_id: [u8; 64],
+    ) -> io::Result<(Hash64, Tb1BeaconSeed)> {
+        if self.closure.round.purpose != Tb1MiningPurpose::Panel
+            || self.close != close
+            || self.closure.round.id() != closure.round.id()
+            || self.closure.qual_root != closure.qual_root
+            || self.closure.consumer_set_root != closure.consumer_set_root
+            || self.closure.policy_root != closure.policy_root
+            || self.freeze_id != freeze_id
+        {
+            return Err(invalid("TB1 certificate belongs to another PANEL freeze"));
+        }
+        Ok((self.certificate, self.seed))
+    }
 }
 
 impl BranchPublicationGate {
@@ -138,6 +174,7 @@ impl BranchPublicationGate {
             close,
             chain: round.chain_id,
             round: round.id(),
+            closure: *closure,
             qual_root: qualified.root(),
             freeze_id,
             release_from_daa: round.release_from_daa,
@@ -249,7 +286,7 @@ impl BranchPublicationGate {
         candidate: &Block,
         q: &Tb1Qualification<'_>,
         limits: PublicationLimits,
-    ) -> io::Result<Tb1BeaconSeed> {
+    ) -> io::Result<VerifiedTb1Publication> {
         Self::check_finalized_branch(native, self.close, parent, settlement)?;
         if batch == candidate.hash() || !native.is_chain_ancestor_of(batch, parent).map_err(Error::other)? {
             return Err(invalid("TB1 release batch does not precede the candidate"));
@@ -266,7 +303,13 @@ impl BranchPublicationGate {
             if marker != expected {
                 return Err(invalid("TB1 certificate differs from candidate block"));
             }
-            Ok(seed)
+            Ok(VerifiedTb1Publication {
+                certificate: candidate.hash(),
+                close: self.close,
+                closure: self.closure,
+                freeze_id: self.freeze_id,
+                seed,
+            })
         })
     }
 

@@ -594,6 +594,8 @@ pub(super) async fn release<'t>(
     let api = node.api().as_ref();
     assert!(gate.propose(api, batch.hash(), exec_rows, q, LIMITS).is_err());
     let certificate_marker = gate.propose_published(api, batch.hash(), q, LIMITS).unwrap();
+    let certificate_parent = snapshot_of(node).unwrap();
+    assert_eq!(certificate_parent.generation, batch.hash());
     let cert = local_carrier(node, parent, peers, 0, certificate_marker, "PANEL seed certificate").await;
     let api = node.api().as_ref();
     let seed = gate.read_published_seed(api, batch.hash(), cert.hash(), q, LIMITS).unwrap();
@@ -637,6 +639,23 @@ pub(super) async fn release<'t>(
     let api = node.api().as_ref();
     let draw =
         cut.draw_published_replays(api, close.hash(), &gate, batch.hash(), cert.hash(), q, LIMITS, original, actors.policy).unwrap();
+    let history = CandidateHistory { api, candidate: Some(cert.hash()) };
+    let candidate_draw = cut
+        .draw_replays_in_candidate(
+            &history,
+            close.hash(),
+            batch.hash(),
+            &certificate_parent,
+            &gate,
+            batch.hash(),
+            &cert,
+            q,
+            LIMITS,
+            original,
+            actors.policy,
+        )
+        .unwrap();
+    assert_eq!(candidate_draw, draw.replay_duty());
     assert!(
         cut.draw_replays(
             api,

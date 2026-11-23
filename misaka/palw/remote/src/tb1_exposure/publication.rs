@@ -5,6 +5,7 @@ pub use kaspa_consensus_core::palw_tb1::publication::{PublicationLimits, Publish
 use kaspa_consensus_core::{
     Hash64,
     api::ConsensusApi,
+    block::Block,
     palw_native_settlement_v1::NativeSettlementSnapshotV1,
     palw_tb1::{
         freeze::Tb1MiningClosure, publication::BranchPublicationGate, qualification::Tb1Qualification, releases::Tb1BeaconSeed,
@@ -19,6 +20,20 @@ pub struct NativePublicationGate {
 }
 
 impl NativePublicationGate {
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_published_candidate(
+        &self,
+        native: &dyn ConsensusApi,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
+        batch: Hash64,
+        candidate: &Block,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+    ) -> io::Result<kaspa_consensus_core::palw_tb1::publication::VerifiedTb1Publication> {
+        self.branch.verify_published_candidate(native, parent, settlement, batch, candidate, q, limits)
+    }
+
     pub fn holder_freeze(&self) -> Tb1HolderFreeze {
         self.freeze
     }

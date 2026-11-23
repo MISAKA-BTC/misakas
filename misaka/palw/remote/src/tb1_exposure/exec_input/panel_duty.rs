@@ -2,15 +2,12 @@
 //! the earlier native close. The dedicated certificate is the only draw input
 //! that becomes known after that close. No positive vote grants mining credit.
 use super::{original::read_published_qf1_original, *};
-use kaspa_consensus_core::palw_panel_v2::{
-    PALW_DRAW_WEIGHT_MAX_MSK_V1, palw_draw_key_cmp_v1, palw_draw_neg_log2_q64_v1, palw_draw_ticket_u64_v1, palw_panel_stake_ticket_v1,
-};
 use kaspa_consensus_core::{
     palw_native_settlement_v1::NativeSettlementSnapshotV1,
     palw_tb1::{
         panel_reply_carrier::{
-            PANEL_REPLY_KEY_BYTES, PANEL_REPLY_SIGNATURE_BYTES, PanelReplayDuty, encode_panel_replies, panel_reply_commitment,
-            replay_message,
+            PANEL_REPLY_KEY_BYTES, PANEL_REPLY_SIGNATURE_BYTES, PanelReplayCut, PanelReplayDuty, encode_panel_replies,
+            panel_reply_commitment, replay_message, replay_policy_id,
         },
         releases::Tb1BeaconSeed,
     },
@@ -49,13 +46,7 @@ impl LocalReplayPolicy {
         Ok(rows)
     }
     pub fn id(self) -> Hash64 {
-        Hash64::from_bytes(
-            Sha3_512::new()
-                .chain_update(b"MISAKA/private/TB1/PANEL/stake-ticket/full-replay/v1")
-                .chain_update(self.seats.to_be_bytes())
-                .finalize()
-                .into(),
-        )
+        replay_policy_id(self.seats)
     }
 }
 
@@ -214,55 +205,67 @@ impl LocalPanelCut {
         freeze: Tb1HolderFreeze,
         read_seed: impl FnOnce() -> io::Result<Tb1BeaconSeed>,
     ) -> io::Result<LocalReplayDraw> {
-        let seats = policy.seats as usize;
+        let draw = self.replay_cut(close, gate, original, policy, freeze)?.draw(certificate, read_seed()?)?;
+        Ok(LocalReplayDraw {
+            chain: draw.chain,
+            original: draw.original,
+            receipt: draw.original_block,
+            close,
+            certificate: draw.certificate,
+            deadline: draw.deadline,
+            selected: draw.selected,
+            duty: draw.duty,
+        })
+    }
+
+    fn replay_cut(
+        &self,
+        close: Hash64,
+        gate: &NativePublicationGate,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+        freeze: Tb1HolderFreeze,
+    ) -> io::Result<PanelReplayCut<'_>> {
         let receipt = self.receipts.iter().find(|r| r.original == original).ok_or_else(|| invalid("Original outside PANEL cut"))?;
         if !receipt.meets_target
             || policy.id().as_bytes() != self.closure.policy_root
-            || seats > self.candidates.len()
-            || self.candidates.iter().any(|(_, w)| *w > PALW_DRAW_WEIGHT_MAX_MSK_V1)
             || gate.holder_freeze().accepting_block != close
             || gate.holder_freeze().freeze_id != freeze.freeze_id
         {
-            return Err(invalid("different PANEL policy, population or publication gate"));
+            return Err(invalid("different PANEL policy, Original or publication gate"));
         }
-        let seed = read_seed()?;
-        let anchor = Hash64::from_bytes(
-            Sha3_512::new()
-                .chain_update(b"MISAKA/private/TB1/PANEL/draw-anchor/v1")
-                .chain_update(freeze.freeze_id)
-                .chain_update(seed.as_bytes())
-                .finalize()
-                .into(),
-        );
-        let mut ranked: Vec<_> = self
-            .candidates
-            .iter()
-            .map(|(id, w)| {
-                let ticket = palw_panel_stake_ticket_v1(anchor, &original, id);
-                (palw_draw_neg_log2_q64_v1(palw_draw_ticket_u64_v1(&ticket)), *w, *id)
-            })
-            .collect();
-        ranked.sort_unstable_by(|a, b| palw_draw_key_cmp_v1(a.0, a.1, &a.2, b.0, b.1, &b.2));
-        let selected = ranked.into_iter().take(seats).map(|(_, _, id)| id).collect();
-        let duty = Sha3_512::new()
-            .chain_update(REPLAY_SIGNATURE_DOMAIN)
-            .chain_update(freeze.freeze_id)
-            .chain_update(original.as_bytes())
-            .chain_update(receipt.block.as_bytes())
-            .chain_update(certificate.as_bytes())
-            .chain_update(anchor.as_bytes())
-            .finalize()
-            .into();
-        Ok(LocalReplayDraw {
-            chain: self.closure.round.chain_id,
-            original,
-            receipt: receipt.block,
+        Ok(PanelReplayCut {
+            closure: &self.closure,
             close,
-            certificate,
+            freeze_id: freeze.freeze_id,
+            original,
+            original_block: receipt.block,
             deadline: receipt.deadline,
-            selected,
-            duty,
+            candidates: &self.candidates,
+            seats: policy.seats,
         })
+    }
+
+    /// Recover the block-owned draw from an in-flight PANEL certificate.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_replays_in_candidate(
+        &self,
+        native: &dyn ConsensusApi,
+        close: Hash64,
+        parent: Hash64,
+        settlement: &NativeSettlementSnapshotV1,
+        gate: &NativePublicationGate,
+        batch: Hash64,
+        candidate: &kaspa_consensus_core::block::Block,
+        q: &Tb1Qualification<'_>,
+        limits: PublicationLimits,
+        original: Hash64,
+        policy: LocalReplayPolicy,
+    ) -> io::Result<PanelReplayDuty> {
+        let freeze = self.resolve_at_parent(native, close, parent, q)?;
+        let cut = self.replay_cut(close, gate, original, policy, freeze)?;
+        let publication = gate.verify_published_candidate(native, parent, settlement, batch, candidate, q, limits)?;
+        cut.draw_for_candidate(&publication)
     }
 }
 impl LocalReplayDraw {
