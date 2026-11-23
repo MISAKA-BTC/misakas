@@ -1,0 +1,13 @@
+# Keep GitHub source archives under 100 MB. A Git checkout includes the
+# compressed replay evidence, raw audit logs and documentation baselines.
+/docs/evidence/**/*.zst export-ignore
+/docs/audit/**/*.log export-ignore
+/docs/maintenance/revisions/**/before/** export-ignore
+/docs/maintenance/revisions/**/upstream/*.zip export-ignore
+/docs/maintenance/revisions/**/baseline-manifest.json export-ignore
+/docs/maintenance/revisions/**/source-baseline.json export-ignore
+/docs/maintenance/revisions/**/source-manifest.json export-ignore
+/docs/maintenance/revisions/**/input-manifest.json export-ignore
+/docs/maintenance/revisions/**/beacon-and-policy-coverage.json export-ignore
+/docs/maintenance/revisions/**/randomness-before.json export-ignore
+/docs/maintenance/revisions/**/preservation-check.json export-ignore
