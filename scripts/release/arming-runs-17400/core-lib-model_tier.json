@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-lib-model_tier",
+  "command": "cargo test --offline -p kaspa-consensus-core --lib -- palw_model_tier_v1",
+  "exitCode": 0,
+  "testsPassed": 11,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 239,
+  "logSha256": "afb27a84747fb95894762bc570d5b146a711dc7a09f131d8cc22b698ee0ce9e5"
+}

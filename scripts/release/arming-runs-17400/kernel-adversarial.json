@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "kernel-adversarial",
+  "command": "cargo test --offline -p misaka-palw-kernel --test k2_adversarial && cargo test --offline -p misaka-palw-kernel --test k2_ledger_route -- a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate && cargo test --offline -p misaka-palw-kernel --test econ_seal_veto -- one_withheld_seal_vetoes_every_attempt_whose_window_contains_it && cargo test --offline -p misaka-palw-kernel --test k2_opv -- past_the_fence_a_withheld_seal && cargo test --offline -p misaka-palw-kernel --test adv_c4_route -- a_producer_and_every_panel_seat_colluding_lose && cargo test --offline -p misaka-palw-kernel --test k2_e2e -- a_challenge_drawn_before_the_evidence_was_bound_is_refused",
+  "exitCode": 0,
+  "testsPassed": 12,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 1479,
+  "logSha256": "8813bd773bb560cb9192ab5a3bfc2a9a9e87b539b38d46444cab96b4ea667342"
+}

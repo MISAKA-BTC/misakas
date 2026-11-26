@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "kaspad-lg14b_restart",
+  "command": "cargo test --offline -p kaspad --lib -- --exact palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations",
+  "exitCode": 0,
+  "testsPassed": 1,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 1191,
+  "logSha256": "b9a5e0f63e39626b7b07737078457bb68592c3f853388b4bf50eeb1a59d4d38c"
+}

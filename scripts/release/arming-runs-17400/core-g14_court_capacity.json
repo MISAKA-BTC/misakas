@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-g14_court_capacity",
+  "command": "cargo test --offline -p kaspa-consensus-core --test g14_court_capacity",
+  "exitCode": 0,
+  "testsPassed": 16,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503005,
+  "seconds": 1473,
+  "logSha256": "113ddc83f72086e26fa07a325381d6269275c86bf954e348fa16b4543682b635"
+}

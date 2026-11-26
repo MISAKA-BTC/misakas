@@ -1,6 +1,7 @@
 import contextlib
 import hashlib
 import io
+import json
 import pathlib
 import re
 import tempfile
@@ -21,6 +22,11 @@ class RebindTests(unittest.TestCase):
         historical=ROOT/'consensus/core/src/palw_t12_17000_records_v1.rs'
         old=historical.read_bytes()
         runs={p:hashlib.sha256(p.read_bytes()).hexdigest() for p in G.HISTORICAL_RUNS_DIR.glob('*.json')}
+        self.assertTrue(runs, 'historical run evidence is required to reproduce the records')
+        for result in runs:
+            metadata = json.loads(result.read_text())
+            log = result.with_suffix('.log')
+            self.assertEqual(hashlib.sha256(log.read_bytes()).hexdigest(), metadata['logSha256'])
         first=self.output()
         self.assertEqual(first,self.output())
         self.assertEqual(first,(ROOT/'consensus/core/src/palw_t12_18400_records_v1.rs').read_text())

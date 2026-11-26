@@ -1,0 +1,3 @@
+# The historical logs are byte-pinned by the accompanying JSON records.
+*.log -text -whitespace
+*.json -text

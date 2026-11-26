@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-rfc0019_s11",
+  "command": "cargo test --offline -p kaspa-consensus-core --lib -- palw_annual_catalog_v1 && cargo test --offline -p kaspa-consensus-core --lib -- palw_model_tier_v1::tests",
+  "exitCode": 0,
+  "testsPassed": 23,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 240,
+  "logSha256": "eef82a46282484257d720d8e99f1669624330193f1e6e639a36ff61d182b03be"
+}

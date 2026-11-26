@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-adr0177_allocation_v3",
+  "command": "cargo test --offline -p kaspa-consensus-core --test adr0177_allocation_v3",
+  "exitCode": 0,
+  "testsPassed": 5,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503007,
+  "seconds": 1475,
+  "logSha256": "c21180f777d053bf249185b2baa5f376823aed32e369ec9385d4de8aac28c5cd"
+}

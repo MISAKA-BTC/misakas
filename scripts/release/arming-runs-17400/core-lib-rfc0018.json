@@ -1,0 +1,15 @@
+{
+  "kind": "misaka-arming-run/v1",
+  "run": "core-lib-rfc0018",
+  "command": "cargo test --offline -p kaspa-consensus-core --lib -- palw_rfc0018_v1",
+  "exitCode": 0,
+  "testsPassed": 39,
+  "testsFailed": 0,
+  "passed": true,
+  "estimate": false,
+  "sourceCommit": "da46131a41fe7c90ec263b0f26ab9b444e4c74a2",
+  "treeDirty": false,
+  "startedAt": 1793169569.503006,
+  "seconds": 239,
+  "logSha256": "596b93673add8eabc179a1caa00da7a95e6c6b9c4017b660ec6275eafd52f4d9"
+}
