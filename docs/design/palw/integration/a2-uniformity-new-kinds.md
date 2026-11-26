@@ -1,18 +1,8 @@
 # A-2 uniformity for every kind the live build cannot decode (A2U, 2026-10-08)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 **Status:** implemented on `fix/a2-uniform-new-tags` (lane A2U), over the integration line at `b8ae9412b` (the user's `pre`, SMALL,
 SHARD2, X12N merged 2026-10-10); the central kind→fence table (§3.5) holds every post-int-12 member, landed or allocated, and the
-live build's kinds a later fence judges anew (ADR-0175). No live id moves on this branch's own account (§2.3). Results: §7.
+live build's kinds a later fence judges anew (旧ADR-0175). No live id moves on this branch's own account (§2.3). Results: §7.
 **Finding:** X8R's review (2026-10-08). **Live build:** testnet-12 runs int-12, `rcore/int-12` @ `0b1c11b87`.
 
 ## 1. The class
@@ -83,7 +73,7 @@ Each of these was checked against int-12, and each gives the same verdict with n
 * **Subnetworks, FP job versions, header algo ids, the coinbase payload parser.** All unchanged since `0b1c11b87`.
 * **V4 payouts, the widened coinbase output cap, DNS retirement.** Each is behind its own fence, and none is armed on testnet-12 (the
   output cap only widens, and only where the fence is declared).
-* **ADR-0125's semantic amendment** (mergeset classification, `round_lane_members`, the heartbeat bound). int-12's GHOSTDAG colours
+* **旧ADR-0125's semantic amendment** (mergeset classification, `round_lane_members`, the heartbeat bound). int-12's GHOSTDAG colours
   every round block red (`round_flags` → `add_red`), and a round block never becomes a selected parent. So the "genuine reds" and the
   members HEAD reads are the same set int-12 reads.
 * **The IBD sidecar's transport cap.** It decides which peer serves the state, not any block's verdict.
@@ -105,11 +95,11 @@ manifest; every variant of `PalwConsensusObjectV2` against `0b1c11b87`'s source)
 
 | Change | Lane | Below its fence | Disposition |
 |---|---|---|---|
-| ADR-0175: tags 27, 28, 29, 81 and 37 (granting `EARLY_VERSION`) recognized and refused by name past `palw_model_immutable_v1`; tags 3, 26, 39, 61, 68, 70, 91 and the epoch sweep folded differently past it | `pre` | int-12's rule; the walk's drop and every fold branch ask the fence (`model_immutable_active` is `false`, the line id is `model_line_id_v1`) | rows `Int12RefusedByName` / `Int12FoldPastFence` (§3.5); the pin carries all five refused kinds, node C arms the fence far above, and a past-fence test shows the block standing (§4.2) |
+| 旧ADR-0175: tags 27, 28, 29, 81 and 37 (granting `EARLY_VERSION`) recognized and refused by name past `palw_model_immutable_v1`; tags 3, 26, 39, 61, 68, 70, 91 and the epoch sweep folded differently past it | `pre` | int-12's rule; the walk's drop and every fold branch ask the fence (`model_immutable_active` is `false`, the line id is `model_line_id_v1`) | rows `Int12RefusedByName` / `Int12FoldPastFence` (§3.5); the pin carries all five refused kinds, node C arms the fence far above, and a past-fence test shows the block standing (§4.2) |
 | `PalwPromotionOutcomeV1::CandidateSelected` (2) appended | `pre` | written only past the fence | `NotCarried` (an epoch row's decision) |
 | `SigningPurpose::PalwReceiptAuthV4` (8), `SignerMessageDigest::PalwReceiptAuthV4` | SMALL (RDA4) | offered only under `palw_receipt_spend_v4` | `NotCarried` (the node ↔ signer protocol) |
 | `PalwFpWorkerFrameV1::Cancelled` (8) | SMALL (RFC-0001 P1) | node-local | `NotCarried` (the worker ↔ gateway frame) |
-| R-1 reporter share 1,000 → 4,900 bps, **unfenced**, and written into the params fingerprint under `palw_rcore_plus` | `pre` (ADR-0032 amendment) | **not fenced on `b8ae9412b`**: testnet-12 arms R-core+ at genesis, so a build of this line pays a different reporter share than int-12 on a conviction and moves the t12 params id | INTF moves it behind `palw_reporter_share_v2` (the Lead's plan); the table holds the row (`StateEncoding`, pending) so INTF's merge is held to it. Not a split int-12 can cause; a split this line would cause if deployed as is |
+| R-1 reporter share 1,000 → 4,900 bps, **unfenced**, and written into the params fingerprint under `palw_rcore_plus` | `pre` (旧ADR-0032 amendment) | **not fenced on `b8ae9412b`**: testnet-12 arms R-core+ at genesis, so a build of this line pays a different reporter share than int-12 on a conviction and moves the t12 params id | INTF moves it behind `palw_reporter_share_v2` (the Lead's plan); the table holds the row (`StateEncoding`, pending) so INTF's merge is held to it. Not a split int-12 can cause; a split this line would cause if deployed as is |
 | SHARD2's part-C hold, X12N's live retention | SHARD, X12N | behind `palw_panel_unavailable_expiry` / DNS retirement, dormant on every preset | no row needed: the fences are older than the change and armed nowhere |
 
 No variant int-12 decodes changed its declaration on this line, `g14/r4-fixes` or `adv/c4r4` (now pinned: §3.4).
@@ -272,14 +262,14 @@ row, so a kind landing there fails the table test until the Lead allocates it. T
 | inside tag 68 (re-read) | `PalwGenProfileV1::Head = 6` | `palw_task_heads_v1` | HFX | yes (no guarded arm: int-12's own `Profile(6)` verdict, probed) |
 | inside tag 68 (appended) | `PalwGenProfileOffersV1::Head` (3) | `palw_task_heads_v1` | HFX | yes (guarded arm; fence `TaskHeadsV1`) |
 | inside a generative job (tensor commitment, court proofs, accusations; the 0x4a FP form) | `PalwGenBodyV1::Head` (2) | `palw_task_heads_v1` | HFX | yes (guarded arm; the FP form by `palw_fp_head_job_refusal_at_v1`) |
-| header formula | `palw_state_root = H(fork-choice leaf ‖ ADR-0043 root)` past the fence | `palw_fork_choice_commitment_v1` | L2FC | no |
+| header formula | `palw_state_root = H(fork-choice leaf ‖ 旧ADR-0043 root)` past the fence | `palw_fork_choice_commitment_v1` | L2FC | no |
 | state encoding | per-shard V3 draw (delta 171, tail `0xED`) | `palw_permissionless_panel_v1` | SHARD | yes |
 | state encoding | per-segment pricing, the shard engine's encodings | `palw_tir_shard_segment_v2` | SHARD | yes |
 | state encoding | bond budget engine Q/B/R/F (deltas 190–199, tail `0xEF`, root block `bond_budget/v1`) | `palw_bond_budget_v1` | BUDGET | no |
 | state encoding | model coinbase by locked miner capital `f(S_m)` | `palw_model_bond_allocation_v1` | BUDGET | no |
 | state encoding | R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 past | `palw_reporter_share_v2` | INTF | no (**unfenced on `b8ae9412b`**, §2.3) |
-| int-12 kinds refused by name past the fence | 27, 28, 29, 81; 37 granting `EARLY_VERSION` | `palw_model_immutable_v1` | ADR-0175 (`pre`) | yes |
-| int-12 kinds folded anew past the fence | 3, 26, 39, 61, 68, 70, 91 and the epoch sweep | `palw_model_immutable_v1` | ADR-0175 (`pre`) | yes |
+| int-12 kinds refused by name past the fence | 27, 28, 29, 81; 37 granting `EARLY_VERSION` | `palw_model_immutable_v1` | 旧ADR-0175 (`pre`) | yes |
+| int-12 kinds folded anew past the fence | 3, 26, 39, 61, 68, 70, 91 and the epoch sweep | `palw_model_immutable_v1` | 旧ADR-0175 (`pre`) | yes |
 
 **The verdict int-12 gives depends on the carriage**, and "below the fence" means that verdict:
 
@@ -291,7 +281,7 @@ row, so a kind landing there fails the table test until the Lead allocates it. T
 * Coinbase trailers: **opaque** miner bytes to int-12 — nothing read, nothing refused (X8R's reader is lenient only where the fence is
   armed, and the length rule is the body stage's at the height).
 * Formulas and state encodings: **byte-identical** below the fence, block by block (the int-12 replay checks every block's root).
-* Kinds int-12 decodes, judged anew past a fence (ADR-0175): **int-12's own rule** below it. Past it a recognized object is refused by
+* Kinds int-12 decodes, judged anew past a fence (旧ADR-0175): **int-12's own rule** below it. Past it a recognized object is refused by
   name in the acceptance walk (not applied, nothing charged) and the carrying block stands — never an isolation or header-context
   refusal, which would turn a statement int-12 accepts into an invalid block at the fence for every peer that has not yet seen the
   object's meaning change. `palw_int12_kind_refused_past_fence_v1` is the policy the rows are reconciled with.
@@ -348,7 +338,7 @@ carrier is a funded 0x4b transaction. The chain carries:
   adds is carried the moment its row exists; plus a hand-built well-formed, signed one of each;
 * every may-ride refusal a new kind has, a tag-254 reference payload, and a **re-read probe** (a tag-68 class whose profile byte is
   `Head = 6`);
-* **ADR-0175's five refused kinds**, signed (27, 28, 29, 81, and 37 granting `EARLY_VERSION`): int-12 decodes and judges them;
+* **旧ADR-0175's five refused kinds**, signed (27, 28, 29, 81, and 37 granting `EARLY_VERSION`): int-12 decodes and judges them;
 * **every kernel-route inner kind inside tag 110**, generically over `PALW_KERNEL_ROUTE_INNER_KINDS_V1` (an inner kind a lane adds —
   15, 16–18, 20 — is carried the moment its row exists);
 * three one-chunk groups of new kinds, and a two-chunk group that completes into a new kind;
@@ -362,7 +352,7 @@ form is in force. An unarmed node and a node with every owning fence armed far a
 every fence list, so a new fence must be armed there to compile, and through every LANDED row's fence by name — `palw_tir_shard_segment_v2`,
 `palw_model_immutable_v1` with the model lines it needs — so a row that lands with a fence the harness does not arm panics) then replay
 every block: the same statuses, refusals, PALW state root **at every block**, sink, UTXO multiset and pruning-proof refusal. That is
-the mixed-verdict pin for ADR-0175 too: an old build (unarmed) and a new build (immutable armed) agree on every block below the fence.
+the mixed-verdict pin for 旧ADR-0175 too: an old build (unarmed) and a new build (immutable armed) agree on every block below the fence.
 
 `t12_a2u_adr0175_past_its_fence_a_definition_update_is_refused_and_its_block_stands` is the other side: with
 `palw_model_immutable_v1` (and model lines) at DAA 1 and its own validation passing, the five refused kinds ride in valid blocks, each
@@ -414,12 +404,12 @@ profile, a decoder helper's change: a lane re-runs the pin test and this replay 
    fences; a new allocation is a Lead commit to that table and the registry together.
 9. **A landed kind's wire form is pinned** (`PALW_A2_NEW_KIND_WIRE_V1`). Creating a kind adds its pin; changing one — a field, a nested
    variant, a type it reaches — re-pins it in the same commit, and the change rides under the row's fence or gets a row of its own.
-10. **A kind int-12 decodes, judged anew past a fence** (ADR-0175's pattern) gets an `Int12RefusedByName` row (refused at acceptance
+10. **A kind int-12 decodes, judged anew past a fence** (旧ADR-0175's pattern) gets an `Int12RefusedByName` row (refused at acceptance
    by name: reconciled with `palw_int12_kind_refused_past_fence_v1`) or an `Int12FoldPastFence` row (the fold, by state), and its
    fence is armed in the pin test's node C. Past the fence the object is not applied and the block stands; never an isolation or
    header-context refusal of a kind int-12 accepts.
 
-**The procedure for lane BUDGET (tags 140–149, ADR-0176/0177).** In the commit that creates each kind: the variant at its tag, an arm
+**The procedure for lane BUDGET (tags 140–149, 旧ADR-0176/0177).** In the commit that creates each kind: the variant at its tag, an arm
 in `palw_lifecycle_kind_owner_v1` (a new `PalwLifecycleKindFenceV1` variant per fence — `BondBudgetV1` → `palw_bond_budget_v1`,
 `ModelBondAllocationV1` → `palw_model_bond_allocation_v1` — with its `params_field`, its resolution in
 `Params::palw_lifecycle_kind_fences_v1`, its arm in `palw_fold_kind_in_force_v1` and in the pin test's `arm_every_owning_fence`),
@@ -431,7 +421,7 @@ its_wire_form` (no pin), the pin test (an unarmed fence).
 
 **The procedure for lane DA16's re-scope (150–153: the `Artifact` lease subject removed under `palw_provider_court_v1`).** The change
 is a wire change to landed kinds: the same commit re-pins 150–153 in `PALW_A2_NEW_KIND_WIRE_V1` (the test prints the values) and keeps
-the row's fence; if any part of the change rides another fence (say ADR-0177's), that part gets its own row and fence variant, and the
+the row's fence; if any part of the change rides another fence (say 旧ADR-0177's), that part gets its own row and fence variant, and the
 kinds' owner arm answers it. Without the re-pin `every_landed_kind_is_pinned_to_its_wire_form` fails.
 
 **Worked example — merging G14-R4's tag 113 (`KernelRouteChunkV1`, in `g14/r4-fixes` and `adv/c4r4`).** On those branches, without
@@ -446,11 +436,11 @@ Status vocabulary: **implemented** / **verified** / **armable** (user, 2026-10-0
 
 | What | Result | Level |
 |---|---|---|
-| Core A2U, lifecycle, `pow_layer0` and `immutable_models` tests (`palw_lifecycle_objects_v2:: pow_layer0:: immutable_models`) — incl. the new `every_tag_row_is_inside_its_allocation`, `the_int12_kinds_refused_past_a_fence_are_the_rows`, `every_landed_kind_is_pinned_to_its_wire_form`, the four new `NotCarried` classifications, `pre`'s own ADR-0175 tests | 68 passed, 0 failed | verified |
+| Core A2U, lifecycle, `pow_layer0` and `immutable_models` tests (`palw_lifecycle_objects_v2:: pow_layer0:: immutable_models`) — incl. the new `every_tag_row_is_inside_its_allocation`, `the_int12_kinds_refused_past_a_fence_are_the_rows`, `every_landed_kind_is_pinned_to_its_wire_form`, the four new `NotCarried` classifications, `pre`'s own 旧ADR-0175 tests | 68 passed, 0 failed | verified |
 | Wire pins bootstrapped once from the test itself (placeholders only; `PALW_A2_INT12_VARIANTS_WIRE_V1 = 0xd1982421da455cca`, 13 landed kinds), int-12's 100 variants first checked equal to `0b1c11b87`'s source | pinned | verified |
-| Pin test, launch ruleset: 49 chain blocks to DAA 22, 71 carriers (every new kind near-zero and hand-built, every malformed form, the reference, the re-read probe, ADR-0175's five refused kinds, every kernel inner kind inside tag 110, chunk groups, a founded line and its published version applied, the mixed block), 1 refused `PFS4` header; unarmed and armed-far nodes agree at every block | ok | verified |
+| Pin test, launch ruleset: 49 chain blocks to DAA 22, 71 carriers (every new kind near-zero and hand-built, every malformed form, the reference, the re-read probe, 旧ADR-0175's five refused kinds, every kernel inner kind inside tag 110, chunk groups, a founded line and its published version applied, the mixed block), 1 refused `PFS4` header; unarmed and armed-far nodes agree at every block | ok | verified |
 | Pin test, release ruleset: 704 chain blocks to DAA 351, 69 carriers, the same agreement | ok | verified |
-| ADR-0175 past its fence: the live rule applies the signed version (2 versions); with `palw_model_immutable_v1` the same publication is refused (1 version); the carrying block (6 definition updates) stands in both | ok | verified |
+| 旧ADR-0175 past its fence: the live rule applies the signed version (2 versions); with `palw_model_immutable_v1` the same publication is refused (1 version); the carrying block (6 definition updates) stands in both | ok | verified |
 | Replay through int-12 itself (`0b1c11b87`'s own tree and target): launch 49 blocks, release 704 blocks — every verdict, root and refusal is the live build's | ok | verified |
 
 A harness finding on the way, not a consensus one: arming `palw_model_lines` at node C's far height DISARMED testnet-12's live

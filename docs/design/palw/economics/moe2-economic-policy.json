@@ -87,7 +87,7 @@
   "tb1_fow1_gates_waived": false,
   "future_price_or_mev_safety_proved": false,
   "model_governance": {
-    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "normative_rfc": "docs/rfc/0007-bft-model-admission.md",
     "GENESIS": "immutable original genesis; no BFT model management",
     "ADDITIONAL": "automatic or BFT admission; BFT stop/resume applies to both",
     "FORK_DESIGNATED": "BFT YES may add; core economics, BFT stop/resume applies",

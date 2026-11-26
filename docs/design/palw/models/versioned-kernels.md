@@ -1,221 +1,73 @@
-# PALW versioned model and verification kernels
+# PALW kernelの意味論・互換性・更新
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+本書は[現行RFC-0002](../../../rfc/0002-tensor-ir-kernels-and-runtime.md)の補助設計です。モデルの追加承認は[RFC-0007](../../../rfc/0007-bft-model-admission.md)のBFT YES/NOだけで行います。kernel解析、lowering、適合試験は実行の技術条件を確認する処理であり、モデルを自動採用する経路ではありません。
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
+## 1. kernelが担うこと
 
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
+kernelは、有限の計算グラフに対する演算、型、丸め、メモリアクセス、状態更新、trace位置と局所Courtの意味を定めます。モデル名ごとの特例ではなく、複数のモデルに再利用できる演算族として定義します。
 
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
+モデルの重み、tokenizer、入力規則、実行profile、Readout、trace schemaを固定し、同じ入力から同じ規範出力を再現できることを要求します。GPU、CPU、低RAMのストリーミング実行もこの同じ意味論に従います。高速化やcacheは意味を変えない範囲で許し、演算順序・丸め・量子化・停止条件を黙って変更しません。
 
-[ADR-0172](../../../adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md) governs this selected design.
-This specification does not establish implementation or activation; the [K2 completion matrix](kernel-k2-tir-v1.md) records existing dormant implementations. [ADR-0173](../../../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)
-requires independent public-verifier prosecution before new profiles become eligible.
+kernelの存在、合格したテスト、BFTのYESは、LLM内部状態の予測困難性や計算費用の数学的下界を意味しません。評価がUNKNOWNなら、そのまま記録します。
 
-## K.0 Decision and scope
+## 2. モデル追加とkernel拡張の境界
 
-**Implement reusable versioned semantic/verification kernels, not PALW-BVM, PALW-GVM or a universal
-VM fallback for model registration.** Ordinary model additions are declarative plans over the
-active kernel. A new operation that cannot be represented safely requires a reviewed, coordinated
-protocol extension comparable in scope to a SegWit/Taproot-class update.
-
-The normal verifier policy remains [RFC11 §15](../../../rfc/0011-permissionless-model-and-long-context-onboarding.md)
-and [RFC07 Part V](../../../rfc/0007-palw-verification-certificates-and-algebraic-checks.md): encode/aggregate all
-relevant execution constraints so small randomized checks detect false claims at the declared error
-bound. A successful suite, required receipts, DA and elapsed challenge window permit Final. Do not
-replace this with mandatory whole-model or whole-segment replay. Exact bounded court handles disputes.
-
-This is not removal of MISAKA's existing EVM lane or a ban on off-chain software. It cancels this
-RFC's new VM workflow/model fallback, guest ISA/syscalls, universal one-step court, Linux profile and
-associated VM-dependent EXEC implementation. Existing EVM contracts may continue under their own
-rules; an EVM job-precompile roadmap is no longer a prerequisite or selected workaround here.
-
-The research comparators in RFC11 §15.9 do not introduce their original trust architectures:
-TEE/enclave validity trust, a model/fraud-proof VM, and a spML-style BFT orchestrator/PKI/committee
-beacon are explicitly excluded, not deferred alternatives. Kernel checkers, public bond/identity
-rules and separately analysed post-commit randomness carry the selected route.
-
-## K.1 Extension ladder, without an interpreter escape hatch
-
-| Model requirement | Route | Consensus update? |
+| 変更内容 | 技術的に必要な処理 | モデルの採用判断 |
 | --- | --- | --- |
-| New weights, dimensions, known graph/state pattern inside active bounds | New artifact and `VerificationPlan` over approved relations | No semantic update; ordinary registration |
-| New format/frontend, same exactly representable model semantics | Off-chain pinned adapter + independent conformance | No, if every relation/bound is already supported |
-| New combination of implemented operators | Bounded typed composition, dependency coverage and resource/soundness accounting | No, only within the already active grammar |
-| Missing operator, memory rule, proof relation, commitment or terminal court | Specify a reusable kernel family/extension and activate it before registration | Yes |
-| Missing weights/rights, non-deterministic unavailable oracle, unbounded execution | Report the precise external or semantic blocker | Not solved merely by a kernel release |
+| 対応済み演算・上限内の新しい重みやshape | artifact、graph、型、実行profileの固定と整合検査 | BFT YES/NO |
+| 新しい入力形式を同じ意味へ変換 | 固定adapterと入力・tokenizerの一致確認 | BFT YES/NO |
+| 対応済み演算の新しい組合せ | 有限graph、依存関係、資源上限、Court coverageの確認 | BFT YES/NO |
+| 未対応の演算・状態更新・Court | kernel仕様とノード実装の追加、明示的な互換移行 | 対応前のYESだけで実行可能にしない |
+| 再現不能な外部API、欠落資料、上限不明の処理 | 拒否理由を返し、技術条件を満たすまで実行を開始しない | YESでも技術的拒否を無効化しない |
 
-A plan cannot upload checker code. No native/WASM/Python plugin, ISA guest, arbitrary syscall,
-user-defined gas machine or `UniversalCPU` circuit is accepted as a disguised kernel. The approved
-grammar can describe finite tensor graphs, fixed recurrence/selection templates and authenticated
-state accesses; its parse/check cost and semantics are specified and metered. A declarative description
-does not automatically authorize arbitrary control flow. Novel templates still require review.
+モデル登録が任意のnative/WASM/Pythonコードを合意ノードに実行させる機能にはしません。任意VMへのフォールバックは採用しません。BFTは、未対応opcode、無効なencoding、資源上限超過を正常な実行へ置き換える権限を持ちません。
 
-## K.2 Kernel descriptor and class binding (proposed schema)
+## 3. identityとdescriptor
 
-```text
-KernelDescriptorV1 {
-  kernel_id, version, semantics_digest,
-  plan_grammar_id, primitive_set_id, constraint_set_id,
-  arithmetic_id, memory_model_id, commitment_suite_id,
-  checker_suite_id, challenge_policy_id, court_suite_id,
-  resource_schedule_id, soundness_policy_id
-}
-ModelKernelBindingV1 {
-  descriptor_digest, plan_root,
-  program_root, artifact_root, tokenizer_or_input_schema_root,
-  task_output_schema, context_and_state_policy
-}
-```
+モデルの技術的束縛には少なくとも次を含めます。
 
-These are specification placeholders, **not allocated ids or implemented Rust types**. The network
-schedule authorizes descriptor digests implemented by the binary. Registration selects only an active
-descriptor. A binary/code hash identifies an implementation; it neither proves soundness nor makes
-downloaded code executable by consensus.
+- kernelの意味論と演算集合、graph grammar、算術・メモリ規則。
+- program／plan、重みartifact、tokenizer／入力schemaのroot。
+- shape・状態上限、生成・停止規則、Readoutとtraceの位置規則。
+- commitmentの符号化、局所checker・Courtの種類と資料上限。
+- 適用するchallenge policy、受付・報酬・仕事会計のprofile。
 
-**2026-10-08 challenge-policy binding:** `challenge_policy_id` resolves the immutable digest of
-[RFC07 Part VI's PostCommitChallengePolicyV1](../../../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol).
-It is a required Kernel security parameter, not a local seed preference. Approve `checker_suite_id +
-challenge_policy_id + soundness_policy_id` as one tuple: field, sampling, repetitions, source qualification,
-commit timing, GKR mode, retry/grinding and reorg assumptions must agree. Reject unknown/mismatched policies;
-no per-model weaker confidence setting. Policy changes require a new descriptor/version and coordinated review.
-The actual beacon, sampled queries and conformance transcript are later evidence, never part of the pre-beacon Kernel id.
+これらは意味上の必須項目であり、ここで新しいwire tagやRust型を割り当てません。既存の`V1`等の型名、codec ID、署名domainは、RFC番号の再編によって改名・再利用しません。
 
-New-format class identity commits to the whole binding using canonical encoding and a new domain.
-Legacy class hashes are unchanged and resolve to their historic profile. Claims, receipts, challenges,
-proof transcripts, cache keys and DA manifests bind the complete applicable class/kernel identity.
-No plan substitution, weakest-suite negotiation or retroactive class upgrade is allowed. A materially
-new profile is a new class/version, subject to the existing line/owner and reward rules.
+claim、キャッシュ、供給資料、Courtは適用された同じdescriptorと元claimへ束縛します。別モデルの重み、別位置の本物のleaf、別profileの結果を入れ替えられないよう、期待root・型・位置を照合します。
 
-## K.3 Constraint families, not model-brand kernels
+## 4. 演算族ごとの検証対象
 
-The first proposed probabilistic kernel should expose reusable families:
-
-| Family | Required meaning and verification obligations |
+| 演算族 | 固定する意味と局所争点 |
 | --- | --- |
-| Dense/sparse matrix relations | Correct dimensions and integer/field encoding, committed inputs/weights/outputs; batched Freivalds or approved circuit proof with sparse-error coverage |
-| Quantization, range, rounding and nonlinear functions | Exact specified integer semantics, carries/overflow and authenticated lookup/range relations; not a linear-only check |
-| Attention, MoE and selection | Score/routing/TopK tie rules, correct expert and gather/scatter bindings; one wrong route cannot be outside the statement |
-| Recurrent and dynamic state | Bounded address/step domains, authenticated reads/writes, ordering, initialization, entry/exit continuity and full declared context |
-| Media and pipelines | Canonical input/output formats, stage/task semantics and cross-stage commitments; text-only extraction is not full multimodal support |
-| Encoding/aggregation | Constraint-to-circuit/encoding binding, degree/length limits, committed oracle openings, all required boundary constraints and the whole-claim soundness composition |
+| 行列積・線形演算 | 次元、重みindex、整数encoding、規範加算・丸め、入力から出力への関係 |
+| 量子化・非線形演算 | scale、範囲、飽和、overflow、lookupや近似関数の規範値 |
+| Attention・MoE | mask、位置、score、routing、TopKのtie、expert／gather／scatterの対応 |
+| 状態更新・KV cache | 初期状態、認証済みread/write、順序、境界、同一入力prefixへの束縛 |
+| 複合処理 | stage間の入出力一致、入力資料snapshot、各stageの有界な反証 |
+| Readout・終了 | 参照する実状態、順序、hash処理、生成tokenと停止理由、Endとの一致 |
 
-Each family needs a reference definition, legal parameter bounds, soundness argument, executable
-checker, exact failure-localization route and bounded court. Kernel activation enables only families
-whose complete route passed; a row in this table is not implementation evidence. The finite approved
-relation grammar is normative even if the underlying GKR math could represent a more general circuit.
+Freivalds等の代数的スポットチェックは直接の確率的検査としてのみ扱い、対象範囲と見逃し確率を明記します。暗号学的な計算validity proof、GKR transcript、PCS、ZK方式を導入しません。ハッシュ・署名・Merkle openingは資料の同一性と位置を認証するもので、計算全体の正しさを証明しません。
 
-Freivalds/GKR are component choices, not magic constant-cost verifiers. Count input/material access,
-proof construction, cold preprocessing, verifier computation/bytes and worst dispute load. An erasure
-code only protects availability unless a sound computation-relation construction also binds it.
-Raw `s`-of-`N` spot checks still miss a unique bad segment with probability `1 - s/N`.
+## 5. 個別claimの検証
 
-## K.4 Registration, checking and Final
+1. BFT採用済みモデルについて、適用profileと実行資格を確認する。
+2. Minerが規範実行と元traceを固定してclaimを提出する。
+3. [G14 Panel](../../../rfc/0008-g14-panel-and-verification.md)が対象claimを独立に完全再実行する。
+4. 不一致は元rootとモデルrootへ認証された資料を用い、[Court](../../../rfc/0009-court-and-claim-final.md)で有界な局所関係として裁く。
+5. 反証・資料case・通知期間を含む正規条件からclaim Finalを判定する。
+6. 合意creditは別途[独立Gate C](../../../rfc/0011-gate-c-and-consensus-credit.md)の条件を満たして認証する。
 
-1. Resolve the pinned source/task and lower into an active semantic kernel. Build artifact and plan
-   remotely if desired; do not force the registrant's VPS to reproduce the inference.
-2. Node/SDK validate plan grammar, kernel activation, typed composition, complete relation coverage,
-   integer semantics and worst-case parse/DA/localization/court budgets. Static admission is
-   deterministic; it does not assert that future outputs are already proven correct.
-3. Before new-format model Active eligibility, follow [RFC11 §17](../../../rfc/0011-permissionless-model-and-long-context-onboarding.md#17-three-stage-model-onboarding-with-post-commit-conformance-2026-10-08):
-   Static Admission, fixed candidate commitment, RFC07 Beacon Conformance, then G14/availability/resource eligibility.
-   RegisteredDormant may wait asynchronously; a conformance pass neither approves unknown semantics nor activates a Kernel.
-4. Execute once, commit output/state/material and encoded evidence before the applicable challenge.
-   Bind every interactive round or reviewed transcript transform in order; prevent adaptive response
-   selection, challenge reuse and unbounded grinding. Retain RFC07's suite/scope-bound receipt tally.
-5. Panel checks the approved relations/proof, not entire selected segments. Positive evidence,
-   quorum, DA/retention and no outstanding dispute after the challenge window are required for Final.
-   Node replay is deterministic: signatures/commitments/lifecycle plus any explicitly metered
-   public-proof verifier, never fresh private randomness or an implicit full LLM replay.
-6. Mismatch triggers bounded localization to a named **kernel primitive/state transition**, then exact
-   terminal adjudication. New primitives need a matching court; there is no generic ISA-step fallback.
-   Missing material follows DA rules, not an invented arithmetic conviction.
+資料不供給を算術的不正と同一視せず、対応する資料caseに分類します。肯定署名が有効な反証を上書きすること、BFT採用を個別claimの成功とすること、local replayだけでGate Cを代替することは認めません。
 
-The conditional proposed error target stays `ε_check ≤ 2^-128` for a false whole claim under the
-specified checker/binding assumptions. It is not a posterior probability, an established production
-parameter or total network security. Add the separately stated Panel, randomness, DA, retry and
-consensus risks. The court cannot remove false claims that escape all checks and challenges.
+## 6. 更新と互換性
 
-### K.4.1 Kernel extension conformance, after completeness (2026-10-08)
+新しい意味論には別のdescriptorを割り当て、対応するノードと明示的な発効条件を用意します。モデル登録のBFT YESと、ノードが新演算を実行できる状態への移行は別です。
 
-A new Kernel relation needs semantics, complete constraint coverage, exact court, authenticated public material
-and resource bounds before beacon-backed testing. Unknown operations cannot pass admission by being missed in samples.
-Freeze reference/checker/court/independent/optimized implementation revisions and vector-generation scope before
-an RFC07 `KERNEL_CONFORMANCE` commitment. Differential vectors may cover matrix relations, rounding, routing/TopK,
-state/checkpoint boundaries and pipeline stages; all required deterministic adversarial vectors remain mandatory.
-Compare authenticated results across reference, independent implementation and optimized backend; publish scope,
-fault model, conditional error assumptions and cost. Random test agreement does not prove Kernel soundness or replace
-semantic/court review. A changed implementation requires a new commitment and future source window, with retries counted.
-After checks, a Kernel still needs the coordinated shadow/release/activation path of ADR0172. Committee votes and
-DNS/BFT beacons supply neither verification challenges nor upgrade authority in this route.
+既存claimには受付時の規則を適用します。旧domain、型ID、rootや署名の意味は変えません。未対応kernelを未知のまま成功扱いにしません。再起動、reorg、pruning、IBDをまたいでも、当該claimのdescriptorと資料を解決できる必要があります。
 
-## K.5 Versioning, activation and historical coexistence
+## 7. 互換試験
 
-K0/K1/K2 in ADR0172 are conceptual layers, not numbers already assigned by consensus. Activate a new
-descriptor through proposal, reference and independent implementations, conformance/adversarial tests,
-reviewed soundness and resource analysis, shadow comparison and a coordinated locked-in schedule.
-This introduces no DNS validator vote or new committee approval gate. The network fingerprint binds
-the actual authorized versions, feature dependencies, ceilings and activation rules.
+規範CPU実行と最適化backendについて、整数境界、tie、丸め、状態更新、trace順序、Readoutを照合します。未知opcode、欠落tile、重複位置、別モデルのopening、誤ったroute、資料不供給を拒否する試験を用意します。
 
-Kernel definitions are append-only in meaning: K2 may remain valid for existing classes while K3
-admits new ones. Correctness-preserving optimized executors are allowed; changed semantics,
-confidence parameters, memory/commitment or court rules require a new version/fence. A vulnerability
-can require a coordinated stop-new-claims/deprecation transition; append-only does not mean an unsafe
-profile must earn forever. Specify treatment of already-bound claims, locked funds and evidence;
-never rewrite their recorded semantics silently.
-
-Default compatibility is a coordinated consensus upgrade. Bitcoin's
-[BIP141](https://github.com/bitcoin/bips/blob/master/bip-0141.mediawiki) and
-[BIP342](https://github.com/bitcoin/bips/blob/master/bip-0342.mediawiki) are extension precedents,
-not proof that this proposal is a soft fork. Unknown kernel/opcode **must not mean success** for
-PALW work, reward or state transitions. Unsupported nodes advertise capabilities and cannot produce
-or claim full validation after the incompatible fence. Only a separate valid-history/state/fork-choice
-compatibility proof could justify a particular soft-fork deployment.
-
-Class binding and the accepted schedule choose the kernel; a producer cannot select it by claiming
-a future DAA. Explicitly test crossing-boundary accepted transactions, old claims finishing after
-activation, reorg, pruning and cold IBD. Cross-kernel pipelines are refused unless an active composition
-profile binds each stage and covers the complete soundness/resource envelope. New verification work
-does not multiply PWU or reward for an existing computation.
-
-## K.6 RFC04, existing software and historical proposals
-
-RFC04's off-chain training, candidate registry, evaluation and promotion stay independent of a VM.
-Automation can run outside consensus with ordinary job/candidate submissions. A new test/checker
-family would be a separately reviewed kernel relation, not automatic EXEC/CRITIC/PROOF support.
-Promotion's statistical test is distinct from probabilistic correctness of its evaluation claims.
-
-Inventory any dormant BVM/GVM prototypes and actual historical activation before cleanup. This
-documentation neither deletes them nor proves they were never active elsewhere. No new implementation
-or activation of the withdrawn RFC05 VM programme is authorized. Preserve necessary historical replay
-and do not reuse allocated program-kind ids, syscall ids, signature domains or old hashes.
-
-## K.7 Coverage and implementation gates
-
-Keep RFC11's real-source, full-task/all-HF census; a source-complete finite model counts as supported
-only when its active kernel route actually passes the required registration tests. Missing kernel
-support remains a failure bucket, not “covered by future upgrade.” No 90–99% forecast or update
-frequency from the reference attachment is adopted as measured evidence.
-
-Implement the descriptor/plan envelope and a measured set of reusable families, not one kernel per
-brand. Required release evidence includes mixed-kernel replay, unknown-version fail-closed behavior,
-forged/omitted constraints, wrong field encodings, one-point faults, bad routing/memory/boundaries,
-adaptive transcripts, unavailable data, bounded exact disputes and duplicate-slice accounting.
-Demonstrate valid large claims reaching Final with small checks, without routine segment replay,
-and report producer/proof/verifier/DA costs and real 9B/long-context cases separately. An independent
-soundness review is necessary; passing a finite fault corpus is not a proof of the security target.
-
-No production fence or implementation-time estimate is selected here. Kernel-only reduces the
-planned general interpreter surface; it does not eliminate new-proof-system engineering or guarantee
-that every future model becomes expressible without a consensus update.
-
-## K.8 Precedence
-
-ADR0172 and §§K.0–K.7 replace the former RFC05 recommendation to implement BVM/GVM after RFC04.
-References from other drafts to RFC05's VM residual must follow this replacement and treat missing
-kernel support explicitly. RFC11 §16 applies this design to registration; RFC07/ADR0171 retain
-their probabilistic verification direction. Existing network rules remain the executable authority.
-
----
+有限の試験成功は全モデルの計算困難性の証明ではありません。BFTによる採用の判断資料と、実行系の技術的互換性を区別します。公開有効化は[RFC-0020](../../../rfc/0020-devnet-release-and-migration.md)に従い、文書更新だけで変更しません。

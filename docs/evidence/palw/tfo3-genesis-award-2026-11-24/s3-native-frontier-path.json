@@ -1,0 +1,111 @@
+{
+  "snapshot": "ef7c7a37e92c440fa3ef4f487455f1b8",
+  "matchedPeers": [
+    0,
+    1,
+    2
+  ],
+  "previousFrontierAttempt": {
+    "acceptedBlock": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+    "acceptedDaa": 7866,
+    "certifiedDaa": 8440,
+    "claim": "0f354a68ea0d46e3ff51ede51559a2af92b567aeba2a6a66adb8903847a48828a7ab40994d58e96e85ba584d0d6cf57a91c71fcce8c2c0705e042413f6f1db8e",
+    "drawnDaa": 8402,
+    "finalDaa": 8370,
+    "selectedEvents": [
+      {
+        "block": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+        "changes": [
+          {
+            "acceptedBlock": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+            "claimAfter": "Provisional",
+            "claimBefore": null
+          }
+        ],
+        "daa": 7866,
+        "root": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9"
+      },
+      {
+        "block": "ab07c467e0fdfd1956e60b551654fca06645b4a47d608adb22f29fee88e8b709512e1f30e0f12f9896b458a0983e2f152f0587673ba47751f667ab10b06d0f53",
+        "changes": [
+          {
+            "attestations": 0,
+            "certifiedDaa": null,
+            "drawn": false,
+            "positions": 0
+          },
+          {
+            "attestations": 0,
+            "certifiedDaa": null,
+            "drawn": false,
+            "positions": 0
+          },
+          {
+            "acceptedBlock": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+            "claimAfter": "Final { final_daa: 8370 }",
+            "claimBefore": "ReceiptLicensed { licensed_daa: 8249 }"
+          }
+        ],
+        "daa": 8370,
+        "root": "79671acc056f0a6b02c6cdf30a1586bf0d3caa044d08e5f7af31e4369389172693b5ae520fdb56774d426fe6c8c8c814aaa5078ee6c3f5c82ab55e325d6d0c62"
+      },
+      {
+        "block": "a47f23aff84d546579d5e2332a3e22bdedd927dbdccb89ee6151e9f5e3f08a1a7c3b67f6d9c5967005f9be318f4d2901d4ffb9ba16d2cb194e5faf84015a037f",
+        "changes": [
+          {
+            "attestations": 0,
+            "certifiedDaa": null,
+            "drawn": true,
+            "positions": 75
+          }
+        ],
+        "daa": 8402,
+        "root": "5b45049b34fa81cab82a651af81af4f1c35238659b82c9e7035121d21294a4f16b754bf1eb9ac156cb15215ad6608a0f330a49df06fec796b7733e56937ec6fe"
+      },
+      {
+        "block": "e711477142fe123ff6891c16368dbc4888af3e61779bf9978065a05ab02a3d959e5d7ec840012532d4755c66b047f2482a3069f1423c87b54b66d0e5a79f99dc",
+        "changes": [
+          {
+            "attestations": 7,
+            "certifiedDaa": 8440,
+            "drawn": true,
+            "positions": 75
+          },
+          {
+            "newFrontier": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+            "oldFrontier": "911739957637b6c0b6f80f250dc02dfa0341642aa0f2f258f43e3041c3d748896f7134159a15a1a4aded7be5f0851e61ce2c6b0ec8187f8f8cc0d5d6913e63eb"
+          }
+        ],
+        "daa": 8440,
+        "root": "9db47441061ae2e976cbd55f15bce094b1d1b0f076c1327ba5f6419eff5df75401309b3d0569763b19870f4444731775b1e4ff0fba370397c7b1eb2b3de55042"
+      }
+    ],
+    "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f"
+  },
+  "acceptedRewardDaa": 7867,
+  "rewardSettled": false,
+  "coveringClaims": [
+    {
+      "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+      "phase": "final",
+      "certification": {
+        "attestationDeadlineDaa": null,
+        "attestations": 0,
+        "certifyByDaa": 10687,
+        "committedDaa": 8527,
+        "committedSpan": 8402,
+        "currentAnchorSpan": 8402,
+        "drawnDaa": null,
+        "drawnPositions": 0,
+        "finalDaa": 8527,
+        "outcomeDaa": null,
+        "requiredAnchorSpan": 8403
+      }
+    },
+    {
+      "claim": "9540b648cfbc7386bc705a8c8f6c6fa89d5a8d3dcc97621c3f193b360177631d3dcb39a819554ac2b17dff4d4d678758889ed9ef28ae52f416fee8b28e34894d",
+      "phase": "provisional",
+      "certification": null
+    }
+  ]
+}

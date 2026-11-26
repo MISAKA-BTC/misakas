@@ -1,8 +1,8 @@
 # IBD・reorg・移行 — 有界ストリーム import と世代番号付き保存(G14 storage / IBD lane)
 
 Status: **設計メモ + node-local 実装**(2026-10-22, branch `storage/ibd`)。P2P に見える row stream の wire は
-[RFC-0037](../../../rfc/0037-ibd-bounded-row-stream-and-storage-generations.md) /
-[ADR-0204](../../../adr/0204-ibd-bounded-row-stream-and-storage-generations.md)(**Proposed / Review Required**)で、
+[RFC-0037](../../../rfc/0018-storage-pruning-and-ibd.md) /
+[旧ADR-0204](../../../rfc/0018-storage-pruning-and-ibd.md)(**Proposed / Review Required**)で、
 P2P message は**未登録・休眠**。consensus(state root の形式、header、fork choice、抽選)は一切変えていない。
 
 前提: pruned node の総 footprint ≤ 30,000,000,000 bytes(G14 storage 共通方針)。本メモの対象は「IBD の受信・展開・
@@ -120,7 +120,7 @@ root/
 
 ### 3.2 有界な authenticated stream import
 
-state root は今も「各 collection の 64 byte root を並べた preimage の hash」(ADR-0043 §2、
+state root は今も「各 collection の 64 byte root を並べた preimage の hash」(旧ADR-0043 §2、
 `palw_state_proof_v1.rs`)。**root の形式を変えずに**次ができる(`consensus/core/src/palw_row_stream_v1.rs`):
 
 1. 期待 root は witness header(pruning point の selected-chain 子)から取る。peer の preimage を最初に
@@ -230,6 +230,6 @@ pub trait StorageReserver: Send + Sync {
 
 1. capacity lane の merge 後、`StorageReserver` の adapter を足し、generation store / `SpillArea` を
    `StorageBudget` に接続。factory.rs は両 lane が同じ関数を触るので、F2 cleanup → capacity の予約 の順で統合する。
-2. RFC-0037 / ADR-0204 の review。採択されたら serve 側と組み立て段を実装し、新 protocol version の下で
+2. RFC-0037 / 旧ADR-0204 の review。採択されたら serve 側と組み立て段を実装し、新 protocol version の下で
    既存 106/107 と並存(旧 peer は従来の carriage 転送のまま)。
 3. phase B(§3.4)を別 RFC/ADR なしで入れられるか(node-local か)を review で判断。

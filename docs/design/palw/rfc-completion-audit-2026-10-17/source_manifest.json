@@ -3,13 +3,13 @@
     "title": "RFC01: 受入条件・実装済みprefix・残る最適化・seed提案",
     "sources": [
       {
-        "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+        "path": "docs/rfc/0003-jobs-tokenizers-and-generation.md",
         "start_line": 370,
         "end_line": 377,
         "file_sha256": "3ed9f479de8cfad83d1dac631c247abf128d1fcb4d0e561cea4de8ada7be2b49"
       },
       {
-        "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+        "path": "docs/rfc/0003-jobs-tokenizers-and-generation.md",
         "start_line": 408,
         "end_line": 429,
         "file_sha256": "3ed9f479de8cfad83d1dac631c247abf128d1fcb4d0e561cea4de8ada7be2b49"
@@ -90,7 +90,7 @@
         "file_sha256": "70d3ffa7c226c0f1d2a7fedd046efd4942bdbc5e63ea48d10b22d784df5826b8"
       },
       {
-        "path": "docs/rfc/0003-palw-generative-model-classes.md",
+        "path": "docs/rfc/0003-jobs-tokenizers-and-generation.md",
         "start_line": 2214,
         "end_line": 2282,
         "file_sha256": "f14ce56cc42c1583274a8a420f089e3c5c342f6dee79404d770f8a6ddebb8dbd"
@@ -279,7 +279,7 @@
     "title": "RFC11 full-task/full-contextの分母と未完了分類",
     "sources": [
       {
-        "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+        "path": "docs/rfc/0007-bft-model-admission.md",
         "start_line": 684,
         "end_line": 719,
         "file_sha256": "83ae98f74d2b0f34e744defc92b6a48a35de606be2fab54506d246e720cf7059"
@@ -574,7 +574,7 @@
     "title": "RFC17現行tierと旧審査の無効化・係数適用",
     "sources": [
       {
-        "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+        "path": "docs/rfc/0007-bft-model-admission.md",
         "start_line": 1,
         "end_line": 42,
         "file_sha256": "c877bb3beb8fe014eceb4700cd1287ddaf51d9a0bca2d2d915c8bbbf4cb7807d"
@@ -673,7 +673,7 @@
     "title": "RFC19 R7/R8未実装とdriver choices",
     "sources": [
       {
-        "path": "docs/rfc/0019-annual-model-upgrade.md",
+        "path": "docs/rfc/0007-bft-model-admission.md",
         "start_line": 310,
         "end_line": 330,
         "file_sha256": "b0614a3a807f2527c8262917ec598d71972654cd2540fbcfe6a67031cf756b86"
@@ -690,19 +690,19 @@
     "title": "RFC20現行スコープと必要な計測",
     "sources": [
       {
-        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "path": "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
         "start_line": 53,
         "end_line": 70,
         "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"
       },
       {
-        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "path": "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
         "start_line": 85,
         "end_line": 97,
         "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"
       },
       {
-        "path": "docs/rfc/0020-long-context-calibration-memory.md",
+        "path": "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
         "start_line": 128,
         "end_line": 157,
         "file_sha256": "6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad"

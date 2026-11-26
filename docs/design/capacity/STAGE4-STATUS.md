@@ -1,6 +1,6 @@
-# ADR-0160 stage 4 (rcore/cap-s1) — status: gate PASS
+# 旧ADR-0160 stage 4 (rcore/cap-s1) — status: gate PASS
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Same branch and base (`rcore/cap-s1` off `c3dbaee3c`; nothing armed; the t12 pins `dbbc9104…` /
 `5de80e64…` / `7c652212…` unmoved). Commit `042053712` (lane N, F-R past F-N, lane S's burst).
@@ -11,7 +11,7 @@ The user's plan: **N = fair share**, `allowed_i = min(bond capacity, rate, class
 property test: **13k × 10 bonds never beats 130k × 1 bond**. Behind its own dormant fence F-N
 `palw_capacity_network_room` (prerequisites F-R, F-S, lane A).
 
-## The rule (ADR-0160 v3 §7, with the deviations the property forced)
+## The rule (旧ADR-0160 v3 §7, with the deviations the property forced)
 
 ```
 L_net   = min(L_seat, L_carry = H_L·LPB·max(1, ā_op), L_anchor = B_bind·max(1, ā_op)·anchor_delay)

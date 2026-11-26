@@ -1,17 +1,5 @@
 # PublicOneHonest 実装台帳
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新規実装はTB1のEXEC/PANELとFOW1の計算依存Ticketを正本とする。旧SWC1のJOB/TICKET/PANEL三段抽選を新profileへ実装しない。以下の実装・測定記録の日付、結果、旧profileの未完了事項は保持する。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-<!-- SWC1-PROPOSAL-BEGIN -->
-> **2026-11-17 監査対応の設計案:** [RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../../../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../../../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
-<!-- SWC1-PROPOSAL-END -->
-
 [実装方針書](public-one-honest-vertical-implementation-plan-2026-11-10.md) の I0 作業記録。出荷設定と公開ネットワークでの有効化はこの台帳の対象外。以下の既存コードは接続先であり、新 profile の検証結果は未取得。
 
 ## 2026-11-12: 受付の一往復を優先する
@@ -246,14 +234,14 @@ tokenizer 登録の接続も再監査した。`install_verified_tokenizer_regist
 
 独立した静的監査で、現在の G14 拒否と、その先の Batch 用登録を分けた。現在の gate は既存 staged/filer/tokenizer-match に加え、対象 class の raw byte 数と key-event 上限を要求する。未有効の class semantics と未受理の宣言を解消することが第一段階であり、検査済み tokenizer row の追加だけで現行 gate が変わるわけではない。既存 EOF は hash と全長を確認するが raw を保持せず、family raw 取得は受理済み claim を前提とするため、受付前の全 rendering 検査へ循環なく接続できない。
 
-[RFC-0051](../../../rfc/0051-funded-preclaim-tokenizer-registration.md) と [ADR-0219](../../../adr/0219-funded-preclaim-tokenizer-registration.md) に、有限の preclaim Open/Part/Finish を Draft として追加した。既存担当エージェントの三回の静的レビューを反映し、署名、先行 parent、競合登録、料金の一回 burn、原期限内の再試行、native raw GC と通常履歴の保持を区別した。設計凍結規約に基づく採択をユーザーへ確認中。料金の数値、公開 activation、runtime 実装は未承認・未実施であり、この案の作成を TFP1 quote 成功に数えない。既存の Output コードのテストは引き続きコンパイル中。
+[RFC-0051](../../../rfc/0003-jobs-tokenizers-and-generation.md) と [旧ADR-0219](../../../rfc/0003-jobs-tokenizers-and-generation.md) に、有限の preclaim Open/Part/Finish を Draft として追加した。既存担当エージェントの三回の静的レビューを反映し、署名、先行 parent、競合登録、料金の一回 burn、原期限内の再試行、native raw GC と通常履歴の保持を区別した。設計凍結規約に基づく採択をユーザーへ確認中。料金の数値、公開 activation、runtime 実装は未承認・未実施であり、この案の作成を TFP1 quote 成功に数えない。既存の Output コードのテストは引き続きコンパイル中。
 
 その後、`5bc8b7b88` の core test build が 19 分 16 秒で完了し、`plain_output_control_length_and_signing_scope_v2` が成功した。同じ生成済み test binary で `g14_native_funded_batch_candidate_v1`、`family_supplier_four_role_prefix_native_original_and_financial_transitions`、`family_supplier_constraint_native_original_material_and_adjudication` も各 1 件成功した。[回帰結果](../../../evidence/palw/native-plain-output-v2-regression-2026-11-11.json) に source commit、binary/log の SHA-256 と範囲を保存した。計 4 件のローカル回帰であり、新 tokenizer 登録案の実装・公開 quote・同じ claim の受付を検証したものではない。
 
 
 ## 2026-11-11 — RFC-0051 採択後の native 登録実装
 
-ユーザー指示「採用するゴールまで進めて」により RFC-0051 / ADR-0219 を設計採択へ更新した。追加登録料の一回 burn を含む設計と実装着手の採択であり、公開 profile の測定値や activation 日時を暗黙に固定していない。
+ユーザー指示「採用するゴールまで進めて」により RFC-0051 / 旧ADR-0219 を設計採択へ更新した。追加登録料の一回 burn を含む設計と実装着手の採択であり、公開 profile の測定値や activation 日時を暗黙に固定していない。
 
 `TKR1` の Open/Part/Finish、署名と bounded wire decode、実 UTXO fee からの料金分離、prior parent の全 Part による一回の rendering 検査、native 登録 writer を追加した。新規 Open だけに登録料を計上し、重複・拒否・Part・Finish は追加登録料ゼロ。検査失敗でも消費した Finish 枠を記録し、同じ DAA の別 block からの再検査を防ぐ。正常・Superseded・期限切れでは未使用の実行容量を解放し、元の割当履歴と raw は固定保持期限まで残す。
 
@@ -376,11 +364,11 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 2026-11-11 の [claim固有Trace配信とnative metadata](../../../evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/README.md): `f888eae3a` で元captureの有界readerからSource認証付き全tileを既存providerへ書き出す経路、通常TFP1 ExecutionRulesとcold状態/依存の独立導出を接続。remote2件・native1件が成功。公開配信権限・完全profile・公開受付とは区別する。
 
-2026-11-11 ユーザーの追加方針を[RFC-0052](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../../../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)として採択。HFを新profileの必須モデル公開元にし、独自重み全量配信を必須経路から外す。元計画は原文保持し、[cold Panel追補](hugging-face-cold-panel-2026-11-11.md)を適用する。HF公開契約の独立登録検査・定期期限と、claim固有資料・取得case・成功停止は必要。設計採択を公開有効化としない。
+2026-11-11 ユーザーの追加方針を[RFC-0052](../../../rfc/0010-materials-and-funded-delivery.md)／[旧ADR-0220](../../../rfc/0010-materials-and-funded-delivery.md)として採択。HFを新profileの必須モデル公開元にし、独自重み全量配信を必須経路から外す。元計画は原文保持し、[cold Panel追補](hugging-face-cold-panel-2026-11-11.md)を適用する。HF公開契約の独立登録検査・定期期限と、claim固有資料・取得case・成功停止は必要。設計採択を公開有効化としない。
 
 2026-11-11 の[HF匿名取得・native変換・同一Studio候補の再計算](../../../evidence/palw/hf-cold-model-replay-2026-11-11/README.md): 新規directoryへ固定commitの9 filesを取得し、元manifestと全size/hash一致、変換後のclass/inventoryと独立再計算のexecution/output/header一致を確認。hostには以前のモデルも別directoryに存在し、未保有遠隔Panelでの実行とは区別する。`0c41b0307`でaccepted TFP1のbackend missを既存root-fetchへ接続、`55a9a7ffd`でstrict public/ungatedと期待manifestを実装。daemon check・回帰5件・Python15件成功。HF公開契約・有効期限・case終結・公開TFP1 quote/受理/Finalは未完。
 
-2026-11-11 の後続ユーザー指示を[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../../../adr/0221-additional-model-burn-pause.md)として採択。先行段落のHF公開契約・定期有効期限・取得不能裁定は廃止し、以後の残件から削除する。追加モデルだけを誰でもburnで停止、登録者burnで解除し、genesis・年次fork指定を除外する。[実装追補](additional-model-burn-pause-2026-11-11.md)に未署名plannerとnative署名/支払/保存/全Final・reward gateの境界を記録する。モデルのtier・既存責任・原期限は維持する。
+2026-11-11 の後続ユーザー指示を[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)／[旧ADR-0221](../../../rfc/0017-model-stop-and-retirement.md)として採択。先行段落のHF公開契約・定期有効期限・取得不能裁定は廃止し、以後の残件から削除する。追加モデルだけを誰でもburnで停止、登録者burnで解除し、genesis・年次fork指定を除外する。[実装追補](additional-model-burn-pause-2026-11-11.md)に未署名plannerとnative署名/支払/保存/全Final・reward gateの境界を記録する。モデルのtier・既存責任・原期限は維持する。
 
 `6511a880e`の[burn停止planner回帰2件](../../../evidence/palw/model-burn-pause-planner-2026-11-11/README.md)が成功した。登録者不在をgenesisとみなす旧便宜関数に頼らず、実genesis objectのexact class/rootと明示catalogに基づいて対象外を判定する。未知owner、古いsequence、誤scope/rootを拒否し、年次指定後のpause無効化を確認した。実署名・支払・state保存と公開停止には未接続。
 

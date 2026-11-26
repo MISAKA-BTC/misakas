@@ -277,7 +277,7 @@ The fixture variable is the model-free devnet PALW path; both requirements preda
   file, broadcast, seat decode), so a third party can assemble the pin from broadcast material,
   and `base0_material_matches_claim_v1` now *recomputes* the integer trace root from the carried
   rows rather than comparing binding fields.
-* ~~**ADR-0049 Decision E's selection rule does not exist**~~ — **CLOSED (integer-first).**
+* ~~**旧ADR-0049 Decision E's selection rule does not exist**~~ — **CLOSED (integer-first).**
   `base0_decode_token_select_v1` (argmax, ties LOWEST) is one function the engine's decode loop
   and the court both call; `PalwCourtVerdictProofV2::DecodeToken` refutes a committed decode
   token on-chain with fault `DecodeTokenMismatch { position }` (evidence kind 6), cost-gated by
@@ -288,8 +288,8 @@ The fixture variable is the model-free devnet PALW path; both requirements preda
   per-position openings arrive with the class that needs them (Gate 3, not a launch blocker).
 * ~~**M-02**~~ — **CLOSED (`364fe079`), and it was sharper than documentation debt**: the drift
   was SIX items (the five named plus `retired_safe_weight`), and `retired_safe_weight` had
-  entered the preimage **without the version bump** ADR-0043's own change rule demands. Settled
-  as: ADR-0043 §2 amended to the full list with provenance, `PALW_STATE_V2_VERSION = 5`
+  entered the preimage **without the version bump** 旧ADR-0043's own change rule demands. Settled
+  as: 旧ADR-0043 §2 amended to the full list with provenance, `PALW_STATE_V2_VERSION = 5`
   supplying the missed bump, and the correspondence made executable — a from-spec second
   implementation (`the_state_root_preimage_is_exactly_the_adr_0043_list`, with an exhaustive
   no-rest destructure so a new carriage field fails to compile beside the list it must join),
@@ -306,6 +306,6 @@ The fixture variable is the model-free devnet PALW path; both requirements preda
 1. **The data-availability transport** (above). Everything else on this page is closed; this is what
    stands between the code and a chain whose claims mature.
 2. **The wallet decision** a validator node needs in order to submit a receipt at all.
-3. **M-02** — settle `state_root()`'s five items against ADR-0043's preimage **before** the ruleset
+3. **M-02** — settle `state_root()`'s five items against 旧ADR-0043's preimage **before** the ruleset
    id is frozen. The id already moved once this session (retirement changed the state), so a t12
    genesis must be re-minted regardless; doing M-02 first makes that one flag day instead of two.

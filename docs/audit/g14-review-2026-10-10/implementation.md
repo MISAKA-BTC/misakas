@@ -1,6 +1,6 @@
 # G14レビューに基づく実装修正
 
-基点: `323ea161a5b627431fb831b358e8d1f88457261d`（Claudeの統合ブランチ、ADR-0176/177 budgetとLG14-Bのmerge後）。修正ブランチ: `codex/g14-prosecution-bounds`。初回レビューの対象は`34b6c3f5e`であり、元の不具合の数値・logは[feedback.md](feedback.md)に固定して残す。
+基点: `323ea161a5b627431fb831b358e8d1f88457261d`（Claudeの統合ブランチ、旧ADR-0176/177 budgetとLG14-Bのmerge後）。修正ブランチ: `codex/g14-prosecution-bounds`。初回レビューの対象は`34b6c3f5e`であり、元の不具合の数値・logは[feedback.md](feedback.md)に固定して残す。
 
 ## 初回の資源修正
 
@@ -32,7 +32,7 @@ canonical OPV fixtureが旧admission listを新しいdeny-listへ渡し、対象
 
 資源修正と下記の再計算経路はG14の完成に必要な実装である。累積開示などの残条件があるため、全面的な完成・activation承認には至っていない。
 
-1. ADR-0177に従い、G14は正しいモデルを保有/取得したverifierを前提とする。配布拒否だけでmodel取得を保証したり、モデルavailability penaltyを復活させたりしない。
+1. 旧ADR-0177に従い、G14は正しいモデルを保有/取得したverifierを前提とする。配布拒否だけでmodel取得を保証したり、モデルavailability penaltyを復活させたりしない。
 2. 計算・binding不正のexact convictionと、claim witness不応答の客観的defaultを区別する。
 3. canonical node試験のOPV class eligibilityはtest hookである。post-genesis bond・public reads・signed carriers・terminalの試験であり、production onboarding/eligibility全体の完成証拠ではない。16-unit privacy scopeと任意の対象faultのlocalization、累積再構成predicate、real-scale v4 courts、正規eligibility経路、期限内包含、beaconと外部soundnessの残gateは別途閉じる。
 4. RAMには、認証・shape確認より先にdecodeするresponseのwire ceilingも別に計上した。RAMのcopy/metadata allowanceは現在の実装に対する保守的な見積りであり、全profileのallocator peakを測定して証明した結果ではない。実model最大profileでの実測・独立レビューは必要である。保持stateもkernel claim rowsの上限であり、provider registry/chunk lane等を含む全chainの保存上限ではない。責任期間後のglobal pruning/cleanupは本修正の範囲外。
@@ -43,7 +43,7 @@ Claudeへの依頼: このbranchの修正を比較・取り込み、最新の統
 
 ## 公開commitmentから不正を発見する経路
 
-Claudeの統合commit `7d1c82324394198a7efb6226570d09b9e12f8f50`へmergeした上で、登録モデルを保有するverifierの再計算を実装した。ADR-0177 D7の前提はユーザーが再確認している。producerからモデルを強制取得する経路は追加しない。
+Claudeの統合commit `7d1c82324394198a7efb6226570d09b9e12f8f50`へmergeした上で、登録モデルを保有するverifierの再計算を実装した。旧ADR-0177 D7の前提はユーザーが再確認している。producerからモデルを強制取得する経路は追加しない。
 
 `FreshVerifierV1::reexecute`は、公開job、program、登録artifactからdependency順にnodeを計算し、最初に異なるcommitmentを見つける。producerの`node_value`も、不正位置のヒントも使わない。それ以前のnodeは公開commitmentと一致するため、最初の不正nodeのinputsを認証できる。新しい`CommitmentMismatch` courtは認証されたinputsから値を独立に計算し、producerのoutput openingを要求せず、公開output commitmentとの不一致をconvictする。正しいclaimへの同じ告発は`NoFault`となる。
 
@@ -108,7 +108,7 @@ raw Tensor providerにもcanonical range/length確認を追加した。I8の値�
 
 ## K2Sのsmall-value courtを統合・修正
 
-未検証だった`k2/real-scale`の`4a6f20aaf`を取り込み、DAで値を開示せずcommitmentだけを返す小型nodeのcourtを完成させた。基点は引き続きintegration `3730cc90f`である。ユーザー確認済みのADR-0177 D7（正しい登録モデルを保有するverifier）を維持している。
+未検証だった`k2/real-scale`の`4a6f20aaf`を取り込み、DAで値を開示せずcommitmentだけを返す小型nodeのcourtを完成させた。基点は引き続きintegration `3730cc90f`である。ユーザー確認済みの旧ADR-0177 D7（正しい登録モデルを保有するverifier）を維持している。
 
 WIPの`SegMaterialV1::own()`は削除した。同じpublic providerがproducer値と「verifier自身の値」の両方を供給できると、独立再計算をせず嘘をCleanにできるためである。verifierの値は認証済みjobと登録param commitmentsから内部で再計算し、一致した値だけをcourt inputsに使う。block readerはDA assemblerの明示的なnode commitmentsを保持し、省略値のzero placeholderをhashして代用しない。
 
@@ -190,7 +190,7 @@ Final待機とreorg試験も修正した。前者は実際のrearmed deadlineを
 | kaspad共通filer | **5 PASS**。default feature（EVMを含む）の`--lib palw_fraud_filer`。容量整理後の再実行 |
 | reservation fold | **7 PASS** |
 | 実node E2E | 最終batch **7 PASS / 1 FAIL**。reorg harnessが本番の浅いtie-window（2 DAA）を超えた1件を修正し、個別再実行 **1 PASS**。単一batchの8/8成功とは記載しない |
-| A2U | **3 PASS**。未有効化のfenceとADR-0175を維持 |
+| A2U | **3 PASS**。未有効化のfenceと旧ADR-0175を維持 |
 | shipping repin drift-only | **差分なし**。検査対象のpinとgateがすべて通過 |
 
 実nodeの7件は、Final前のconviction、Final後のconviction、非応答のDA default、honest dismissal、別bondのreservation併存、restart、未有効化の対照試験である。DA default試験は、他の正当な回答義務を満たした後で対象sessionの実際のdeadlineを実blockで超える。reorg再試験は両branchのFinal workを等しく保ち、必要なblue workを最小限だけ増やして本番tie-window内でundo/restoreする。
@@ -309,7 +309,7 @@ history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最�
 
 初回のwrong-job fixtureは古いv2 wrapperを使いjob identityを記録せず、IdentityNotRecordedを正しく返したため、testのacceptanceだけ実v7へ移した。次の実行はobjective offence fenceがfixtureで休眠していたため、R-core+ from genesisの設定に合わせextrasもtest-armした。判定条件や認証条件は緩めていない。
 
-公開bindingのidentity違反とcountの直接証拠に加えても、G14全域は未達である。4096 idsを超えるcanonical promptのPromptNotAnchored自動提出、checkpoint/traceの残る局所化、free-promptの公開job/inputからのstartup、非base0 codecと全familyの正規eligibility、full service→public read→mempool/template→conviction、post-retirementの自動発見、最大profile・恒久retention・累積scope・全枠飽和・期限内包含は残る。wrong-job fixtureは公開eventをtestへ直接渡すため、新規nodeのhistory歩行から証拠提出までの一続きのV-nodeとは数えない。新しいread APIはconsensus encodingを変更せず、activation heightとADR-0177の登録モデル保有前提を維持する。
+公開bindingのidentity違反とcountの直接証拠に加えても、G14全域は未達である。4096 idsを超えるcanonical promptのPromptNotAnchored自動提出、checkpoint/traceの残る局所化、free-promptの公開job/inputからのstartup、非base0 codecと全familyの正規eligibility、full service→public read→mempool/template→conviction、post-retirementの自動発見、最大profile・恒久retention・累積scope・全枠飽和・期限内包含は残る。wrong-job fixtureは公開eventをtestへ直接渡すため、新規nodeのhistory歩行から証拠提出までの一続きのV-nodeとは数えない。新しいread APIはconsensus encodingを変更せず、activation heightと旧ADR-0177の登録モデル保有前提を維持する。
 
 検証log: [merge lifecycle](evidence/integration-x8r-lifecycle-final.log)、[merge reader](evidence/integration-x8r-public-history-final.log)、[public binding fold / builder](evidence/public-binding-legacy-final.log)、[reader回帰](evidence/public-binding-reader-final.log)、[reporter回帰](evidence/public-binding-reporter-final.log)。
 
@@ -330,7 +330,7 @@ history cacheでは、bindingだけ正しくpinが壊れた新しいeventが最�
 
 [LG14-B / large-prompt結果](evidence/large-prompt-legacy-final.log)、[filer回帰](evidence/large-prompt-filer-final.log)、[reporter回帰](evidence/large-prompt-reporter-final.log)。default feature、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で実行した。初回fold fixtureにFlatネットワーク上のnon-held profileを使ったため、courtがMerkle prompt証明を正しく拒否した。fold fixtureだけ既存held profileを用いる形へ修正した。prompt formのconsensus規則は変えていない。
 
-synthetic bindingのtree rootはfixtureのcommitmentであり、最大profileの実modelを実行した試験ではない。class admissionは既存test fixtureで、通常のproduction eligibilityではない。公開eventをtestへ渡すV-foldであって、fresh-nodeのpaged read→service tick→reporter commit/file/reveal→mempool/template→blockのV-nodeではない。この変更で大型promptの直接証拠生成は接続したが、free-prompt startup、checkpoint/traceの残る局所化、全family／最大profile、post-retirement discovery、reorgによるown replayのjob変更、累積scope、予約枠飽和、恒久retentionと期限内包含は引き続き完成条件である。consensus encoding・activation height・ADR-0177は変更していない。
+synthetic bindingのtree rootはfixtureのcommitmentであり、最大profileの実modelを実行した試験ではない。class admissionは既存test fixtureで、通常のproduction eligibilityではない。公開eventをtestへ渡すV-foldであって、fresh-nodeのpaged read→service tick→reporter commit/file/reveal→mempool/template→blockのV-nodeではない。この変更で大型promptの直接証拠生成は接続したが、free-prompt startup、checkpoint/traceの残る局所化、全family／最大profile、post-retirement discovery、reorgによるown replayのjob変更、累積scope、予約枠飽和、恒久retentionと期限内包含は引き続き完成条件である。consensus encoding・activation height・旧ADR-0177は変更していない。
 
 
 ## Reorg後のjob更新と旧blocking replayの破棄
@@ -364,7 +364,7 @@ actual replay workerは、モデル保有前提どおりfresh backendからexecu
 
 新しいactual FP fold testから、FP Finalにvesting rowがないため、candidate discoveryとreservationが拒否し、さらに通常DA admissionも拒否することが分かった。既存の休眠palw_legacy_public_filer_v1 fence内で、この3箇所を共通のpost-Final predicateへ変更した。FPにはunvoided・unexpiredのliability rowとDA回答期限内のtrace retentionを要求する。unmatured vestingを持つ既存attemptの判定は維持する。FPのpursuitを責任期間内に開始した場合はda_rekeyの単一writer経由でliability expiryも延ばし、予約中に次のDA要求が失効することを防ぐ。新field、wire encoding、activation heightは追加していない。
 
-この段階でもG14全域は未達。PanelDA withheld inputのcourt bootstrap、canonical FPのbad input-rootからbootstrap前に直接証拠／DA defaultへ進む経路、prefix-state等の公開stateからのstartup、非base0 codec・全familyの正規eligibility、full-service fresh-nodeのmempool/template包含、post-retirement discovery、恒久prune後の取得／再要求、累積scope・全枠飽和・最大profileの実測RAM／期限内包含が残る。FPM/FPC/FPAのinput prefix読出しの成功を、producerのprivate stateなしに全PanelDA claimを再実行できる証明とは数えない。ADR-0177はユーザー確認どおり維持する。
+この段階でもG14全域は未達。PanelDA withheld inputのcourt bootstrap、canonical FPのbad input-rootからbootstrap前に直接証拠／DA defaultへ進む経路、prefix-state等の公開stateからのstartup、非base0 codec・全familyの正規eligibility、full-service fresh-nodeのmempool/template包含、post-retirement discovery、恒久prune後の取得／再要求、累積scope・全枠飽和・最大profileの実測RAM／期限内包含が残る。FPM/FPC/FPAのinput prefix読出しの成功を、producerのprivate stateなしに全PanelDA claimを再実行できる証明とは数えない。旧ADR-0177はユーザー確認どおり維持する。
 
 
 | 検証 | 結果と範囲 |
@@ -443,7 +443,7 @@ core `lg14a_legacy_dispute_fold`は **7 V-fold PASS**。actual ML-DSA-87署名�
 
 最初のPanelDA fixtureは、accepted-payload extractionのPanelDA fence引数を既存PublicDA試験同様のfalseにしており、正しくstateless拒否された。fixtureだけを明示的にtest-armし、productionのfenceを緩めていない。gate試験では、Merkle networkの大きな入力もchunkは小さいという性質をFlatのwhole-inputと取り違えた期待を訂正した。FlatとMerkleのcoherentなgenesis形式を別々に通す。初回gate buildはdisk不足で失敗し、自分の古いbuild cacheを整理して再実行した。最終PASSだけを結果へ計上する。
 
-G14全域は未達。34-session予算に入力取得も含むため、8kは4 input unitだが最大contextや任意回数のrestartを保証しない。accepted FP commitment自体の恒久prune、canonical FP bad root、prefix-state、非base0／全familyの正規eligibility、全枠飽和、最大profileのRAM／時間、fresh-node serviceと責任期間内包含、累積scope等は残る。ADR-0177 D7の登録モデル保有前提を維持し、model distribution義務とactivation heightは追加しない。
+G14全域は未達。34-session予算に入力取得も含むため、8kは4 input unitだが最大contextや任意回数のrestartを保証しない。accepted FP commitment自体の恒久prune、canonical FP bad root、prefix-state、非base0／全familyの正規eligibility、全枠飽和、最大profileのRAM／時間、fresh-node serviceと責任期間内包含、累積scope等は残る。旧ADR-0177 D7の登録モデル保有前提を維持し、model distribution義務とactivation heightは追加しない。
 
 ## 共謀者の予約数による新verifierの締出しを除く
 
@@ -486,7 +486,7 @@ kind-3／kind-4はpublic-filer fence前にこの追加proofを明示的に拒否
 
 nodeはcanonical input admissionの失敗でも、認証済みaccepted FP payloadをPending bootstrapとして保持し、公開bindingのreservation／demandへ進める。保持はaccepted jobの認証直後、小さいinput用host ticketで行い、backendのceiling context導出やfull replayのメモリ予約より前に置く。full replayのメモリ待ちだけで直接証明を止めない。canonical Pendingは入力ids未保持でもreplay retry対象へ残し、メモリが使えるようになれば正しいjobの独立replayへ進める。bindingを得たらproducerのprompt idsを要求せず、公開jobとbindingからkind-4 reporter filingへ進む。binding非応答は既存`ProducerWithholding`に進む。ordinary V3／V4 canonical jobを対象とし、PublicDA／PanelDAを認める。prefix/eval/tensor-tail等の別job意味論をこのproofへ混ぜない。
 
-G14全域は未達。この時点では最大contextのinput session予算、恒久pruneされたaccepted FP jobの取得、prefix/state等のbootstrap、全familyの正規eligibility、checkpoint/trace局所化、fresh-node full-service／包含／restart／IBD／reorg、最大population/profileの実測RAM・期限、累積scopeが残る。登録モデル保有を前提とするADR-0177 D7と、activationのfail-closed方針を維持する。後続のfresh service試験は末尾に範囲を限定して記録する。
+G14全域は未達。この時点では最大contextのinput session予算、恒久pruneされたaccepted FP jobの取得、prefix/state等のbootstrap、全familyの正規eligibility、checkpoint/trace局所化、fresh-node full-service／包含／restart／IBD／reorg、最大population/profileの実測RAM・期限、累積scopeが残る。登録モデル保有を前提とする旧ADR-0177 D7と、activationのfail-closed方針を維持する。後続のfresh service試験は末尾に範囲を限定して記録する。
 
 heavy課金は現行のonce-per-claimを引き継ぐ。ソース上、whole-root memoは8 entryのFIFOであり、より多い小promptのclaimを交互に提出すると退避済みrootを再計算し得る。claim集合の課金済みflagだけではその実workを束縛しない。今回の単独claimのroot判定PASSを、多claim下の実CPU上限又はproof spamへの期限内包含の証明と扱わない。この予算／memo退避の反例を実際のblockで検証して閉じることは、次の残課題である。
 
@@ -550,13 +550,13 @@ priority queue（reporterとpublic filerが提出するcourt queue）とcommon c
 
 初回compileはfixtureのsampling seedへ整数を渡して失敗し、正しい32-byte arrayへ修正した。[初回compile log](evidence/carrier-rent-node-initial.log)。初回のclock試験は、testnet-12のmodel-lines clockもrent徴収を有効にすることを見落とし、certification rentだけをoffにした期待がFAILした。fixtureでmodel-linesをoffにして対象clockを隔離し、productionのOR条件やburn価格を緩めていない。[初回clock試験](evidence/carrier-rent-node-fence-initial.log)。最終PASSだけを計上した。
 
-最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。[repin](evidence/carrier-rent-repin-final.log)、[harvest tests](evidence/carrier-rent-repin-harvest-tests.log)、[harvest lib](evidence/carrier-rent-repin-harvest-lib.log)、[再読込](evidence/carrier-rent-repin-replay-final.log)。価格定数、consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は引き続き未達で、ADR-0177 D7の登録モデル保有前提を維持する。
+最終sourceのshipping repinとfresh harvest再読込はexit 0、**361 ok・差分なし**。[repin](evidence/carrier-rent-repin-final.log)、[harvest tests](evidence/carrier-rent-repin-harvest-tests.log)、[harvest lib](evidence/carrier-rent-repin-harvest-lib.log)、[再読込](evidence/carrier-rent-repin-replay-final.log)。価格定数、consensus source、rooted state、wire、activation height、shipping pinを変更していない。G14全域は引き続き未達で、旧ADR-0177 D7の登録モデル保有前提を維持する。
 
 ## 新規公開bondとfresh DBから実serviceでDA不応答を追及する（2026-10-11）
 
 `11bead78a`を基点に、`palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default`を追加した。genesis外の9番目のkeyを、実ML-DSA-87のbond登録署名とoperator possession署名、実collateral outputを持つcarrierで登録する。登録済みDAAが0より大きいことを公開APIで確認し、presetの1,000 DAA maturityを短縮せず待つ。capable classesは空で、このverifierは対象claimのseatではない。全assigned Panelは誤ったexecution/output/trace rootsを持つfloor attemptへ実Valid署名し、実quorum assemblerとfunded licence carrierを通す。
 
-新しい空DBへ公開genesis UTXOをimportし、履歴2,051 blockを実`validate_and_insert_block`で再検証する。DAA 1025のlicense状態と外部candidateを公開APIで確認した後、旧DB／processorsを終了する。producerのcapture、state file、artifact、evidence-providerを新DB又はverifierへ渡さない。verifierはADR-0177 D7どおりbuiltin floorの正しい登録モデルを独立に再実行する。`PalwPanelService`の実`AsyncService::start`、`FlowContext`、PQ設定を持つ`MiningManager`、通常のcarrier signer／submitterとproduction block templateを使用する。controller book／queueへの試験注入は行わない。予約とbindingのDA要求を、観測したmempoolだけでなく対象claim／reserverを照合した実block bodyで確認する。
+新しい空DBへ公開genesis UTXOをimportし、履歴2,051 blockを実`validate_and_insert_block`で再検証する。DAA 1025のlicense状態と外部candidateを公開APIで確認した後、旧DB／processorsを終了する。producerのcapture、state file、artifact、evidence-providerを新DB又はverifierへ渡さない。verifierは旧ADR-0177 D7どおりbuiltin floorの正しい登録モデルを独立に再実行する。`PalwPanelService`の実`AsyncService::start`、`FlowContext`、PQ設定を持つ`MiningManager`、通常のcarrier signer／submitterとproduction block templateを使用する。controller book／queueへの試験注入は行わない。予約とbindingのDA要求を、観測したmempoolだけでなく対象claim／reserverを照合した実block bodyで確認する。
 
 この試験はraw block historyのfresh validationと直接`ConsensusApi`読み取りを使用する。P2P peer、socket RPC、ネットワークIBD orchestration、pruned-state importではない。test-only keys／premine、skip PoW、inert EVM、未有効public-filer fenceをfixture内で0に置く例外がある。fenceを置く前のpreset validationが成功し、置いた後のshipping activation validatorは拒否することをassertする。通常のregistration／collateral／court windowsは維持する。node lib-testと通常binaryはdefault featureでEVMを含めてcompileするが、このfixtureのEVMは実行しない。
 
@@ -631,7 +631,7 @@ lock修正後のexact V-node試験は **1 PASS、394.69秒**。公開eventを実
 
 合計 **77 unique PASS**。nodeはdefault feature（EVMを含む）で`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`をbuildし、同じ最終`kaspad_lib-a562e45711087c1e`を各filterで実行した。[node build](evidence/service-foreign-build-final.log)。consensusは`--features evm`で最終sourceをbuildした`kaspa_consensus-1eec1b8c750cb2a6`を使用した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。初回失敗と修正前のDA PASSは最終77件へ重複計上しない。service fixtureのinert EVMは、通常featureのcompile又は別のconsensus回帰試験のEVMを無効にする意味ではない。
 
-最終sourceのfresh shipping harvestと保存harvestの再読込はともにexit 0、**361 ok・差分なし**。[repin](evidence/service-foreign-repin-final.log)、[harvest tests](evidence/service-foreign-repin-harvest-tests.log)、[harvest lib](evidence/service-foreign-repin-harvest-lib.log)、[再読込](evidence/service-foreign-repin-replay-final.log)。今回consensus moduleのnode policy／mempool livenessは修正したが、block conviction／DA fold規則、rooted state、wire、activation height、shipping pinは変更していない。ADR-0177 D7とshipping activation拒否を維持する。全family／最大profile／累積scope／recoveryを含むG14全域は未達である。
+最終sourceのfresh shipping harvestと保存harvestの再読込はともにexit 0、**361 ok・差分なし**。[repin](evidence/service-foreign-repin-final.log)、[harvest tests](evidence/service-foreign-repin-harvest-tests.log)、[harvest lib](evidence/service-foreign-repin-harvest-lib.log)、[再読込](evidence/service-foreign-repin-replay-final.log)。今回consensus moduleのnode policy／mempool livenessは修正したが、block conviction／DA fold規則、rooted state、wire、activation height、shipping pinは変更していない。旧ADR-0177 D7とshipping activation拒否を維持する。全family／最大profile／累積scope／recoveryを含むG14全域は未達である。
 
 ## PublicDA FP V3/V4の通常受理から実serviceで全Valid署名者を追及する（2026-10-11）
 
@@ -659,7 +659,7 @@ V3は既存presetを使用する。V4だけはfixture内で通常のdecode-rules
 
 上記 **56 unique PASS**。最終sourceを`cargo test -p kaspad --lib palw_service_public_e2e --locked --no-run`でdefault feature（EVMを含む）buildし、同じ`kaspad_lib-a562e45711087c1e`をexact name又はmodule filterで実行した。`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`、既存unused/dead-code警告は残る。wrong module filterで0件だった実行、途中sourceのattempt PASSは成功件数に含めない。[build](evidence/service-fp-build-final.log)、[V3](evidence/service-fp-v3-node-final.log)、[V4](evidence/service-fp-v4-node-final.log)、[attempt](evidence/service-fp-attempt-node-final.log)、[DA default](evidence/service-fp-da-node-final.log)、[filer](evidence/service-fp-filer-final.log)、[False Valid](evidence/service-fp-false-valid-final.log)、[reporter](evidence/service-fp-reporter-final.log)。fixture-only変更の今回にshipping repin／production binary checkは再実行していない。直前のproduction修正に対する77 PASS／361 pin検証は前節の記録である。
 
-変更はtest fixtureと監査記録だけで、production、consensus規則、wire、activation、shipping pinは変更していない。この追加だけではF9–F16全familyのPASSにならない。pipelineの正規onboardingとstage間入力binding、Retrieval snapshotのconformance、FP V5／Gen・evaluation・prefix-state等の通常入口と公開bootstrap、恒久prune後のFP job再取得、全算術/input/output/state違反、累積scopeと64要素hiding tile、最大profile・人口・期限内包含、restart/reorg/IBD/socket RPCは引き続き未達。ADR-0177 D7の登録モデル保有前提とshipping activation拒否を維持する。
+変更はtest fixtureと監査記録だけで、production、consensus規則、wire、activation、shipping pinは変更していない。この追加だけではF9–F16全familyのPASSにならない。pipelineの正規onboardingとstage間入力binding、Retrieval snapshotのconformance、FP V5／Gen・evaluation・prefix-state等の通常入口と公開bootstrap、恒久prune後のFP job再取得、全算術/input/output/state違反、累積scopeと64要素hiding tile、最大profile・人口・期限内包含、restart/reorg/IBD/socket RPCは引き続き未達。旧ADR-0177 D7の登録モデル保有前提とshipping activation拒否を維持する。
 
 
 ## 元FP履歴消失後の公開job bootstrap（2026-10-11）
@@ -697,7 +697,7 @@ canonical FP prompt証拠tag 2の既存follow-upにもA2の分類漏れがあっ
 
 [履歴消失後のactual service](evidence/public-fp-metadata-pruned-held-final.log)、[core／node unitと通常V4を実行したbinaryのSHA-256](evidence/public-fp-metadata-core-node-before-held-fixture.sha256)。unit／通常V4はfixtureのLG14-B toggle追加前、履歴消失caseはtoggle追加後のnode binaryを使用した。production codeは同一で、上記2つのhash記録を混同しない。core test executableは`kaspa_consensus_core-6db2961b3177b804`、nodeは`kaspad_lib-a562e45711087c1e`、private targetは`/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target`である。
 
-この修正はpost-fence job保存と元履歴消失を扱う。metadata保存前に恒久消失した既存jobの移行、evaluation tail/prefix-state等の完全bootstrap、network pruned import、restart/reorg、socket RPC/P2P、全familyの正規onboarding、全算術/input/output/state違反、cumulative scope/64要素hiding、最大profile・population・包含期限は引き続き必要である。全G14の完成判定やproduction activationを変更しない。ADR-0177 D7を維持する。
+この修正はpost-fence job保存と元履歴消失を扱う。metadata保存前に恒久消失した既存jobの移行、evaluation tail/prefix-state等の完全bootstrap、network pruned import、restart/reorg、socket RPC/P2P、全familyの正規onboarding、全算術/input/output/state違反、cumulative scope/64要素hiding、最大profile・population・包含期限は引き続き必要である。全G14の完成判定やproduction activationを変更しない。旧ADR-0177 D7を維持する。
 
 今回のnative object field変更を使うSDKにも`cargo check -p misaka-palw-sdk --locked`を実施し成功した。[SDK check](evidence/public-fp-metadata-sdk-check-final.log)。
 
@@ -718,7 +718,7 @@ input非応答caseは正しいbindingを実PQ mempool・templateへ包含し、u
 
 [初回build](evidence/pruned-fp-input-build-initial.log)、[修正後build](evidence/pruned-fp-input-build-repair.log)、[通常binary check](evidence/pruned-fp-input-binary-initial.log)、[初回binary SHA-256](evidence/pruned-fp-input-binary-initial.sha256)、[修正後binary SHA-256](evidence/pruned-fp-input-binary-repair.sha256)、[filer/input](evidence/pruned-fp-input-filer-initial.log)、[honest case初回失敗](evidence/pruned-fp-input-honest-initial.log)、[honest case修正後](evidence/pruned-fp-input-honest-repair.log)、[input非応答](evidence/pruned-fp-input-withheld-initial.log)、[identity回帰](evidence/pruned-fp-input-identity-initial.log)、[稼働中sample](evidence/pruned-fp-input-withheld-sample.txt)。
 
-保存前のFP job本体をbindingなしで要求する経路は現在のtag 156／Event／Held再取得に存在せず、別の認証済みjob-body bootstrap又はmigration設計が必要である。今回その経路を実装したとはしない。最大input・34 sessionsの適合、pre-replay ticket／contextが取得不能なjobの直接証明、全family、initial/prefix-state、cumulative scope／hiding、deadline/inclusionとrestart／reorg／network pruned importは引き続き未達。登録モデル保有のADR-0177 D7とfull G14 objectiveを維持する。
+保存前のFP job本体をbindingなしで要求する経路は現在のtag 156／Event／Held再取得に存在せず、別の認証済みjob-body bootstrap又はmigration設計が必要である。今回その経路を実装したとはしない。最大input・34 sessionsの適合、pre-replay ticket／contextが取得不能なjobの直接証明、全family、initial/prefix-state、cumulative scope／hiding、deadline/inclusionとrestart／reorg／network pruned importは引き続き未達。登録モデル保有の旧ADR-0177 D7とfull G14 objectiveを維持する。
 
 ## 再計算前のユーザーinput bootstrap（2026-10-11）
 
@@ -747,7 +747,7 @@ unitの初回は22 PASS・1 FAIL。binding要求のfixtureがDA要求を認め�
 
 [初回build](evidence/pre-replay-input-build.log)、[unit phase修正build](evidence/pre-replay-input-build-phase-fix.log)、[最終fixture build](evidence/pre-replay-input-build-final.log)、[通常binary check](evidence/pre-replay-input-binary.log)、[初回unit失敗](evidence/pre-replay-input-filer-before-phase-fix.log)、[最終unit](evidence/pre-replay-input-filer-final.log)、[pruned honest](evidence/pre-replay-input-honest.log)、[pruned input非応答](evidence/pre-replay-input-withheld.log)、[通常PublicDA honest](evidence/pre-replay-input-public-honest.log)、[pruned identity](evidence/pre-replay-input-identity.log)、[pruned honest／非応答のbinary hash](evidence/pre-replay-input-test-before-phase-fix.sha256)、[unit phase修正後のhash](evidence/pre-replay-input-test-before-honest-public-fixture.sha256)、[最終fixtureのhash](evidence/pre-replay-input-test-final.sha256)。
 
-wire／rooted state／activation／shipping pinは変更していない。今回shipping harvestは再実行せず、前節の361 pinは以前のsourceの検証として保持する。context取得不能やfull ticket拒否でもbootstrapを保持する分岐はcodeとunit policyで確認したが、その資源条件を実serviceへ加えた試験はまだない。未解決はpre-fence永久消失jobの取得、最大inputの全chunk／session／carrier予算、initial/prefix-state、全familyの通常入口と算術・output・stateの終局、scope／hiding、最大負荷・包含期限、restart／reorg／network pruned import。input非応答はproducer DA defaultの検証で、全Panelの金銭制裁や全G14の完成を立証しない。ADR-0177 D7の登録モデル保有前提を維持する。
+wire／rooted state／activation／shipping pinは変更していない。今回shipping harvestは再実行せず、前節の361 pinは以前のsourceの検証として保持する。context取得不能やfull ticket拒否でもbootstrapを保持する分岐はcodeとunit policyで確認したが、その資源条件を実serviceへ加えた試験はまだない。未解決はpre-fence永久消失jobの取得、最大inputの全chunk／session／carrier予算、initial/prefix-state、全familyの通常入口と算術・output・stateの終局、scope／hiding、最大負荷・包含期限、restart／reorg／network pruned import。input非応答はproducer DA defaultの検証で、全Panelの金銭制裁や全G14の完成を立証しない。旧ADR-0177 D7の登録モデル保有前提を維持する。
 
 
 ## 保存metadataもないFP claimの公開binding追及（2026-10-11）
@@ -772,7 +772,7 @@ private target、default features、`CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2`で�
 
 [最終build](evidence/unretained-job-build-metadata.log)、[初期build](evidence/unretained-job-build-initial.log)、[中間build](evidence/unretained-job-build-final.log)、[filer/input](evidence/unretained-job-filer.log)、[metadata無しidentity](evidence/unretained-job-identity.log)、[metadata無しbinding非応答](evidence/unretained-job-withheld.log)、[pruned honest回帰](evidence/unretained-job-pruned-honest-regression.log)、[0件filter](evidence/unretained-job-pruned-honest.log)、[node binary check](evidence/unretained-job-binary.log)、[test executable SHA256](evidence/unretained-job-test.sha256)。
 
-この区切りではwire/rooted state/activationを変更していない。shipping harvestを再実行しておらず、以前の361 pin検証を今回の検証へ読み替えない。**正しいbindingの後でjob本体が永久消失していればまだWaitとなる。** その認証済みjob-preimage取得courtは次の実装であり、今回の成功を完全なjob取得・算術追及の成功としない。busy selectorとmemory ticketのpolicyはunitで確認し、実serviceの枠飽和は未検証。最大input/session、初期/prefix state、全familyの正規入口と各終局、scope/hiding、回復・最大負荷・期限内包含が残る。ADR-0177 D7と有効化拒否を維持し、G14全域は未達。
+この区切りではwire/rooted state/activationを変更していない。shipping harvestを再実行しておらず、以前の361 pin検証を今回の検証へ読み替えない。**正しいbindingの後でjob本体が永久消失していればまだWaitとなる。** その認証済みjob-preimage取得courtは次の実装であり、今回の成功を完全なjob取得・算術追及の成功としない。busy selectorとmemory ticketのpolicyはunitで確認し、実serviceの枠飽和は未検証。最大input/session、初期/prefix state、全familyの正規入口と各終局、scope/hiding、回復・最大負荷・期限内包含が残る。旧ADR-0177 D7と有効化拒否を維持し、G14全域は未達。
 
 ## 公開FP job-preimageの取得court（2026-10-11）
 
@@ -803,4 +803,4 @@ core binary SHA256は`9a09922f2a86801a3e42fe957087ab6a8d45d297eb3dd3228715ac9ab7
 
 [core初回失敗](evidence/fp-job-preimage-core.log)、[core成功](evidence/fp-job-preimage-core-final.log)、[core hash](evidence/fp-job-preimage-core-test.sha256)、[node初回失敗](evidence/fp-job-preimage-node-build.log)、[node成功](evidence/fp-job-preimage-node-build-final.log)、[35 unit](evidence/fp-job-preimage-node-units.log)、[honest service](evidence/fp-job-preimage-honest.log)、[job非応答service](evidence/fp-job-preimage-withheld.log)、[legacy初回失敗](evidence/fp-job-preimage-legacy-regression.log)、[legacy成功](evidence/fp-job-preimage-legacy-regression-final.log)、[release fixture再build](evidence/fp-job-preimage-node-build-release-final.log)、[前node hash](evidence/fp-job-preimage-node-test.sha256)、[最終node hash](evidence/fp-job-preimage-node-test-release-final.sha256)、[node binary check](evidence/fp-job-preimage-binary.log)、[shipping harvest失敗](evidence/fp-job-preimage-repin.log)、[fresh integration harvest](evidence/fp-job-preimage-repin-harvest-tests.log)、[disk不足lib log](evidence/fp-job-preimage-repin-harvest-lib.log)、[同一core binaryの3 goldens](evidence/fp-job-preimage-repin-lib-final.log)、[361 pin再読込](evidence/fp-job-preimage-repin-final.log)。生logの末尾空行はそのまま保存し、source diffのwhitespace確認とは区別する。
 
-**G14全域は未達。** このjob courtは64 KiBのpreimageを対象とし、bindingと合わせてcourt/single-carrier ceilingへ収まることをdemand/reacquisitionで検査する。しかし最大64 KiB constraint tailとheaderはこのjob boundを超える。48 KiBのFP payload capはwallet builderに存在するだけで、今回の最大job取得保証の根拠としては扱わない。最大jobをadmissionできる一方でこの単一answerでは回答できないなら、不可能な義務となるため有効化してはならない。次の実装ではmultipart/transportとadmission/profile適合を共に閉じる必要がある。大きいbinding、追加session予算、最大input、initial/prefix-state、non-prompt input、全familyの正規入口と算術/output/state終局、scope/hiding、restart/reorg/network IBD、最大負荷・期限内包含は残る。shipping validatorは引き続きarmingを拒否し、ADR-0177 D7とfull objectiveを維持する。
+**G14全域は未達。** このjob courtは64 KiBのpreimageを対象とし、bindingと合わせてcourt/single-carrier ceilingへ収まることをdemand/reacquisitionで検査する。しかし最大64 KiB constraint tailとheaderはこのjob boundを超える。48 KiBのFP payload capはwallet builderに存在するだけで、今回の最大job取得保証の根拠としては扱わない。最大jobをadmissionできる一方でこの単一answerでは回答できないなら、不可能な義務となるため有効化してはならない。次の実装ではmultipart/transportとadmission/profile適合を共に閉じる必要がある。大きいbinding、追加session予算、最大input、initial/prefix-state、non-prompt input、全familyの正規入口と算術/output/state終局、scope/hiding、restart/reorg/network IBD、最大負荷・期限内包含は残る。shipping validatorは引き続きarmingを拒否し、旧ADR-0177 D7とfull objectiveを維持する。

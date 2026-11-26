@@ -1,6 +1,6 @@
 # A0 — Positive Court 共通契約 v2 / revision 1
 
-2026-10-31。実装対象はユーザーが指定したR2、履歴番号は [RFC-0044](../../../rfc/0044-positive-court-full-coverage.md) / [ADR-0212](../../../adr/0212-positive-court-without-model-prepossession.md)。既存0042 / 0210は変更しない。
+2026-10-31。実装対象はユーザーが指定したR2、履歴番号は [RFC-0044](../../../rfc/0008-g14-panel-and-verification.md) / [旧ADR-0212](../../../rfc/0008-g14-panel-and-verification.md)。既存0042 / 0210は変更しない。
 
 この文書と `misaka/palw/positive-contract/` を担当間の基準とする。A0が共通型・署名domain・識別子・framing・port・旧新切替を管理する。A1〜A7が各自で型や成功条件を再定義しない。ここで定めるのは私設interchange r1であり、native tag、公開profile、activation heightの割当ではない。独立レビューと各実装の統合は別の状態である。
 

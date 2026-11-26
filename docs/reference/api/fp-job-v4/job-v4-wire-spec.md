@@ -1,13 +1,5 @@
 # FP Job V4 — wire specification
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。以下のwire表とtest vectorは旧V4として保持する。新TB1/FOW1のcodecを同じ版に詰め込まず、context digest64byte、seed32byte、s32byte、Ticket256bitを区別した新profileとして固定する。旧RFC1への参照だけで新規profileの規則を省略しない。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Normative source: RFC-0001 §A (Implementation Frozen). This document states the bytes; where it and
 the RFC differ, the RFC wins and this document is wrong. The executable form of every rule below is
 `consensus-vectors/fp-v4/` (see "Vectors").
@@ -39,7 +31,7 @@ with a `decode: Option<DecodeConfigV4>` tail whose presence the version decides:
 
 * version 5 (V3): the bytes end at `temperature_q` — byte for byte the V3 job as it always was;
 * version 7 (V4): the bytes continue with the `DecodeConfigV4`;
-* version 6 is ADR-0096 Decision 8's constraint job, reserved and unbuilt; versions are not reused.
+* version 6 is 旧ADR-0096 Decision 8's constraint job, reserved and unbuilt; versions are not reused.
 
 A version/tail mismatch (V4 without a config, V3 with one) is refused as
 `DecodeConfigVersionMismatch`. Borsh serialization never fails on it (a hash is computed over
@@ -75,7 +67,7 @@ so it covers the decode config.
   agreement on every transaction below `H`.
 * **Extraction walk** re-checks at the accepting block's DAA (the authoritative rule).
 * A V3 claim accepted before `H` is state: it is verified to the end by the V3 verifier.
-* Sampling: a V3 job is always greedy (`SamplingNotArmed` otherwise); a V4 job carries ADR-0082
+* Sampling: a V3 job is always greedy (`SamplingNotArmed` otherwise); a V4 job carries 旧ADR-0082
   Decision 11 (`temperature_q`, `sampling_seed`), with a non-zero seed at temperature 0 refused as a
   second encoding.
 

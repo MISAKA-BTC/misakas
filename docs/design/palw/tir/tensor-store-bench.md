@@ -92,7 +92,7 @@ Writing W4 at ~0.5 GB/s is about 4 minutes, W4b about 7.
 
 | id | job | how it runs | used by |
 | --- | --- | --- | --- |
-| **J-P(P)** | a producer attempt: `P` prompt positions, the last one's logits choosing the one token (the prefill draw, ADR-0117 Decision 1) | `TirBackendV1::execute` on the anchor `Hash64::from_u64_word(0x8000_1001)` (the 8k test's anchor) — the leaves hashed, the roots formed, the capture kept as the node keeps it (dense while it fits the dense-capture bytes, a fold beyond) | W1 P=255; W3a/W3b P=255 and P=1023; W4 P=255; W4-t4 P=255; W4b P=64 |
+| **J-P(P)** | a producer attempt: `P` prompt positions, the last one's logits choosing the one token (the prefill draw, 旧ADR-0117 Decision 1) | `TirBackendV1::execute` on the anchor `Hash64::from_u64_word(0x8000_1001)` (the 8k test's anchor) — the leaves hashed, the roots formed, the capture kept as the node keeps it (dense while it fits the dense-capture bytes, a fold beyond) | W1 P=255; W3a/W3b P=255 and P=1023; W4 P=255; W4-t4 P=255; W4b P=64 |
 | **J-R** | a full-seat replay of J-P's job | `execute_for_verdict` (`backend.rs:1156`) | W3a, W3b (P=255) |
 | **J-D(P+D)** | a generating job: `P` prompt positions then `D` generated tokens | the runner over a job of `D` decode tokens | W1 64+8; W3a/W3b 64+8; W4 16+4; W4b 8+2 |
 | **J-C** | RFC-0006 cells: `S_L` = 4 shards, `S_P` = 1 segment, over J-P's dense capture | `tir_verify_capture_cells_over_v1` (`node/cell.rs:796-828`) per shard | W3a P=63 (informative in M2; M3's gate) |
@@ -119,7 +119,7 @@ Writing W4 at ~0.5 GB/s is about 4 minutes, W4b about 7.
 | profile | what | memory cap |
 | --- | --- | --- |
 | **H-MAC** | this Mac Studio: Apple M1 Max, 10 cores, 32 GiB, internal SSD (APFS), Darwin 25.6.0 | no cgroup on macOS: a cell's cap is checked against the footprint, not enforced; nothing over 16 GiB (32 GiB is the whole machine) |
-| **H-VIRTIO** | a Linux x86-64 VM like the fleet's hosts: 8 vCPU, 23–24 GiB (ADR-0112 §1, §10.5), virtio disk, kernel ≥ 5.19 with cgroup v2, swap present but off for the bench scope, a dedicated volume ≥ 200 GB, `dd iflag=direct` ≥ 500 MB/s | `systemd-run --scope -p MemoryMax=<cap> -p MemorySwapMax=0 --`; the 16 GiB profile |
+| **H-VIRTIO** | a Linux x86-64 VM like the fleet's hosts: 8 vCPU, 23–24 GiB (旧ADR-0112 §1, §10.5), virtio disk, kernel ≥ 5.19 with cgroup v2, swap present but off for the bench scope, a dedicated volume ≥ 200 GB, `dd iflag=direct` ≥ 500 MB/s | `systemd-run --scope -p MemoryMax=<cap> -p MemorySwapMax=0 --`; the 16 GiB profile |
 | **H-VIRTIO-L** | the same instance type with ≥ 48 GiB | the 32 GiB profile (W4, W4b) |
 | H-NVME (informative) | a Linux host with local NVMe, to show the ceiling | as H-VIRTIO |
 
@@ -128,7 +128,7 @@ running nothing else.
 
 **The device's own rate, `R_dev`, measured per host per day** before the cells and recorded with them:
 - Linux: `fio --name=seq --filename=<a cold container> --rw=read --bs=8m --direct=1 --ioengine=psync --numjobs=4 --size=8g`,
-  cross-checked by ADR-0112 §1's method (`dd if=<file> of=/dev/null bs=4M iflag=direct skip=2048 count=128`: 512 MiB at 8 GiB).
+  cross-checked by 旧ADR-0112 §1's method (`dd if=<file> of=/dev/null bs=4M iflag=direct skip=2048 count=128`: 512 MiB at 8 GiB).
 - macOS: after `sudo purge`, the harness's `--calibrate` (8 MiB positional reads on 4 threads over 8 GiB of a container, with
   `F_NOCACHE` on the descriptor).
 
@@ -154,7 +154,7 @@ running nothing else.
 
 | id | what | for |
 | --- | --- | --- |
-| **B-PC** | the page cache: `TirArtifactV1::open`, mapped and unpinned (`--resident-bytes 0` in the bench today) | every TIR workload; on W4/W4b once, with a 2-hour wall cap and its fault rate recorded — at the fleet's 6–11 MB/s a J-P is not expected to finish (ADR-0112 §1), and that is the result |
+| **B-PC** | the page cache: `TirArtifactV1::open`, mapped and unpinned (`--resident-bytes 0` in the bench today) | every TIR workload; on W4/W4b once, with a 2-hour wall cap and its fault rate recorded — at the fleet's 6–11 MB/s a J-P is not expected to finish (旧ADR-0112 §1), and that is the result |
 | **B-PIN** | mapped and pinned, int-10.2 A1 (`MAP_SHARED`, populated, `mlock`) | W2 (R3); W3a on H-MAC as an informative cell (7.1 GiB within ¼ of 32 GiB); never W3b and up (over the cap) |
 | **B-ALL** | the TIR residency holding every byte (budget = the weights), uncapped | W1, W3a, W3b: the speed reference |
 | **B-FLOOR** | the TIR residency at its floor (`Bytes(floor)`) | W1 (3.01 GiB); for a dense class it is B-ALL |
@@ -209,7 +209,7 @@ runs dominate the wall time (§7).
 ## 7. Predictions — what each cell should read
 
 **Arithmetic, not measurement** — from the shapes in the bench program's conventions and `R = 0.845 GB/s` (the fleet's `dd`,
-ADR-0112 §1; the bench substitutes its own `R_dev`). A measured cell is compared with its prediction (§8, T3).
+旧ADR-0112 §1; the bench substitutes its own `R_dev`). A measured cell is compared with its prediction (§8, T3).
 
 | workload, mode | weights budget | streamed floor | resident slabs | streamed bytes / run or decode position | J-P device bytes (run, W = P) | J-D device bytes | at R |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -240,12 +240,12 @@ predicted here; the B-ALL cells measure it, and T5–T6 are stated against them.
 | **T1** | every digest equals its reference, in every cell, on every host | tiers decide where bytes are, never which (`tensor-store.md` §7); one mismatch stops M2, whatever else passes |
 | **T2** | under every cap: no OOM kill, no swap, the cgroup's `memory.peak` ≤ the cap; the manager's held bytes never pass its budget (printed by the harness); `VmHWM` ≤ budget + windows × cursors + state + working set + 0.5 GiB | the floor and budget are the contract the ledger reserves by; 0.5 GiB covers the plan, the program and the allocator |
 | **T3** | device bytes of each run within [0.95, 1.05] × §7's prediction (the open pass measured apart, equal to the file ±1 %) | the read volume is the cost model operators size hosts by; > 5 % over means re-reads (an eviction bug, a thrashing LRU, a pinned page refaulted); < 95 % means the page cache served and the run was not cold |
-| **T4** | while streaming and I/O-bound (J-D at S-5, S-13, S-28): device bytes ÷ wall ≥ 0.7 × `R_dev` | ADR-0112's whole premise is reads at the device's rate (845 against 11 MB/s); 0.7 leaves room for a slab's several extents (7 in the dense shapes) and the queue's ramp — under it, the I/O pool or the chunking is wrong |
+| **T4** | while streaming and I/O-bound (J-D at S-5, S-13, S-28): device bytes ÷ wall ≥ 0.7 × `R_dev` | 旧ADR-0112's whole premise is reads at the device's rate (845 against 11 MB/s); 0.7 leaves room for a slab's several extents (7 in the dense shapes) and the queue's ramp — under it, the I/O pool or the chunking is wrong |
 | **T5** | J-P runs (W ≥ 64): prefetch hit rate ≥ 95 % and stalls ≤ 5 % of the wall; J-D: a decode position's wall ≤ 1.15 × max(its B-ALL compute time, its streamed bytes ÷ `R_dev`) | at depth 1 the read of N + 1 hides behind N wherever compute ≥ read, which a run of 64 positions makes true for every dense shape here; 15 % is the per-position bubble (each position's first slab, uneven layers) |
 | **T6** | W3a and W3b J-P(255) and J-P(1023) at S-5: positions/s ≥ 0.9 × B-ALL on both hosts | at W = P a run reads the streamed slabs once for all its positions (W3b: 11.1 GiB, ≈ 14 s at 845 MB/s), while its compute reads every weight from RAM once a position (≈ 13.7 GB × 255) — minutes on 8 vCPU; with N + 1's read behind N's compute, streaming should cost under 10 % |
 | **T7** | where nothing streams (W1 at B-FLOOR and B-FIFTH, W2, W3a at B-ALL): wall ±5 %, device bytes ±2 %, peak memory at most +5 % against the M1 build | M2 must cost nothing when it is not used |
 | **T8** | W4 at S-13 and S-28: J-P(255) completes with T1; device bytes ≤ 1.05 × 104.5 / 89.0 GiB; wall ≤ 1.3 × max(compute, bytes ÷ `R_dev`), compute extrapolated from W4-t4's B-ALL time, its layers' share × 22 | the "200 GB ≠ 200 GB of RAM" claim at half size on fleet-like hardware; 30 % for extrapolating compute from 4 layers to 88 |
-| **T9** | A6: one byte under the streamed floor is refused with every term named; the floor runs | ADR-0112 I-3's rule, for the new floor |
+| **T9** | A6: one byte under the streamed floor is refused with every term named; the floor runs | 旧ADR-0112 I-3's rule, for the new floor |
 | **T10** | W1 J-P(255) at S-5 (A3, A7): device bytes ≤ 0.15 × B-FIFTH's measured bytes, and within T3 of §7's ≈ 27 GiB | the occurrence-major run's point for a mixture: ≈ 1/13 of the position-major reads under uniform routing |
 
 **M2 is accepted** when T1–T10 pass on H-VIRTIO (and H-VIRTIO-L for T8) and H-MAC shows no T1 or T2 failure. A failure of T4–T6
@@ -323,4 +323,4 @@ and H2 exist, the baselines can be taken on H-MAC and H-VIRTIO before M1, and M1
 - Raw JSON lines: `~/Downloads/MISAKA-wt-b/lanes/evidence/tensor-store/` (Mac) and `/data/tsb/out/` (Linux), kept.
 - The summary: `docs/design/palw/tir/tensor-store-bench-results-<yyyy-mm-dd>-<host>.md` — per cell the median / min / max, the
   prediction, the thresholds passed or failed, the digest, the container roots of §1.3 and the facts of §4.
-- A result is quoted with its host and its date (ADR-0110's rule: a figure is a measurement with a host and a time).
+- A result is quoted with its host and its date (旧ADR-0110's rule: a figure is a measurement with a host and a time).

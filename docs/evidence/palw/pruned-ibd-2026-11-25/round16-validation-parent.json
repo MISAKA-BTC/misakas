@@ -1,0 +1,42 @@
+{
+  "test": "round16_archival_to_genesis_node_over_tcp",
+  "sourceManifestSha256": "17697d9bf0ce11702519dcd2ed2b0fe0a7a27674dae075a34a6d4c5dd3fc621a",
+  "observationSeconds": 300,
+  "before": {
+    "headers": 74920,
+    "pruningPoint": "0e210616d5fec9c179d51c0630e3f2e7306617add03fb83c3782f3cfd63445cef884c1560595fc9d475d8268c292ac8e3334733335d17561f696e0c2360a2d37",
+    "palwRoot": "e818ba7fd0ec19e48dbedc6de7d34d1b2486cd81668482513da8f5fbe280156902b8443403f01e89dde4122d08fadf9d7e59bf89d61fcf1b41cc96f6480e7a68",
+    "utxoRows": 73,
+    "bodiesAtLastProgressBeforeTimeout": 27027,
+    "progressPercent": 36,
+    "loggedReconstructedParents": 27564,
+    "loggedAppliedDeltas": 1360465,
+    "loggedRevertedDeltas": 0,
+    "combinedTestLogBytes": 13258856,
+    "tipParity": false
+  },
+  "after": {
+    "headers": 74920,
+    "pruningPoint": "0e210616d5fec9c179d51c0630e3f2e7306617add03fb83c3782f3cfd63445cef884c1560595fc9d475d8268c292ac8e3334733335d17561f696e0c2360a2d37",
+    "palwRoot": "e818ba7fd0ec19e48dbedc6de7d34d1b2486cd81668482513da8f5fbe280156902b8443403f01e89dde4122d08fadf9d7e59bf89d61fcf1b41cc96f6480e7a68",
+    "utxoRows": 73,
+    "bodiesAtLastProgressBeforeTimeout": 43857,
+    "progressPercent": 58,
+    "loggedReconstructedParents": 0,
+    "loggedAppliedDeltas": 0,
+    "loggedRevertedDeltas": 0,
+    "combinedTestLogBytes": 99731,
+    "tipParity": false,
+    "monitor": {
+      "exit": 101,
+      "reason": null,
+      "elapsedSeconds": 301.65,
+      "minimumSampledFreeBytes": 14935928832
+    },
+    "confirmedSourceFiles": 118
+  },
+  "passingControls": {
+    "rfc12_x": 17,
+    "p2_t49_a_node_that_imports": 1
+  }
+}

@@ -1,70 +1,11 @@
-# Bond budget (ADR-0176) and model-bond allocation (ADR-0177) — engine design
-
-<!-- BMR1-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — BFT継続5%・モデル恒久廃止と用途別bond
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../../../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../../../adr/0237-bft-model-retirement-and-role-bonds.md)／[BMR1移行](../../../governance/model-retirement-transition.md)をBFTの継続報酬・恒久廃止・用途別bond処理の正本とする。最新配分は同一coinbase原資Cの50/20/20/5/5であり、BFTの通常継続報酬は**`F=floor(50C/1000)`（5%）**、Panel/Gate CのMISAKA枠は**`P=floor(50C/1000)`（5%）**。同日途中の10%と可変W/P前段を撤回する。残るPOSITION購入70%とMISAKA LP20%はRFC0068の同じ一回分割・残差規則に従い、5%をさらに二重控除しない。検証者5%内の役割配分は既存の正規planで決める。
-
-正規BFTのモデル恒久廃止で、当該永久LP内actual MISAKA・登録者責任bond・MINING用途bond・未確定mining報酬を100%burn/失効させる。**全Panel/Gate C検証用途bondは、不正者も含め一律にBFT廃止burnから保護**し、個人不正はCourtの個別slashへ分離する。正当に成立した検証報酬の支払を維持し、他モデル資産へ影響させない。兼任は用途別lot（MINING6,000だけburn、PANEL4,000は保護）とし、重複担保・責任中の用途変更は禁止する。
-
-通常のLP撤去禁止を維持し、canonical廃止のactual reserve burnだけを限定例外にする。BFTの没収受取・廃止bountyは0。継続5%報酬を没収額に連動させない。可逆Pause/Resumeと区別し、旧停止専用・LP絶対不処分の記述をこのscopeだけ置換する。旧profile/native/履歴を保持し、BMR1実装・移行・有効化は別工程とする。
-
-**個別Court slashの実回収額は別会計。** 対象offenceから実際に回収したMISAKAをSとし、Panel/Gate C合計の報酬を`E=floor(490S/1000)`、残り`T=S-E`をburnとする（名目49%/51%、端数はburn）。49%は両役割の合計であり、それぞれ49%ではない。不正発見・立証の資格を認証したplanで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFTモデル廃止の100%burn資産をSへ加えず、BFTの没収受取・廃止bountyは0のまま。検証bondがBFT一律burnから保護されることは、本人のCourt個別slash免除ではない。
-<!-- BMR1-ADOPTED-20261126-END -->
-
-<!-- MOE3-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — 全モデル統一・小数POSITION・50/20/20/5/5
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0068](../../../rfc/0068-fractional-position-miner-rewards.md)／[ADR0236](../../../adr/0236-fractional-position-miner-rewards.md)／[MOE3適用・移行](../../../governance/fractional-position-economics-transition.md)を新経済の正本とする。ユーザーの最新指定は、対象coinbase原資Cの**50%をMiner用POSITION購入、20%をLP用POSITION購入、20%をMISAKAのLP、5%をPanel/Gate CへMISAKA、5%をBFTへMISAKA**である。Minerと検証者の受取資産を分け、5%枠内のPanel/Gate C配分は認証済みplanに従う。新しい半々配分等を暗黙設定しない。
-
-整数分割は`F=floor(50C/1000)`、`P=floor(50C/1000)`、`A=floor(200C/1000)`、`J=floor(200C/1000)`、`D=C-F-P-A-J`、`B=D+J`。FがBFT、Pが検証者、AがLP用MISAKA、JがLP用POSITION購入原価、DがMiner用購入原価であり、**通貨の全丸め残差はD**へ置く。B（名目70%）を一括購入し、購入qから`ell=floor(q*J/B)`をLP、`m=q-ell`をMinerへ配る（B>0）。単一モデルにC全額を割り当て、かつCが20の倍数の例ならell=floor(2q/7)で名目2/7 LP・5/7 Minerとなるが、端数時も無条件に2q/7としない。`C=B+A+P+F`、`q=ell+m`を保つ。POSITIONの50%/20%相当は取得原価の按分であり、換金額の保証ではない。
-
-全モデルを係数1.0・各モデルの一意市場・MAD2管理へ統一する。新fork特別区分、追加モデル専用κ、coreの市場/報酬免除、genesisのBFT管理免除を継承しない。originは履歴として保存し、genesisの差は正規creatorがいない点だけとする。POSITIONは小数8桁、`1 POSITION=100,000,000 atoms`として固定精度整数で計算する。
-
-通常AMMはburn5%を維持し、creatorありの総手数料1%/名目net94%、正規genesisのcreatorなしは0%/名目net95%とする。不存在creatorの1%を徴収・追加burnしない。内部購入・LP・配布の追加AMM feeは0。通常の永久LP撤去禁止・claim検証・共通発行/資本/責任capを維持し、BMR1正規廃止の限定burnは後続規範に従う。
-
-同日途中の「80%購入・q/4 LP・60%相当Miner」「Wから可変Panel枠を引いてRへ」「BFT10%」は**今回の固定50/20/20/5/5に置換済み**であり、新規受理に使わない。旧MOE1/MOE2のwhole数量・30/20/50・owner3%・旧claim/wire/native/過去試験は元profileの記録として保持する。MOE3のnative接続・移行実行・本番有効化の完了ではない。
-
-一般/複数モデルでは、RFC0068 §4.3で一度分割したCの各legを結合按分し、各モデルの実予算比`floor(q_i J_i/B_i)`でLP数量を求める。Cが20で割り切れるだけでは各モデルの比率が2/7になるとは限らない。
-<!-- MOE3-ADOPTED-20261126-END -->
-
-<!-- MOE2-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../../../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../../../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../../../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
-
-永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
-
-旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
-<!-- MOE2-ADOPTED-20261120-END -->
-
-
-<!-- MOE1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。報酬を共通capで価格付けした後、coreはMiner=R、additionalのみ50%買上げと残余分配へ分岐する。市場は追加登録時に存在し、欠落を全額Miner払いの正常分岐にしない。
-
-追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
-
-[RFC0063](../../../rfc/0063-additional-model-option-economics.md) / [ADR0231](../../../adr/0231-additional-model-option-economics.md) / [適用と移行](../../../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
-<!-- MOE1-ADOPTED-20261120-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
+# Bond budget (旧ADR-0176) and model-bond allocation (旧ADR-0177) — engine design
 
 **Lane:** BUDGET (`budget/adr176-177`, from the integration head `b8ae9412b`), 2026-10-10.
-**Specification:** [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md),
-[ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md),
-[RFC-0015 §8.3–8.5](../../../rfc/0015-panel-free-permissionless-verification.md), [RFC-0014 §16.5–16.8](../../../rfc/0014-panel-independent-fraud-prosecution.md),
+**Specification:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限),
+[旧ADR-0177](../../../rfc/0013-model-work-accounting.md),
+[RFC-0015 §8.3–8.5](../../../rfc/0008-g14-panel-and-verification.md), [RFC-0014 §16.5–16.8](../../../rfc/0009-court-and-claim-final.md),
 [PRINCIPLES](../../../PRINCIPLES.md) §4/§6, [readiness matrix §3c](../integration/activation-readiness-matrix.md).
-**Fences:** `palw_bond_budget_v1` (ADR-0176) and `palw_model_bond_allocation_v1` (ADR-0177 D3–D5). Both are dormant: `None` on
+**Fences:** `palw_bond_budget_v1` (旧ADR-0176) and `palw_model_bond_allocation_v1` (旧ADR-0177 D3–D5). Both are dormant: `None` on
 every preset, hashed Some-only, collapsed from `Some(never())`, listed in `palw_fences_v1()`, probed by the fork-id gate, and
 refused by validation when armed. **Nothing here is armable.**
 
@@ -72,7 +13,7 @@ Status words follow the user's 2026-10-09 vocabulary: *implemented* (code exists
 required attack tests pass on this branch), *armable* (also economic parameters, external review, activation conditions). This
 note is a design; §11 records what each milestone reached.
 
-Amounts are written in BILI (ADR-0174); `1 BILI = 10^8` base units in code (`SOMPI_PER_KASPA`).
+Amounts are written in BILI (旧ADR-0174); `1 BILI = 10^8` base units in code (`SOMPI_PER_KASPA`).
 
 ---
 
@@ -94,7 +35,7 @@ DAA or fork choice.
 
 | Item | Use | Verified unused before first use |
 |---|---|---|
-| Object tag **140** | `BondCapitalAssignedV1` (ADR-0177 D3, signed by the bond) | yes: no variant 140–149 on HEAD, `rfc8/x8r-review`, `g14/r4-fixes`, `opv/bootstrap-beacon`, `k2/real-scale`, `fin/palw-finality-consistency`, `g14/completion`, `fix/a2-uniform-new-tags` |
+| Object tag **140** | `BondCapitalAssignedV1` (旧ADR-0177 D3, signed by the bond) | yes: no variant 140–149 on HEAD, `rfc8/x8r-review`, `g14/r4-fixes`, `opv/bootstrap-beacon`, `k2/real-scale`, `fin/palw-finality-consistency`, `g14/completion`, `fix/a2-uniform-new-tags` |
 | Tags 141–149 | reserved for the lane (not used) | — |
 | Delta **190** | `BondBudgetRow { table, key, old, new }`: one generic row entry for every budget table; a new table takes a table id, not a delta number | yes (HEAD highest 173; X8R uses 180–181) |
 | Delta **191** | `BondBudgetHeader { old, new }` (the engine header; `None → Some` creates the engine) | yes |
@@ -109,7 +50,7 @@ preimage or carriage tails without a Lead commit that adds the skeleton first") 
 the two delta entries, the tail and the root block, all dormant) in **one separate commit** that the Lead can take ahead of the
 engine.
 
-## 2. The four budgets of one bond (ADR-0176 D1–D2)
+## 2. The four budgets of one bond (旧ADR-0176 D1–D2)
 
 ### 2.1 Units
 
@@ -120,7 +61,7 @@ engine.
 | `R` reward | base units (BILI × 10^8) | the most the claim can be paid on every leg (producer, seats, reserve, buyback): an Attempt its `escrowed_reward`, a free-prompt claim `quanta × worker carve` at commit (the subsidy never rises) |
 | `F` Final weight | the state's weight units (`safe_weight`) | the contribution its Final would add (`palw_claim_safe_contribution_v3` → `palw_weight_final_safe_v1`); free-prompt `quanta × palw_fp_spend_weight_v1` |
 
-**Block rights are physical and never fractional at creation.** ADR-0176 D2 forbids issuing `1/m` of a block. A bond's `B` window
+**Block rights are physical and never fractional at creation.** 旧ADR-0176 D2 forbids issuing `1/m` of a block. A bond's `B` window
 counts whole reward blocks (`U` each). A rider batch shares the lead's one block: when riders attach, the lead's block is
 *re-attributed* in fixed point. Each of the `n` riders gets `⌊U/(1+n)⌋`, and the lead keeps `U − n·⌊U/(1+n)⌋`, so the remainder
 goes deterministically to the lead and the sum is exactly `U`. Fractional rights therefore exist only as attribution of a
@@ -171,7 +112,7 @@ Q_max(C) = ⌊C · q · ρ / u⌋        B_max(C) = ⌊C · b / u⌋        R_ma
 * **Slashed capital shrinks the caps at once.** A bond whose window already exceeds the new cap admits nothing until enough
   reservations leave the window. Nothing is taken back, because it was earned under the cap of its time.
 
-### 2.4 The common clock `reuse_not_before = d + W` (ADR-0176 D4)
+### 2.4 The common clock `reuse_not_before = d + W` (旧ADR-0176 D4)
 
 * The window is rolling and **keyed on acceptance**. A claim accepted at DAA `d` counts against its bond from `d` until the first
   block whose DAA is `≥ d + W`. That block releases it before any admission in the same block (a release queue
@@ -245,7 +186,7 @@ window has emptied. Over any `W`-span, the combined reservations of the old bond
 using sub-additivity (§2.3). Bond identity is the outpoint, and no rule reads the operator key for budget purposes. Operator-level
 aggregation is not needed for this bound and is not added.
 
-### 2.9 Old claims and the new ruleset (ADR-0176 §4 migration)
+### 2.9 Old claims and the new ruleset (旧ADR-0176 §4 migration)
 
 * A claim accepted below the fence has no budget row and completes under the rules it was accepted under. Its Final and payout
   writers see no row and run unchanged.
@@ -253,10 +194,10 @@ aggregation is not needed for this bound and is not added.
   `reuse_not_before = accepted_daa + W`. If that point has already passed, the claim is not seeded. Its *ask* becomes a
   `Legacy`-origin reservation that is never consumed, because old claims are paid under old rules. A bond whose old claims fill
   its new window admits nothing new until they leave it. The upgrade therefore never grants a fresh full window on top of old
-  liabilities (ADR-0176 §4: "upgradeを満額枠の再取得経路にしない"). Seeding is one pass over the live claims, once, in the block
+  liabilities (旧ADR-0176 §4: "upgradeを満額枠の再取得経路にしない"). Seeding is one pass over the live claims, once, in the block
   that creates the engine (`None → Some`).
 
-## 3. Model-bond allocation (ADR-0177 D3–D5)
+## 3. Model-bond allocation (旧ADR-0177 D3–D5)
 
 ### 3.1 Capital assignment (tag 140, signed)
 
@@ -292,7 +233,7 @@ Epoch `t = ⌊(daa − activation) / E⌋` (POLICY `E`). The first block of epoc
 Snapshot work is bounded by the number of assignment rows. Each row cost a carried, signed object, and each holds at most
 `max_models_per_bond` entries.
 
-### 3.3 The allocation curve `A_m = S_m^α` (ADR-0177 as revised 2026-10-10; POLICY)
+### 3.3 The allocation curve `A_m = S_m^α` (旧ADR-0177 as revised 2026-10-10; POLICY)
 
 The goal changed on 2026-10-10. The allocation now strongly favours models with more effective locked miner bond. It no longer
 favours publication itself, and equal capital gets equal treatment whoever owns it. The piecewise-linear `f` of the old goal
@@ -332,7 +273,7 @@ favours publication itself, and equal capital gets equal treatment whoever owns 
 * The total budget.
 * Nothing scales block issuance, the beacon, Final weight or fork choice.
 * A capped bond gains nothing from a steeper curve (test `a_capped_bond_gains_nothing_more_from_a_steeper_curve`).
-* Large-capital concentration, adversarial capital included, is accepted as residual risk (ADR-0177 revision).
+* Large-capital concentration, adversarial capital included, is accepted as residual risk (旧ADR-0177 revision).
 * **`p = 0` compute-skipping is a separate, unresolved gate.** This curve is not evidence for it.
 
 **The verification-attestation gate** (ECON round 2, readiness §3f) is not implemented on this branch. If it lands, it is a separate
@@ -345,14 +286,14 @@ optional policy switch, off by default, and it is not evidence for `p = 0` eithe
 ### 3.4 The realized PALW budget and a model's available budget
 
 * `R_PALW(t)` is accrued as it is realized. Each chain block adds its worker carve (`worker_carve_at(subsidy, carve)`) to the
-  epoch's accumulator, before admissions. That is the existing carve (ADR-0042 D10, `palw_reward_v2.rs`) inside the fixed
+  epoch's accumulator, before admissions. That is the existing carve (旧ADR-0042 D10, `palw_reward_v2.rs`) inside the fixed
   subsidy, so **nothing new is minted** (D4).
 * `available_m = ⌊accrued · A_m / ΣA⌋ − reserved_m`. This is `0` when `ΣA = 0` (the zero-denominator rule) or `A_m = 0`. Floors
   give `Σ_m ⌊accrued · A_m/ΣA⌋ ≤ accrued`, so the sum over models never exceeds the realized budget (conservation, property-tested).
 * A claim of model `m` reserves `min(R ask, available_m)` and adds it to `reserved_m`. The model and epoch are fixed on the claim's
   row at acceptance, so a later change in `S_m` never adds rights to a past claim (D5).
 
-### 3.5 Three budgets at once (ADR-0176 "支払時はnetwork/model/bondの全予算を同時に検査")
+### 3.5 Three budgets at once (旧ADR-0176 "支払時はnetwork/model/bondの全予算を同時に検査")
 
 A payment is `≤` all of the following:
 
@@ -375,7 +316,7 @@ armed allocation fence where nobody has assigned capital pays **no** PALW reward
 
 ### 3.7 Which id is a claim's "model"
 
-An Attempt (and a rider) maps to the line that owns its `(class, artifact_root)`: `artifact_line_of_root`. Under ADR-0175 this is
+An Attempt (and a rider) maps to the line that owns its `(class, artifact_root)`: `artifact_line_of_root`. Under 旧ADR-0175 this is
 the immutable registration id. Without an owner it maps to the class id, which is also the founding line's id. A free-prompt
 claim has no root on the claim and maps to its class id. **DESIGN question §10 D-4:** whether allocation should be per
 registration or per class.
@@ -464,20 +405,20 @@ Columns: what it writes today → reserve at acceptance → consume at block / p
 | 10 | **Retire / reversal** — `retire_claim` S:28150 → `retired_safe_weight`; `reverse_convicted_final` S:24113 | — | none (no refund) | close hook (M3) |
 | 11 | **Void / conviction / default** — `void_claim` S:28011, `void_and_slash_at` S:27429 | — | none; closes the claim | close hook (M3) |
 | 12 | **Coinbase** — `palw_v2_escrow_withheld_at` P:6555, `palw_v2_merged_escrow_withheld` P:6638, `palw_v2_payout_outputs` P:7122; payout queue `write_payout` S:20076 | — | reads the clipped rows; withholding unchanged (a refused attempt is a skip) | unchanged by construction |
-| 13 | **Emission budget / breaker (ADR-0167, F-EM/F-K)** — `palw_emission_admits_v1`, 16 carves per DAA | the network budget, kept | — | unchanged (it is the network layer of §3.5) |
+| 13 | **Emission budget / breaker (旧ADR-0167, F-EM/F-K)** — `palw_emission_admits_v1`, 16 carves per DAA | the network budget, kept | — | unchanged (it is the network layer of §3.5) |
 | 14 | **RFC-0006 shard segments** — seat locks per part; `final_legs_v1` splits the panel pool by shares at Final | — | inside the Final R clip (the pool is a slice of the clipped reward) | covered by row 7 |
 | 15 | **Kernel route Final reward** — `misaka-palw-kernel` `FinalReward` (`ledger.rs` tick) → `apply_settlements` → `add_kernel_payout`; on `g14/r4-fixes` paid from the poster's job escrow (GAP-5) | kernel claim commit must reserve | FinalReward clip | **hook H-1** (dormant route; G14R branch) |
-| 16 | **OPV rewards / seal deposits / bounties** (`g14/r4-fixes`, `opv/bootstrap-beacon`) | producer rewards: as 15; bounties and deposits are slash-funded or deposit flows, not producer issuance | — | **hook H-2** (bounties outside ADR-0176; the producer FinalReward inside) |
+| 16 | **OPV rewards / seal deposits / bounties** (`g14/r4-fixes`, `opv/bootstrap-beacon`) | producer rewards: as 15; bounties and deposits are slash-funded or deposit flows, not producer issuance | — | **hook H-2** (bounties outside 旧ADR-0176; the producer FinalReward inside) |
 | 17 | **RFC-0004 typed roots** (spec jobs, `spec_on_final`) | as 15 | as 15 | **hook H-1** |
 | 18 | **RFC-0008 EXEC v2** (`rfc8/x8r-review`): `settle_at_final_v2` splits the root claim's reward leg among slice executors; EXEC_TX/EXEC_SLICE weight and DAA stay 0 | slices reserve nothing new | slices are paid from the root's clipped Final reward; a block whose coinbase attributes a worker share outside an escrowed claim must consume `U` from the bond window: `palw_bond_budget_consume_block_v1` | **hook H-3** |
-| 19 | **Model allocation** (ADR-0177) | the R clip of §3.4 | — | implemented (M2), wired (M3) |
+| 19 | **Model allocation** (旧ADR-0177) | the R clip of §3.4 | — | implemented (M2), wired (M3) |
 | 20 | **Fork choice** — `candidate_order` S:14216 (frontier, `safe_weight`, `bounded_immature`); `palw_fork_authority_v2` | — | reads the clipped weights only | unchanged by construction |
 | 21 | **DAA** — PALW weight does not feed DAA or `blue_work` (`palw_chain_weight.rs`); per-class DAA retargets from `epoch_counters` / `receipt_epoch_counters` (production census) | — | the census counts produced work, not reward; unchanged. Allocation never touches it (§3.5) | unchanged |
-| 22 | **Rule E (ADR-0178, FINX branch)**: its readers of Final weight | — | must read the *budgeted* Final weight of a claim (`PalwChainStateV2::bond_budget_final_weight`) where a row exists | **hook H-4** |
+| 22 | **Rule E (旧ADR-0178, FINX branch)**: its readers of Final weight | — | must read the *budgeted* Final weight of a claim (`PalwChainStateV2::bond_budget_final_weight`) where a row exists | **hook H-4** |
 | 23 | **RPC readers** — `get_palw_claims_call`, `get_palw_vesting_call`, `get_palw_settlement_call`, `get_palw_class_economics_call`, `get_palw_capacity_shadow_call`, `get_palw_kernel_*` | — | read clipped state; the budget itself through ops 250–253 (§8.4) | designed; ops not implemented |
 | 24 | **EVM / settlement** — `palw_settlement_v1` (sink claims), `native_delta_evidence_v1` (deltas: claims entering Final, FP spends, voids), `evm_settlements` / `MarketSettle` | — | read Final phases and spends only; amounts already clipped | unchanged |
 | 25 | **Undo / reorg / IBD / pruning** — per-block `PalwStateDeltaRecordV2`; `revert_delta_v2`/`apply_delta_v2`; pruning snapshot and IBD import of the carriage, checked against the child header's root | — | budget rows are deltas 190/191; the engine rides tail 0xEF and the root block | implemented (M2) |
-| 26 | **Reporter rewards, slash, burns** — 49% of the collected slash (ADR-0032) | not producer issuance | — | out of scope (ECON uses the net loss) |
+| 26 | **Reporter rewards, slash, burns** — 49% of the collected slash (旧ADR-0032) | not producer issuance | — | out of scope (ECON uses the net loss) |
 | 27 | **Activation-pool payouts, model fee legs, improvement grants** | funded by top-ups and sinks, not the subsidy carve | — | out of scope; listed for ECON (§10 P-6) |
 
 ## 5. State, deltas, carriage, root
@@ -598,7 +539,7 @@ These need no reader. The amounts they read are already clipped.
 
 All four show "fence dormant" until armed.
 
-## 9. Acceptance map (ADR-0176 §4, ADR-0177 §3 → tests)
+## 9. Acceptance map (旧ADR-0176 §4, 旧ADR-0177 §3 → tests)
 
 `E` = engine unit or property test (`palw_bond_budget_v1`, M2). `F` = fold-level test through `apply_palw_transition_v2` (M3).
 `N` = real-node E2E (`consensus/src/pipeline/virtual_processor/tests/budget_e2e.rs`, M3). `X` = not provable in this lane.
@@ -613,7 +554,7 @@ All four show "fence dormant" until armed.
 | **176-6** Final / retired / reversal, fork choice / DAA, RPC/EVM, restart/reorg/IBD | E `delta_round_trip`, `carriage_round_trip`; F `retire_and_reversal_refund_nothing`, `reorg_by_delta_equals_fresh`; N `budget_e2e::reorg_and_restart_replay_identical` |
 | **176-7** Panel/miner collusion, external verification, actual recovery, self-collusion bounty | **X**: G14/ECON. The budget bounds the maximum gain only; `p` and `L_collectible_net` are MEAS/ECON |
 | **177 Non-interference** | E `allocation_reads_no_availability_input` (the inputs are the state's capital and assignment rows only); F `allocation_is_independent_of_distribution` |
-| **177 Identity / court scope** | **X** (ADR-0175 fence; DA16b/K2S2 court units) |
+| **177 Identity / court scope** | **X** (旧ADR-0175 fence; DA16b/K2S2 court units) |
 | **177 Distinct capital** | E `assignments_never_exceed_capital`, `many_claims_do_not_multiply_s_m`, `pro_rata_clip_after_slash`, `seasoning_delays_increases_not_decreases`; F `assignment_replay_and_foreign_bond_refused` |
 | **177 Allocation conservation** | E `model_budgets_sum_within_accrued` (property), `zero_denominator_is_zero`, `curve_validation`, `overflow_bounds`; F `unused_model_budget_is_not_minted` |
 | **177 Same-bond opportunity** | F `model_budget_never_restores_bond_window` |
@@ -646,7 +587,7 @@ All four show "fence dormant" until armed.
 * **P-3** ρ and whether rights are sliced per claim by ρ (`slice_rights_by_rho`).
 * **P-4** the allocation epoch `E` and its tie to `W`.
 * **P-5** seasoning.
-* **P-6** `α` of `A_m = S_m^α` (interim, unapproved: 1.5), and the acceptance quantification ADR-0177's revision asks for: the capital range, the multiplier, and whether the advantage holds for allocation, actual payment or net profit below the individual caps.
+* **P-6** `α` of `A_m = S_m^α` (interim, unapproved: 1.5), and the acceptance quantification 旧ADR-0177's revision asks for: the capital range, the multiplier, and whether the advantage holds for allocation, actual payment or net profit below the individual caps.
 * **P-7** the rule for unallocated budget when `ΣA = 0` (v1: not minted).
 * **P-8** `max_models_per_bond`.
 * **P-9** fee-only Rounds: `CountAgainstBlocks` (each allocated ticket one block of `B_max`) or `ExecutionCap { rights_per_unit }`.
@@ -673,7 +614,7 @@ The test names in §9 were planned in M1. The rows below name the tests that exi
 | Area | Status | Tests that passed |
 |---|---|---|
 | Engine: caps, ceilings, ρ, split, clock, reservation, consumption, riders, deltas, carriage | verified | `palw_bond_budget_v1::tests` (27, incl. `rho_moves_q_only`, `split_capital_never_raises_caps`, `release_only_at_d_plus_w_and_closing_returns_nothing`, `delta_round_trip_and_revert`, `carriage_round_trip`) |
-| Model allocation (ADR-0177 D3–D5) | verified | `model_budgets_sum_within_accrued_and_zero_denominator_is_zero`, `many_claims_do_not_multiply_s_m_and_assignments_never_exceed_capital`, `seasoning_delays_increases_not_decreases_and_pro_rata_after_slash`, `same_s_m_same_allocation_whoever_owns_it`, `model_budget_clips_reward_and_never_restores_the_bond_window` |
+| Model allocation (旧ADR-0177 D3–D5) | verified | `model_budgets_sum_within_accrued_and_zero_denominator_is_zero`, `many_claims_do_not_multiply_s_m_and_assignments_never_exceed_capital`, `seasoning_delays_increases_not_decreases_and_pro_rata_after_slash`, `same_s_m_same_allocation_whoever_owns_it`, `model_budget_clips_reward_and_never_restores_the_bond_window` |
 | §3e BUDGET / WORK / WINDOW / NEUTRALITY / SPLIT (engine) | verified | `round_rights_reserve_once_and_release_at_d_plus_w`, `candidates_follow_work_below_the_cap_and_stop_at_it`, `the_window_is_shared_and_concurrent_draws_never_pass_the_cap`, `a_role_swap_swaps_the_allocation_and_order_is_irrelevant`, `splitting_bonds_or_claims_never_raises_candidates` |
 | Fences dormant, Some-only hashed, refused when armed | verified | `both_fences_are_dormant_some_only_hashed_and_refused_when_armed`, `fork_id_v1::`, `consensus_params_id_tests` |
 | Unarmed fold byte-identical | verified | `the_unarmed_fold_is_byte_identical_whether_the_fence_is_absent_or_scheduled_ahead`; `palw_state_v2::` (whole module), `palw_execution_quanta`, `palw_execution_lane` |
@@ -694,7 +635,7 @@ non-zero tickets needs a heavier class fixture. It is open.
 Failures on this tree that are not this lane's: the `a2u` pins for tags 109 (changed) and 113 (unpinned), and
 `dns_finality::TakeoverToken (gone)` missing from `PALW_INT12_WIRE_CHANGES_V1`.
 
-**Round 2 (2026-10-10, ADR-0177 revision).** The curve `A_m = S_m^α` is implemented and verified. There are 8 of 8 Sim tests and
+**Round 2 (2026-10-10, 旧ADR-0177 revision).** The curve `A_m = S_m^α` is implemented and verified. There are 8 of 8 Sim tests and
 the engine and fold filters pass, built on integration `d4e37155e`. Whether it is armable: no. The tests are:
 * `curve_validation_isqrt_and_exact_powers`, which checks the floor root on random 512-bit inputs and exact powers to `α = 4` at
   `S = 2^64 − 1`;

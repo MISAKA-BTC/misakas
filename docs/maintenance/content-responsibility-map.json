@@ -1,0 +1,323 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "RFC": "normative design, formats, formulas, state transitions, constraints, acceptance conditions",
+    "ADR": "context, concise choice, rationale, alternatives, consequences"
+  },
+  "explicit_transfers": [
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        1,
+        2,
+        4,
+        8,
+        19,
+        59,
+        174
+      ],
+      "target": "docs/rfc/0001-principles-and-governance.md",
+      "target_section": "9. ネットワークと基盤identity",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        30,
+        31,
+        40,
+        47,
+        50,
+        52,
+        53,
+        67,
+        70,
+        102,
+        110,
+        112,
+        116,
+        118,
+        119,
+        136,
+        172,
+        211
+      ],
+      "target": "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+      "target_section": "10. 規範演算とkernel契約",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        77,
+        78,
+        80,
+        81,
+        82,
+        219
+      ],
+      "target": "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+      "target_section": "8. 受付前tokenizerと入力資料",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        55,
+        72,
+        117,
+        145,
+        208,
+        226,
+        227,
+        228,
+        230
+      ],
+      "target": "docs/rfc/0004-fow1-execution-and-ticket.md",
+      "target_section": "10. 署名済みprefix exportと依存",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        98,
+        147,
+        210,
+        212,
+        218
+      ],
+      "target": "docs/rfc/0008-g14-panel-and-verification.md",
+      "target_section": "9. G14 assignmentと返答責務",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        183,
+        184,
+        186,
+        187,
+        189,
+        190,
+        191,
+        192,
+        193,
+        194,
+        195,
+        196,
+        197,
+        198,
+        199,
+        200,
+        201,
+        205,
+        206,
+        215,
+        217,
+        225
+      ],
+      "target": "docs/rfc/0009-court-and-claim-final.md",
+      "target_section": "10. Court容量・保持・時計の適用",
+      "status": "current-design-with-explicit-clock-proposal",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        213
+      ],
+      "target": "docs/rfc/0010-materials-and-funded-delivery.md",
+      "target_section": "8. Positive assignmentと原資契約",
+      "status": "adopted-contract-with-unallocated-wire-candidates",
+      "treatment": "担当RFCの§8/§9へ詳細契約として統合。schema候補は未割当のまま。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        214
+      ],
+      "target": "docs/rfc/0010-materials-and-funded-delivery.md",
+      "target_section": "9. 限定funding relayとcustody契約",
+      "status": "adopted-contract-with-unallocated-wire-candidates",
+      "treatment": "担当RFCの§8/§9へ詳細契約として統合。schema候補は未割当のまま。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        75,
+        147,
+        176,
+        184
+      ],
+      "target": "docs/rfc/0011-gate-c-and-consensus-credit.md",
+      "target_section": "8. 認証consumerと位置数",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        16,
+        32,
+        61,
+        64,
+        65,
+        151,
+        152,
+        160,
+        176,
+        209
+      ],
+      "target": "docs/rfc/0012-bonds-budgets-and-slashing.md",
+      "target_section": "8. claim予約の分解と期間上限",
+      "status": "adopted-budget-design-and-explicit-account-bond-proposal",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        5,
+        7,
+        37,
+        83,
+        92,
+        125,
+        130,
+        138,
+        139,
+        140,
+        142,
+        165,
+        167,
+        168,
+        169,
+        216,
+        223,
+        224
+      ],
+      "target": "docs/rfc/0014-exec-schedule-and-capacity.md",
+      "target_section": "9. 時計・heartbeat・massの境界",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        20,
+        23,
+        25,
+        60,
+        109,
+        127,
+        129,
+        178
+      ],
+      "target": "docs/rfc/0015-dag-blocks-and-settlement.md",
+      "target_section": "9. EVMとnativeの状態境界",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        3,
+        8,
+        22,
+        25,
+        41,
+        203,
+        204
+      ],
+      "target": "docs/rfc/0018-storage-pruning-and-ibd.md",
+      "target_section": "9. UTXO commitmentとPALW状態root",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        6,
+        11,
+        14,
+        15,
+        63,
+        65,
+        89,
+        95,
+        97,
+        115,
+        122,
+        174,
+        204,
+        214
+      ],
+      "target": "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+      "target_section": "9. 型・値・診断の公開契約",
+      "status": "current-design",
+      "treatment": "現行設計を仕様として統合。旧本文を複製保存しない。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/rfc/0005-qf1-qwen3-execution-profile.md",
+      "target": "docs/adr/0005-qwen3-execution-and-readout.md",
+      "kind": "rationale",
+      "text": "抽象的な層数の例では実装境界が決まらないため、特定のQwen3-8B構成を採用する。実際の層・演算・state producerへReadoutを結び付けるための選択である。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/rfc/0005-qf1-qwen3-execution-profile.md",
+      "target": "docs/adr/0005-qwen3-execution-and-readout.md",
+      "kind": "rationale",
+      "text": "全層に同じ便宜的な量子化scaleを当てると、元のモデルの品質を損ない得る。scaleを不変model parameterとして登録する選択は、再現性と層ごとの数値範囲を両立させるためである。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/rfc/0005-qf1-qwen3-execution-profile.md",
+      "target": "docs/adr/0005-qwen3-execution-and-readout.md",
+      "kind": "rationale",
+      "text": "このprofileでは生成分岐の自由度を限定し、Minerと検証者の再現性を優先してnon-thinking frameとgreedyを選択する。品質上の影響を許容できるかは別に評価する。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/rfc/0011-gate-c-and-consensus-credit.md",
+      "target": "docs/adr/0011-independent-gate-c-certification.md",
+      "kind": "rationale",
+      "text": "閉じたモデル保有者だけの承認や、反証が出なかったという事実だけでは、独立した検査機会を確認できない。このためFinalから合意資源へ進む境界に独立Gate Cを置く。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/rfc/0013-model-work-accounting.md",
+      "target": "docs/adr/0013-model-work-accounting.md",
+      "kind": "rationale",
+      "text": "標準Jobを固定してtargetを仕事量比例にする選択肢もあるが、自由な生成長とFOW1の事前固定targetを同時に扱うには追加条件を要する。MWA1は共通targetと仕事量比例の当選原資を提案し、二つの方式が混在することで仕事量を二重評価することを避ける。この選択自体も提案段階である。"
+    },
+    {
+      "direction": "ADR_TO_RFC",
+      "source_adr_numbers": [
+        213,
+        214
+      ],
+      "source_detail_paths": [
+        "docs/design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md",
+        "docs/design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md"
+      ],
+      "target": "docs/rfc/0010-materials-and-funded-delivery.md",
+      "target_section": "8 / 9",
+      "treatment": "正式採択済み契約の詳細field表・native期待値・署名・cursor・復元を統合。草案本文の重複を削除。未割当namespaceは維持。"
+    },
+    {
+      "direction": "RFC_TO_ADR",
+      "source": "docs/design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md",
+      "target": "docs/adr/0010-public-materials-and-funded-service.md",
+      "kind": "rationale",
+      "treatment": "署名循環、終端と部分精算の選択理由・不採用案を移す。"
+    }
+  ],
+  "source_coverage": "adr-map.json",
+  "scope": "Current decisions only; superseded alternatives are not reintroduced as live specifications."
+}

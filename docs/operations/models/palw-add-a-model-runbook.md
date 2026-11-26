@@ -1,50 +1,21 @@
 # 既存モデルを `.palwart` に変換してチェーンに追加する手順
 
-<!-- MOE2-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
-
-永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
-
-旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
-<!-- MOE2-ADOPTED-20261120-END -->
-
-
-<!-- MOE1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。追加登録は市場初期化を同時に完了する。別seed作業を市場成立の前提にせず、旧CLI・測定はその版として読む。FOW1資格の検証は引き続き別条件である。
-
-追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
-
-[RFC0063](../../rfc/0063-additional-model-option-economics.md) / [ADR0231](../../adr/0231-additional-model-option-economics.md) / [適用と移行](../../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
-<!-- MOE1-ADOPTED-20261120-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。既存の一般登録・FamilyCertified・着席の手順はFOW1採掘適格性の完了を意味しない。新規採掘にはRFC0062に従い、対象系列のG-COLL適合定理、G-COSTの反復費用検査、有界な適合checker、TB1対応が必要である。QwenのG-COSTは未判定である。
-
-[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **版依存の資料です。** 今回CLI・稼働nodeを再検証していません。旧資格・旧数値を現在の設計へ流用せず、[状態](../../STATUS.md) と [画像・動画・改善の当面無効化](../../governance/post-mainnet-scope.md) を先に確認してください。
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > 対象: 手元に Qwen 系の checkpoint（HF safetensors か GGUF）があり、それを MISAKA の PALW
 > クラスとして **変換 → 検証 → 登録 → 認証 → 着席** まで持っていきたい運用者。
 > 2026-09-23 時点の `feat/testnet-12-regenesis` の build で実在するコマンドだけで書いてある。
 > 開発者向けの下層（SDK の trait、lineage の追加）は [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md)、
-> 認証オブジェクトの詳細は [palw-certify-a-new-model.md](../../history/operations/model-certification/palw-certify-a-new-model.md)。
+> 認証オブジェクトの詳細は palw-certify-a-new-model.md。
 
 ## 0. 先に知っておくこと（ここを読めば残りは作業）
 
@@ -59,9 +30,9 @@
    | hybrid mmap（`qwen36-mmap-v1`） | `Qwen3.6-35B-A3B/graph-v7@512`, `…/graph-v7@2097152`, `Qwen/Qwen3.5-2B/graph-v3`, `Qwen/Qwen3.8-27B/graph-v3`, `huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3` | `Q4_K_M` の GGUF | `qwen36-convert` |
 
    **catalog に無いアーキテクチャは、ファイルを置いただけでは class にならない。** 幾何の定数と
-   catalog の行（ADR-0135 の言い方で「model は data」）、court が歩ける profile、決定論的な変換器と
+   catalog の行（旧ADR-0135 の言い方で「model は data」）、court が歩ける profile、決定論的な変換器と
    実行器、reachable kernel の裁定、conformance テストが要る（[palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md) §「新しい lineage」）。
-   例外は ADR-0108 の **class manifest 経路**（`misaka model add --manifest <file>`）で、これは
+   例外は 旧ADR-0108 の **class manifest 経路**（`misaka model add --manifest <file>`）で、これは
    「build を変えずに、inline profile / canonical job / artifact root を書いた manifest を
    Full 深度で検証してから登録する」もの。
 3. **4 つの合意が同時に成り立って初めて class は動く**: court が歩ける graph（= class id）、
@@ -71,7 +42,7 @@
    ファイル全体の digest と、graph ごとの **operand-inventory root** は別物で、held 行
    （`graph-v7@…`）や graph-v6 行が登録するのは inventory root。人が root を手で書き写す場面を
    無くすために **sidecar `.palwmanifest`** がある（§3）。
-5. **登録は permissionless だが、weight と lane は certification が買う**（ADR-0069/0075）。
+5. **登録は permissionless だが、weight と lane は certification が買う**（旧ADR-0069/0075）。
    class の kernel 集合を drill 済み family が被覆していれば floor share で着席、無ければ
    **weightless**（登録はできるが block の重みが 0、`palw_uncertified_weightless` 武装網では収益 0）。
    この build が drill できる family は 5 つ: `base0`, `qwen36`, `a16`, `a16-v5`, `qwen36-v6`。
@@ -86,7 +57,7 @@
    直すには新しい map 版と class の再登録が要る。それまで held hybrid 行は block を作らない。
    testnet-12 の genesis から hybrid 行を外したのはこのため（genesis は floor + dense
    `graph-v7@8192` + dense `graph-v7@2097152`）。
-6. **登録者は自分の class を自分では活かせない**（ADR-0145 §7）: 登録直後の状態 `Registered` は
+6. **登録者は自分の class を自分では活かせない**（旧ADR-0145 §7）: 登録直後の状態 `Registered` は
    「登録者**以外**の operator の seat が ready になる」まで `Prefetching` にも進まない。着席
    （§6）を他人に頼めることが前提。
 
@@ -116,7 +87,7 @@
     戻って rolling するので 1 回の funding で複数回持つ。genesis bond には 100 BILI の float が
     同梱されている。
 * 座席（§6）を提供するホスト: artifact を **同じファイル**で持ち、replay できるだけのメモリ。
-  artifact は mmap で host に 1 部（ADR-0136）だが、**K/V と replay の working set は class の
+  artifact は mmap で host に 1 部（旧ADR-0136）だが、**K/V と replay の working set は class の
   context に比例する**（§7 の実測）。
 
 ## 2. 変換する（Step 1）
@@ -210,7 +181,7 @@ misaka --network testnet-12 model status "Qwen3.6-35B-A3B/graph-v7@2097152"   # 
 * 何も `--yes` 無しには払わない。途中で止めても **再実行すれば chain の状態から再開**する
   （journal ではなく class table と certified families を見る）。`--no-wait` は「今の pending を
   言って終了」。
-* `--seat-ms-per-position <ms>`: fleet で一番遅い seat の実測 replay コスト。ADR-0082 D9 の
+* `--seat-ms-per-position <ms>`: fleet で一番遅い seat の実測 replay コスト。旧ADR-0082 D9 の
   seat-window 上限に使う。
 
 ### 低レベル（自動化・開発者向け）: `kaspad` の登録 flag
@@ -270,7 +241,7 @@ palw-certify inspect --object cls-fp.obj     # 何を運ぶか、この build �
   `FamilyCertified` + `ClassLaneCertified(attempt)` で座る。
 * **prompt（fp）lane**: chain 上の certified family（`FamilyCertified` で運ばれたもの）が要る。
   genesis の pin は chain の集合には数えられない（新しい identity の chain 集合は空から始まる、
-  ADR-0075 D10）ので、**fp lane は必ず drill を filing してから bind** する。
+  旧ADR-0075 D10）ので、**fp lane は必ず drill を filing してから bind** する。
 * `misaka model certify <class-id> --yes` は「この build の drill で family を filing する」だけを
   行う CLI 形（activation ではなく fence でもない）。
 * 拒否は carrier が落ちる形で現れ、fee は戻らず、理由は**ノードのログ**（`[palw-lifecycle]`）に
@@ -281,7 +252,7 @@ palw-certify inspect --object cls-fp.obj     # 何を運ぶか、この build �
 ## 6. 座席を集めて lifecycle を歩かせる（Step 5）
 
 登録した class が仕事を受けるには、**その artifact を持ち replay できる seat が
-`required_ready_seats` だけ ready** にならなければならない（ADR-0135）。
+`required_ready_seats` だけ ready** にならなければならない（旧ADR-0135）。
 
 ```bash
 misaka --network testnet-12 palw registry            # op 186: 行ごとの state・derived profile・ready seats・possession proofs
@@ -308,7 +279,7 @@ Registered ──(登録者以外の operator の seat が ready)──> Prefetc
   seat の仕事は鍵と bond があれば常に動く（`--palw-panel` は 2026-09-25 から不要。渡しても何もせず WARN が 1 行出る）。
   この seat の bond は、この 1 つの process だけで動かす（上の「低レベル」節の注意）。
   possession proof（readiness）は seat が**自動で** span ごとに出す。ただし **replay 予算が無い seat は
-  proof を出さない**（ADR-0136: 予算は host の share から導かれる）。1 host に複数 node を置くなら
+  proof を出さない**（旧ADR-0136: 予算は host の share から導かれる）。1 host に複数 node を置くなら
   `--palw-host-memory-budget` ÷ `--palw-host-node-count`、役割が違う node が同居するなら
   `--palw-host-memory-share` で明示する。足りないと「a replay needs X GiB as full-seat」を
   ログに出して deferral し続ける。
@@ -349,7 +320,7 @@ registry の正しい答え。context を狭めた行（例 `@8192`、window 3 s
 bond が同時に持てる claim 数は `担保 × 50 % ÷ (escrow + weight)` で決まり、担保に比例する。
 genesis の seat は floor 64 本 + 各 model 行 4 本で 939,063.21 BILI。
 
-market（任意、ADR-0087〜0090）: `misaka model market open <model> [--seed <BILI>]` で class の
+market（任意、旧ADR-0087〜0090）: `misaka model market open <model> [--seed <BILI>]` で class の
 founding line を seed する（最小 seed 100,000 BILI、分割払い可）。position の売買は
 `misaka position list|quote|buy|sell`。登録・認証とは独立で、後からでよい。
 
@@ -380,11 +351,11 @@ catalog row  Qwen3.6-35B-A3B/graph-v7@2097152   class id b4b891afe49a59f5…
 
 ## 10. 参照
 
-* ADR-0135（registry と lifecycle）、ADR-0136（mmap と host 予算）、ADR-0145 §7（`Registered` は
-  登録者以外の seat が要る）、ADR-0075（認証は consensus object）、ADR-0069（weight は認証が買う）、
-  ADR-0103/0119（held 行）、ADR-0108（manifest 経路）、ADR-0122（`misaka model add` と運用者 UX）、
-  ADR-0087〜0090（market）。
-* [palw-certify-a-new-model.md](../../history/operations/model-certification/palw-certify-a-new-model.md) — 5 family と手動の認証手順。
+* 旧ADR-0135（registry と lifecycle）、旧ADR-0136（mmap と host 予算）、旧ADR-0145 §7（`Registered` は
+  登録者以外の seat が要る）、旧ADR-0075（認証は consensus object）、旧ADR-0069（weight は認証が買う）、
+  旧ADR-0103/0119（held 行）、旧ADR-0108（manifest 経路）、旧ADR-0122（`misaka model add` と運用者 UX）、
+  旧ADR-0087〜0090（market）。
+* palw-certify-a-new-model.md — 5 family と手動の認証手順。
 * [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md) — 新しい checkpoint / 新しい lineage を
   SDK に載せる開発者手順。
-* [testnet-12-regenesis-2026-09-23.md](../../history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md) — testnet-12 の genesis 行と fingerprint。
+* [testnet-12-regenesis-2026-09-23.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md) — testnet-12 の genesis 行と fingerprint。

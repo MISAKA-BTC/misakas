@@ -1,6 +1,6 @@
 # 対象TFP1に束縛した資料case — 2026-11-11
 
-[native保存リンク](../tfp1-native-original-link-2026-11-11/README.md)を、受理済みのPublicOriginal・Panel抽選・署名付き資料要求へ接続する。[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)のclaim固有資料の実装であり、Minerにモデル重み全量の配信を要求しない。
+[native保存リンク](../tfp1-native-original-link-2026-11-11/README.md)を、受理済みのPublicOriginal・Panel抽選・署名付き資料要求へ接続する。[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)のclaim固有資料の実装であり、Minerにモデル重み全量の配信を要求しない。
 
 ## 変更
 

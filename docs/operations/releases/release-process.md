@@ -70,7 +70,7 @@ with its fence height and the finding that forced it, and the soak clock restart
    Fix the leg and re-run the failed jobs. The source archives come from GitHub's own release
    page.
 
-6. Update [Current network](../../history/documentation/2026-10-17/README.md#current-network--testnet-12) and
+6. Update [Current network](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/documentation/2026-10-17/README.md#current-network--testnet-12) and
    [mainnet-readiness.md](mainnet-readiness.md) in the same PR as the release notes.
 
 `RELEASE-INFO.json` looks like this. Nothing in it is typed into the workflow:
@@ -125,7 +125,7 @@ that it is on the right one.
 
 - **Reproducible builds are not checked by CI.** The release is signed as built by the workflow.
   Nothing yet rebuilds it independently and compares bytes. testnet-12's local release build did
-  match across two checkouts ([t12 launch note](../../history/networks/testnet-12/t12-launch-2026-09-25.md)).
+  match across two checkouts ([t12 launch note](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-12/t12-launch-2026-09-25.md)).
 - **The ARM64 Linux leg has not run yet.** It is a native glibc build on `ubuntu-24.04-arm`. Its
   first test is the first dry run, not a release.
 - **The SBOM describes the source tree** (the Cargo dependency graph), not a scan of each binary.

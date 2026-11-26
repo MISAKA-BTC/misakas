@@ -1,6 +1,6 @@
 # RFC-0026 F03 — owner-independent native TIR request universe
 
-Status: Proposed / Review Required implementation component, 2026-10-20. [ADR-0192 A/A detailed contract](rfc26-service-shared-frontier-contract-2026-10-20.md) and [RFC-0026](../../../rfc/0026-court-policy-master-contract.md) remain governing. No wire tag, original terms, profile adoption, preset, limit, activation, deployment or pre integration changes.
+Status: Proposed / Review Required implementation component, 2026-10-20. [旧ADR-0192 A/A detailed contract](rfc26-service-shared-frontier-contract-2026-10-20.md) and [RFC-0026](../../../rfc/0009-court-and-claim-final.md) remain governing. No wire tag, original terms, profile adoption, preset, limit, activation, deployment or pre integration changes.
 
 ## Source-derived closed query set
 

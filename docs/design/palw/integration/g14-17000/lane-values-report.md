@@ -39,7 +39,7 @@ Branch `claude/g14-values`（base `55510b56a`）。状態はすべて **目安�
 
 - 計算 script `g14_values_v1_check.py`（stdlib のみ）: 全項目 PASS。cert（f=0.25, m=75, k=41）の誤認証 4.0e-8/draw、正直認証 0.9926。D2 draw 64 は嘘の割合 ≥ 3.54% で検出 ≥ 90%、≥ 6.95% で ≥ 99%。
 - Rust 試験 `palw_g14_values_v1::tests`（7 本）: V1 の packet が a+10,000 内に収まり空の book に予約できる、V2 の schedule が組める、V3 の保存則、V11 の policy が `validate` を通り cap 42 を保つ、V4 の R=21、V5 と c_retain の一致、本番の置き場が typed-missing のまま。結果は §6。
-- PRINCIPLES §6 の 7 条件・ADR-0176 の Q/B/R/F は本 lane の値で変わらない（報酬・weight を与える値は無い）。Gate C の承認は m/k の再計算のみ。
+- PRINCIPLES §6 の 7 条件・旧ADR-0176 の Q/B/R/F は本 lane の値で変わらない（報酬・weight を与える値は無い）。Gate C の承認は m/k の再計算のみ。
 
 ## 4. 発見（統括の判断が要る）
 

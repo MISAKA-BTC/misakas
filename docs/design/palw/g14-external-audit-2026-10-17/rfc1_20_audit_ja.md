@@ -216,7 +216,7 @@ G. 不正のない32K claimが正常にFinal・報酬・ブロック機会に到
 | 02 | `misaka/palw/tir/{core,exec,lower}`、`misaka/palw/kernel` | 多数の実装あり。TIRの費用/時計、native経路、実規模の検証に残件。 |
 | 03 | `misaka/palw/gen/src/output.rs`、generative class群 | 対応コードあり。全class/profileの完了は未認定。genesis text-only外を直ちに欠落扱いしない。 |
 | 04 | `consensus/core/src/palw_improve_{v1,fold_v1,state_v1,artifact_v1}.rs` 等 | model improvement実装群あり。全改善・昇格・複合経路の完了は未認定。 |
-| 05 | `docs/rfc/0005-palw-ml-vm.md` | VMは明示的不採用。VM未実装を欠陥としない。versioned kernel方針。E25。 |
+| 05 | `docs/rfc/0001-principles-and-governance.md` | VMは明示的不採用。VM未実装を欠陥としない。versioned kernel方針。E25。 |
 | 06 | `palw_tir_shard_v1.rs`、`palw_tir_shard_fold_v1.rs`、watch | sharded検証の実装あり。全familyの独立局所化・実負荷完遂は未認定。 |
 | 07 | `misaka/palw/challenge`、検査/receipt/selected-approval adapter | 実装あり。最新記録ではadapter追加後fixture移行・m/k測定が残る。全被覆と誤差前提の確認が必要。E16/E30/E31。 |
 | 08 | `palw_exec_v2.rs`、fold、verify、rewards | EXEC実装あり。kernel/EXEC seamなど最新残件記録あり。全終端未認定。E16。 |

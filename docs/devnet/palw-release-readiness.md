@@ -2,7 +2,9 @@
 
 ## 2026-11-26 改訂後の公開候補設計
 
-11月26日配布の [RFC-0068（MOE3）](../rfc/0068-fractional-position-miner-rewards.md) と [RFC-0069（BMR1）](../rfc/0069-bft-model-retirement-and-role-bonds.md) は採択済み・未有効化。[RFC-0070（MWA1）](../rfc/0070-model-work-accounting-and-exec-credit.md) は提案段階。以下の作業順で第22〜27回の合格条件を更新する。これ以前の実測・決済証跡は当時のprofileに属する。
+現行のモデル追加・管理方針は [RFC-0007](../rfc/0007-bft-model-admission.md) と [RFC-0017](../rfc/0017-model-stop-and-retirement.md) に従う。以下の過去の試験と当時の残件は、各試験で用いたprofileの記録として読む。
+
+11月26日配布の [RFC-0068（MOE3）](../rfc/0016-position-market-and-rewards.md) と [RFC-0069（BMR1）](../rfc/0017-model-stop-and-retirement.md) は採択済み・未有効化。[RFC-0070（MWA1）](../rfc/0013-model-work-accounting.md) は提案段階。以下の作業順で第22〜27回の合格条件を更新する。これ以前の実測・決済証跡は当時のprofileに属する。
 
 | 回 | 改訂後の実装・検証方針 |
 |---|---|
@@ -20,13 +22,13 @@ BMR1のBFT恒久廃止では対象モデルに拘束された該当資産を規�
 
 | 経路・SPEC | 確認した実装入口 | 拒否・保持条件 | 残る公開候補の検証 |
 |---|---|---|---|
-| TFO3・ADR-0176 | private node、PFS3受理、selected state、cold-settlement | quantumの二重使用を拒否。未認証Finalでは報酬を保持 | S3で実受賞の決済・再起動・reorgを確認。全経路接続後の公開候補総合試験が残る |
+| TFO3・旧ADR-0176 | private node、PFS3受理、selected state、cold-settlement | quantumの二重使用を拒否。未認証Finalでは報酬を保持 | S3で実受賞の決済・再起動・reorgを確認。全経路接続後の公開候補総合試験が残る |
 | Pruned Node・RFC-v2 0012 | pruning processor、palw_pruning_capture_v1、row_stream_v1、PALW retention janitor、storage_capacity | pruning pointの状態を確保してから削除。保持義務が不明な資料は保持 | Round 16のTCP取込点DAA 13798と選択先端51258でroot・全73 UTXO一致。未決Court・決済等の実データ、資料取得、容量増加率と公開運用予算は対象別に検証 |
-| TB1・RFC-0061、ADR-0229 | palw_tb1、private_tb1_close、remoteのtb1_exposure | 資格・署名・期限・finalityを検査。finality撤回後のshare公開を停止 | 隔離3プロセスの証跡あり。通常Nodeとholderの配信、再起動、EXEC/PANEL双方の端から端までの確認 |
-| FOW1・RFC-0062、ADR-0230 | TB1 EXEC登録、TIR実行、QF1 Readoutとwork carrier | 入力・seed・契約・Ticketの一致、採用basisに応じた評価条件 | 実LLM内部値から裁定・権利消費まで同一claimで追跡 |
-| QF1・RFC-0066、ADR-0234 | tir/lower、tir/exec、qf1_local、palw_qf1のCourt、qf1_terminal_court | REVIEW_HOLD。artifact、tokenizer、trace、Readoutの一致 | 資料の期限とreorg、実機評価、通常受付とFinal後の権利を隔離profileで照合。公開採掘は別途承認 |
-| MAD2・RFC-0067、ADR-0235 | 非公開MAS1の案件受付・停止適用で、nativeのgenesis登録と選択台帳のclass・artifactを照合 | 元genesisの管理操作を拒否。追加モデルの停止が承認に優先。BFT票をclaim認証に流用しない | kernel自動・BFT YES/NOの二経路、共通技術条件、原子的fork指定、停止集合・履歴を通常処理で検証 |
-| MOE2・RFC-0064、ADR-0232 | palw_model_market_v1/moe2、private_moe2_settlement、remoteのexec_input/moe2 | 永久LPの移転・償還を拒否。過去cohortの資産・責任を保持 | 通常quoteとnative/EVM残高、同じ受賞権利の一回消費、支払と市場更新の原子性 |
+| TB1・RFC-0061、旧ADR-0229 | palw_tb1、private_tb1_close、remoteのtb1_exposure | 資格・署名・期限・finalityを検査。finality撤回後のshare公開を停止 | 隔離3プロセスの証跡あり。通常Nodeとholderの配信、再起動、EXEC/PANEL双方の端から端までの確認 |
+| FOW1・RFC-0062、旧ADR-0230 | TB1 EXEC登録、TIR実行、QF1 Readoutとwork carrier | 入力・seed・契約・Ticketの一致、採用basisに応じた評価条件 | 実LLM内部値から裁定・権利消費まで同一claimで追跡 |
+| QF1・RFC-0066、旧ADR-0234 | tir/lower、tir/exec、qf1_local、palw_qf1のCourt、qf1_terminal_court | REVIEW_HOLD。artifact、tokenizer、trace、Readoutの一致 | 資料の期限とreorg、実機評価、通常受付とFinal後の権利を隔離profileで照合。公開採掘は別途承認 |
+| MAD2・RFC-0067、旧ADR-0235 | 非公開MAS1の案件受付・停止適用で、nativeのgenesis登録と選択台帳のclass・artifactを照合 | 元genesisの管理操作を拒否。追加モデルの停止が承認に優先。BFT票をclaim認証に流用しない | kernel自動・BFT YES/NOの二経路、共通技術条件、原子的fork指定、停止集合・履歴を通常処理で検証 |
+| MOE2・RFC-0064、旧ADR-0232 | palw_model_market_v1/moe2、private_moe2_settlement、remoteのexec_input/moe2 | 永久LPの移転・償還を拒否。過去cohortの資産・責任を保持 | 通常quoteとnative/EVM残高、同じ受賞権利の一回消費、支払と市場更新の原子性 |
 
 ## 保存台帳の基準
 

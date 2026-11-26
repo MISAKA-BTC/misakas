@@ -1,0 +1,197 @@
+{
+  "previousSavedGeneration": "ef7c7a37e92c440fa3ef4f487455f1b8",
+  "run": "run-1795555955288260000",
+  "wallClockBudgetSeconds": 300,
+  "minimumFreeBytes": 12884901888,
+  "freeBytesAfter": 28614979584,
+  "exit": {
+    "status": "stopped",
+    "exitCode": 130,
+    "reason": "settlement time budget reached"
+  },
+  "nodeSHA256": "0c101f3fc49695a099e137655c456b91a526a40b08518b954f9246092604094b",
+  "matchingPeerResults": true,
+  "peers": [
+    0,
+    1,
+    2
+  ],
+  "settlement": {
+    "acceptedDaa": 7867,
+    "coveringAttempts": [
+      {
+        "bindBackstopDaa": null,
+        "certificationProgress": {
+          "attestationDeadlineDaa": null,
+          "attestations": 0,
+          "certifyByDaa": 10687,
+          "committedDaa": 8527,
+          "committedSpan": 8402,
+          "currentAnchorSpan": 8402,
+          "drawnDaa": null,
+          "drawnPositions": 0,
+          "finalDaa": 8527,
+          "outcomeDaa": null,
+          "requiredAnchorSpan": 8403
+        },
+        "claim": {
+          "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+          "acceptedBlueScore": 16530,
+          "acceptedDaa": 8247,
+          "boundDaa": 8402,
+          "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+          "claimLocalSettlement": null,
+          "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+          "committedSompi": "0",
+          "escrowedRewardSompi": 320084650080,
+          "execLane": {
+            "credit": 7708,
+            "firstRound": null,
+            "lastRound": null,
+            "span": 8649,
+            "stage": "maturing",
+            "tickets": 0,
+            "ticketsSpent": 0
+          },
+          "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+          "freePrompt": false,
+          "openCourts": 0,
+          "payoutPendingSompi": null,
+          "phase": "final",
+          "phaseDaa": 8527,
+          "phaseDeadlineDaa": 11527,
+          "quanta": 0,
+          "quantaSpent": 0,
+          "reboundDaa": null,
+          "reservationSplit": null,
+          "reservedSompi": "128877760000",
+          "seats": [
+            "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:1"
+          ],
+          "securityCertification": "pending",
+          "voidReason": null,
+          "workLeaves": 0
+        },
+        "g14PanelSeed": null,
+        "gateCGoverns": true
+      },
+      {
+        "bindBackstopDaa": 9002,
+        "certificationProgress": null,
+        "claim": {
+          "acceptedBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+          "acceptedBlueScore": 16841,
+          "acceptedDaa": 8402,
+          "boundDaa": null,
+          "claimId": "9540b648cfbc7386bc705a8c8f6c6fa89d5a8d3dcc97621c3f193b360177631d3dcb39a819554ac2b17dff4d4d678758889ed9ef28ae52f416fee8b28e34894d",
+          "claimLocalSettlement": null,
+          "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+          "committedSompi": "129197844651",
+          "escrowedRewardSompi": 320084650080,
+          "execLane": null,
+          "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+          "freePrompt": false,
+          "openCourts": 0,
+          "payoutPendingSompi": null,
+          "phase": "provisional",
+          "phaseDaa": 0,
+          "phaseDeadlineDaa": 8422,
+          "quanta": 0,
+          "quantaSpent": 0,
+          "reboundDaa": null,
+          "reservationSplit": null,
+          "reservedSompi": "128877760000",
+          "seats": [],
+          "securityCertification": "pending",
+          "voidReason": null,
+          "workLeaves": 0
+        },
+        "g14PanelSeed": {
+          "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+          "anchorSpan": 8402,
+          "bindBaseDaa": 8402,
+          "canSupplyPostCommitAnchor": true,
+          "currentSpan": 8668,
+          "hasPostCommitSeed": false,
+          "spanDaa": 1
+        },
+        "gateCGoverns": true
+      }
+    ],
+    "depth": 0,
+    "pendingAnchors": 1,
+    "safeFrontierDaa": 7866,
+    "settled": false,
+    "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+    "sinkDaa": 8667,
+    "stateRoot": "406b82e76f0aa31da4f56e12698571948c6ddc685e218a664237b4ab358d06a505a551f3ced8d3cc3b8611ce29251a878704f81cedc2e531d82a7f2f37acd8d9",
+    "uncertifiedFinalAnchors": 1
+  },
+  "newStudioQueueCreated": false,
+  "studioJobCount": 1,
+  "evidenceGeneration": "72e6a8b458184ee6ab3b67ac939f918b",
+  "matchedStudioRecords": {
+    "studio-evidence.json": "d9591a62a3e2626948518237e17456d98c6dca34ea7ecc3006f5fb8ecb583e2a",
+    "studio-run.json": "370e61c9af185a572db379f14ccf27b7c21690fe156de351886b695422e53e3c"
+  },
+  "producerOpportunities": [
+    {
+      "parent": "e8b98a81ac774f0e9f123274d49a5ce728d0e4a5313a79822ee6ceb25f431eae44246de6a65c41cdd4138d20232d4318e6f56156b256beca06487a68da58f88f",
+      "daa": 8603,
+      "elapsedSeconds": 45.008019833003345
+    },
+    {
+      "parent": "9f9abdac4872246de8303ae216710487231b969c95314b8e3663d053c1166f64025cc1de243a34d9b2474d5d620e587e6fb5ca9f7f3d0630d5c441b68ca09e6c",
+      "daa": 8635,
+      "elapsedSeconds": 45.01070070799324
+    }
+  ],
+  "producedAttempt": {
+    "acceptedBlock": null,
+    "acceptedDaa": null,
+    "artifact": "bcf2d9eb7357bd6c267df2df6588393ca71c67d7c802903ca7031948303c793dcb78bfe26488f52d0393be08e0cc0777b080e2dce9355d3576036b734545b8df",
+    "block": "3c047a6f09a2f58e9912ca70bd5a0b6552c3a796daff7fc84d53fa7441d59a97cfcffe46990fa4508dd7b03b8d1a179c56fe8d322dccddb1f19878f4cac06b67",
+    "blockDaa": 8603,
+    "claim": "a2ced403fa244a37eddf442d32aa255cf37e44a0b0aae205563ae7e4ccc9a1e9d880d4e4b86b0d16a03bbb7f15ed256fd96e01cf95903cf2296eb6bb40b4c1be",
+    "class": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+    "hasDelta": true,
+    "phase": null,
+    "selectedIndex": null,
+    "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+    "sinkDaa": 8667
+  },
+  "mergeRefusal": "ModelBlockOpportunity",
+  "savedParentLeadPreflight": [
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "matchingPeers": 3,
+      "availableUnits": 998548,
+      "candidateDaa": 8603,
+      "model": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "refusal": "the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 \u00a78.5.5)",
+      "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+      "sinkDaa": 8602
+    },
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "matchingPeers": 3,
+      "availableUnits": 1003513,
+      "candidateDaa": 8604,
+      "model": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "refusal": null,
+      "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+      "sinkDaa": 8602
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "matchingPeers": 3,
+      "availableUnits": 1321240,
+      "candidateDaa": 8668,
+      "model": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "refusal": null,
+      "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+      "sinkDaa": 8667
+    }
+  ],
+  "newStudioInferences": 0
+}

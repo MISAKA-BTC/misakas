@@ -9,9 +9,9 @@ Every cell below is a line of code or a measurement, not a setting.
 |---|---|---|---|---|---|
 | hash PoW (BLAKE2b‖SHA3) — **the anchor** | 3 | **yes** | **yes** | blue; `calc_work(bits)` | derived from the digest |
 | PALW attempt (committed / exec) | 6 / 9 | **yes** — not in `mergeset_non_daa` | yes below the single lottery; **no from 6,001** (`algo_id_is_priced_by_bits_v3`) | blue; **2^20 fixed** past `palw_attempt_work` (armed on t11) | 0 from 6,001 (`calc_block_level_check_pow_layer0_v2`) |
-| receipt spend | 7 | **yes** — not in `mergeset_non_daa` | no since ADR-0083 (`palw_receipt_rows_unpriced`) | **never blue, work 0** (`algo_id_carries_no_chain_position`) | none |
+| receipt spend | 7 | **yes** — not in `mergeset_non_daa` | no since 旧ADR-0083 (`palw_receipt_rows_unpriced`) | **never blue, work 0** (`algo_id_carries_no_chain_position`) | none |
 | heartbeat | 8 | **yes** | no | blue; work ε = 1 past the heartbeat lane; ≤ 4 per mergeset | none |
-| execution round (ADR-0125) | 10 | **no** — `is_round_block` puts it in `mergeset_non_daa` past the lane fence | no | never blue, work 0 | none |
+| execution round (旧ADR-0125) | 10 | **no** — `is_round_block` puts it in `mergeset_non_daa` past the lane fence | no | never blue, work 0 | none |
 
 Sources: `consensus/src/processes/difficulty.rs::calc_daa_score_and_mergeset_non_daa_blocks` (the only
 lane it excludes is the round lane), `consensus/src/processes/window.rs::sampled_mergeset_iterator` (the
@@ -78,17 +78,17 @@ the anchor's 120 s is shared over 10 DAA → **12 s/DAA**; **burst** — no in-e
 
 | window (DAA) | what it protects | nominal 120 s | today 450 s | 6,001 steady 12 s | burst 3.3 s | floor it was sized for |
 |---|---|---|---|---|---|---|
-| `t_leak_daa` 5,040 (ADR-0128) | a silent validator is leaked | **7.0 d** | 26 d | **16.8 h** | 4.6 h | 7 days ("DAA の 7 日") |
+| `t_leak_daa` 5,040 (旧ADR-0128) | a silent validator is leaked | **7.0 d** | 26 d | **16.8 h** | 4.6 h | 7 days ("DAA の 7 日") |
 | `reentry_final_depth_daa` 200 | a re-entering validator's anchor depth | 6.7 h | 25 h | 40 min | 11 min | hours |
 | `window_bind` 600 | a claim's panel binds | 20 h | 75 h | 2 h | 33 min | hours |
-| `window_receipt` 600 | seats replay and file | 20 h | 75 h | **2 h** | **33 min** | 20 h (ADR-0133: replay ≤ 240 s on 7 seats, page-in ~10 GiB on a 24 GiB class) |
-| `window_challenge` 120 (from 6,001, ADR-0132 §7.6) | a licensed claim can be challenged | **4 h** | 15 h | **24 min** | **6.6 min** | 4 hours |
+| `window_receipt` 600 | seats replay and file | 20 h | 75 h | **2 h** | **33 min** | 20 h (旧ADR-0133: replay ≤ 240 s on 7 seats, page-in ~10 GiB on a 24 GiB class) |
+| `window_challenge` 120 (from 6,001, 旧ADR-0132 §7.6) | a licensed claim can be challenged | **4 h** | 15 h | **24 min** | **6.6 min** | 4 hours |
 | `window_court` 3,000 | a court's clock | 100 h | 375 h | 10 h | 2.75 h | days |
 | `court_turn_deadline` 42 | one court move | 84 min | 5.3 h | 8.4 min | 2.3 min | > one replay |
 | `claim_retirement` 3,000 | claim records stay adjudicable | 100 h | 375 h | 10 h | 2.75 h | ≥ court + challenge |
 | `withdrawal_delay` 7,500 | a bond's exit | 10.4 d | 39 d | 25 h | 6.9 h | 10 days |
 | `epoch_length` 1,000 | retarget, W step, budgets | 33 h | 125 h | 3.3 h | 55 min | ~1.4 days |
-| span 5 (ADR-0125/0130) | schedule, readiness cadence | 10 min | 37 min | 60 s | 16 s | minutes |
+| span 5 (旧ADR-0125/0130) | schedule, readiness cadence | 10 min | 37 min | 60 s | 16 s | minutes |
 | readiness V1 age 30 spans = 150 | a possession proof stands | 5 h | 19 h | 30 min | 8 min | hours |
 | readiness V2 age 8 spans = 40 | (6,100) | 80 min | 5 h | 8 min | 2.2 min | tens of minutes |
 
@@ -110,13 +110,13 @@ fails the operator's criterion ("DAA traffic 依存で security/liveness window 
 
 No rollout of main or testnet-11 until the DAA clock is independent of lane traffic.
 
-## 5. The fix — ADR-0138 `palw_anchor_clock`: a block advances the DAA score iff `bits` priced it
+## 5. The fix — 旧ADR-0138 `palw_anchor_clock`: a block advances the DAA score iff `bits` priced it
 
 One rule, one place, fenced at 6,001 with the rest of the bundle:
 
 * In `internal_calc_daa_score`, subtract from the mergeset count every block that is **not** priced
   by `bits` at its own DAA (the same predicate the difficulty window already uses —
-  `algo_id_is_priced_by_bits_v3` past the single lottery). Round blocks were already out (ADR-0125);
+  `algo_id_is_priced_by_bits_v3` past the single lottery). Round blocks were already out (旧ADR-0125);
   attempt, receipt and heartbeat blocks join them.
 * **Not** through `mergeset_non_daa`: that set means "outside the DAA window, unpaid", the coinbase
   skips it (`coinbase.rs:233`) and the PALW fold skips it (`palw_v2_merged_works(.., &merged_non_daa, ..)`).
@@ -143,10 +143,10 @@ One rule, one place, fenced at 6,001 with the rest of the bundle:
   (`misaka/evm/core/src/env.rs:66`), and round blocks reach the chain only through the block that merges
   them (`utxo_validation.rs:368-382`). With chain blocks every 120 s, "1 BPS" of round blocks is
   1 BPS of **scheduling**: 30 M gas per 120 s of throughput, whatever the lane's width. The spec
-  decision and its implementation are in ADR-0139.
+  decision and its implementation are in 旧ADR-0139.
 * **Class-derived verification window vs the global receipt deadline.** `verification_window_spans`
   is read only by capacity (`panel_room_v1`, the profile); the receipt deadline is
-  `bound_daa + window_receipt` for every class. The fail-closed guard is in ADR-0133 §11.3.
+  `bound_daa + window_receipt` for every class. The fail-closed guard is in 旧ADR-0133 §11.3.
 
 ---
 
@@ -155,7 +155,7 @@ One rule, one place, fenced at 6,001 with the rest of the bundle:
 Four gates, run against the frozen candidate. Two things the fix itself created, both closed here;
 one residual on the blue axis, reported as a release blocker below.
 
-## 7. ADR-0138 re-audited: the clock's own holes
+## 7. 旧ADR-0138 re-audited: the clock's own holes
 
 **Every DAA increment site.** One: `SampledDifficultyManager::internal_calc_daa_score`
 (`consensus/src/processes/difficulty.rs`). Both callers — the template's
@@ -171,7 +171,7 @@ fence combination, including the heights where the attempt and receipt lanes are
 therefore still tick) and `the_classification_is_a_pure_function_every_node_computes_alike`.
 
 **The freeze the first version created, and the double-count the obvious fix would have created.**
-ADR-0066 took the heartbeat out of `bits`, so the first cut of ADR-0138 exempted it too — and a chain
+旧ADR-0066 took the heartbeat out of `bits`, so the first cut of 旧ADR-0138 exempted it too — and a chain
 whose hash lane stops still beats, which means its DAA score would have **frozen** while blocks kept
 coming: every fence, deadline, retention and leak window stopped with it. The registry drill showed
 this on a running chain: virtual DAA 20, unmoved, with 183 blocks accepted.
@@ -205,7 +205,7 @@ iteration order enters either.
 
 ## 8. RELEASE BLOCKER, NOW CLOSED (blue axis) — the DNS leak's evidence window is walked in blue score while the leak is decided in DAA
 
-ADR-0138 made the DAA score slower than the blue score, and one rule reads both.
+旧ADR-0138 made the DAA score slower than the blue score, and one rule reads both.
 
 * The leak fires when `anchor_daa − last_attested_daa ≥ t_leak_daa` (5,040 on testnet-11):
   `dns_bft_v1.rs:368`, decided in **DAA**.
@@ -216,8 +216,8 @@ ADR-0138 made the DAA score slower than the blue score, and one rule reads both.
   testnet-11 (`dns_bft_v1.rs:55-60,110`; the runtime loop at
   `virtual_processor/dns_bft.rs:186-203` breaks on `compact.blue_score < floor`).
 
-Before ADR-0138 blue and DAA advanced together, so walking 5,244 of blue reached back ≥ 5,040 of DAA
-and ADR-0128's own sentence held: *"Absence inside a window at least `t_leak_daa` long is silence of
+Before 旧ADR-0138 blue and DAA advanced together, so walking 5,244 of blue reached back ≥ 5,040 of DAA
+and 旧ADR-0128's own sentence held: *"Absence inside a window at least `t_leak_daa` long is silence of
 at least `t_leak_daa`, so the lower-edge fallback is exact rather than a guess."* Now the attempt
 lane adds blue without adding DAA: at the work target's steady state (`fp_attempt_share_permille =
 900`, so ~0.9 attempt blocks an anchor) 5,244 blue reaches back **~2,760 DAA**, and
@@ -227,7 +227,7 @@ lane adds blue without adding DAA: at the work target's steady state (`fp_attemp
 honest validator is leaked — the fallback under-states silence, never over-states it) and wrong for
 the overlay: a validator that stops attesting is never removed from the counted set, so a two-stage
 BFT quorum can be held below threshold by bonds that never speak, the DNS-final anchor stops
-advancing, and the stake reorg gate freezes at its last confirmation. ADR-0128's stated purpose —
+advancing, and the stake reorg gate freezes at its last confirmation. 旧ADR-0128's stated purpose —
 "inactivity leak は再実装して … 正しく有効化できるようにして" — is defeated on the flag day, silently.
 
 **Fixed (2026-09-18, same session).** The window covers both spans:
@@ -236,7 +236,7 @@ advancing, and the stake reorg gate freezes at its last confirmation. ADR-0128's
 union's start is the deeper of them and the slice stays contiguous — and the runtime loop ends only
 where both are behind it. `dns_bft_window_lower_edge_daa_v1` and `dns_bft_is_final_evidence_v1` read
 the same predicate. Where the two clocks agree, which is every height below `palw_anchor_clock`, the
-window is the blue-only one ADR-0128 shipped, block for block; and the DNS gate and the leak both
+window is the blue-only one 旧ADR-0128 shipped, block for block; and the DNS gate and the leak both
 arm at 6,001, so nothing below the flag day changes. Pinned by
 `a_silent_bond_is_leaked_whether_blue_runs_with_the_daa_clock_or_twice_as_fast`: at blue-to-DAA
 ratios of 1, 2 and 4 the window still reaches back at least `t_leak_daa` of DAA and a silent bond is
@@ -269,7 +269,7 @@ and DNS validators must attest more often per unit time. Reaching finality depth
 chain harder to reorg, which is the safe direction. **Recommendation:** accept and document these
 four, and close §8 before arming — it is the one that turns a security mechanism off.
 
-## 10. ADR-0139 re-audited
+## 10. 旧ADR-0139 re-audited
 
 `evm_distinct_permitted_rounds_v1` is the whole rule and it is now one function in consensus-core,
 read by validation and by the template alike. `one_round_buys_one_budget_however_many_blocks_or_permits_it_carries`
@@ -281,7 +281,7 @@ filling one round with blocks cannot even reach the count. The cap saturates at
 `EVM_CHAIN_BLOCK_GAS_CEILING_V1` (390 M) and is committed as the EVM header's `gas_limit`, so a
 reorg that changes the round set changes the commitment and the block does not reconstruct.
 
-## 11. ADR-0133 §11.3 re-audited — the units
+## 11. 旧ADR-0133 §11.3 re-audited — the units
 
 `verification_window_spans` (spans) × `fold.span_daa` (DAA a span) vs `window_receipt()` (DAA): one
 unit on both sides. The safety the operator asked about is inside the derivation, not the
@@ -298,7 +298,7 @@ testnet-11 one.
 ## 12. The registry fence re-audited — consensus side, not just the node
 
 Holding the node's own submitter was not enough: anyone can put a `ClassRegistered` object on the
-chain below the fence (its acceptance is gated by ADR-0049's admission, not by the registry's
+chain below the fence (its acceptance is gated by 旧ADR-0049's admission, not by the registry's
 height), and the C-1 fix means no node can ever derive that class's work from the chain. **The first
 boundary past the fence now gives such a class an inert row** — `Registered`, zero work, admission
 zero — instead of leaving it row-less: it admits no claim (`ClassNotAdmitting{Registered}`), it

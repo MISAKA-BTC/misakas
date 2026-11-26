@@ -1,0 +1,102 @@
+{
+  "generation": "bda15b77344d4277b7a1a63c690da3a1",
+  "matchingPeers": [
+    0,
+    1,
+    2
+  ],
+  "journalWalks": [
+    {
+      "added": 0,
+      "anchor": "9c4b43244541bfd732c1fb13e34a11bc9cf73f4036e5747b32a3d9288e008c47bcf3420252dc854f5b40c945a1f0382f0e542cd0ea98de59aa5921b3daa31f92",
+      "removed": 0
+    },
+    {
+      "added": 0,
+      "anchor": "9c4b43244541bfd732c1fb13e34a11bc9cf73f4036e5747b32a3d9288e008c47bcf3420252dc854f5b40c945a1f0382f0e542cd0ea98de59aa5921b3daa31f92",
+      "removed": 0
+    },
+    {
+      "added": 0,
+      "anchor": "9c4b43244541bfd732c1fb13e34a11bc9cf73f4036e5747b32a3d9288e008c47bcf3420252dc854f5b40c945a1f0382f0e542cd0ea98de59aa5921b3daa31f92",
+      "removed": 0
+    }
+  ],
+  "transition": {
+    "acceptedDaa": 7867,
+    "after": {
+      "anchor": {
+        "acceptedDaa": 8247,
+        "block": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "blueScore": 16530,
+        "certifiedDaa": 8703,
+        "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "finalDaa": 8527
+      },
+      "block": "9c4b43244541bfd732c1fb13e34a11bc9cf73f4036e5747b32a3d9288e008c47bcf3420252dc854f5b40c945a1f0382f0e542cd0ea98de59aa5921b3daa31f92",
+      "coveringGateC": "certified",
+      "daa": 8703,
+      "depth": 1,
+      "frontierDaa": 8247,
+      "root": "83da1432c4fafbb1e6843db755ed74846323047d4b4f962a2b8b33c591bbc660718dfa7e1a251721ee577caa1127bb9683592fc183a79f65eaaa25f1b392577f",
+      "settled": true
+    },
+    "award": {
+      "acceptingBlock": "a67a8c278fb7bee9f05fc02f76461d276809db894920232e998f60d1879ba77dfaaa49f7a3e7085c41d2c79fcecc9fb0010649a2c8dbaf349892761b9a942ec5",
+      "child": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "receipt": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "scriptPublicKey": "000076c440d5c3f916d3636b881f3d561267a3022620139b5c6877f6df7b792e8fef0f8eea02c38ecee3c729b94d1c0a9dbcce888c06ae657b0279b3593cf3cd43b48e45ee88a6",
+      "unspent": true,
+      "valueSompi": 320084650080
+    },
+    "before": {
+      "anchor": {
+        "acceptedDaa": 7866,
+        "block": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+        "blueScore": 15762,
+        "certifiedDaa": 8440,
+        "claim": "0f354a68ea0d46e3ff51ede51559a2af92b567aeba2a6a66adb8903847a48828a7ab40994d58e96e85ba584d0d6cf57a91c71fcce8c2c0705e042413f6f1db8e",
+        "finalDaa": 8370
+      },
+      "block": "2c76bf283ce40b92af2559ca9d4b216df110dc90d7fc28bb41d9bde15696bc8748a7ab29a6044ddbada815eee3f3ab486d0f5cd6b640ec5c565f0ec829ce7ed3",
+      "coveringGateC": "pending",
+      "daa": 8703,
+      "depth": 0,
+      "frontierDaa": 7866,
+      "root": "f5d77df1a54ac7513242db8e502afe3da7b4d5641a2cd72a1d4b15352a2544d31a13070e681fa14ac4e7ccfaee6bcb33b1fdd33f044d5e473945a5388c77f34f",
+      "settled": false
+    },
+    "childCommitmentToParent": "f5d77df1a54ac7513242db8e502afe3da7b4d5641a2cd72a1d4b15352a2544d31a13070e681fa14ac4e7ccfaee6bcb33b1fdd33f044d5e473945a5388c77f34f",
+    "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+    "coldSettlementRollbackReapplied": true,
+    "coldUtxoRowsCompared": true,
+    "coveringClaim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+    "deltaBytes": 24624,
+    "quantum": 0,
+    "sink": "9c4b43244541bfd732c1fb13e34a11bc9cf73f4036e5747b32a3d9288e008c47bcf3420252dc854f5b40c945a1f0382f0e542cd0ea98de59aa5921b3daa31f92",
+    "snapshotPrimaryBytes": 6530741,
+    "stepsFromSink": 1,
+    "utxos": {
+      "after": {
+        "commitment": "1e56b5cf050e3eb242ca15795ff02312f482411cf3c3a2c77e901ad7b76b82bdc2c46b2b30cc910129b7dd2bc25bfd7021066ca1cf013fb1f8a9cc0b56dce387",
+        "rows": 2259
+      },
+      "before": {
+        "commitment": "c02b03dfe2746631bea200207dfd1957e6c43d644bd1e6128bc1e31cc644dac3591fa238b2e4bc5b47877d001ac1df3a87a497d4281d99ffb6dfe961f886644d",
+        "rows": 2259
+      }
+    }
+  },
+  "allocatedScratchSstBytesByPeer": [
+    1363968,
+    1363968,
+    1363968
+  ],
+  "pendingGenerationsCheckedOnAllPeers": [
+    "ef7c7a37e92c440fa3ef4f487455f1b8",
+    "72e6a8b458184ee6ab3b67ac939f918b"
+  ],
+  "nonReceiptRejected": true,
+  "sourceDbFileSizesAndMtimesUnchanged": true
+}

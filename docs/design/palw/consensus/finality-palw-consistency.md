@@ -5,7 +5,7 @@
 > branch `fin/palw-finality-consistency`. The fix ships in the single full-activation release (C3 or rule E — the user's choice).
 
 Lane FINX · branch `fin/palw-finality-consistency` (from the integration head `9ea89994b`) · decision draft:
-[ADR-0178](../../../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md).
+[旧ADR-0178](../../../rfc/0015-dag-blocks-and-settlement.md).
 
 **Status (2026-10-09): rule E ADOPTED by the user and IMPLEMENTED behind the dormant fence `palw_fork_choice_rule_e_v1`** (§10).
 §0–§9 are the analysis that led there, unchanged: the candidates in the model (`consensus/core/tests/finality_palw_consistency_model.rs`)
@@ -57,8 +57,8 @@ anything), and a partition longer than the seal (rule K, a 2/3-participation che
 
 **testnet-12 as shipped** (MEASURED `finx_p0_facts`): finality depth 600 blue, merge depth 30, pruning depth 74,920; windows bind 600,
 receipt 600, challenge 1,200 with the short window (120) armed from DAA 0, court 3,000; anchor delay 20, quorum 3; strict-win and the
-pruning-proof strict-economic commit at DAA 750, F-W at 1,700; **frontier provenance (ADR-0065 D2) `None`**; DNS overlay configured and
-**the DNS BFT veto (ADR-0128) armed from DAA 0** (`dns_bft_gate`, params.rs:22443). `dns_bft_gate_refusal` runs in `dns_reorg_outcome`
+pruning-proof strict-economic commit at DAA 750, F-W at 1,700; **frontier provenance (旧ADR-0065 D2) `None`**; DNS overlay configured and
+**the DNS BFT veto (旧ADR-0128) armed from DAA 0** (`dns_bft_gate`, params.rs:22443). `dns_bft_gate_refusal` runs in `dns_reorg_outcome`
 before the V2 arm and refuses a candidate that abandons the last DNS-final anchor — when the rollout stage is Active, an anchor is
 confirmed, it is not stale (TTL 120 DAA on the node's own chain) and the gate is not abstaining; otherwise it answers nothing and the V2
 arm decides. The harness runs the overlay in Bootstrap (no validators), so every pipeline test here measures the V2 arm alone. t12's DNS
@@ -132,7 +132,7 @@ The way out is an input an honest partition side has and a private branch does n
   whose claims matured; and forgeable on a private branch by a quorum-holding adversary that grinds its panels (MODEL, panel collusion);
 * **bonded participation** — a pre-fork bond's signature on an attempt above the fork. An attempt is signed by its bond over its own
   challenge, which binds its parents, so it cannot be copied onto another branch; header-verifiable; bonds minted after the fork are
-  already excluded by ADR-0065 D2's set difference. A private branch carries only the attacker's bonds; an honest side carries its own;
+  already excluded by 旧ADR-0065 D2's set difference. A private branch carries only the attacker's bonds; an honest side carries its own;
 * **external** — operators, checkpoints (`--checkpoint`, `trusted_checkpoint`), the DNS overlay's BFT votes (armed on testnet-12 from
   DAA 0; RFC-0012 proposes retiring them). The DNS overlay is itself a stake-signed finality layer; it bounds V6 while it confirms
   (§3.1) but does not heal a partition: a side whose DNS-final anchor is on its own branch refuses the other branch outright.
@@ -165,7 +165,7 @@ i.e. the DNS confirmation lag (GAP: the live lag is not measured here; it is the
 disappears when the overlay is not Active, when validators stall past the veto's 120-DAA TTL, when the gate abstains, and when RFC-0012
 retires the overlay — then the window below applies. As a function of the victim's anchor lag `L` (sink DAA minus its last DNS-final
 anchor's DAA) and the veto's TTL (120 DAA): reach `L − 1` DAA for `3 < L ≤ 120`, none for `L ≤ 3`, the finality depth for `L > 120` or no
-Active/confirmed overlay (ADR-0178 §6). **So C3 or rule E is a hard prerequisite of arming the DNS retirement** (ADR-0178 §6).
+Active/confirmed overlay (旧ADR-0178 §6). **So C3 or rule E is a hard prerequisite of arming the DNS retirement** (旧ADR-0178 §6).
 
 Window without the veto (DERIVED from the rules; ~120 s a DAA): lower bound 3 DAA (≈ 6 min) — the shallow window is 2. Upper bound the
 victim's finality point (600 blue: 154–300 DAA, 5.2–10.2 h). In practice the carrier form closes once the public chain carries licences of its own claims
@@ -179,7 +179,7 @@ published small-value rule (30 blue score above, attempts continuing) does not p
 outranks every key the attacker can bring), as does waiting for the finality depth.
 
 **A note on the fix's definition.** An attacker can also make a post-fork claim "shared": fork earlier and merge the public attempts made
-between the fork and X (their pasts exclude X; ADR-0058 counts merged work). Their claims are then "above the fork" on both branches, and
+between the fork and X (their pasts exclude X; 旧ADR-0058 counts merged work). Their claims are then "above the fork" on both branches, and
 their licences and `Final`s are timing-sensitive again. So C3 and rule E close V6 only when "portable" and "participation" are taken over
 each tip's **exclusive past** (blocks in one tip's past and not the other's) — merged honest attempts then cancel — not over "accepted
 above the fork's blue score". In the model's tree (no merging) the two definitions coincide; the merge variant is not exercised (§9).
@@ -499,7 +499,7 @@ chains a node can follow, so a mixed network still disagrees.
 
 ## 10. Rule E, implemented (2026-10-09)
 
-Decision record: [ADR-0178](../../../adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md) §4 (as implemented) and §9.
+Decision record: [旧ADR-0178](../../../rfc/0015-dag-blocks-and-settlement.md) §4 (as implemented) and §9.
 Code: `consensus/core/src/palw_fork_choice_rule_e_v1.rs`, `consensus/core/src/palw_fork_choice_rule_e_leaf_v2.rs`,
 `consensus/src/pipeline/virtual_processor/palw_rule_e.rs`; the gate in `dns_reorg_outcome`, the continuation in
 `sink_search_algorithm`, the IBD commit and the relay in `protocol/flows`. Leaf v2 (for lane L2FC): `rule-e-leaf-v2-note.md`.
@@ -558,23 +558,23 @@ named, unchanged and still passing.
 * **The leaf-v2 window opening** refused a valid opening whose boundary record was the window's first (exactly one record at or below
   the fork): the verifier read "a boundary exists" as "the range does not start at 0". Fixed (c8bf7eca6), with the case in the test.
 
-### 10.3 Residuals (stated; ADR-0178 §5 and §9)
+### 10.3 Residuals (stated; 旧ADR-0178 §5 and §9)
 
 Heartbeat-only partitions stay split; a partition longer than the seal stays split on the relay path (the minority's way back is the
 IBD commit, which rule E decides for the majority, or a verified resync); IBD ties keep the incumbent; a lighter branch with no
 registered bond's attempt above the fork is never weighed by the search's continuation; a flood that takes the continuation's eight
 validations needs header-level participation at least the honest branch's.
 
-### 10.4 ADR-0176 and ADR-0177 (2026-10-10)
+### 10.4 旧ADR-0176 and 旧ADR-0177 (2026-10-10)
 
-Recorded in ADR-0178 §10–§11. In short: participation is one per bond however many claims; the economic keys read the claim through
+Recorded in 旧ADR-0178 §10–§11. In short: participation is one per bond however many claims; the economic keys read the claim through
 `PalwRuleEBondBudgetV1` (lane BUDGET implements it) and credit each `(bond, version, window)` at most `F_max` on both keys —
 MEASURED in `a_fast_forger_counts_once_and_its_budget_caps_its_credit` (a 20,000-claim forger and an honest bond of the same budget
 tie at `F_max`; without an allocation the same records sum to 1,500 `F_max`); `a_record_reads_the_allocation_and_the_streamed_side_is_the_records_side`
 pins that a node's streamed side equals the records' side with and without an engine. **Finding**: the 16,384-claim fail-closed
-was a veto purchasable with claim volume under ADR-0160 S (ρ = 1,000: 100 claims a DAA per 13,000 MSK bond); a node now streams
-each side and never refuses on volume; the bound remains for a leaf window and a client's opening only. ADR-0177: rule E reads no
-availability input (ADR-0178 §10 lists its inputs and the two indirect readers).
+was a veto purchasable with claim volume under 旧ADR-0160 S (ρ = 1,000: 100 claims a DAA per 13,000 MSK bond); a node now streams
+each side and never refuses on volume; the bound remains for a leaf window and a client's opening only. 旧ADR-0177: rule E reads no
+availability input (旧ADR-0178 §10 lists its inputs and the two indirect readers).
 
 ### 10.5 The 2026-10-10 drill "permanent split" — not a fork-choice split (MEASURED)
 

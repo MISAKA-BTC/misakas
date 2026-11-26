@@ -66,7 +66,7 @@
 
 **満たすべき要件:** RFC01 §6(2)–(5)、mission amendment: produce/replayのbit一致、公開反証、prefix/batch同値、fence越えFinal。
 
-**不足位置:** `docs/rfc/0001-palw-inference-surface-gaps.md:370–377; consensus/core/src/palw_step_refute.rs:5959,5969; consensus/core/src/palw_state_v2/transition_builder.rs:5792–5793; misaka/palw/base0/src/fp_worker.rs:1256`
+**不足位置:** `docs/rfc/0003-jobs-tokenizers-and-generation.md:370–377; consensus/core/src/palw_step_refute.rs:5959,5969; consensus/core/src/palw_state_v2/transition_builder.rs:5792–5793; misaka/palw/base0/src/fp_worker.rs:1256`
 
 **何が成立しないか:** constraint courtやrender自体が無い、という旧記録は現コードに合わない。一方、drill producerが存在することだけで、改定後の全fence・実class・公開告発・Final/支払いの組合せを合格にできない。
 
@@ -328,7 +328,7 @@
 
 **満たすべき要件:** RFC11現行§18: D_completeは全task・提供する全contextでon-chain registration、片側95%下限90%以上。未対応architectureも分母に残す。
 
-**不足位置:** `docs/rfc/0011-permissionless-model-and-long-context-onboarding.md:684–719; misaka/palw/sdk/src/census/onboarding.rs:90–143`
+**不足位置:** `docs/rfc/0007-bft-model-admission.md:684–719; misaka/palw/sdk/src/census/onboarding.rs:90–143`
 
 **何が成立しないか:** FrontendRequired/KernelExtension/ProfileRequired/NotRunを区別するコードはある。Audio/Video profile欠落、実32K artifact/registration/court未完を除外して成功率を作ることは仕様違反。8つのtext-only genesis成功だけでもRFC11全体の達成にはならない。
 
@@ -641,7 +641,7 @@
 
 **満たすべき要件:** RFC19 §11/§12.1: annual新規model ID/root追加のみ、旧モデル保持、実推論をH前後で確認。
 
-**不足位置:** `docs/rfc/0019-annual-model-upgrade.md:320–327,406; scripts/drills/rfc0019_rolling_upgrade_drill.py:391`
+**不足位置:** `docs/rfc/0007-bft-model-admission.md:320–327,406; scripts/drills/rfc0019_rolling_upgrade_drill.py:391`
 
 **何が成立しないか:** driver choicesはrolling/switch/stale/boundary/restart/livenessのみ。catalog editionのswitchが通っても新旧実モデルの推論成功を証明しない。R7/R8は実際に新モデルを追加するeditionから必須で、edition0同梱fenceの初回試験と区別する。
 
@@ -661,7 +661,7 @@
 
 **満たすべき要件:** RFC20 §2/§3/§5.5/§7: consume-on-read、位置run、spill、streaming fidelityの意味同一性と8K/16K/32K計測。
 
-**不足位置:** `misaka/palw/tir/lower/tests/position_blocks.rs:125; docs/rfc/0020-long-context-calibration-memory.md:128–157`
+**不足位置:** `misaka/palw/tir/lower/tests/position_blocks.rs:125; docs/rfc/0002-tensor-ir-kernels-and-runtime.md:128–157`
 
 **何が成立しないか:** carry消費/spill/runの実装と7architecture toy参照テストはあるが、記録は実モデル8K/16K/32Kのpeak RAM/時間を未計測とする。32K drift-windowsはTIR用で、legacy #1/#8の不足は13-A。
 

@@ -235,7 +235,7 @@ equal at every position before anything was timed):
 
   None of these changes a byte; each is held by the same gate (§7).
 - **The bigger lever: batch positions into each dispatch** (built since: §11). A seat's replay is one forward, a layer at a
-  time over all positions (ADR-0117 "a draw is one forward"; `forward_prefill_planned` in
+  time over all positions (旧ADR-0117 "a draw is one forward"; `forward_prefill_planned` in
   `misaka-palw-base0` does exactly this for the legacy engines). If the device executor evaluates each
   occurrence for ALL positions of a job before the next, dispatches per claim scale with
   **nodes × layers** instead of **nodes × layers × positions**. Today that is 948 dispatches per position
@@ -381,7 +381,7 @@ and `device_ledger_v1`, "a device's memory when a GPU backend arrives". How a ba
 `BatchReplay` (`experiments/palw-tir-gpu/src/batch.rs`) is §6's bigger lever. A seat replaying a committed
 job — a claim's prefill-and-decode run, a court's step leg, RFC-0006's cell over a position segment —
 holds every token before it starts. So it runs the occurrences in schedule order, and each occurrence
-ONCE over a chunk of positions: ADR-0117's "a draw is one forward", what `forward_prefill_planned`
+ONCE over a chunk of positions: 旧ADR-0117's "a draw is one forward", what `forward_prefill_planned`
 in `misaka-palw-base0` does for the legacy engines. The per-position semantics are unchanged: a
 layer's carry-in at position `p` is its predecessor's carry-out at `p`, and history rows are appended
 in position order.

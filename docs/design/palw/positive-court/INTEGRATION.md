@@ -2,7 +2,7 @@
 
 ## 番号と現行文書数
 
-**A0適用注記（2026-10-31）:** 下段には元ZIPの整理計画を保持する。現在のローカル採択IDはユーザー指定の**RFC-0044 / ADR-0212**。既存RFC-0042 / ADR-0210は別内容のため保持した。添付の旧番号・本数を現checkoutの番号割当として使わない。[実装状態](IMPLEMENTATION-STATUS.md)と[native契約](NATIVE-CONTRACT-R1.md)が現時点の接続状況を示す。
+**A0適用注記（2026-10-31）:** 下段には元ZIPの整理計画を保持する。現在のローカル採択IDはユーザー指定の**RFC-0044 / 旧ADR-0212**。既存RFC-0042 / 旧ADR-0210は別内容のため保持した。添付の旧番号・本数を現checkoutの番号割当として使わない。[実装状態](IMPLEMENTATION-STATUS.md)と[native契約](NATIVE-CONTRACT-R1.md)が現時点の接続状況を示す。
 
 添付の最新ZIPは旧番号のRFC41本・ADR204ファイルを含み、`docs/rfc-v2/`と`docs/adr-v2/`は含まない。本パッケージでは履歴用にRFC0042 / ADR0210を追加する。別branch予約は未確認。
 

@@ -113,8 +113,8 @@ user: may the census range-read `pytorch_model.bin`'s zip directory and `data.pk
   EfficientNet / MobileViT classifiers are not;
 * **reward is not claimed**: a `Head` class's verification coverage, public material, Panel-independent prosecution (G14) and
   collateral are this profile's PRINCIPLES §6 conditions and are not shown by this lane. The fence is refused when armed until the
-  full-activation release. (2026-10-10, ADR-0177: G14 is conditional on the verifier having acquired the registered model, and the
-  effective detection probability can be 0 for a model nobody serves; ADR-0176: any reward would draw on `palw_bond_budget_v1`,
+  full-activation release. (2026-10-10, 旧ADR-0177: G14 is conditional on the verifier having acquired the registered model, and the
+  effective detection probability can be 0 for a model nobody serves; 旧ADR-0176: any reward would draw on `palw_bond_budget_v1`,
   which does not exist yet.)
 
 ## 6. Re-measurement (RFC-0011 §18's three numbers), 2026-10-09
@@ -209,7 +209,7 @@ fetched one, so nobody could say how many lower, admit or fit a kernel route.
 | 2. registered full task, full advertised context / `D_complete` | **0** (LB 0.00 %) | **0** (LB 0.00 %) |
 | 3. mined and a funded `Final` / `D_complete` | **0** — every fence stays unarmed | **0** — until the full-activation release arms them |
 
-Numbers 2 and 3 are counts of evidence under ADR-0175 (`registrations.py`): the one H1 record (a private devnet, 512 of 32,768 positions)
+Numbers 2 and 3 are counts of evidence under 旧ADR-0175 (`registrations.py`): the one H1 record (a private devnet, 512 of 32,768 positions)
 is excluded for both reasons. **Number 1 moved +0.19 point** — 14 of the 347 re-judged rows now reach shape-ready: 11 of the 40 sampled MLX rows (`MLX_QUANT_V1`) and 3 fine-tunes that ship no
 tokenizer and bind their base's (`Options::base_tokenizer`); the encoder-family features below move NO shape-ready count, because the generative route's position-sized bounds refuse
 every encoder class (§6) — which is why they are reported against the kernel route instead. The 90 % bar is on number 2; nothing in this

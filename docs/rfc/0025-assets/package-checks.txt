@@ -1,8 +1,0 @@
-Package checks (document-level only)
-Main RFC: 697 lines; 29412 Unicode characters
-Relative markdown links/explicit anchors checked: 17
-Top-level JSON parse checks: passed
-Markdown code fences: paired
-Key topic coverage checks: passed
-Result: PASS
-This is not an implementation, cryptographic, or network acceptance check.

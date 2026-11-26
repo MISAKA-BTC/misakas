@@ -1,0 +1,1680 @@
+{
+  "run": "run-1795531117263218000",
+  "sourceSnapshot": "eb54edd4f11d485594811d5e45b58a66",
+  "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+  "identity": {
+    "version": 1,
+    "genesisHash": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "consensusParamsId": "5ba9ad0813d64cbd87fc0122734e19d586b985c6fcb92c816109c1367f8dddec",
+    "networkDomain": "a8591a53aef9855c44234281d7cd779d14a16183d0b015bb29b0b1d41ec3c8f73fc10f24b0246da355ad5cfebd6ff056326ed53d545f67d0bdc0a5b228a792ee",
+    "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+    "transactionId": "738126ecf5c3655e0be2f187476072fc3aa61f72d57af832317ae28b65ce291a27655c4d4c47c24c2058cda8908314e0d31a7ea05e527952a580d49bc0104917",
+    "executionRoot": "b0750a9bebe275d615a6b05da82446a86bd058fd8bc48478801ad0e6f0ce30192d5980b4a811bf0567f96af58d832db0c0992961e910e9500c9b2a1d99a1c7a3"
+  },
+  "studioRun": "1a20d11114087f32688",
+  "additionalStudioInference": 0,
+  "wallLimitSeconds": 3600,
+  "sourceAdmission": 4002,
+  "sourceAcceptingBlock": "5f407fbe63aab6a042509069bcf763d8d8222f90c182c22fc6c3731b7e8ddb287f17b6e83eff0310bf2d4e606448c04aec4b9c8e8cb3c740ddd65025ee5f5e8d",
+  "nodeBuild": "0df0ba62ed457b7a11390fe76c432ca4ad3cff847500dd799cc31a3cbabfb62f",
+  "stages": {
+    "final": {
+      "sha256": "5f62ed60005291faa79010db57b61c5a907eafa90e96cd892ad0b7fc19b82cdd",
+      "peerViews": {
+        "55423": {
+          "selected": "d030b56ae464069e6769787ed636f1901244abde7f35e0d7693478b192dc915b537e7372689d724327b471c7c8ccb876b4deb6ce2989b2f4ff9dee00bff5d26f",
+          "daa": 7123,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": null,
+            "approvals": 0,
+            "attempt": false,
+            "attestations": 0,
+            "committedDaa": 7123,
+            "deadlineDaa": null,
+            "drawn": false,
+            "drawnDaa": null,
+            "draws": 0,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": null,
+            "outcomeDaa": null,
+            "veto": 0
+          }
+        },
+        "55433": {
+          "selected": "d030b56ae464069e6769787ed636f1901244abde7f35e0d7693478b192dc915b537e7372689d724327b471c7c8ccb876b4deb6ce2989b2f4ff9dee00bff5d26f",
+          "daa": 7123,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": null,
+            "approvals": 0,
+            "attempt": false,
+            "attestations": 0,
+            "committedDaa": 7123,
+            "deadlineDaa": null,
+            "drawn": false,
+            "drawnDaa": null,
+            "draws": 0,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": null,
+            "outcomeDaa": null,
+            "veto": 0
+          }
+        },
+        "55443": {
+          "selected": "d030b56ae464069e6769787ed636f1901244abde7f35e0d7693478b192dc915b537e7372689d724327b471c7c8ccb876b4deb6ce2989b2f4ff9dee00bff5d26f",
+          "daa": 7123,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": null,
+            "approvals": 0,
+            "attempt": false,
+            "attestations": 0,
+            "committedDaa": 7123,
+            "deadlineDaa": null,
+            "drawn": false,
+            "drawnDaa": null,
+            "draws": 0,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": null,
+            "outcomeDaa": null,
+            "veto": 0
+          }
+        }
+      },
+      "selected": "d030b56ae464069e6769787ed636f1901244abde7f35e0d7693478b192dc915b537e7372689d724327b471c7c8ccb876b4deb6ce2989b2f4ff9dee00bff5d26f",
+      "virtualDaa": 7123,
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "certificationStatus": "pending",
+      "drawSlot": null
+    },
+    "gate-c-certification": {
+      "sha256": "0b29d078ae98c7f4d690f3fa7adc1bbde9a99f2c25cb9c578b740f0843a82de0",
+      "peerViews": {
+        "55423": {
+          "selected": "b3a2aa5992f2d9e0b590b7b91b645b42f92707528e9a0886135c2d3c120b93fb2902ffc92bd11eac3e3a40e5714c1f4697bc047fd1f03a4433f3f30e62ef6fa8",
+          "daa": 7795,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        },
+        "55433": {
+          "selected": "b3a2aa5992f2d9e0b590b7b91b645b42f92707528e9a0886135c2d3c120b93fb2902ffc92bd11eac3e3a40e5714c1f4697bc047fd1f03a4433f3f30e62ef6fa8",
+          "daa": 7795,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        },
+        "55443": {
+          "selected": "b3a2aa5992f2d9e0b590b7b91b645b42f92707528e9a0886135c2d3c120b93fb2902ffc92bd11eac3e3a40e5714c1f4697bc047fd1f03a4433f3f30e62ef6fa8",
+          "daa": 7795,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        }
+      },
+      "selected": "b3a2aa5992f2d9e0b590b7b91b645b42f92707528e9a0886135c2d3c120b93fb2902ffc92bd11eac3e3a40e5714c1f4697bc047fd1f03a4433f3f30e62ef6fa8",
+      "virtualDaa": 7795,
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "certificationStatus": "certified",
+      "drawSlot": 7835
+    },
+    "receipt-checkpoint": {
+      "sha256": "c4a49348de6d0219a7aa438a3b3bf9c6824a2856ddfece1060397a168aff726a",
+      "peerViews": {
+        "55423": {
+          "selected": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+          "daa": 7867,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        },
+        "55433": {
+          "selected": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+          "daa": 7867,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        },
+        "55443": {
+          "selected": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+          "daa": 7867,
+          "phase": "final",
+          "phaseDaa": 7123,
+          "panelSeats": 1,
+          "certification": {
+            "anchorSpan": 7766,
+            "approvals": 42,
+            "attempt": false,
+            "attestations": 3,
+            "committedDaa": 7123,
+            "deadlineDaa": 9206,
+            "drawn": true,
+            "drawnDaa": 7766,
+            "draws": 75,
+            "finalDaa": 7123,
+            "heldRewardSompi": 0,
+            "k": 41,
+            "m": 75,
+            "negatives": 0,
+            "outcome": "Certified",
+            "outcomeDaa": 7795,
+            "veto": 0
+          }
+        }
+      }
+    }
+  },
+  "panelAcceptance": {
+    "acceptedDaa": 4323,
+    "acceptedTxOrdinal": 1,
+    "acceptingBlock": "36e3aa5b9929b43423f3470826200cd825fc95e4020ab43fc4f05b93fae7c12af0c72486b9845301ad1b84df9f3bbb7d4590178b4c2c509c4a558a6f2b729649",
+    "bond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:4",
+    "carrierBlock": "9781f8f8ae2d0220e1ad77a8e98ab5dbc8b2c79834b61d84a80bcf396e4352a9248d717cf2c0fcd12b260f6cdc5422aff3a287d8c66026f225ee166308cf4d05",
+    "carrierTransaction": "c17702f1f9e2a25a9f871752082159fabd3228fe627c9c37230991a728107bca6b5db04b240eab793b12362799d04260c6369b2ff5d15f5e59efd8a4014455a1"
+  },
+  "fundedAttemptOpportunity": {
+    "quote": {
+      "model": {
+        "availableSompi": 660413139307,
+        "cPermille": 1000,
+        "capitalSompi": "27042118542",
+        "epoch": 10,
+        "model": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "reservedSompi": 0,
+        "tier": "approved",
+        "weight": "4446937937251777"
+      },
+      "epoch": {
+        "accruedSompi": 185649097046400,
+        "index": 10,
+        "startDaa": 7280,
+        "sumA": "1250081143960606145"
+      },
+      "consumedBlockUnits": 0,
+      "earliestFullBlockDaa": 7561,
+      "nowDaa": 7570
+    },
+    "startDaa": 7570,
+    "elapsed": 53.300105291,
+    "blocks": [
+      {
+        "hash": "e087dd83073ea3634249097054e587b4d3758527ae0a17762bcbb4c537591c25de5c45d050a761251991fba641817c819dfbabda4e9abec36317d160fafde614",
+        "daa": 7569,
+        "algo": 8
+      },
+      {
+        "hash": "3cf64be8c22616acaec9332cd4bb21498c8322dbc2e5bfffca7ee9bbdc0650746fdd16e75f9f54c39b5f44d92fbf42f565bf91be9dd4cc289bc71ae54718b027",
+        "daa": 7570,
+        "algo": 8
+      }
+    ],
+    "certification": {
+      "anchorSpan": null,
+      "approvals": 0,
+      "attempt": false,
+      "attestations": 0,
+      "committedDaa": 7123,
+      "deadlineDaa": null,
+      "drawn": false,
+      "drawnDaa": null,
+      "draws": 0,
+      "finalDaa": 7123,
+      "heldRewardSompi": 0,
+      "k": 41,
+      "m": 75,
+      "negatives": 0,
+      "outcome": null,
+      "outcomeDaa": null,
+      "veto": 0
+    }
+  },
+  "attemptRefusals": [
+    "2026-11-24 23:45:32.256+09:00 [INFO ] PALW: merged blue 258ed8e4db02f5158e598fd5d3655c153788c1b9363282e5a7847b1996a9146c6f8cec981a09bb977e45792cc44087cb16237d6bd70add0a14de649733a20eaf carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-24 23:47:33.290+09:00 [INFO ] PALW: merged blue cd325cf55de7c2caa51d2a2e596924823ad669efea22648eb3f6a4a6422765083c930272091255b507bc6be7f0aea83d6b714a948ad200232f3b31f0e5ea20a2 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-24 23:50:25.139+09:00 [INFO ] PALW: merged blue 71c1c23ba5d93fffb1e7dee81a724bb7a2efac7e9418e16d66571ef3681a27d8ad918035979cd3bd4222b1371ca70d2ea4f4cf990f5dcc0ab5885a823bea2d0b carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-24 23:52:31.480+09:00 [INFO ] PALW: merged blue 5315aa4fda9173b22f962d6fa527e46c379bcf2a0654d0ff74d22012461f6f55d4ffbf40903f10868e23f65d6306390c3ae3d7a5678f5c7289458afff5f265d7 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-24 23:52:33.546+09:00 [INFO ] PALW: merged blue 5315aa4fda9173b22f962d6fa527e46c379bcf2a0654d0ff74d22012461f6f55d4ffbf40903f10868e23f65d6306390c3ae3d7a5678f5c7289458afff5f265d7 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-24 23:59:18.337+09:00 [INFO ] PALW: merged blue 9131430bd03a3c2653b62e26c1a4c91b3552c7b2184cc73ec9703f7b55823c1d1b9336587f0011e89e8c4f022024d644eef2e6b01843ff23784bc437b846a678 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:01:55.194+09:00 [INFO ] PALW: merged blue 1560aea6755528bac97c4c8e890fc5183de6977d5583dc728aea8f2a97699c264753f0d07d4551c02580d4235c0f262555d34f53d23a5dffebfb7ef381f6394a carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:22:02.221+09:00 [INFO ] PALW: merged blue e0590a1ef53de7a629b28c0bade4a47cb0b644479fba868eb363f05a781ac1187ab800ad340d03d476bd58281f4f41a6d5635a314ed0ddedf8f95aa0e606fe16 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:25:49.953+09:00 [INFO ] PALW: merged blue 4e8b19e344919c4f16c79ff072fc11789f484344c01edefa703f2d783b8e7d0710ef91532c9317f9be11b4498ed8c390a4f65cafa730224a8fb3a89477e59ac2 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:25:51.210+09:00 [INFO ] PALW: merged blue 4e8b19e344919c4f16c79ff072fc11789f484344c01edefa703f2d783b8e7d0710ef91532c9317f9be11b4498ed8c390a4f65cafa730224a8fb3a89477e59ac2 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:31:04.283+09:00 [INFO ] PALW: merged blue 07474ebb8b317d76746b392b9fcd0a1b1734df3b6373cd89959863f901a90ea669d253b7f60903202a46757dce45ae0281e0b3df5a9cb2a66c441faffcd51dda carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)",
+    "2026-11-25 00:33:15.245+09:00 [INFO ] PALW: merged blue debbc908ec56041d386a026ac8a5e6ff9affdd2eb0bc439fa81c39efb1a6331b8006f9c91b9f7d1e6de6abfed13f341341b0c3695f114515bb4d5eeb9c903c91 carried work this chain point refused (the accepting block stands): bond PalwBondKeyV2(TransactionOutpoint { transaction_id: e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742, index: 0 })'s budget refuses the claim: the model's block opportunity P_m is used up this allocation epoch (ADR-0177, RFC-0015 §8.5.5) (ADR-0176)"
+  ],
+  "winning-draw-6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1": {
+    "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+    "draw": {
+      "allLoseThroughDeadline": false,
+      "beaconBlock": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "beaconDaa": 7866,
+      "budgetRefusalStateRoot": null,
+      "candidateDaa": 7867,
+      "claimReserveSompi": "1620720000000",
+      "exportHold": {
+        "capSompi": "405180000000",
+        "untilDaa": 17123
+      },
+      "lastEligibleDaa": 8466,
+      "maximumRemainingTarget": "85070591730234615865843651857942052863",
+      "selectedParent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "spendBudgetFits": true,
+      "target": "42492857642785034246503491573461008384",
+      "tickets": [
+        "13913882171893198229823730785476142575",
+        "329763988227706722339376747801124950600",
+        "97305162006876945561298076379749970807",
+        "283842280861363119046251351135913287842",
+        "323073622463386847935526996734343055391",
+        "178138871714938301937591259618499002145",
+        "26104121302529840615149040016498591144",
+        "254556178581130161789178792850908443915",
+        "202867069038320111440123173432548965490",
+        "251783176303289624973969718503700291979",
+        "322337097297569558519444516335511028067",
+        "233584831711947999512413813613372458579",
+        "303593089676904253568699643241541588113",
+        "273329750649740541800271494464412449489",
+        "63960131136897500846429510380683207942",
+        "84654770564830886886763943420515353439",
+        "112787280732864785332562671337225339281",
+        "301908631508373031425669993541351753629",
+        "163329536536934445438276494995898739717",
+        "216856175493679619083868118037428392364",
+        "149318472661982703629743242917552132423"
+      ],
+      "winningIndices": [
+        0,
+        6
+      ],
+      "workerCarveSompi": "320084650080"
+    }
+  },
+  "receipt-payout": [
+    {
+      "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "receiptDaa": 7866,
+      "child": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+      "childDaa": 7866,
+      "acceptingBlock": "a67a8c278fb7bee9f05fc02f76461d276809db894920232e998f60d1879ba77dfaaa49f7a3e7085c41d2c79fcecc9fb0010649a2c8dbaf349892761b9a942ec5",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "output": {
+        "amount": 320084650080,
+        "scriptPublicKey": "000076c440d5c3f916d3636b881f3d561267a3022620139b5c6877f6df7b792e8fef0f8eea02c38ecee3c729b94d1c0a9dbcce888c06ae657b0279b3593cf3cd43b48e45ee88a6",
+        "isCoinbase": true,
+        "blockDaaScore": 7867
+      },
+      "utxoObservation": "unspent-at-read",
+      "receiptSubsidy": 444562014000
+    },
+    {
+      "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "receiptDaa": 7866,
+      "child": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+      "childDaa": 7866,
+      "acceptingBlock": "a67a8c278fb7bee9f05fc02f76461d276809db894920232e998f60d1879ba77dfaaa49f7a3e7085c41d2c79fcecc9fb0010649a2c8dbaf349892761b9a942ec5",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "output": {
+        "amount": 320084650080,
+        "scriptPublicKey": "000076c440d5c3f916d3636b881f3d561267a3022620139b5c6877f6df7b792e8fef0f8eea02c38ecee3c729b94d1c0a9dbcce888c06ae657b0279b3593cf3cd43b48e45ee88a6",
+        "isCoinbase": true,
+        "blockDaaScore": 7867
+      },
+      "utxoObservation": "unspent-at-read",
+      "receiptSubsidy": 444562014000
+    },
+    {
+      "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "receiptDaa": 7866,
+      "child": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+      "childDaa": 7866,
+      "acceptingBlock": "a67a8c278fb7bee9f05fc02f76461d276809db894920232e998f60d1879ba77dfaaa49f7a3e7085c41d2c79fcecc9fb0010649a2c8dbaf349892761b9a942ec5",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "output": {
+        "amount": 320084650080,
+        "scriptPublicKey": "000076c440d5c3f916d3636b881f3d561267a3022620139b5c6877f6df7b792e8fef0f8eea02c38ecee3c729b94d1c0a9dbcce888c06ae657b0279b3593cf3cd43b48e45ee88a6",
+        "isCoinbase": true,
+        "blockDaaScore": 7867
+      },
+      "utxoObservation": "unspent-at-read",
+      "receiptSubsidy": 444562014000
+    }
+  ],
+  "exit": {
+    "status": "stopped",
+    "exitCode": 130
+  },
+  "window": {
+    "run": "/Users/wata/.local/share/misaka-tfo3-award/network-s3/run-1795531117263218000",
+    "nativeExit": 130,
+    "reason": "wall-limit",
+    "elapsed": 3615.965180292,
+    "freeBytes": 5128712192
+  },
+  "award": {
+    "receiptAudit": {
+      "actualClaimCompletion": false,
+      "actualPanelWorkerExecutionVerified": false,
+      "beaconBlock": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+      "gateCCertifiedObserved": true,
+      "headerHashChecked": true,
+      "kind": "protectedReceiptObservationAudit",
+      "nativeReceiptEnvelopeValidated": true,
+      "quantumIndex": 0,
+      "quantumTicketHex": "0a77b75af6d1444e135d45abfc0fe5ef",
+      "spendId": "036ccc63db1f5b14891cf3f63a586589230c016ed362213f51663f7bc2179163afcdc7b7f3f4652ab147080a5ea8b51d3c6e6a66b0bd0931fe40c4dca579fe89",
+      "spentIndexObserved": true,
+      "statefulChecksSource": "native selected-chain RPC observation",
+      "version": 1
+    },
+    "receiptFirstAcceptance": [
+      {
+        "peer": 0,
+        "route": "relay",
+        "log": "/Users/wata/.local/share/misaka-tfo3-award/network-s3/run-1795531117263218000/clock/peer-0.log",
+        "event": "2026-11-25 00:19:16.521+09:00 [INFO ] Accepted block bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb via relay"
+      },
+      {
+        "peer": 1,
+        "route": "submit block",
+        "log": "/Users/wata/.local/share/misaka-tfo3-award/network-s3/run-1795531117263218000/clock/peer-1.log",
+        "event": "2026-11-25 00:19:16.197+09:00 [INFO ] Accepted block bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb via submit block"
+      },
+      {
+        "peer": 2,
+        "route": "relay",
+        "log": "/Users/wata/.local/share/misaka-tfo3-award/network-s3/run-1795531117263218000/clock/peer-2.log",
+        "event": "2026-11-25 00:19:17.139+09:00 [INFO ] Accepted block bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb via relay"
+      }
+    ],
+    "receiptPeerObservations": "receipt-observation-0001.peers.json"
+  },
+  "nativeConsumedAudit": {
+    "audit": {
+      "awardAccounting": {
+        "blockUnitsAfter": 1000000,
+        "blockUnitsBefore": 0,
+        "child": "528fd3047558ab5c2bf9239fe87c3522a017abccf9eb4cd171e695ddef3e8aeaa525d0ca6cd75af9cddc01d5f365ea45f3171d3abe7a4e5cb3b1fe8d111e180f",
+        "claimReserveSompi": "1620720000000",
+        "executionRoot": "b0750a9bebe275d615a6b05da82446a86bd058fd8bc48478801ad0e6f0ce30192d5980b4a811bf0567f96af58d832db0c0992961e910e9500c9b2a1d99a1c7a3",
+        "markerPresent": false,
+        "obligationId": "66631835cc1b27fc90ad9f6188a6bf1a2c70ac811580aedff2476e52ad0d25c29a73c9b6c791eaf6a600fcbc4054e71f32d792c2e0ff52fd13235f081efeb7c9",
+        "rewardConsumedAfter": 320084650080,
+        "rewardConsumedBefore": 0,
+        "rewardDebitSompi": 320084650080,
+        "root": "4dd909dc29c6ab9b857c2014e311dcf84198152ef1d064226f771f27430bc7856ac2ddafdde27e0fa187004a0b22d3624338cc97507080f891e2b56defcef559",
+        "scheduledWorkerCarveSompi": 320084650080,
+        "spentAfter": 1,
+        "spentBefore": 0,
+        "workId": "cdcd47649550055c38bb53073c12ee9cb66ba1b3636a1fccef4a40c071b197da6687720db6027ca7e69967c5609d689e23ada3ab1e362bd0456a47e33281e1ce"
+      },
+      "awardParent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "awardParentRoot": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9",
+      "beacon": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+      "gateC": {
+        "attestations": [
+          {
+            "attestedDaa": 7795,
+            "transcript": "a9cf19cd859804932bfc45529cf1add51d8a70cd4a5cd1b628fdc1ade2e5368d8654d7f45b8efb6d4f2e509cb878876d7dd26e3ec7ac4fdacbf4f57d289d5eef",
+            "verdict": "Reproduced",
+            "verifier": "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329"
+          },
+          {
+            "attestedDaa": 7795,
+            "transcript": "0f24c2e75d3ada6b161a770819e64f60b88d408a90d91688cd74ec1def9b6431edd22f2ac478ccd0cf5c549fdc617e9aa45c23a618c699f3d7a5506c3bec9479",
+            "verdict": "Reproduced",
+            "verifier": "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a"
+          },
+          {
+            "attestedDaa": 7795,
+            "transcript": "6f07d7c2dc03f1d64fab7c53380c27f99f37ef12694682cd2efc6ad19f5f78315428fbbf98f4e5a37c661084e9e8fc1fb2b1facd9564f87c891f465f33924bfa",
+            "verdict": "Reproduced",
+            "verifier": "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c"
+          }
+        ],
+        "certifiedDaa": 7795,
+        "drawnDaa": 7766,
+        "draws": [
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "385ff3812b9b8cb2baff56549dd2f822634cef037f2a8982fb59a22e38359ba5c1f75cda5dcf56038f7397a5ca680ed10a090c02de44389107e151881563a50e",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "2c44a815fa552f12ee6ce3807209d6b2eb35e6474fd1a0c11cde04a7025d7752009e433fe84fdcac84195d91994a53a3f45af8b5e58bf62148ec848d038635e7",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "d7941ad8b651bff9441f9f05ecd104f1dcc3b21836b907d2b554045c6401544ee78d0a2ff2f61cffb07f8fcc1d10b1d509598cca70ff9b032606768ec9ad1545",
+          "ff4767c12cb8d352eae2c279626fff5e8b8197715132628716442b7ca06b17730a9ec31f2128de983ed83e253d719248f8db841e2cd2773ffaf58124766ddbc4",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c",
+          "e56640e40c93f3739e1c81cd39406060222dbe8b1e743cf4f22cc8db6dbb65e2859562b894263ea27df478f05c09631f3bc3f2ae8c5a2c62a7c8b09e1e75075a",
+          "94757649b0e0396d23b648e3fe900cc4926b2086a49ac7bb36b51721fe77a5510090436228d8290ab1d56729309554eafcdb947700ddcbd76ef7f16589498329",
+          "516333c40cb42134fd37c21a73e383593b307a62973eda19a148d7b7f948c374f4aa652d77739932c7d4e1359bceddcc57205ec91061f0cf9e845732dffe089c"
+        ],
+        "finalDaa": 7123,
+        "positivePositions": 42,
+        "producerBond": "192641ce3b7532616a12b4b0886dcdf659a43531933bf66dfa76418e60b4115030ebd0d6ef9337f7fe255a41656d6379cfc044035b4e982c979b7db2fdc762c3"
+      },
+      "nativeAdmissionError": "QuantumAlreadySpent",
+      "payoutMaturity": {
+        "acceptedDaa": 7867,
+        "ageDaa": 4,
+        "classicFloorDaa": 1,
+        "classicFloorReached": true,
+        "maturityWithoutAnchorDaa": 600,
+        "spendableWithoutAnchor": false
+      },
+      "quantumIndex": 0,
+      "receipt": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "spendId": "036ccc63db1f5b14891cf3f63a586589230c016ed362213f51663f7bc2179163afcdc7b7f3f4652ab147080a5ea8b51d3c6e6a66b0bd0931fe40c4dca579fe89",
+      "statePoint": "3356211968f87550454fee76813c3eac937f9a362f99e2834add8876eaf1d5cd5aafe56d8f31b474c0b194046ce24d0271d76a571b54b49fd5154de8b251f3f6",
+      "stateRoot": "100505611d69acb08bd10c9c75cbcd4a2ad7eeb04e0d0244b685de5c8cafe767a1d32efbf903b0c337b0fa37469277357ab12f90aa4fc391b6de4db80989cc01",
+      "target": "42492857642785034246503491573461008384",
+      "ticket": "13913882171893198229823730785476142575"
+    },
+    "peers": [
+      {
+        "parent": "3356211968f87550454fee76813c3eac937f9a362f99e2834add8876eaf1d5cd5aafe56d8f31b474c0b194046ce24d0271d76a571b54b49fd5154de8b251f3f6",
+        "root": "100505611d69acb08bd10c9c75cbcd4a2ad7eeb04e0d0244b685de5c8cafe767a1d32efbf903b0c337b0fa37469277357ab12f90aa4fc391b6de4db80989cc01",
+        "bytes": 6488798,
+        "sha256": "46cd17862fbb03cef01af976fb8e81adb8836fbbf0af7a9722fb3e47c0ac504f"
+      },
+      {
+        "parent": "3356211968f87550454fee76813c3eac937f9a362f99e2834add8876eaf1d5cd5aafe56d8f31b474c0b194046ce24d0271d76a571b54b49fd5154de8b251f3f6",
+        "root": "100505611d69acb08bd10c9c75cbcd4a2ad7eeb04e0d0244b685de5c8cafe767a1d32efbf903b0c337b0fa37469277357ab12f90aa4fc391b6de4db80989cc01",
+        "bytes": 6488798,
+        "sha256": "46cd17862fbb03cef01af976fb8e81adb8836fbbf0af7a9722fb3e47c0ac504f"
+      },
+      {
+        "parent": "3356211968f87550454fee76813c3eac937f9a362f99e2834add8876eaf1d5cd5aafe56d8f31b474c0b194046ce24d0271d76a571b54b49fd5154de8b251f3f6",
+        "root": "100505611d69acb08bd10c9c75cbcd4a2ad7eeb04e0d0244b685de5c8cafe767a1d32efbf903b0c337b0fa37469277357ab12f90aa4fc391b6de4db80989cc01",
+        "bytes": 6488798,
+        "sha256": "46cd17862fbb03cef01af976fb8e81adb8836fbbf0af7a9722fb3e47c0ac504f"
+      }
+    ],
+    "selectedBlock": "cc6acd34b2b43740646380f1cf175249863928b40e1f92894fa3818accc4de6fcca9e8a53643c8fb8aad24f195bd13baee220a05e4fc3618f5e6fe181bafa040",
+    "awardParent": {
+      "parent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+      "root": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9",
+      "bytes": 6488374,
+      "sha256": "351088a70b5eea0841b1fc3302917c84e121515ca5f446d02dc3902f7cb2608d"
+    },
+    "awardApplied": {
+      "parent": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+      "root": "4dd909dc29c6ab9b857c2014e311dcf84198152ef1d064226f771f27430bc7856ac2ddafdde27e0fa187004a0b22d3624338cc97507080f891e2b56defcef559",
+      "bytes": 6488474,
+      "sha256": "beebcd933dcbd712c7319e371cb96d1d694b7e2fc2deb927ec86a7b8763f94df"
+    },
+    "workerOutpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+    "workerUtxo": {
+      "amount": 320084650080,
+      "scriptPublicKey": "000076c440d5c3f916d3636b881f3d561267a3022620139b5c6877f6df7b792e8fef0f8eea02c38ecee3c729b94d1c0a9dbcce888c06ae657b0279b3593cf3cd43b48e45ee88a6",
+      "isCoinbase": true,
+      "blockDaaScore": 7867
+    },
+    "exitCode": 0
+  },
+  "settlementObservations": [
+    {
+      "epochTime": 1795534022.624377,
+      "sinkDaa": 7996,
+      "epoch": {
+        "accruedSompi": 459641557514880,
+        "index": 10,
+        "startDaa": 7280,
+        "sumA": "1250081143960606145"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 2000000,
+      "oneBlockAvailableFromDaa": null,
+      "nextEpochDaa": 8000,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 7996,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 7996,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 7996,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534031.058052,
+      "sinkDaa": 8001,
+      "epoch": {
+        "accruedSompi": 960253950240,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 0,
+      "oneBlockAvailableFromDaa": 8201,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8001,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8001,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8001,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534193.0050209,
+      "sinkDaa": 8067,
+      "epoch": {
+        "accruedSompi": 43531512410880,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 0,
+      "oneBlockAvailableFromDaa": 8201,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8067,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8067,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8067,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534320.985066,
+      "sinkDaa": 8133,
+      "epoch": {
+        "accruedSompi": 85462601571360,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 0,
+      "oneBlockAvailableFromDaa": 8201,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8133,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8133,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8133,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534450.6254342,
+      "sinkDaa": 8197,
+      "epoch": {
+        "accruedSompi": 127073606081760,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 0,
+      "oneBlockAvailableFromDaa": 8201,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8197,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8197,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 0,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8197,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534599.4408178,
+      "sinkDaa": 8247,
+      "epoch": {
+        "accruedSompi": 158761986439680,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 1000000,
+      "oneBlockAvailableFromDaa": 8402,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8247,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8247,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 10528,
+          "safeFrontierDaa": 5256,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8247,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534607.95904,
+      "sinkDaa": 8251,
+      "epoch": {
+        "accruedSompi": 161322663640320,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 1000000,
+      "oneBlockAvailableFromDaa": 8402,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8251,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8251,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8251,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534701.512635,
+      "sinkDaa": 8298,
+      "epoch": {
+        "accruedSompi": 191410620747840,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 1000000,
+      "oneBlockAvailableFromDaa": 8402,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8298,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8298,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8298,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    },
+    {
+      "epochTime": 1795534710.768578,
+      "sinkDaa": 8302,
+      "epoch": {
+        "accruedSompi": 194291382598560,
+        "index": 11,
+        "startDaa": 8000,
+        "sumA": "895750221063043962"
+      },
+      "weight": "4446937937251777",
+      "reservedBlockUnits": 1000000,
+      "oneBlockAvailableFromDaa": 8402,
+      "nextEpochDaa": 8720,
+      "settlement": [
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8302,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8302,
+          "uncertifiedFinalAnchors": 0
+        },
+        {
+          "available": true,
+          "daaScore": 7867,
+          "depth": 0,
+          "depthIsLowerBound": false,
+          "pendingAnchors": 1,
+          "safeFrontierBlueScore": 15560,
+          "safeFrontierDaa": 7766,
+          "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+          "settled": false,
+          "sinkDaa": 8302,
+          "uncertifiedFinalAnchors": 0
+        }
+      ]
+    }
+  ],
+  "coveringAttemptReceipt": [
+    {
+      "peer": 55423,
+      "selected": "16e0de3de3c9918f57f7618354603bf5f7657aa0a65ca60d83e3c0702b83a92447b82717debb8a7d5ab8f35752944061bb16ffc6be2bb77a52378f30cb5d952a",
+      "daa": 8253,
+      "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+      "detail": {
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "acceptedDaa": 8247,
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "boundDaa": null,
+        "phaseDeadlineDaa": 8267,
+        "securityCertification": "pending",
+        "voidReason": null
+      }
+    },
+    {
+      "peer": 55433,
+      "selected": "16e0de3de3c9918f57f7618354603bf5f7657aa0a65ca60d83e3c0702b83a92447b82717debb8a7d5ab8f35752944061bb16ffc6be2bb77a52378f30cb5d952a",
+      "daa": 8253,
+      "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+      "detail": {
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "acceptedDaa": 8247,
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "boundDaa": null,
+        "phaseDeadlineDaa": 8267,
+        "securityCertification": "pending",
+        "voidReason": null
+      }
+    },
+    {
+      "peer": 55443,
+      "selected": "16e0de3de3c9918f57f7618354603bf5f7657aa0a65ca60d83e3c0702b83a92447b82717debb8a7d5ab8f35752944061bb16ffc6be2bb77a52378f30cb5d952a",
+      "daa": 8253,
+      "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+      "detail": {
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "acceptedDaa": 8247,
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "boundDaa": null,
+        "phaseDeadlineDaa": 8267,
+        "securityCertification": "pending",
+        "voidReason": null
+      }
+    }
+  ],
+  "coveringAttemptBeforeStop": [
+    {
+      "port": 55423,
+      "selected": "a433b8dcebefa0338a80c5a9ac503237392709d9169c591a25651c1d3a3ea1f7ec737adcd4bf0444b7067e6bd4e19e88b9dde1811ba21f70ae3b09c71e7765c1",
+      "tipDaa": 8300,
+      "claim": {
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "acceptedBlueScore": 16530,
+        "acceptedDaa": 8247,
+        "boundDaa": null,
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "claimLocalSettlement": null,
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "committedSompi": "129197844651",
+        "escrowedRewardSompi": 320084650080,
+        "execLane": null,
+        "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "freePrompt": false,
+        "openCourts": 0,
+        "payoutPendingSompi": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "phaseDeadlineDaa": 8267,
+        "quanta": 0,
+        "quantaSpent": 0,
+        "reboundDaa": null,
+        "reservationSplit": null,
+        "reservedSompi": "128877760000",
+        "seats": [],
+        "securityCertification": "pending",
+        "voidReason": null,
+        "workLeaves": 0
+      },
+      "lifecycle": {
+        "approvalBasis": 0,
+        "bond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "certification": null,
+        "certificationCode": "pending",
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "final": false,
+        "gateCGoverns": true,
+        "held": false,
+        "kind": "palwClaimLifecycle",
+        "newAttemptOfClassNow": {
+          "admitted": true
+        },
+        "nowDaa": 8301,
+        "panelSeatCount": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "reasons": [
+          {
+            "code": "pending",
+            "text": "Final reached (or not yet) and the drawn verifiers have not decided: reward held, no consensus credit yet"
+          }
+        ],
+        "route": "chain",
+        "securityCertified": false,
+        "verificationRoute": "g14ModelPanelOne",
+        "version": 1,
+        "voidCode": null,
+        "voided": false
+      }
+    },
+    {
+      "port": 55433,
+      "selected": "a433b8dcebefa0338a80c5a9ac503237392709d9169c591a25651c1d3a3ea1f7ec737adcd4bf0444b7067e6bd4e19e88b9dde1811ba21f70ae3b09c71e7765c1",
+      "tipDaa": 8300,
+      "claim": {
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "acceptedBlueScore": 16530,
+        "acceptedDaa": 8247,
+        "boundDaa": null,
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "claimLocalSettlement": null,
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "committedSompi": "129197844651",
+        "escrowedRewardSompi": 320084650080,
+        "execLane": null,
+        "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "freePrompt": false,
+        "openCourts": 0,
+        "payoutPendingSompi": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "phaseDeadlineDaa": 8267,
+        "quanta": 0,
+        "quantaSpent": 0,
+        "reboundDaa": null,
+        "reservationSplit": null,
+        "reservedSompi": "128877760000",
+        "seats": [],
+        "securityCertification": "pending",
+        "voidReason": null,
+        "workLeaves": 0
+      },
+      "lifecycle": {
+        "approvalBasis": 0,
+        "bond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "certification": null,
+        "certificationCode": "pending",
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "final": false,
+        "gateCGoverns": true,
+        "held": false,
+        "kind": "palwClaimLifecycle",
+        "newAttemptOfClassNow": {
+          "admitted": true
+        },
+        "nowDaa": 8301,
+        "panelSeatCount": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "reasons": [
+          {
+            "code": "pending",
+            "text": "Final reached (or not yet) and the drawn verifiers have not decided: reward held, no consensus credit yet"
+          }
+        ],
+        "route": "chain",
+        "securityCertified": false,
+        "verificationRoute": "g14ModelPanelOne",
+        "version": 1,
+        "voidCode": null,
+        "voided": false
+      }
+    },
+    {
+      "port": 55443,
+      "selected": "a433b8dcebefa0338a80c5a9ac503237392709d9169c591a25651c1d3a3ea1f7ec737adcd4bf0444b7067e6bd4e19e88b9dde1811ba21f70ae3b09c71e7765c1",
+      "tipDaa": 8300,
+      "claim": {
+        "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+        "acceptedBlueScore": 16530,
+        "acceptedDaa": 8247,
+        "boundDaa": null,
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "claimLocalSettlement": null,
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "committedSompi": "129197844651",
+        "escrowedRewardSompi": 320084650080,
+        "execLane": null,
+        "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "freePrompt": false,
+        "openCourts": 0,
+        "payoutPendingSompi": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "phaseDeadlineDaa": 8267,
+        "quanta": 0,
+        "quantaSpent": 0,
+        "reboundDaa": null,
+        "reservationSplit": null,
+        "reservedSompi": "128877760000",
+        "seats": [],
+        "securityCertification": "pending",
+        "voidReason": null,
+        "workLeaves": 0
+      },
+      "lifecycle": {
+        "approvalBasis": 0,
+        "bond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+        "certification": null,
+        "certificationCode": "pending",
+        "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "final": false,
+        "gateCGoverns": true,
+        "held": false,
+        "kind": "palwClaimLifecycle",
+        "newAttemptOfClassNow": {
+          "admitted": true
+        },
+        "nowDaa": 8301,
+        "panelSeatCount": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "reasons": [
+          {
+            "code": "pending",
+            "text": "Final reached (or not yet) and the drawn verifiers have not decided: reward held, no consensus credit yet"
+          }
+        ],
+        "route": "chain",
+        "securityCertified": false,
+        "verificationRoute": "g14ModelPanelOne",
+        "version": 1,
+        "voidCode": null,
+        "voided": false
+      }
+    }
+  ],
+  "fundedSettlementAttemptOpportunity": {
+    "startDaa": 8201,
+    "earliest": 8201,
+    "elapsedSeconds": 45.36904737500001,
+    "selected": [
+      "55be3f4c1566e3a85fb141d834ae94c50e98a9b70a684017f75b165b639556d3f5f7591835ec02d5c04ae2d804926aaa09802f12a5c2496d338081e7db7748f9"
+    ],
+    "after": {
+      "available": true,
+      "daaScore": 7867,
+      "depth": 0,
+      "depthIsLowerBound": false,
+      "pendingAnchors": 0,
+      "safeFrontierBlueScore": 10528,
+      "safeFrontierDaa": 5256,
+      "securityCertificationPremise": "SecurityCertified is premise-based: m-of-k positive attestations by verifiers drawn from the global bonded pool after the claim was committed, plus the G14 public-prosecution window elapsed with no challenge or conviction. It is sound only while the honest fraction of drawn verifier stake is at least the threshold; signatures are not recomputation proofs. A certified claim later convicted is voided and its consensus credit revoked.",
+      "settled": false,
+      "sinkDaa": 8200,
+      "uncertifiedFinalAnchors": 0
+    }
+  },
+  "afterStop": {
+    "snapshot": {
+      "snapshot": "9e327e58d2e04f2599b17b337e5a644b",
+      "identity": {
+        "profile": "tfo3",
+        "genesis": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+        "consensusParamsId": "5ba9ad0813d64cbd87fc0122734e19d586b985c6fcb92c816109c1367f8dddec",
+        "networkDomain": "a8591a53aef9855c44234281d7cd779d14a16183d0b015bb29b0b1d41ec3c8f73fc10f24b0246da355ad5cfebd6ff056326ed53d545f67d0bdc0a5b228a792ee"
+      },
+      "files": 18378
+    },
+    "peers": [
+      {
+        "peer": 0,
+        "awardJournal": {
+          "exitCode": 0,
+          "appliedRoot": "4dd909dc29c6ab9b857c2014e311dcf84198152ef1d064226f771f27430bc7856ac2ddafdde27e0fa187004a0b22d3624338cc97507080f891e2b56defcef559",
+          "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+          "daa": 7866,
+          "frontierAttempt": {
+            "acceptedDaa": 5256,
+            "block": "edd4ebbef0698baf34a05729c8a5dd78a7d8fec771afa68f94ed700c88ae676e13d2aeda0658496b61a4f284073c33cbce7a00ea3a23c68aaac50a0f6a9d45e3",
+            "blueScore": 10528,
+            "certifiedDaa": 6354,
+            "claim": "f3d1338114f7efa59c684318bbaa5b1ae68c3682245feeed0e3c50bb86700a564bd9618c3b95a4affc91e8abe07a066beb7a9197d73a5509724f000ead0c97b8",
+            "finalDaa": 5694
+          },
+          "fullStateRestored": true,
+          "journalEntries": 10,
+          "parent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+          "powAlgoId": 7,
+          "revertedRoot": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9"
+        },
+        "tip": {
+          "exitCode": 0,
+          "appliedRoot": "9c318cbfb024b50b30a1635f12c71b989693fa3e1f26e4dda85495dde342d1923bd244e73b707128be927064c0f701e57ff76ebc9d5e8b44e30c4a63aff67d77",
+          "block": "d53efd7b2e2069491c46d043a3f5232609fa1cb6ed3037cf28a9f5f2218d6e9447d391996ea3ca7964f8f886f2d69da1a64a1e3c6e207092128bc22599470256",
+          "daa": 8305,
+          "frontierAttempt": {
+            "acceptedDaa": 7766,
+            "block": "911739957637b6c0b6f80f250dc02dfa0341642aa0f2f258f43e3041c3d748896f7134159a15a1a4aded7be5f0851e61ce2c6b0ec8187f8f8cc0d5d6913e63eb",
+            "blueScore": 15560,
+            "certifiedDaa": 8250,
+            "claim": "73ac2826c24285c5c631752400f066035ee3edd687b7efa066bfe59e54ae4d37e5a79bd8c6f61058005a2b22cc352a5b98a87004a180847e8dfe30f4665a27ec",
+            "finalDaa": 7989
+          },
+          "fullStateRestored": true,
+          "journalEntries": 5,
+          "parent": "429135f70c5d3d2532b5a5714d1542e29272095993ba7858f119e23de17194d79c5b781f7bde257782b82104ac02a647effafba8bc0010610c8a23dad360c2d6",
+          "powAlgoId": 8,
+          "revertedRoot": "b3e35097b511cfeffe9f5c2cf155e986a221cce13cc49bc18728275e8793153d90eee0a3231f65d99ceafb5af7aa0a473866efe49163aeb084ff576d01ce3f36"
+        }
+      },
+      {
+        "peer": 1,
+        "awardJournal": {
+          "exitCode": 0,
+          "appliedRoot": "4dd909dc29c6ab9b857c2014e311dcf84198152ef1d064226f771f27430bc7856ac2ddafdde27e0fa187004a0b22d3624338cc97507080f891e2b56defcef559",
+          "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+          "daa": 7866,
+          "frontierAttempt": {
+            "acceptedDaa": 5256,
+            "block": "edd4ebbef0698baf34a05729c8a5dd78a7d8fec771afa68f94ed700c88ae676e13d2aeda0658496b61a4f284073c33cbce7a00ea3a23c68aaac50a0f6a9d45e3",
+            "blueScore": 10528,
+            "certifiedDaa": 6354,
+            "claim": "f3d1338114f7efa59c684318bbaa5b1ae68c3682245feeed0e3c50bb86700a564bd9618c3b95a4affc91e8abe07a066beb7a9197d73a5509724f000ead0c97b8",
+            "finalDaa": 5694
+          },
+          "fullStateRestored": true,
+          "journalEntries": 10,
+          "parent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+          "powAlgoId": 7,
+          "revertedRoot": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9"
+        },
+        "tip": {
+          "exitCode": 0,
+          "appliedRoot": "9c318cbfb024b50b30a1635f12c71b989693fa3e1f26e4dda85495dde342d1923bd244e73b707128be927064c0f701e57ff76ebc9d5e8b44e30c4a63aff67d77",
+          "block": "d53efd7b2e2069491c46d043a3f5232609fa1cb6ed3037cf28a9f5f2218d6e9447d391996ea3ca7964f8f886f2d69da1a64a1e3c6e207092128bc22599470256",
+          "daa": 8305,
+          "frontierAttempt": {
+            "acceptedDaa": 7766,
+            "block": "911739957637b6c0b6f80f250dc02dfa0341642aa0f2f258f43e3041c3d748896f7134159a15a1a4aded7be5f0851e61ce2c6b0ec8187f8f8cc0d5d6913e63eb",
+            "blueScore": 15560,
+            "certifiedDaa": 8250,
+            "claim": "73ac2826c24285c5c631752400f066035ee3edd687b7efa066bfe59e54ae4d37e5a79bd8c6f61058005a2b22cc352a5b98a87004a180847e8dfe30f4665a27ec",
+            "finalDaa": 7989
+          },
+          "fullStateRestored": true,
+          "journalEntries": 5,
+          "parent": "429135f70c5d3d2532b5a5714d1542e29272095993ba7858f119e23de17194d79c5b781f7bde257782b82104ac02a647effafba8bc0010610c8a23dad360c2d6",
+          "powAlgoId": 8,
+          "revertedRoot": "b3e35097b511cfeffe9f5c2cf155e986a221cce13cc49bc18728275e8793153d90eee0a3231f65d99ceafb5af7aa0a473866efe49163aeb084ff576d01ce3f36"
+        }
+      },
+      {
+        "peer": 2,
+        "awardJournal": {
+          "exitCode": 0,
+          "appliedRoot": "4dd909dc29c6ab9b857c2014e311dcf84198152ef1d064226f771f27430bc7856ac2ddafdde27e0fa187004a0b22d3624338cc97507080f891e2b56defcef559",
+          "block": "bb8a1337a59c242e442dd0f0c3bc0a1e905849baabb533ec0d4377713021200c5e436cea49254f7ba756386bbc5e527d163a7b82ed0f08796421f72cbea587eb",
+          "daa": 7866,
+          "frontierAttempt": {
+            "acceptedDaa": 5256,
+            "block": "edd4ebbef0698baf34a05729c8a5dd78a7d8fec771afa68f94ed700c88ae676e13d2aeda0658496b61a4f284073c33cbce7a00ea3a23c68aaac50a0f6a9d45e3",
+            "blueScore": 10528,
+            "certifiedDaa": 6354,
+            "claim": "f3d1338114f7efa59c684318bbaa5b1ae68c3682245feeed0e3c50bb86700a564bd9618c3b95a4affc91e8abe07a066beb7a9197d73a5509724f000ead0c97b8",
+            "finalDaa": 5694
+          },
+          "fullStateRestored": true,
+          "journalEntries": 10,
+          "parent": "6ba3fbb1e86c2d0802d4c5189a570dff02a20ff187e1fb4052884294e976834386be1094fb57a8e0c1732b1f812374866d35bc8546affd27993bde468be58be1",
+          "powAlgoId": 7,
+          "revertedRoot": "53f570657000a06d6e6a5e1a10fa16cab7e61f996ccfb4a05b474d260b256ff0510b32d9ac2c557054901a1f699210f0a43243a2122abf85809f1a852fcf2cd9"
+        },
+        "tip": {
+          "exitCode": 0,
+          "appliedRoot": "9c318cbfb024b50b30a1635f12c71b989693fa3e1f26e4dda85495dde342d1923bd244e73b707128be927064c0f701e57ff76ebc9d5e8b44e30c4a63aff67d77",
+          "block": "d53efd7b2e2069491c46d043a3f5232609fa1cb6ed3037cf28a9f5f2218d6e9447d391996ea3ca7964f8f886f2d69da1a64a1e3c6e207092128bc22599470256",
+          "daa": 8305,
+          "frontierAttempt": {
+            "acceptedDaa": 7766,
+            "block": "911739957637b6c0b6f80f250dc02dfa0341642aa0f2f258f43e3041c3d748896f7134159a15a1a4aded7be5f0851e61ce2c6b0ec8187f8f8cc0d5d6913e63eb",
+            "blueScore": 15560,
+            "certifiedDaa": 8250,
+            "claim": "73ac2826c24285c5c631752400f066035ee3edd687b7efa066bfe59e54ae4d37e5a79bd8c6f61058005a2b22cc352a5b98a87004a180847e8dfe30f4665a27ec",
+            "finalDaa": 7989
+          },
+          "fullStateRestored": true,
+          "journalEntries": 5,
+          "parent": "429135f70c5d3d2532b5a5714d1542e29272095993ba7858f119e23de17194d79c5b781f7bde257782b82104ac02a647effafba8bc0010610c8a23dad360c2d6",
+          "powAlgoId": 8,
+          "revertedRoot": "b3e35097b511cfeffe9f5c2cf155e986a221cce13cc49bc18728275e8793153d90eee0a3231f65d99ceafb5af7aa0a473866efe49163aeb084ff576d01ce3f36"
+        }
+      }
+    ],
+    "coldSettlement": {
+      "peerExitCodes": [
+        0,
+        0,
+        0
+      ],
+      "identicalReplies": 3,
+      "result": {
+        "acceptedDaa": 7867,
+        "coveringAttempts": [
+          {
+            "bindBackstopDaa": 8847,
+            "claim": {
+              "acceptedBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+              "acceptedBlueScore": 16530,
+              "acceptedDaa": 8247,
+              "boundDaa": null,
+              "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+              "claimLocalSettlement": null,
+              "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+              "committedSompi": "129197844651",
+              "escrowedRewardSompi": 320084650080,
+              "execLane": null,
+              "executorBond": "e4d97e8bf22482387413dc2a206d96d1b1f88c09ccb83511da341ddf7ec82e6ce36807d800a3dbda076782b44dfdf8144c57619913644886079142ea80f19742:0",
+              "freePrompt": false,
+              "openCourts": 0,
+              "payoutPendingSompi": null,
+              "phase": "provisional",
+              "phaseDaa": 0,
+              "phaseDeadlineDaa": 8267,
+              "quanta": 0,
+              "quantaSpent": 0,
+              "reboundDaa": null,
+              "reservationSplit": null,
+              "reservedSompi": "128877760000",
+              "seats": [],
+              "securityCertification": "pending",
+              "voidReason": null,
+              "workLeaves": 0
+            },
+            "g14PanelSeed": {
+              "anchorBlock": "4d6853849d40f93437c8c74ffc46b2811edfa6d2d00cc78c0bd0d97d4f6969d14b9b4c0dc535d9434b26ad997587c709ba15365b75ed7298f1e7013e1ab6f8b5",
+              "anchorSpan": 8247,
+              "bindBaseDaa": 8247,
+              "canSupplyPostCommitAnchor": true,
+              "currentSpan": 8306,
+              "hasPostCommitSeed": false,
+              "spanDaa": 1
+            },
+            "gateCGoverns": true
+          }
+        ],
+        "depth": 0,
+        "pendingAnchors": 1,
+        "safeFrontierDaa": 7766,
+        "settled": false,
+        "sink": "d53efd7b2e2069491c46d043a3f5232609fa1cb6ed3037cf28a9f5f2218d6e9447d391996ea3ca7964f8f886f2d69da1a64a1e3c6e207092128bc22599470256",
+        "sinkDaa": 8305,
+        "stateRoot": "9c318cbfb024b50b30a1635f12c71b989693fa3e1f26e4dda85495dde342d1923bd244e73b707128be927064c0f701e57ff76ebc9d5e8b44e30c4a63aff67d77",
+        "uncertifiedFinalAnchors": 0
+      }
+    }
+  },
+  "heartbeatWork": {
+    "hashes": 62210048,
+    "seconds": 3600.012617708,
+    "winningBatches": 3721
+  },
+  "verdict": {
+    "liveAward": true,
+    "rewardUtxo": true,
+    "consumedOnce": true,
+    "settled": false,
+    "reason": "wall-limit",
+    "pendingStage": "covering-attempt-panel-final-and-certification",
+    "selectedForkReorgAfterSettlementVerified": false,
+    "afterRestartVerification": "cold database reopen, award journal reversal and reapplication on each peer"
+  }
+}

@@ -1,11 +1,11 @@
 # MISAKA/Kaspa L1 Selected-Parent EVM 設計書 v0.4
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **版:** v0.4 統合版(v0.2 Audit-Revised + v0.3 DEX/Uniswap Addendum + v0.4 §21 Scaling Addendum を単一文書に統合)
 **日付:** 2026-06-10
 **対象:** MISAKA/Kaspa L1 における consensus-native EVM 実行レーン。外部ブリッジなし・L2 シーケンサなし。
-**関連:** [ADR-0020](../../adr/0020-selected-parent-evm-lane.md)(コード接地版フリーズ)、[ADR-0019](../../adr/0019-mldsa87-migration.md)(PQ-only 不変条件)、[ADR-0008](../../adr/0008-hash64-consensus-identity.md)(Hash64 consensus identity)
+**関連:** [旧ADR-0020](../../rfc/0015-dag-blocks-and-settlement.md)(コード接地版フリーズ)、[旧ADR-0019](../../rfc/0001-principles-and-governance.md)(PQ-only 不変条件)、[旧ADR-0008](../../rfc/0001-principles-and-governance.md)(Hash64 consensus identity)
 
 ## 版履歴と本版の位置づけ
 
@@ -43,7 +43,7 @@ EVM レーンは次の 4 段階で構成する。
 - 「EvmResult は block hash に対して不変、reorg は pointer 切替のみ」を全 Stage で維持する。
 - UTXO レーンの mass 予算・伝播特性・DAG 安定性(λ·D_max ≲ k)を不変に保つ。
 - 性能主張を「仕様保証値」と「技術目標値」に分離し、benchmark matrix で裏付ける。
-- PQ-only 不変条件([ADR-0019])との整合: EVM レーンは独立 signature domain とし、既定ノードビルドは secp256k1-free を維持する(§20)。
+- PQ-only 不変条件([旧ADR-0019])との整合: EVM レーンは独立 signature domain とし、既定ノードビルドは secp256k1-free を維持する(§20)。
 
 ### 1.2 非目的
 
@@ -172,7 +172,7 @@ EVM header フィールドは `Header` 構造体に常時存在する(ゼロ既�
 
 v≥2 の preimage には `pruning_point` の後に `evm_payload_hash(64)` → `evm_commitment_root(64)` の順で追記する(frozen byte order)。header 変更は pre-PoW hash 順序定義と `hash64-migration-inventory` の更新を伴う(監査 K-11)。
 
-on-disk consensus header は bincode 直列化のため、フィールド追加は `LATEST_DB_VERSION` の bump(旧 DB は open 時拒否 → clean resync、[ADR-0001] 準拠)を伴う。
+on-disk consensus header は bincode 直列化のため、フィールド追加は `LATEST_DB_VERSION` の bump(旧 DB は open 時拒否 → clean resync、[旧ADR-0001] 準拠)を伴う。
 
 ## §5 EVM 実行環境(EvmBlockEnv)
 
@@ -303,7 +303,7 @@ UTXO_balances + EVM_deposit_locks + EVM_native_balances + burned == issued
 
 **ブリッジ台帳(2026-09-24、`Params::evm_bridge_ledger_activation_daa_score`、testnet-12 は genesis から有効)。** 本ブリッジは lock-and-mint ではなく burn-and-mint であり、プールが無い。したがって L1 が出金として materialize できる額を抑えているのは executor の正しさだけで、deposit を経ない EVM 残高(インタプリタ/intercept の欠陥)はそのまま出金でき、累積器は飽和演算で黙って吸収していた。fence 以降、累積器は **L1 が裏付けた EVM 供給の台帳** として checked で扱う:
 
-- 増加: deposit claim(tip 含む全額)、ADR-0089 の market sell credit。
+- 増加: deposit claim(tip 含む全額)、旧ADR-0089 の market sell credit。
 - 減少: basefee burn、F002 出金、約定した market escrow の settlement burn。
 - escrow の予約: market writer に escrow を置く tx の時点で、そのブロックの余力(台帳 − 同ブロックで予約済みの escrow)から予約する。台帳そのものが減るのは子ブロックの settlement で約定分が burn されたときで、拒否された escrow は EVM 内で返金され台帳は変わらない。予約は、burn の時点では置いた tx をもうスキップできないために行う。
 - 規則: user tx の引き出し(自分の basefee burn + F002 出金 + escrow)が台帳の残り(= 台帳 − 同ブロックで予約済みの escrow)を超える場合、その tx は **class-2 skip**(state を破棄。nonce・burn・出金なし)。ブロック全体を拒否しないのは、delayed acceptance 下では tx が mergeset 経由で必ず受理対象になるため、ブロック拒否だと 1 件の tx でチェーンが止まるから。
@@ -536,7 +536,7 @@ RPC・公式 UI・マーケティング資料はこの 3 層を区別する義�
 
 ## §20 PQ-only との整合(secp 開示)
 
-EVM レーンは secp256k1/ECDSA(ecrecover + 署名検証)を**独立 signature domain** として再導入する。native UTXO レーンの ML-DSA-87 PQ-only 不変条件([ADR-0019])との整合は次で担保する:
+EVM レーンは secp256k1/ECDSA(ecrecover + 署名検証)を**独立 signature domain** として再導入する。native UTXO レーンの ML-DSA-87 PQ-only 不変条件([旧ADR-0019])との整合は次で担保する:
 
 - EVM の**型**(consensus-core)は常時コンパイルされ secp-free。
 - EVM の **executor**(revm/k256)は cargo `evm` feature(default OFF)の背後。既定 `kaspad` は secp-free のまま(`scripts/ci/pq-ci-guard.sh` が 9 production binaries で強制)。
@@ -545,7 +545,7 @@ EVM レーンは secp256k1/ECDSA(ecrecover + 署名検証)を**独立 signature 
 
 ## §21 実装状況と v0.3 実装からの移行
 
-2026-06-10 時点で `pr-19-s5f-…` に **v0.2/v0.3 ベースの P0–P3 が実装済み**(ADR-0020 参照): 単一 `evm_commitment_root` の version-gated header(P1)、revm Shanghai executor `kaspa-evm`(P2)、state snapshot + append-only chaining + consensus stores + `evm_validate_and_persist` driver(P3 データ層)。全ネット `evm_activation_daa_score = u64::MAX`(inert)。
+2026-06-10 時点で `pr-19-s5f-…` に **v0.2/v0.3 ベースの P0–P3 が実装済み**(旧ADR-0020 参照): 単一 `evm_commitment_root` の version-gated header(P1)、revm Shanghai executor `kaspa-evm`(P2)、state snapshot + append-only chaining + consensus stores + `evm_validate_and_persist` driver(P3 データ層)。全ネット `evm_activation_daa_score = u64::MAX`(inert)。
 
 v0.4 が既実装に要求する差分(activation 前の改修であり、inert のため既存ネット影響なし):
 

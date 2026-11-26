@@ -1,15 +1,5 @@
 # SHARD — RFC-0006 × RFC-0010: per-shard V3 draw, G14 pre-emption guard, non-seat cell watcher, per-segment pricing
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Agent SHARD, branch `shard/rfc6-10`, 2026-10-09. Owner: Lead (single integration line). Companion to
 `remaining-rfc-integration-matrix.md` (RFC-0006 and RFC-0010 rows) and `rfc-0010-production-path-record.md` (§5, §6).
 Everything here is behind a dormant fence: `palw_permissionless_panel_v1` (refused at every real height),
@@ -174,7 +164,7 @@ to the last close. Three paths were not covered:
    receipt clock. A claim cannot be DA-accused before its bind (`DaClaimNotAccusable`), but a court can be open on it:
    `CourtOpened` and `TirShardCourtAccused` accept any non-terminal phase, and under the held regime a one-move accusation
    at a dissected leaf *opens a dissection session* on a `Provisional` claim. On today's chain every V3 claim ends
-   `BeaconUnavailable`, so every such session would be closed neutrally by the void (C3 of ADR-0152 §4-ter).
+   `BeaconUnavailable`, so every such session would be closed neutrally by the void (C3 of 旧ADR-0152 §4-ter).
 3. **Defence in depth.** Any future path that ends a V3 claim non-fraud while an accusation is pending would silently
    pre-empt it; nothing failed loudly.
 
@@ -289,7 +279,7 @@ collapse) and the bundle mirror `PalwStateParamsV2::tir_shard_segment_from_daa`.
 ### 4.4 Why no on-chain tier
 
 A tier ("the highest segment this seat can host") is a capacity claim; nothing on chain can prove it, and silence is not
-convictable (ADR-0064). Carrying it would need a new object (the armed `TirSeatReadinessProved` cannot change its
+convictable (旧ADR-0064). Carrying it would need a new object (the armed `TirSeatReadinessProved` cannot change its
 encoding) and a slash rule for over-declaring that the chain cannot adjudicate. With `S_P = 1` (decision 5's default) there
 is one segment and the question does not arise; with `S_P = 2` the readiness gate above gives the same liveness property
 without a consensus field. If a measured drill later shows the gate too strict for the network's hosts, a tiered

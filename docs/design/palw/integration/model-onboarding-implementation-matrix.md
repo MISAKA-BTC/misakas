@@ -1,24 +1,5 @@
 # Model onboarding — implementation matrix
 
-<!-- QF1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — QF1のQwen3具体profile
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0066](../../../rfc/0066-qwen3-fow1-execution-and-readout.md)／[ADR0234](../../../adr/0234-qwen3-fow1-execution-and-readout.md)／[適用・移行](../../../governance/qwen-fow1-profile-transition.md)。QF1の具体graph/Readout/codec仕様を追加した。lowererのstage schedule、hash chunk Court、実モデル・品質・反復費用検査のnative完了をこの文書変更から推定しない。
-
-QF1は36層Qwen3-8Bの整数A16実行、各予測位置の37 vector、HEX64実入力、固定Readout/四Root/Ticketを定義する。G-COLL/G-COST/G-USE、MAS1のUNKNOWN・BFT安全停止、Panel＋Courtを維持する。Qwen実機の品質・反復費用検査・native有効化は未完であり、旧claimやMOE2経済を変更しない。
-<!-- QF1-ADOPTED-20261120-END -->
-
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **適用時期の現行方針（2026-10-17 文書化）:** RFC-0003 の画像・動画と RFC-0004 のモデル改善は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
 > 旧「全 RFC 完成」条件から延期範囲の肯定的完成・性能評価を外す。ただし対象経路の閉鎖確認、共有コードがテキスト・合意・認証・会計・回復に及ぼす問題は免除しない。
 

@@ -1,20 +1,10 @@
-# The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
+# The remaining PALW wiring, and why it lands as one unit (旧ADR-0044 FP-08, 旧ADR-0042 PR-08)
 
 Status (corrected 2026-09-03): **the wiring landed.** Units A–D are in the tree, testnet-11 has
 been mining on them since the 2026-08 relaunches, the gateway signs, submits and stages a
-capture, and the host-side hardening of that path landed with ADR-0079's R-01..R-07. "The
+capture, and the host-side hardening of that path landed with 旧ADR-0079's R-01..R-07. "The
 pipeline wiring below is **not** started" was true when this was written and is no longer;
-ADR-0077 Decision 9 named this file as one of three carrying a stale header, and it was the last
+旧ADR-0077 Decision 9 named this file as one of three carrying a stale header, and it was the last
 of the three. This page is now the record of WHY the units had to land together rather than a
 plan for landing them: read the list below as the wiring's invariants, which still hold, and do
 not read any present tense in it as a description of the current tree. This document exists
@@ -31,7 +21,7 @@ that were load-bearing and are now false:
 
 | the page said | the tree says |
 |---|---|
-| `calculate_l1_tag` "has arms for algo 1/2/3/4/5" and falls to `UnknownAlgoId` for 6 and 7 | it has the algo-6 arm (shared with algo-9, ADR-0072 SA-4) at `POW_ALGO_ID_PALW_COMMITTED_V2 \| POW_ALGO_ID_PALW_EXEC_V3`, the algo-7 arm at `POW_ALGO_ID_PALW_RECEIPT_V3`, and the heartbeat arm at algo 8 |
+| `calculate_l1_tag` "has arms for algo 1/2/3/4/5" and falls to `UnknownAlgoId` for 6 and 7 | it has the algo-6 arm (shared with algo-9, 旧ADR-0072 SA-4) at `POW_ALGO_ID_PALW_COMMITTED_V2 \| POW_ALGO_ID_PALW_EXEC_V3`, the algo-7 arm at `POW_ALGO_ID_PALW_RECEIPT_V3`, and the heartbeat arm at algo 8 |
 | "no worker path on this tree captures a step leg at all" | the family workers capture one per job — `misaka/palw/base0/src/fp_capture.rs`, `legs.rs`, and both backends |
 
 Unit B's subtle item survived intact, which is worth noting because it was the one most likely to
@@ -62,7 +52,7 @@ P0-4 (sink-dependent weights) and P0-5 (two canonical-chain views in one node).
 Nothing inside a unit may ship without the rest of that unit on the same branch, behind the same
 mode.
 
-### Unit A — the attempt lane's PoW (ADR-0042 PR-10's remainder)
+### Unit A — the attempt lane's PoW (旧ADR-0042 PR-10's remainder)
 
 1. `calculate_l1_tag` arm for algo 6: `Expand(commitment_root)` from the header's carried
    attempt envelope (`l1_tag_v2`), **and** the decode of that envelope from
@@ -177,7 +167,7 @@ shipped network depends on. The legs are additionally covered where they are pur
 
 `palw_fork_authority_v2`'s four functions wired into virtual tip selection, IBD commit, pruning
 ceiling and the deep-reorg gate **together**, with the header processor's store renamed to a
-download hint (ADR-0042 Decision 9). Wiring one site is P0-5: two canonical-chain views inside
+download hint (旧ADR-0042 Decision 9). Wiring one site is P0-5: two canonical-chain views inside
 one node.
 
 **All four landed 2026-08-20.**
@@ -200,7 +190,7 @@ it is candidate-scoped rather than a fact about the node's sink. Its consumers:
   the candidate-hash key decides, and roughly half of all ordinary forward progress is refused as
   a failed reorg.
 
-* **Virtual tip selection** — through the seam ADR-0039 W4′ already built rather than beside it.
+* **Virtual tip selection** — through the seam 旧ADR-0039 W4′ already built rather than beside it.
   `Params::palw_tip_order_v1()` answers `PalwWeighted` for a `ConsensusV2` network (it read only
   the V1 fence, which a V2 network does not and may not set), and `palw_tip_weights_v1` feeds
   `PalwCandidateOrderV1`'s `(safe_weight, live_total)` into `PalwChainWeightsV1` — the same two
@@ -336,11 +326,11 @@ transaction the executor rail would submit.
 The units landed and the network they were written for is running, so the pages a person actually
 follows are elsewhere and this one should not be competing with them:
 
-* [testnet11-join-mining.md](../../../history/networks/testnet-11/testnet11-join-mining.md) — joining, bonding, producing, and §7 for
+* [testnet11-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-join-mining.md) — joining, bonding, producing, and §7 for
   the free-prompt lane end to end.
 * [palw-freeprompt-gateway.md](../../../operations/serving/palw-freeprompt-gateway.md) — the gateway and the worker protocol
   as they are.
-* [testnet11-ask-for-a-file.md](../../../history/networks/testnet-11/testnet11-ask-for-a-file.md) — the artifact path, and the widths
+* [testnet11-ask-for-a-file.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-ask-for-a-file.md) — the artifact path, and the widths
   that bound it today.
 
 What this page is still worth reading for is the argument in "The atomic units": the reason each

@@ -6,7 +6,7 @@ Claude 側では 4 本の lane が動いています。Codex には、**どの l
 
 - `AGENTS.md`(= `CLAUDE.md`):暗号学的な計算証明(ZK・SNARK・STARK・zkVM・zkML・PCS など)は一切使わない。モデル tier は凍結(genesis・年次フォークは 1.0、登録モデルは 0.3、モデル単位の審査はしない)。
 - `docs/PRINCIPLES.md` §10〜§12:§10 は slash の損失が不正の利得を上回ること・court が正直な仕事を slash しないこと。§11 は設計凍結(設計変更は ADR に記録)。§12 は画像・動画・モデル改善を mainnet 後へ延期し、当面無効。
-- `docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md` と `docs/adr/0186-*.md`
+- `docs/rfc/0009-court-and-claim-final.md` と `docs/adr/0186-*.md`
 - `docs/audit/palw/rfc18-dag-audit-2026-10-17/assessment_ja.md` と `shared-frontier-sources.md`
 - `docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md` の §11〜§13(G14 の現状)
 

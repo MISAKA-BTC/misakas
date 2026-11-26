@@ -4,8 +4,8 @@
 > 2026-10-03). The implementation is deferred until after the DAA 5,300 deployment, as int-12.x node releases. **Node software
 > only: no object, rule, fence, parameter, class id or fingerprint moves**, and `scripts/release/t12-repin.sh --drift-only` must print no
 > row at any step. The benchmark that decides each step is fixed before any code, in [`tensor-store-bench.md`](tensor-store-bench.md).
-> Builds on ADR-0112 (a class's weights are read within a stated budget), [`runtime-residency.md`](runtime-residency.md) (the IR
-> tiers), ADR-0117 (a draw is one forward), RFC-0006 (cells, shard-only fetch), [`gpu-integer-backend.md`](gpu-integer-backend.md)
+> Builds on 旧ADR-0112 (a class's weights are read within a stated budget), [`runtime-residency.md`](runtime-residency.md) (the IR
+> tiers), 旧ADR-0117 (a draw is one forward), RFC-0006 (cells, shard-only fetch), [`gpu-integer-backend.md`](gpu-integer-backend.md)
 > and `docs/design/palw/t12-replay-memory-1001.md` (the 8k pin). Every `file:line` below is at `4d5f97d58`.
 
 ## 概要(日本語)
@@ -17,7 +17,7 @@
   だけを決める。既存の pinned / routed LRU / gathered、Qwen3.6 の LRU、shard 行取得、8k pinner をこの一か所に集める。
 - **欠けている部品 = 密層ストリーミング。** 実行中の occurrence の層を常駐、次の層を先読み、一つ前の層を返す。順序は
   `plan.occurrences`(静的スケジュール)そのものなので推測ではない。常駐させる層の集合は予算から静的に決める(周期アクセスに
-  LRU は全滅する)。MoE の routed 行は router が決めるので先読みしない(ADR-0112 Decision 4 のまま)。
+  LRU は全滅する)。MoE の routed 行は router が決めるので先読みしない(旧ADR-0112 Decision 4 のまま)。
 - **prefill/replay は occurrence-major の run で実行**し、ストリーム層を run あたり 1 回だけ読む。decode は位置ごとに全層を読み直す
   (遅いが動く)。t12 の attempt は prefill だけ(prefill draw は genesis から必須)なので、producer は 1 回の抽選で artifact を 1 回読む。
   MoE ではこの実行順の方が効く:今の位置優先 executor は 1/5 予算で 255 位置の draw に expert を ≈363 GiB 読むが、run なら ≈27 GiB
@@ -37,7 +37,7 @@
 is the runtime's decision under a budget the operator states, and it is made in one place. Every weight read goes through one
 interface (`PalwTensorStoreV1`: read a range, pin, prefetch, evict, count), served by one of three backends — memory, positional
 reads of the local file, or a shard's rows fetched from a holder and proven against the registered root — with the demand-paged
-mapping kept only as the baseline it is measured against, and as the last resort ADR-0112 already makes it for a default the host
+mapping kept only as the baseline it is measured against, and as the last resort 旧ADR-0112 already makes it for a default the host
 cannot fit. Above it a residency manager decides placement: what every forward
 reads whole and small stays pinned; routed and gathered rows are served as they are today; and the per-layer dense weights that
 do not fit are STREAMED — the occurrence that runs is resident, the next one is being read, the one before is given back — in the
@@ -70,10 +70,10 @@ prefill **a layer at a time over runs of 64 positions** (`misaka/palw/base0/src/
 
 1. **Dense layers cannot stream.** A per-layer weight every forward reads densely is tier `Pinned(Dense)` (`tiers.rs:448-449`), so a
    dense class's floor is its size: `runtime-residency.md` §7 has Qwen2.5-7B at 6.70 GiB of floor for 7.72 GiB of weights, "SHORT"
-   at a fifth, and it stays on the page cache by default (`residency.rs:91-93`). ADR-0112 §8 named the dial — "Streaming the
+   at a fifth, and it stays on the page cache by default (`residency.rs:91-93`). 旧ADR-0112 §8 named the dial — "Streaming the
    always-set … The dial exists in the design; the ratio this ADR certifies does not need it" — and left it. A producer must run
    every layer, so this is the hardware barrier that remains once RFC-0006 lets a verifier hold one shard.
-2. **No prefetch.** An admission reads, then the gathers compute (`runtime-residency.md` §9; ADR-0112 §8, last bullet).
+2. **No prefetch.** An admission reads, then the gathers compute (`runtime-residency.md` §9; 旧ADR-0112 §8, last bullet).
 3. **No occurrence-major run on the CPU executor** (§10, F3): streaming without it re-reads every streamed layer every position.
 4. **Five accountings** — the IR residency's stats, the Qwen3.6 stats, the pin summary, the shard holding's byte count, the device
    pool — and two decisions that can disagree about the same file (§10, F2).
@@ -83,7 +83,7 @@ prefill **a layer at a time over runs of 64 positions** (`misaka/palw/base0/src/
 
 | | requirement | where |
 | --- | --- | --- |
-| R1 | One trait over every weight read — `read_range`, `pin`, `prefetch`, `evict`, plus stats, budget and schedule hints; backends Memory, Pread, Shard first; mmap only as a measured baseline (fleet virtio disks: 6–11 MB/s through faults against ~845 MB/s for sized reads, ADR-0112 §1) | §3 |
+| R1 | One trait over every weight read — `read_range`, `pin`, `prefetch`, `evict`, plus stats, budget and schedule hints; backends Memory, Pread, Shard first; mmap only as a measured baseline (fleet virtio disks: 6–11 MB/s through faults against ~845 MB/s for sized reads, 旧ADR-0112 §1) | §3 |
 | R2 | A residency manager with a RAM budget and a VRAM budget field reserved for M5, unifying pinned / routed LRU / gathered, the Qwen3.6 LRU, the shard-row fetcher and the A16 8k pinner — how each maps, what changes, what does not | §3.6, §4 |
 | R3 | Dense-layer streaming driven by the static schedule: the streamed tier, its floor, its interaction with the other tiers, prefill against decode, KV/state resident, refusal by name | §5 |
 | R4 | Producer and panel in one plan; "a 200 GB artifact is not 200 GB of RAM": 200 GB on SSD, 16–32 GB of RAM (+ 12–24 GB of VRAM at M5), slow but runnable | §6 |
@@ -188,10 +188,10 @@ prefetch; the schedule itself is the manager's (§5.2).
 | **Memory, locked** | copy from the locked mapping | lease on the region, zero copy | nothing (the file is locked whole) | nothing | an artifact read in place by several processes on one host: the 8k `.palwart`, a small IR container — today's pin (`palw_artifact_pin.rs:271-331`): `MAP_SHARED`, populated by 8 MiB reads, `mlock`, one copy per host |
 | **Pread** | positional read (`read_exact_at`), split into 8 MiB parallel reads (`residency.rs:182, 224-233`) | read into owned memory and hold | queue on the I/O pool | drop the hold | everything that is not locked: today's residency, and streaming |
 | **Shard** | from the local spill, through Pread; a leaf not in the spill is an error, never a fetch inside a step | as Pread | as Pread | as Pread | a shard-only seat: the fill (`TirRowPursuitV1`, unchanged) proves each opening against the root and appends it to a local spill file; then the shard's instances are served like any file |
-| **Page-cache baseline** | copy from a `MAP_PRIVATE` mapping (faults) | a borrowed view (faults when read) | `MADV_WILLNEED` (which ADR-0112 §1 measured to do nothing on the fleet's disks) | `MADV_DONTNEED` | what neither the lock nor a budget can hold — today's decline, and `0` where the lock is refused — logged as such; and the bench |
+| **Page-cache baseline** | copy from a `MAP_PRIVATE` mapping (faults) | a borrowed view (faults when read) | `MADV_WILLNEED` (which 旧ADR-0112 §1 measured to do nothing on the fleet's disks) | `MADV_DONTNEED` | what neither the lock nor a budget can hold — today's decline, and `0` where the lock is refused — logged as such; and the bench |
 
 **Why the locked mapping stays.** The sketch puts mmap on the measured baseline only. That holds for a **demand-paged** mapping,
-the one ADR-0112 measured at 6–11 MB/s. The pin's mapping is something else: populated by large reads and locked before anything
+the one 旧ADR-0112 measured at 6–11 MB/s. The pin's mapping is something else: populated by large reads and locked before anything
 reads it (`palw_artifact_pin.rs:28-46`), so no read of it ever faults, and it is the one way several processes on a host share one
 copy — 5.104 measured five seats at 1.68 GiB of `Shared_Clean` each, one physical copy (`t12-replay-memory-1001.md` §1); five
 owned copies would be 8.4 GiB. It is the Memory backend's shared form, not a fourth way of reading.
@@ -210,7 +210,7 @@ policy and the host:
 3. A stated budget (`--palw-class-resident-bytes N`, `N > 0`) for a lineage that takes one (an IR class) → **Pread + manager** at
    that budget, and never locked: the operator's number is the budget. (Today such a holding is also locked whole — F2.)
 4. Otherwise, a file that would not be resident under today's rules — the dense lineage, which takes no residency policy
-   (ADR-0112 I-6); an IR class at `0`, or whose default residency declines — and that fits the pin rules (`--palw-no-artifact-pin`
+   (旧ADR-0112 I-6); an IR class at `0`, or whose default residency declines — and that fits the pin rules (`--palw-no-artifact-pin`
    off; within the cap, default ¼ of MemTotal; the bytes not yet resident within the host's spare past the 1 GiB reserve,
    `palw_artifact_pin.rs:304-318`) → **Memory, locked**: today's pin, unchanged. A file that fits the lock is not streamed, even
    with streaming on — on a host of seats one shared copy beats a stream per process.
@@ -226,7 +226,7 @@ the fleet's 23 GiB hosts — that take it.
 ### 3.6 The residency manager
 
 ```rust
-/// **The budget**: one number for host memory, as ADR-0112's; the device's reserved for M5.
+/// **The budget**: one number for host memory, as 旧ADR-0112's; the device's reserved for M5.
 pub struct TirBudgetV1 {
     /// Bytes of weights the manager may hold: the pinned set, the resident layers, the routed rows,
     /// every cursor's window and one admission in flight (§5.8).
@@ -344,7 +344,7 @@ compiled plan's, fixed per program (`plan.rs:112`), so nothing is predicted; aft
 position's `pre` while the job has positions, and stops prefetching at its end.
 
 **Routed rows are not in this schedule.** Which experts a layer reads is the router's output at that layer, so they are admitted
-at the route group's first gather, as now (`rows.rs:110-132`) — ADR-0112 Decision 4: prefetch of experts across layers "is
+at the route group's first gather, as now (`rows.rs:110-132`) — 旧ADR-0112 Decision 4: prefetch of experts across layers "is
 impossible and not attempted". Determinism of the prefetch is a property of the dense slabs only.
 
 ### 5.3 Which slabs stay resident
@@ -367,7 +367,7 @@ When the positions are known before the run — the producer's attempt (on t12 a
 cell's segment, a court's re-derivation from a resume point — the executor runs **occurrence-major over a run of W positions**:
 occurrence 0 at every position of the run, then occurrence 1, and so on. A streamed slab is then read once a run, not once a
 position. This is what base0 already does for the dense and hybrid engines (`forward_prefill_planned`, `engine_a16.rs:2005`,
-`qwen36_plan.rs:485`; ADR-0117 Decision 2: "the order is not the protocol"), what the GPU prototype does (`BatchReplay`), and what
+`qwen36_plan.rs:485`; 旧ADR-0117 Decision 2: "the order is not the protocol"), what the GPU prototype does (`BatchReplay`), and what
 RFC-0006 §1.4 specifies for a cell ("one layer at a time over every position of the segment").
 
 - **API (M2).** `TirExecutor::step_run(tokens, run_post, sink) -> TirResult<RunOut>` over positions `pos .. pos + tokens.len()`.
@@ -402,7 +402,7 @@ answers, RFC-0004's generating evaluations, and jobs with more than one generate
 
 - **Pinned globals**: as today.
 - **Routed**: admission unchanged; the routed capacity must hold one occurrence's routed rows, and in a run their union over its
-  W positions to read each once (ADR-0117 Decision 2: "the same order admits a layer's routed union while that layer runs").
+  W positions to read each once (旧ADR-0117 Decision 2: "the same order admits a layer's routed union while that layer runs").
 - **Gathered**: unchanged.
 - **A mixture.** Qwen3-30B-A3B today: 1.28 GiB pinned, 1.69 GiB of routed rows a token, floor 3.01 GiB (`runtime-residency.md`
   §7). Streamed, its 0.86 GiB of per-layer attention and routers become 48 slabs of ≈ 18 MiB and its floor ≈ 0.4 GiB (§5.10).
@@ -429,7 +429,7 @@ positions the K/V of the shapes of §5.10 is 0.44 GiB (7B) to 2.75 GiB (123B) in
 
 ### 5.8 The floor, and refusal by name
 
-| term | today (ADR-0112 Decision 3, `tiers.rs:500-528`) | streamed (proposal) |
+| term | today (旧ADR-0112 Decision 3, `tiers.rs:500-528`) | streamed (proposal) |
 | --- | --- | --- |
 | pinned | every pinned instance, the dense per-layer weights included | the pinned globals and the per-layer instances under 1 MiB |
 | dense per-layer weights | — (inside pinned) | **the window**: the largest `depth + 1` consecutive slabs of the cyclic schedule — at depth 1 the widest two consecutive layers (N and N + 1) — times the cursors the node runs |
@@ -444,14 +444,14 @@ bytes, `admit.rs:788-822`, plus a run's carries).
 *"a resident budget of B bytes is below this class's streamed floor of F: the pinned globals are G, the widest window is W
 (occurrences o … o + d at prefetch depth d, for c cursors), one occurrence's routed rows are R and one admission in flight is I;
 the smallest budget this class runs in is F (tensor-store.md §5.8)"*. A default under it declines to the page-cache baseline with
-`TirResidencyDeclinedV1` extended by the streamed floor — never a refusal, because nobody stated a number (ADR-0112 Decision 2,
+`TirResidencyDeclinedV1` extended by the streamed floor — never a refusal, because nobody stated a number (旧ADR-0112 Decision 2,
 amended). A budget at or over today's floor streams nothing: placement is exactly today's.
 
-**The routed term is a decision for the operator.** ADR-0112's floor holds one token's routed rows "so a forward never re-reads
+**The routed term is a decision for the operator.** 旧ADR-0112's floor holds one token's routed rows "so a forward never re-reads
 what it read earlier in the same forward" (`runtime-residency.md` §3), and I-2/I-3 assert it. Under streaming a layer's rows are
 needed only while that layer runs, so one occurrence's rows suffice to run; keeping the token term would make a mixture with
 ~20 GiB of active weights a token need ~20 GiB of floor for that term alone, against the 16–32 GB target. The per-occurrence term
-applies in streamed placement only, amends ADR-0112 Decision 3 for it (node software), and needs the operator's OK before M2.
+applies in streamed placement only, amends 旧ADR-0112 Decision 3 for it (node software), and needs the operator's OK before M2.
 
 ### 5.9 I/O mechanics
 
@@ -488,7 +488,7 @@ measurement**: the bench prints the measured terms beside these.
 
 What a decode position (or a prefill run) then reads from SSD — the streamed slabs, at the budget named:
 
-| shape, budget for weights | resident slabs | streamed bytes | at 845 MB/s (fleet `dd`, ADR-0112 §1) | at 3 GB/s (an NVMe, illustrative) |
+| shape, budget for weights | resident slabs | streamed bytes | at 845 MB/s (fleet `dd`, 旧ADR-0112 §1) | at 3 GB/s (an NVMe, illustrative) |
 | --- | --- | --- | --- | --- |
 | 7B, a fifth (1.42 GiB) | 2 of 28 | 5.66 GiB | 7.2 s | 2.0 s |
 | 14B, a fifth (2.74 GiB) | 5 of 40 | 11.14 GiB | 14.2 s | 4.0 s |
@@ -516,7 +516,7 @@ A prefill run of W positions reads the same bytes once for all W: a producer's 2
 **Why the producer is the case that matters.** RFC-0006 already lets a verifier hold one shard. A producer runs every layer, and
 until now that meant every layer in memory — or, for a dense class, the page cache. On t12 an attempt is a prefill and nothing
 else: wherever `palw_offence_attribution` is armed, `palw_prefill_draw` must be armed at genesis (`consensus/core/src/config/params.rs:4136-4146`),
-and the drawn job is the canonical one at one decode step (ADR-0117 Decision 1), i.e. its `P` prompt positions, the last one's
+and the drawn job is the canonical one at one decode step (旧ADR-0117 Decision 1), i.e. its `P` prompt positions, the last one's
 logits choosing the token. So an occurrence-major producer reads each streamed slab **once per draw**: the 123B shape's 105 GiB is
 ~2 min of I/O on the fleet's disks and ~40 s on a 3 GB/s NVMe, beside its compute.
 
@@ -572,7 +572,7 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
   `--palw-artifact-pin-max-bytes`, `--palw-host-pinner`, `--palw-prefill-run-max`, `--palw-seat-replay-slots`.
 - **The load line**, one per holding: `[palw-store] <class> backend=<kind> budget=… pinned=… resident_slabs=k/n window=…
   cursors=c streamed_floor=… (today's floor …) routed_capacity=… state@positions=…` — or the refusal / the decline with its terms.
-- **The per-duty line** (beside the storage line of ADR-0112 Decision 8): bytes read, slab hits / waits and stall seconds, routed
+- **The per-duty line** (beside the storage line of 旧ADR-0112 Decision 8): bytes read, slab hits / waits and stall seconds, routed
   hits / misses / evictions, gathered rows, the process's device bytes (`/proc/self/io` on Linux).
 - **`getPalwNodeStatus.verification`** gains `store_kind`, `store_budget_mib`, `store_resident_mib`, `store_streamed_mib`,
   `store_stall_ms`, `store_cursors` — new keys in the existing `key=value` string, so the wire does not move (as int-10.2 did).
@@ -597,10 +597,10 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
   re-reads every streamed layer — the sketch needs the occurrence-major run (§5.4), an executor change, not only a store. The same
   order is why `runtime-residency.md` §7's replay estimate (every expert read once) does not hold on today's TIR path at a fifth:
   ≈ 363 GiB against ≈ 27 GiB for a 255-position Qwen3-30B-A3B draw under uniform routing (§5.6).
-- **F4 — the prefetch is deterministic for dense slabs only.** Routed rows are the router's choice at run time; ADR-0112 Decision 4
+- **F4 — the prefetch is deterministic for dense slabs only.** Routed rows are the router's choice at run time; 旧ADR-0112 Decision 4
   calls prefetch of experts across layers impossible, and the code admits them at the route group's first gather (`rows.rs:110-132`).
 - **F5 — the floor's routed term is one token over every layer** (`tiers.rs:525`; refused at `residency.rs:485-490`; I-2/I-3). For a
-  large mixture that term alone outgrows a 16–32 GB host. Streaming needs a per-occurrence term (§5.8) — an amendment of ADR-0112
+  large mixture that term alone outgrows a 16–32 GB host. Streaming needs a per-occurrence term (§5.8) — an amendment of 旧ADR-0112
   Decision 3 for streamed placement, the operator's to approve.
 - **F6 — params are bound for the executor's life** (`exec.rs:437-440`; `'static` by `held_forever`, `artifact.rs:103-111`), so a
   streamed instance needs a lease through `Reader` (§3.7).
@@ -618,10 +618,10 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
 - **F13 — the bench's synthetic activation table uses `f64` `exp`** (`tir-exec-bench.rs:273-281`), which macOS libm and glibc need
   not round alike, so a container written on the Mac and on Linux may root differently; the bench pins an integer-only table
   (`tensor-store-bench.md` §9, H1).
-- **F14 — the page cache is a runtime fallback, not only a baseline.** ADR-0112 Decision 2 (amended) sends a default budget below
+- **F14 — the page cache is a runtime fallback, not only a baseline.** 旧ADR-0112 Decision 2 (amended) sends a default budget below
   the floor to the page cache — "never a refusal" (`residency.rs:476-484`) — and today that is how a dense IR container runs
   wherever the lock is refused. The design keeps that fallback, logged and counted; streaming makes it rare (the 7B streamed floor
-  is ≈ 1 GiB against today's 6.6). Removing it would refuse a node whose host can spare nothing, which ADR-0112 rejected.
+  is ≈ 1 GiB against today's 6.6). Removing it would refuse a node whose host can spare nothing, which 旧ADR-0112 rejected.
 
 ## 11. Out of scope
 
@@ -636,7 +636,7 @@ swap — M4 first if producers are the bottleneck when M2 lands, M3 first if sea
 
 ## 12. Open questions for the operator
 
-1. **The routed term** (§5.8): approve the per-occurrence term for streamed placement (an ADR-0112 Decision 3 amendment)?
+1. **The routed term** (§5.8): approve the per-occurrence term for streamed placement (an 旧ADR-0112 Decision 3 amendment)?
 2. **The page-cache mode** for streamed slabs (`drop` or `keep`) — the bench measures both; the default follows it.
 3. **The resident subset** (evenly spaced or a prefix) — default evenly spaced unless the bench says otherwise.
 4. **The hosts.** The A/B node of each step is a fleet node the operator picks (a seat that holds an IR class; a producer for

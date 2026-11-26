@@ -1,52 +1,13 @@
-# PALW 詳細設計
+# PALW詳細設計への入口
 
-<!-- BMR1-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — BFT継続5%・モデル恒久廃止と用途別bond
+規範は[現行RFC20本](../../rfc/README.md)です。モデル追加はBFT承認だけとし、kernelの自動loweringは実行準備として使います。新規採掘はTB1/FOW1、個別claimはG14/Court/独立Gate C、共通経済はMOE3/BMR1を参照します。MWA1は提案のままです。
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../../adr/0237-bft-model-retirement-and-role-bonds.md)／[BMR1移行](../../governance/model-retirement-transition.md)をBFTの継続報酬・恒久廃止・用途別bond処理の正本とする。最新配分は同一coinbase原資Cの50/20/20/5/5であり、BFTの通常継続報酬は**`F=floor(50C/1000)`（5%）**、Panel/Gate CのMISAKA枠は**`P=floor(50C/1000)`（5%）**。同日途中の10%と可変W/P前段を撤回する。残るPOSITION購入70%とMISAKA LP20%はRFC0068の同じ一回分割・残差規則に従い、5%をさらに二重控除しない。検証者5%内の役割配分は既存の正規planで決める。
+- [モデル・実行](models/README.md)
+- [検証](verification/README.md)
+- [実行と決済](execution/README.md)
+- [QF1参照codec](models/qf1/README.md)
+- [BFT採用policy](models/mad2-admission-policy.json)
+- [任意評価policy](models/mas1-admission-policy.json)
+- [MOE3経済policy](economics/moe3-economic-policy.json)
 
-正規BFTのモデル恒久廃止で、当該永久LP内actual MISAKA・登録者責任bond・MINING用途bond・未確定mining報酬を100%burn/失効させる。**全Panel/Gate C検証用途bondは、不正者も含め一律にBFT廃止burnから保護**し、個人不正はCourtの個別slashへ分離する。正当に成立した検証報酬の支払を維持し、他モデル資産へ影響させない。兼任は用途別lot（MINING6,000だけburn、PANEL4,000は保護）とし、重複担保・責任中の用途変更は禁止する。
-
-通常のLP撤去禁止を維持し、canonical廃止のactual reserve burnだけを限定例外にする。BFTの没収受取・廃止bountyは0。継続5%報酬を没収額に連動させない。可逆Pause/Resumeと区別し、旧停止専用・LP絶対不処分の記述をこのscopeだけ置換する。旧profile/native/履歴を保持し、BMR1実装・移行・有効化は別工程とする。
-
-**個別Court slashの実回収額は別会計。** 対象offenceから実際に回収したMISAKAをSとし、Panel/Gate C合計の報酬を`E=floor(490S/1000)`、残り`T=S-E`をburnとする（名目49%/51%、端数はburn）。49%は両役割の合計であり、それぞれ49%ではない。不正発見・立証の資格を認証したplanで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFTモデル廃止の100%burn資産をSへ加えず、BFTの没収受取・廃止bountyは0のまま。検証bondがBFT一律burnから保護されることは、本人のCourt個別slash免除ではない。
-<!-- BMR1-ADOPTED-20261126-END -->
-
-<!-- MOE3-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — 全モデル統一・小数POSITION・50/20/20/5/5
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0068](../../rfc/0068-fractional-position-miner-rewards.md)／[ADR0236](../../adr/0236-fractional-position-miner-rewards.md)／[MOE3適用・移行](../../governance/fractional-position-economics-transition.md)を新経済の正本とする。ユーザーの最新指定は、対象coinbase原資Cの**50%をMiner用POSITION購入、20%をLP用POSITION購入、20%をMISAKAのLP、5%をPanel/Gate CへMISAKA、5%をBFTへMISAKA**である。Minerと検証者の受取資産を分け、5%枠内のPanel/Gate C配分は認証済みplanに従う。新しい半々配分等を暗黙設定しない。
-
-整数分割は`F=floor(50C/1000)`、`P=floor(50C/1000)`、`A=floor(200C/1000)`、`J=floor(200C/1000)`、`D=C-F-P-A-J`、`B=D+J`。FがBFT、Pが検証者、AがLP用MISAKA、JがLP用POSITION購入原価、DがMiner用購入原価であり、**通貨の全丸め残差はD**へ置く。B（名目70%）を一括購入し、購入qから`ell=floor(q*J/B)`をLP、`m=q-ell`をMinerへ配る（B>0）。単一モデルにC全額を割り当て、かつCが20の倍数の例ならell=floor(2q/7)で名目2/7 LP・5/7 Minerとなるが、端数時も無条件に2q/7としない。`C=B+A+P+F`、`q=ell+m`を保つ。POSITIONの50%/20%相当は取得原価の按分であり、換金額の保証ではない。
-
-全モデルを係数1.0・各モデルの一意市場・MAD2管理へ統一する。新fork特別区分、追加モデル専用κ、coreの市場/報酬免除、genesisのBFT管理免除を継承しない。originは履歴として保存し、genesisの差は正規creatorがいない点だけとする。POSITIONは小数8桁、`1 POSITION=100,000,000 atoms`として固定精度整数で計算する。
-
-通常AMMはburn5%を維持し、creatorありの総手数料1%/名目net94%、正規genesisのcreatorなしは0%/名目net95%とする。不存在creatorの1%を徴収・追加burnしない。内部購入・LP・配布の追加AMM feeは0。通常の永久LP撤去禁止・claim検証・共通発行/資本/責任capを維持し、BMR1正規廃止の限定burnは後続規範に従う。
-
-同日途中の「80%購入・q/4 LP・60%相当Miner」「Wから可変Panel枠を引いてRへ」「BFT10%」は**今回の固定50/20/20/5/5に置換済み**であり、新規受理に使わない。旧MOE1/MOE2のwhole数量・30/20/50・owner3%・旧claim/wire/native/過去試験は元profileの記録として保持する。MOE3のnative接続・移行実行・本番有効化の完了ではない。
-
-一般/複数モデルでは、RFC0068 §4.3で一度分割したCの各legを結合按分し、各モデルの実予算比`floor(q_i J_i/B_i)`でLP数量を求める。Cが20で割り切れるだけでは各モデルの比率が2/7になるとは限らない。
-<!-- MOE3-ADOPTED-20261126-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-| 分野 | 資料 |
-| --- | --- |
-| 経済・bond | [economics](economics/README.md) |
-| 検証・court・beacon | [verification](verification/README.md) |
-| EXEC・資源・remote | [execution](execution/README.md) |
-| モデル・kernel・onboarding | [models](models/README.md) |
-| fork choice・finality・IBD | [consensus](consensus/README.md) |
-| 統合状況・readiness | [integration](integration/README.md) |
-| 利用者ツール(CLI・RPC) | [tooling](tooling/README.md) |
-| genesis・IR・kernelの詳細 | [genesis8](genesis8/) / [tir](tir/) / [vm](vm/) |
-
-画像・動画経路とモデル改善は **mainnet後へ延期・当面無効**です。旧「全RFC完成」の記録を理由に再び初期mainnetの必須対象に戻しません。[正式方針](../../governance/post-mainnet-scope.md)。
+日付・commitを持つ検証メモは当時の入力・実装を示し、新profileの採用・公開有効化を宣言しません。文書再編でwire識別子、署名domain、旧claimの期限・責任は変えません。

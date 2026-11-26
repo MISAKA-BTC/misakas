@@ -1,0 +1,84 @@
+{
+  "genesisHash": "85151853ecab03e6686c6103ebeaa6d1ec7d20b8e588ee6e5cf381e8094189e8316923cc8fd3e42738ae58527d78dbb0506b30f481efa49ec29aa0daebc7b33c",
+  "consensusParamsId": "5006b87d4ece91b3fd0d6c2aec1da5daea35b9d3c1c83a37bfb6a361b5bb510c",
+  "claimId": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb",
+  "observations": [
+    {
+      "tip": "81015a202f8657c167f4be86b5adba8910fd9f38ea347ebd0b930fda97a92e941fd24d29bb1e81ca4407fbf9d4f3f9f9651a501905acdcb77f4c8d9ae4901f02",
+      "daa": 43,
+      "algo": 8,
+      "claim": {
+        "acceptedBlock": "a3353b2f8ba46fea9c48ac32926297ba5e62be46855fd47e83a2845feb44d542c34dda3b4eb6587bafefed2a439d3fc6c1506b2096f03f93999da6f99a2ef026",
+        "acceptedBlueScore": 23,
+        "acceptedDaa": 11,
+        "boundDaa": null,
+        "claimId": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb",
+        "claimLocalSettlement": null,
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "committedSompi": "320095402740",
+        "escrowedRewardSompi": 320084650080,
+        "execLane": null,
+        "executorBond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+        "freePrompt": false,
+        "openCourts": 0,
+        "payoutPendingSompi": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "phaseDeadlineDaa": 31,
+        "quanta": 0,
+        "quantaSpent": 0,
+        "reboundDaa": null,
+        "reservationSplit": null,
+        "reservedSompi": "10752660",
+        "seats": [],
+        "securityCertification": "pending",
+        "voidReason": null,
+        "workLeaves": 0
+      }
+    }
+  ],
+  "history": {
+    "tip": "81015a202f8657c167f4be86b5adba8910fd9f38ea347ebd0b930fda97a92e941fd24d29bb1e81ca4407fbf9d4f3f9f9651a501905acdcb77f4c8d9ae4901f02",
+    "acceptedBlock": "a3353b2f8ba46fea9c48ac32926297ba5e62be46855fd47e83a2845feb44d542c34dda3b4eb6587bafefed2a439d3fc6c1506b2096f03f93999da6f99a2ef026",
+    "slot": 31,
+    "selectedSuccessors": 64,
+    "distinctBlocks": 64,
+    "algorithmsAtOrAfterSlot": {
+      "8": 25
+    },
+    "attemptsAtOrAfterSlot": []
+  },
+  "producer": {
+    "draws": 338,
+    "producedBlocks": 0,
+    "producerReason": ""
+  },
+  "nodeExitCodes": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "replay": {
+    "acceptedDaa": 11,
+    "anchor": "fa227ee0ce933f3e5cefb88f85c9a40df8a8f95da36b5b356f7eee1127578d7adee886486c001a0d61861c9143b400ae8819ab43918249b24b799620905b8e59",
+    "block": "a3353b2f8ba46fea9c48ac32926297ba5e62be46855fd47e83a2845feb44d542c34dda3b4eb6587bafefed2a439d3fc6c1506b2096f03f93999da6f99a2ef026",
+    "chunks": 1,
+    "claim": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb",
+    "executionRoot": "b96d0fa82c739af21f8cddc42dcf5b2d9ac7743623a05af3fa5c0a554e573b388906613a724e96eb44b5840563a2f74d7cc80ee806ceae71f191335eb7c78c59",
+    "manifestRoot": "67ad6977914b6c24e45e337957ebce7d47368a8f7ae8b677c07ec8898968044f01382a2bda5984ce61c001f46e950bc3718ef8dda1d2badd1b3b43033b4bb134",
+    "matchedBytes": 1599245,
+    "outputRoot": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+    "traceRoot": "d30f1fa17d82fe976947dbb153fd432f438da9bd1dc42cbcc9c85aa45d68d56e0655f56cae6e9823d60a88874b4ca40fe0b2fa0cd01123d13f64dbf4146199ca"
+  },
+  "rejected": {
+    "capture": "Error: \"replayed material differs from retained capture\"",
+    "header": "Error: \"unexpected accepted header\"",
+    "claim": "Error: \"unexpected claim, class or genesis domain\""
+  },
+  "savedInputs": {
+    "file": "replay-8abe70c93edb5ebe.tar.gz",
+    "bytes": 747423,
+    "sha256": "828e5cc0c9a03af1ea1f911e3969a991b0af9088340c1a344961666287106912"
+  }
+}

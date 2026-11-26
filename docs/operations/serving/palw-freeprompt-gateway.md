@@ -1,16 +1,8 @@
-# The free-prompt gateway — run your own LLM, mine with the same inference (ADR-0044)
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。以下は旧gatewayと旧profileの運用記録である。任意promptの同一推論を新規FOW1採掘へ自動流用できない。新規採掘にはTB1 challengeの実入力adapter、適格なFOW1登録、zと四Rootへの対応を要する。未対応APIを旧profileへfallbackして成功させない。署名鍵seedはこのbeaconではない。
-
-[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
+# The free-prompt gateway — run your own LLM, mine with the same inference (旧ADR-0044)
 
 Status: FP-06 through FP-09b landed and measured on the pinned model — the gateway, the retained
 trace, and the executor rail that signs a real commitment transaction — plus `misaka palw
-fp-submit`, which puts that transaction on the chain. ADR-0077 Decisions 1-4 are landed on top:
+fp-submit`, which puts that transaction on the chain. 旧ADR-0077 Decisions 1-4 are landed on top:
 the worker is resident (`v3-serve`), the answer streams as SSE while the commitment does not, the
 gateway reads the four chain facts it commits against, and the rail finishes the handoff through
 one library.
@@ -19,13 +11,13 @@ one library.
 person looking.** The 2026-08-31 note removed "no network accepts the free-prompt subnetwork yet":
 `tx_validation_in_isolation` validates subnetwork `0x4a`, `calculate_l1_tag` carries the algo-7
 arm, and testnet-11 runs the `ConsensusV2` bundle. What it then said still stood — the gateway's
-worker was a llama.cpp/GGUF runtime that no chain registers as a class — and ADR-0077 Decision 5
+worker was a llama.cpp/GGUF runtime that no chain registers as a class — and 旧ADR-0077 Decision 5
 removed that too: the workers behind this gateway are now the FAMILY workers
 (`palw-a16-fp-worker`, `palw-qwen36-fp-worker`), which are the runtimes the class rows name. The
 question left is no longer "can this reach a chain" but "does the chain certify THIS class", and
 that is a thing `/health` answers by name (Decision 3, below).
 
-**Local-only:** the gateway accepts only loopback binds (ADR-0144). Public bind opt-in and public-job reward routing have been removed.
+**Local-only:** the gateway accepts only loopback binds (旧ADR-0144). Public bind opt-in and public-job reward routing have been removed.
 
 ## What this is
 
@@ -45,7 +37,7 @@ your app ──POST /v1/chat/completions──▶ misaka-palw-gateway ──▶ 
 ```
 
 One inference. The same run that answers you is the run whose commitment can later certify and
-mine (ADR-0044). There is no second, mining-only lane anywhere in this path.
+mine (旧ADR-0044). There is no second, mining-only lane anywhere in this path.
 
 ## Build
 
@@ -73,7 +65,7 @@ registered on chain; hex is 64-byte-value hex, i.e. 128 chars):
 }
 ```
 
-**The chain (ADR-0077 Decision 3).** Point the gateway at your node with `--rpc <host:port>` (the
+**The chain (旧ADR-0077 Decision 3).** Point the gateway at your node with `--rpc <host:port>` (the
 same wRPC-borsh endpoint `misaka --rpc` takes) and it reads, per job: the class registry row, the
 free-prompt-certified set (`ClassLaneCertified`, genesis ∪ chain), the executor bond and its
 exposure room, and a fresh anchor. `/health` names all four — `registered`, `fp_certified`,
@@ -96,7 +88,7 @@ One of `--rpc` or `--anchor` is required. `--rpc` wins if both are given.
 # The worker reads its runtime from the environment — the gateway spawns it, so these three must
 # be set where the GATEWAY runs, and as absolute paths: the worker resolves them from its own cwd,
 # not from yours. Without them the gateway reports only "the worker exited before announcing its
-# manifest" (its stderr is withheld by ADR-0079 SA-7; set MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1
+# manifest" (its stderr is withheld by 旧ADR-0079 SA-7; set MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1
 # to see the worker's own line, e.g. "MISAKA_PALW_NETWORK_ID is not set").
 export MISAKA_PALW_NETWORK_ID=testnet-11
 export MISAKA_PALW_ARTIFACT=/abs/path/to/qwen25-a16-graph-v5.palwart
@@ -130,10 +122,10 @@ worker is not"). `palw-class ledger --network testnet-11` prints it beside the m
 | `--claim-exposure-sompi <n>` | what one claim reserves. `0` = read it from the chain |
 | `--claim-budget-permille <n>` | fraction of the operator’s bond exposure room local claims may reserve per day (default 200; max 1000) |
 | `--answer-never-commit` | SA-1(c): answer every prompt, commit none |
-| `--privacy public-da\|panel-da` | ADR-0077 D16: `panel-da` files commitments that carry no prompt on chain — the ids reach only the drawn seats over the authenticated pull. Refused per request where the chain has not armed `palw_panel_da` (`panel_da_armed` in the facts), before the inference. The gateway prints the disclosure sentence at boot: private from the public, not from the panel; a dispute publishes it |
+| `--privacy public-da\|panel-da` | 旧ADR-0077 D16: `panel-da` files commitments that carry no prompt on chain — the ids reach only the drawn seats over the authenticated pull. Refused per request where the chain has not armed `palw_panel_da` (`panel_da_armed` in the facts), before the inference. The gateway prints the disclosure sentence at boot: private from the public, not from the panel; a dispute publishes it |
 | `--per-source-jobs-per-window <n>` | SA-8's secondary per-IP quota |
-| `--derive-seed <file>` | ADR-0078: sign derivations here. **Must live outside `--identity`'s directory and outside `--outbox`** — the boot refusal scans exactly those two for reachable signing secrets and will refuse to start |
-| `MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1` | print the worker's stderr. Withheld by default (ADR-0079 SA-7): that stream is the model runtime's and can quote its input |
+| `--derive-seed <file>` | 旧ADR-0078: sign derivations here. **Must live outside `--identity`'s directory and outside `--outbox`** — the boot refusal scans exactly those two for reachable signing secrets and will refuse to start |
+| `MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1` | print the worker's stderr. Withheld by default (旧ADR-0079 SA-7): that stream is the model runtime's and can quote its input |
 
 Without `--bond-exposure-room-sompi`/`--claim-exposure-sompi` AND without `--rpc` the gateway
 cannot price the spend, so it answers and commits nothing — the safe reading of an unknown.
@@ -150,7 +142,7 @@ The reply is a normal chat completion plus a `misaka` object: `fp_job_id`, the t
 roots, `work_leaves`, the artifact path, `committed`, and — when it is false —
 `not_committed_because` in the chain's own words.
 
-**Streaming (ADR-0077 Decision 2).** `"stream": true` is served as SSE: `chat.completion.chunk`
+**Streaming (旧ADR-0077 Decision 2).** `"stream": true` is served as SSE: `chat.completion.chunk`
 events as the worker decodes, then one event carrying the `misaka` object and `usage`, then
 `[DONE]`. The commitment is NOT streamed; it exists only at completion. When the frame arrives the
 gateway re-checks that the ids it streamed are the committed `output_token_ids` and that the bytes
@@ -167,9 +159,9 @@ plus their manifest — written by the worker BEFORE its result frame exists, be
 that kept nothing would default in court).
 
 What is still pending before an on-chain commitment lands: the signature and the submission, both
-below. The gateway holds NO key (ADR-0079 Decision 4) and therefore does neither.
+below. The gateway holds NO key (旧ADR-0079 Decision 4) and therefore does neither.
 
-**The unsigned commitment is written only when the job may become a claim.** ADR-0077 Decision 3
+**The unsigned commitment is written only when the job may become a claim.** 旧ADR-0077 Decision 3
 and SA-1/SA-7: an unregistered or uncertified class, an unpriced lane, an inactive bond, no
 exposure room, the daily local claim budget, or `--answer-never-commit` each leave the answer intact
 and the commitment unwritten, with `not_committed_because` naming which. A derivation
@@ -221,9 +213,9 @@ from the lane's funding selector on a node with `--utxoindex`), and does not sta
 until the previous carrier has become a claim — saying so, by name, when the chain dropped the
 commitment instead. State lives in `<outbox>/rail-watch-state.json`; `--once` runs one pass. The
 identity file it signs under can be written from the node with `--print-identity --class-id <id>`.
-The end-to-end page for operators is [testnet11-free-prompt-mining.md](../../history/networks/testnet-11/testnet11-free-prompt-mining.md).
+The end-to-end page for operators is [testnet11-free-prompt-mining.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-free-prompt-mining.md).
 
-**One handoff (ADR-0077 Decision 4).** Add `--submit --rpc <host:port>` and the same command
+**One handoff (旧ADR-0077 Decision 4).** Add `--submit --rpc <host:port>` and the same command
 finishes the job — it hands the signed transaction to `misaka-palw-fp-submit`, the library
 `misaka palw fp-submit` also calls:
 
@@ -235,7 +227,7 @@ finishes the job — it hands the signed transaction to `misaka-palw-fp-submit`,
 ```
 
 In that one step: the anchor is checked against the node's DAA (SA-1b), `<claim>.material` and
-`<claim>.answer` (ADR-0084: the job, the prompt ids and the answer's ids, what a seat is served
+`<claim>.answer` (旧ADR-0084: the job, the prompt ids and the answer's ids, what a seat is served
 when the capture is over the transport cap) are staged as `.partial`s in the directory the node
 names as its own (`getPalwProducerFacts` → `palwRetentionDir`; `--retention-dir` overrides it, and
 a directory the node's panel does not read serves nobody), the transaction is broadcast, and the
@@ -243,7 +235,7 @@ files take their real names only after the node accepts. A refusal leaves nothin
 material for a claim that does not exist — and a mempool collision is reported as a wait rather
 than a fault.
 
-## The worker protocol (ADR-0077 Decisions 1, 2 and 6)
+## The worker protocol (旧ADR-0077 Decisions 1, 2 and 6)
 
 A family worker — `palw-a16-fp-worker` (dense tier) or `palw-qwen36-fp-worker` (hybrid) — has
 three modes, and they are the same code from the request onward:
@@ -285,18 +277,18 @@ Two things the manifest states that are easy to get wrong:
 
 * `n_ctx` is the **class's registered** context, not the artifact's rotary span. The dense
   artifact's table covers 512 positions and the class registers 16; the runtime answers at 16,
-  because answering wider than the court admits is exactly the split ADR-0077 R0 exists to close.
+  because answering wider than the court admits is exactly the split 旧ADR-0077 R0 exists to close.
 * `eog_token_ids` is a **display** stop. Execution runs to the job's declared decode budget — a
   step leaf hash binds the job context, which binds the executed count, so hashing cannot start
   before the count is fixed — and the commitment covers every executed token.
 
 The resident worker verifies its artifact by reading all of it at startup and re-verifies whenever
-the file's device, inode or size changes (ADR-0077 SA-6). An artifact replaced or truncated under a
+the file's device, inode or size changes (旧ADR-0077 SA-6). An artifact replaced or truncated under a
 running worker is a `Refused` job naming the two digests, never a crash. Nothing the worker logs
 carries prompt text or prompt ids: a refusal names the rule and the position it was broken at
-(ADR-0079 SA-7).
+(旧ADR-0079 SA-7).
 
-## The OpenAI surface (ADR-0096)
+## The OpenAI surface (旧ADR-0096)
 
 A client written against `api.openai.com` works against this gateway with the base URL changed
 and nothing else — and where it cannot, it is told why, by name, before any inference runs.
@@ -314,7 +306,7 @@ its verdict; the Studio runs the same files against its `/v1`.
 | `messages[].content` with a non-text part (`image_url`, `input_audio`, `file`, …) | refused by name, with the message and part index |
 | `tools`, `tool_choice`, `messages[].tool_calls`, role `tool` | rendered as the model's own text (below) |
 | `response_format` (`text` / `json_object` / `json_schema`) | advisory mode (below); a schema outside the subset is refused by name |
-| `temperature`, `seed` | ADR-0082 Decision 11, unchanged: anything but greedy is refused naming `palw_fp_decode_rules` while the fence is dormant |
+| `temperature`, `seed` | 旧ADR-0082 Decision 11, unchanged: anything but greedy is refused naming `palw_fp_decode_rules` while the fence is dormant |
 | `top_p`, `top_k`, `min_p`, `repeat_penalty`, `frequency_penalty`, `presence_penalty` | accepted at their identity value only (1, 0, 0, 1, 0, 0) and reported; any other value is refused by name — no consensus rule exists for them, and none will |
 | `stop`, `logit_bias` | accepted empty; refused by name otherwise (the display cut is the template's; trim in your app) |
 | `n ≠ 1`, `logprobs`, `top_logprobs`, `functions` / `function_call` (legacy), any `stream_options` key but `include_usage` | refused by name |
@@ -325,11 +317,11 @@ its verdict; the Studio runs the same files against its `/v1`.
 | `Authorization: Bearer …` | ignored; the pool slot token is the credential |
 | any field not named here | refused by name, never dropped |
 
-**The limits, before the first token (ADR-0097 Decision 2).** `GET /v1/models` carries
+**The limits, before the first token (旧ADR-0097 Decision 2).** `GET /v1/models` carries
 `misaka.limits` and `GET /health` carries the same object (`limits`, schema `misaka.palw.limits.v1`):
 `context_window` (the class's `n_ctx`; prompt and answer together, `prompt_plus_answer_must_fit`),
 `max_output_tokens` (`min(--max-decode-cap, n_ctx − 1)`), `default_output_tokens`,
-`max_prompt_bytes`, `tokenizer_id` and `vocab` (count with the table ADR-0096 Decision 8 serves),
+`max_prompt_bytes`, `tokenizer_id` and `vocab` (count with the table 旧ADR-0096 Decision 8 serves),
 `eog_token_ids`, `jobs_per_request: 1`, `streaming: true`, and under `features` the word the chain's
 fences decide for each thing the table above accepts — `response_format.json_schema:
 "advisory" | "committed"`, `sampling.temperature: "greedy_only" | "requested"`,
@@ -347,10 +339,10 @@ for the same refusal, or `prompt_bytes_exceeded`) and the numbers under `misaka.
 answer also carries `misaka.decode = {requested_max_tokens, applied_limit, cap, clamped}`, because
 a `max_tokens` past `--max-decode-cap` is clamped and a clamp nobody is told about is a downgrade
 nobody agreed to. Whether a MODEL fits this chain at a width — every wall, with its number — is
-`misaka-palw-base0 --bin palw-model-fit` (ADR-0097 Decision 1), not this gateway's to say.
+`misaka-palw-base0 --bin palw-model-fit` (旧ADR-0097 Decision 1), not this gateway's to say.
 
 **Tools are the model's own text (Decision 2).** The shipped classes' models were trained on the
-Hermes-style convention, and the template is the model's (ADR-0077 Decision 6), so the tool list
+Hermes-style convention, and the template is the model's (旧ADR-0077 Decision 6), so the tool list
 rides the system turn as text — created with `You are a helpful assistant.` when the request has
 no system turn — in the exact words of Qwen2.5-Instruct's `chat_template`:
 
@@ -390,7 +382,7 @@ back) is the app's, and each leg is its own inference and its own claim.
 
 **`response_format` has two enforcement modes, and the answer says which (Decision 3).** The mode
 is the chain's to decide. *Committed* — the network has armed `Params::palw_fp_decode_constraint`
-(ADR-0096 Decision 8; Part B of the ADR, not in this tree): the schema compiles to a decode
+(旧ADR-0096 Decision 8; Part B of the ADR, not in this tree): the schema compiles to a decode
 constraint the seat replays and the court can try. *Advisory* — every shipped network today: the
 instruction rides the system turn as text (`Respond with a single JSON value and nothing else.`,
 or `… that conforms to this JSON Schema and nothing else:` followed by the schema in RFC 8785
@@ -420,7 +412,7 @@ the other fences.
 The same object rides the SSE stream's terminal event; the terminal chunk's `delta` carries the
 parsed `tool_calls` (with `index`) and the finish reason.
 
-## An answer-only local engine (ADR-0096 Decision 10)
+## An answer-only local engine (旧ADR-0096 Decision 10)
 
 The gateway is also the local chat engine: the same binary, over the same family worker, filing
 nothing. This is what MISAKA Studio's `misaka` engine runs, and it needs no node, no bond and no
@@ -489,7 +481,7 @@ a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s w
   This bullet used to say "single-batch prefill caps the prompt at 512 tokens", which was true of
   a bundle cap and never of a registered class — an optimistic number is as stale as a pessimistic
   one. Longer rows are a NEW class identity (`n_ctx` is inside the shape profile id), which is the
-  ladder ADR-0077 Decision 13 exists for; [testnet11-ask-for-a-file.md](../../history/networks/testnet-11/testnet11-ask-for-a-file.md)
+  ladder 旧ADR-0077 Decision 13 exists for; [testnet11-ask-for-a-file.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-ask-for-a-file.md)
   §0 states what today's width means for a person typing a prompt.
 - **The display stop is not the execution stop.** On a model whose control tokens the manifest
   declares, the `chat-segments/v1` template elicits EOG and the shown answer ends there. On one it
@@ -497,7 +489,7 @@ a `response_format: json_object` request returned `{"capital":"Paris"}` in 7 s w
   answer you want and the display trims at the next marker. Either way execution runs to the
   declared decode budget — a step leaf hash binds the executed count before the first leaf is
   hashed — and the commitment covers every executed token.
-- **The gateway holds no key** (ADR-0079 Decision 4). It refuses to boot if a 32-byte file or a
+- **The gateway holds no key** (旧ADR-0079 Decision 4). It refuses to boot if a 32-byte file or a
   seed variable is reachable in its own view of `--identity`'s directory or `--outbox`.
 - **Determinism is the class's**: run the pinned worker on hardware inside the registered class
   or the panel replay will rightly refute the trace.
@@ -520,7 +512,7 @@ python3 scripts/drills/misaka-palw-fp-rail-smoke.py "$MISAKA_ROOT"/target/releas
 
 The worker smoke pins the property everything else stands on: the Text arm and the TokenIds
 (replay) arm converge on byte-identical roots, so a panel seat holding only chain data can
-re-derive exactly what your gateway committed. The gateway smoke adds the two ADR-0077 bindings —
+re-derive exactly what your gateway committed. The gateway smoke adds the two 旧ADR-0077 bindings —
 the SSE answer equals the buffered one and `answer_stream_checked` is true (Decision 2 / W5), and
 `prompt_ids_checked` is true on the artifact (SA-3) — and reads `/health` for all four chain names.
 

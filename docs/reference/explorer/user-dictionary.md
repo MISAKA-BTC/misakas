@@ -46,7 +46,7 @@ copy-to-clipboard still print.
 | PALW Attempt lane | **AI Inference** | This block's work was one model inference, replayed and checked by the network. | `algo 6 · PALW attempt lane` |
 | PALW Receipt lane | **AI Request served** | A user's paid request was answered here, and the work became network weight. | `receipt block · certified quantum spent` |
 | Free Prompt lane | **AI Request** | Somebody asked the network for an answer and committed to paying for it. | `FreePromptCommitted · fp lane` |
-| Heartbeat lane | **Network Heartbeat** | Keeps the chain's clock moving when no AI production is available. Earns fees only, and no work weight. | `algo 8 · bondless heartbeat (ADR-0060)` |
+| Heartbeat lane | **Network Heartbeat** | Keeps the chain's clock moving when no AI production is available. Earns fees only, and no work weight. | `algo 8 · bondless heartbeat (旧ADR-0060)` |
 | EVM lane | **EVM Transaction** | An ordinary smart-contract transaction. | `EVM execution lane` |
 | Algorithm 4 / algo 6 | *(not shown at top level)* | — | `algorithm N` |
 
@@ -54,10 +54,10 @@ copy-to-clipboard still print.
 
 | today | display | tooltip | technical |
 |---|---|---|---|
-| Model Registry | **Models** | The AI models the network runs, and which are producing right now. | `getPalwModelRegistry · ADR-0135` |
+| Model Registry | **Models** | The AI models the network runs, and which are producing right now. | `getPalwModelRegistry · 旧ADR-0135` |
 | Execution class | **Model** *(name + shape)* | A model at one runtime configuration. The same model at a different context size is a different entry. | `class_id · PalwShapeProfile::shape_profile_id()` |
 | Artifact root | **Model File ID** | The fingerprint of the exact weights file this entry runs. | `artifact_root` |
-| Model line | **Model version history** | Who maintains this model and which version is current. | `line_id · ADR-0088` |
+| Model line | **Model version history** | Who maintains this model and which version is current. | `line_id · 旧ADR-0088` |
 | Registrant bond | **Producer Deposit** | Collateral the worker locks; it is slashed if the work is proven wrong. | `bond · outpoint txid:index` |
 | Producer | **AI Worker** | The machine that ran the model for this block. | `producer bond` |
 | Claim | **AI Work** | One unit of model work the chain is tracking. | `claim · PalwClaimStateV2` |
@@ -66,16 +66,16 @@ copy-to-clipboard still print.
 | Voided claim | **Rejected AI Work** | The work never completed — no panel could check it, or it failed. | `Voided { reason }` |
 | Ready seats | **Checkers ready** | How many machines are holding this model right now and can verify work on it. | `readySeatsNow / requiredReadySeats` |
 | Panel | **Checkers** | The independent machines drawn to verify one piece of work. | `panel · PALW_V2_PANEL_SEATS` |
-| Execution lane / round / permit | **Work slots** | How many pieces of AI work the network will accept this round. | `getPalwRoundLane · ADR-0125` |
+| Execution lane / round / permit | **Work slots** | How many pieces of AI work the network will accept this round. | `getPalwRoundLane · 旧ADR-0125` |
 | Domain quota | **Share of work slots** | The fraction of slots this model's work may take. | `quotaPermille` |
 
 ### Progress and confidence
 
 | today | display | tooltip | technical |
 |---|---|---|---|
-| DAA score | **Network Progress** | How far the network's clock has moved. Only blocks that carry priced work advance it. | `daa_score · ADR-0138 anchor clock` |
+| DAA score | **Network Progress** | How far the network's clock has moved. Only blocks that carry priced work advance it. | `daa_score · 旧ADR-0138 anchor clock` |
 | safe_weight | **Confirmed Work Weight** | Work that is finished and can no longer be taken back. | `safe_weight` |
-| Settlement depth | **Confirmations** | Counted in settled AI work, never in blocks — heartbeats and execution blocks add none. | `depth · settled anchors · ADR-0127` |
+| Settlement depth | **Confirmations** | Counted in settled AI work, never in blocks — heartbeats and execution blocks add none. | `depth · settled anchors · 旧ADR-0127` |
 | Safe frontier | **Fully resolved up to** | The last point where everything behind it is decided. | `safe_frontier_blue_score` |
 | Fence / flag day | **Upgrade height** | The block height at which a new rule starts applying. | `ForkActivation · fence DAA` |
 
@@ -83,9 +83,9 @@ copy-to-clipboard still print.
 
 | today | display | tooltip | technical |
 |---|---|---|---|
-| Position | **Membership** | A holding in a model, which may grant declared access. | `position · ADR-0087` |
-| Line benefits | **Access** | What holding this membership lets you do. | `benefits · ADR-0095` |
-| Service facts | **Who serves this model** | Providers who have signed a statement that they serve it. | `serviceFacts · ADR-0101` |
+| Position | **Membership** | A holding in a model, which may grant declared access. | `position · 旧ADR-0087` |
+| Line benefits | **Access** | What holding this membership lets you do. | `benefits · 旧ADR-0095` |
+| Service facts | **Who serves this model** | Providers who have signed a statement that they serve it. | `serviceFacts · 旧ADR-0101` |
 
 **The eight words that carry the product**, and the only ones a first-time reader must learn:
 Model · AI Work · AI Worker · Checker · Membership · Access · Verified · Network Heartbeat.

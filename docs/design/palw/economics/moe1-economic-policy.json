@@ -5,8 +5,8 @@
   "runtime_configuration": false,
   "activation_position": null,
   "normative_sources": [
-    "docs/rfc/0063-additional-model-option-economics.md",
-    "docs/adr/0231-additional-model-option-economics.md",
+    "docs/rfc/0016-position-market-and-rewards.md",
+    "docs/rfc/0016-position-market-and-rewards.md",
     "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md"
   ],
   "classification": {
@@ -125,7 +125,7 @@
     "tb1_fow1_gates_waived": false
   },
   "model_governance": {
-    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "normative_rfc": "docs/rfc/0007-bft-model-admission.md",
     "GENESIS": "immutable original genesis; no BFT model management",
     "ADDITIONAL": "automatic or BFT admission; BFT stop/resume applies to both",
     "FORK_DESIGNATED": "BFT YES may add; core economics, BFT stop/resume applies",

@@ -2,8 +2,8 @@
 
 Status: private implementation annex / unresolved header-work projection. This
 annex implements the new claim-version separation required by
-[RFC-0044](../../../rfc/0044-positive-court-full-coverage.md) and
-[ADR-0212](../../../adr/0212-positive-court-without-model-prepossession.md).
+[RFC-0044](../../../rfc/0008-g14-panel-and-verification.md) and
+[旧ADR-0212](../../../rfc/0008-g14-panel-and-verification.md).
 It does not activate a header form, alter old envelope meanings, adopt new
 issuance or declare native readiness. The governing
 [principles](../../../PRINCIPLES.md) continue to apply.

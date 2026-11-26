@@ -1,0 +1,121 @@
+{
+  "snapshot": "ef7c7a37e92c440fa3ef4f487455f1b8",
+  "peersWithIdenticalResults": [
+    0,
+    1,
+    2
+  ],
+  "selectedWindow": {
+    "allocatedSstBytes": 12161024,
+    "allocatedSstBytesPerDaa": 1520128,
+    "blocks": 16,
+    "logicalJournalEntryBytesByWireTag": {
+      "19": 2864,
+      "191": 5264,
+      "210": 99631680,
+      "51": 343
+    },
+    "logicalValueBytes": 99642903,
+    "nonterminalClaimsAtTip": 1,
+    "parentDaa": 8594,
+    "repeatedStagedCourtValueBytesByDigest": 43588846,
+    "sample": "selected delta SST files only",
+    "stagedCourtEntryBytesByKeyTag": {
+      "12": 99631680
+    },
+    "stagedCourtValueBytes": 99631648,
+    "tip": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+    "tipDaa": 8602,
+    "tipStateRoot": "4592c453bbecaf53c26b1bc448a4fd0ba02e093749d1233354094696c605f80cb3f50a5e25c802b20da797bc654404d3f3b621c98b00c34ce2e1abbe203a130e",
+    "verifiedRows": 16
+  },
+  "awardedClaim": {
+    "block": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+    "captureOwed": true,
+    "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+    "claimPresent": true,
+    "daa": 8602,
+    "gateC": "certified",
+    "openCourts": 0,
+    "openDaSessions": 0,
+    "pruningPoint": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "pruningPointDaa": 0,
+    "pruningPointIndex": 0,
+    "retentionCheckpoint": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "retentionRoot": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "stateRoot": "4592c453bbecaf53c26b1bc448a4fd0ba02e093749d1233354094696c605f80cb3f50a5e25c802b20da797bc654404d3f3b621c98b00c34ce2e1abbe203a130e"
+  },
+  "coveringClaim": {
+    "block": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+    "captureOwed": true,
+    "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+    "claimPresent": true,
+    "daa": 8602,
+    "gateC": "pending",
+    "openCourts": 0,
+    "openDaSessions": 0,
+    "pruningPoint": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "pruningPointDaa": 0,
+    "pruningPointIndex": 0,
+    "retentionCheckpoint": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "retentionRoot": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+    "stateRoot": "4592c453bbecaf53c26b1bc448a4fd0ba02e093749d1233354094696c605f80cb3f50a5e25c802b20da797bc654404d3f3b621c98b00c34ce2e1abbe203a130e"
+  },
+  "snapshotAllocationInterval": {
+    "definition": "regular-file allocated blocks per snapshot including shared clone extents and the manifest",
+    "from": {
+      "daa": 8305,
+      "snapshot": "9e327e58d2e04f2599b17b337e5a644b",
+      "allocatedBytesByCategory": {
+        "other": 2676625408,
+        "logs": 92364800,
+        "consensusSst": 17235525632,
+        "otherDbFiles": 14626816,
+        "consensusBlob": 15431081984,
+        "wal": 491667456,
+        "utxoIndex": 802816,
+        "retainedMaterial": 107028480
+      }
+    },
+    "to": {
+      "daa": 8602,
+      "snapshot": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "allocatedBytesByCategory": {
+        "other": 3412275200,
+        "logs": 99209216,
+        "consensusSst": 18185936896,
+        "consensusBlob": 15431081984,
+        "otherDbFiles": 2465792,
+        "wal": 153427968,
+        "utxoIndex": 892928,
+        "retainedMaterial": 97394688
+      }
+    },
+    "netAllocatedBytes": 1332961280,
+    "totalAllocatedBytesPerDaaFloor": 4488085
+  },
+  "priorSelectedWindow": {
+    "allocatedSstBytes": 12161024,
+    "allocatedSstBytesPerDaa": 1520128,
+    "blocks": 16,
+    "logicalJournalEntryBytesByWireTag": {
+      "19": 2864,
+      "191": 5264,
+      "210": 99631680,
+      "52": 370
+    },
+    "logicalValueBytes": 99642930,
+    "nonterminalClaimsAtTip": 2,
+    "parentDaa": 8297,
+    "repeatedStagedCourtValueBytesByDigest": 43588846,
+    "sample": "selected delta SST files only",
+    "stagedCourtEntryBytesByKeyTag": {
+      "12": 99631680
+    },
+    "stagedCourtValueBytes": 99631648,
+    "tip": "d53efd7b2e2069491c46d043a3f5232609fa1cb6ed3037cf28a9f5f2218d6e9447d391996ea3ca7964f8f886f2d69da1a64a1e3c6e207092128bc22599470256",
+    "tipDaa": 8305,
+    "tipStateRoot": "9c318cbfb024b50b30a1635f12c71b989693fa3e1f26e4dda85495dde342d1923bd244e73b707128be927064c0f701e57ff76ebc9d5e8b44e30c4a63aff67d77",
+    "verifiedRows": 16
+  }
+}

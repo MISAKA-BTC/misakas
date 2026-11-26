@@ -63,4 +63,4 @@ full FP retention, all protected cases and the complete quote/admission
 profile remain required. No public polling, deployment or transaction was
 performed for this change.
 
-The subsequent user-adopted [HF acquisition change](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md) removes mandatory model-weight redistribution from the new HF profile. This publisher handles claim-specific Trace, so that work remains applicable.
+The subsequent user-adopted [HF acquisition change](../../../rfc/0010-materials-and-funded-delivery.md) removes mandatory model-weight redistribution from the new HF profile. This publisher handles claim-specific Trace, so that work remains applicable.

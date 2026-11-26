@@ -11,11 +11,11 @@
 
 | # | レビューの指摘 | 判定 | 根拠 |
 | --- | --- | --- | --- |
-| 1 | HF Transformers との bit-exact 比較は原理的に不可能 | **済**（そもそも HF を正解にしていない） | ADR-0040、`misaka-palw-base0-ref2` |
-| 2 | 整数なら `reduction_order = fixed` は不要・有害 | **済**（クラスの中心的性質として明文化） | ADR-0040 Decision E |
+| 1 | HF Transformers との bit-exact 比較は原理的に不可能 | **済**（そもそも HF を正解にしていない） | 旧ADR-0040、`misaka-palw-base0-ref2` |
+| 2 | 整数なら `reduction_order = fixed` は不要・有害 | **済**（クラスの中心的性質として明文化） | 旧ADR-0040 Decision E |
 | 2b | overflow 境界を仕様に書き CI で assert | **済**（const_assert + 実行時 + shape 検証の三重） | `palw_base0.rs:100`, `palw_base0_ops.rs:114`, `artifact.rs:177` |
 | 3 | 本当の敵は MatMul でなく非線形（RoPE/Softmax/RMSNorm/除算） | **済**（4 つとも整数化済み） | `rope.rs`, `palw_base0_ops.rs:264`, `RSQRT_ITERS`, `int_recip` |
-| 4 | Validator フル再実行はスケールしない → bisection | **済**（court は二分探索で実装・実機 drill 済） | ADR-0027/0028/0030、`palw_step_refute.rs`, `palw_dispute.rs` |
+| 4 | Validator フル再実行はスケールしない → bisection | **済**（court は二分探索で実装・実機 drill 済） | 旧ADR-0027/0028/0030、`palw_step_refute.rs`, `palw_dispute.rs` |
 | 5 | Tokenizer の実装差でチェーンが割れる | **済**（構造的に consensus 外へ出してある） | `palw_v2.rs:404`, `palw_freeprompt_v3.rs:192` |
 | 6 | argmax tie-break / PRNG / offline calibration / EOS | **済** | `engine.rs:441`, `convert.rs`, `palw_freeprompt_v3.rs` |
 | — | Phase 0: 仕様 + KAT ベクタ + 独立実装 | **部分** — 独立実装は 2 つあるが **KAT がリポジトリ外に出ていない** | 下記 G2 |
@@ -31,20 +31,20 @@
 レビューの指摘自体は正しい（float 実行と整数実行が bit-exact になることはない）。
 ただし本リポジトリは HF を正解に置いていない。正解の三層は既に：
 
-* **仕様**: `docs/adr/0040-palw-base-0-integer-arithmetic.md`（7 プリミティブ + 10 op の閉じた集合）
+* **仕様**: `docs/rfc/0002-tensor-ir-kernels-and-runtime.md`（7 プリミティブ + 10 op の閉じた集合）
 * **構造的独立の第 2 実装**: `testing/reference/palw-base0-ref2/src/primitives.rs`
   — 同一著者・別定式化。実際に**欠陥 3 件**を検出している（`SRDHM` の丸め方向、
   RSR の負値、`RoundingShiftRight64` の overflow panic）。
 * **著者独立のオラクル**: `testing/reference/palw-base0-ref2/src/gemmlowp.rs`
   — Google の gemmlowp を byte-identical に vendor。`SRDHM` と `RoundingShiftRight` の
-  2 つについては「このリポジトリが自己整合」ではなく「ADR-0040 が**正しい**」ことの証拠になる。
+  2 つについては「このリポジトリが自己整合」ではなく「旧ADR-0040 が**正しい**」ことの証拠になる。
 
 レビューが言う「暗号ライブラリと同じで、正解は参照実装ではなく仕様 + KAT」は、
 この 3 層でほぼ実現している。**欠けているのは KAT がファイルとして外に出ていないこと**だけ（G2）。
 
 ### 2. reduction order — 既にクラスの中心的性質
 
-ADR-0040 **Decision E** がレビューと同じ結論を、より強い形で述べている：
+旧ADR-0040 **Decision E** がレビューと同じ結論を、より強い形で述べている：
 
 > 整数加算は正確に結合的かつ可換であり、丸めも飽和もない。**どの順序で積み上げても結果は変わらない**
 > — スレッド数・SIMD 幅・タイル形状をまたいで。
@@ -76,7 +76,7 @@ BASE-0 は **accumulate では overflow 不能、narrowing では飽和**（C3�
 
 | レビューの懸念 | 実装 |
 | --- | --- |
-| RoPE で `sinf/cosf` を呼んだら終わり | `misaka/palw/base0/src/rope.rs` — 事前計算した固定小数点テーブル。ADR-0040 が catalog から `sinf/cosf` を**削除**し、ADR-0031（canonical transcendentals）を「持たないことで」supersede している |
+| RoPE で `sinf/cosf` を呼んだら終わり | `misaka/palw/base0/src/rope.rs` — 事前計算した固定小数点テーブル。旧ADR-0040 が catalog から `sinf/cosf` を**削除**し、旧ADR-0031（canonical transcendentals）を「持たないことで」supersede している |
 | Softmax の online rescaling は結果を変える | `palw_base0_ops.rs:264` — max → exp → sum → reciprocal の 2-pass 固定。flash 系の逐次 rescale は存在しない |
 | RMSNorm の rsqrt は反復回数を固定するか LUT | `palw_base0.rs:61` `RSQRT_ITERS: u32 = 3` — 固定反復 + 16 エントリの seed テーブル。収束判定で抜ける経路はない |
 | 除算は全面禁止 | `int_recip` で置換済み。softmax も sigmoid も逆数経由（`palw_base0_ops.rs:279`, `:296`） |
@@ -87,7 +87,7 @@ BASE-0 は **accumulate では overflow 不能、narrowing では飽和**（C3�
 ### 4. 検証フロー — bisection は実装済み
 
 レビューの「`O(validator数 × フル推論)` はスケールしない → Verde 型 bisection」は、
-ADR-0027/0028 の court として既に実装されている：
+旧ADR-0027/0028 の court として既に実装されている：
 
 ```
 consensus/core/src/palw_step.rs         17 種の op 語彙とステップ空間
@@ -135,7 +135,7 @@ TEE には依存していない（PQC を掲げる以上 TEE は筋が悪い、�
 採用しない：**candle / tract / burn**。BASE-0 は 10 op の閉じた catalog で自己完結しており、
 テンソルフレームワークを持ち込むと catalog の閉性（court の前提）が壊れる。
 `ggml` / `llama.cpp` は GGUF レイアウトの参考として `misaka/palw/base0/src/mmap.rs` の
-コンバータ側にある（`misaka-palw-metal` は ADR-0053 で削除。GGUF を*実行*する経路は無く、
+コンバータ側にある（`misaka-palw-metal` は 旧ADR-0053 で削除。GGUF を*実行*する経路は無く、
 読むだけの経路が残っている）。
 
 ## 残っている本物のギャップ
@@ -152,7 +152,7 @@ misaka/palw/base0/src/produce.rs:20    doc コメント
 misaka/palw/base0/src/convert.rs       offline PTQ（意図的に float、推論経路ではない）
 ```
 
-しかし**これを守らせる仕組みがない**。ADR-0040 Decision A は「libm をリンクするビルドは
+しかし**これを守らせる仕組みがない**。旧ADR-0040 Decision A は「libm をリンクするビルドは
 適合実装ではない」と言い切っているが、それを検査するものが存在しない。
 レビューの「lint で deny すれば事故の 9 割が消える」はここに当たる。
 
@@ -163,7 +163,7 @@ Rust には「float 型を禁止する」組み込み lint も clippy lint も�
 
 差分テスト（`testing/reference/palw-base0-ref2/tests/differential.rs`）は Rust コード同士の比較なので、
 **第三者が Rust を読まずに適合実装を書く経路がない**。
-ADR-0040 は「二つの独立実装が一致して初めてクラスが登録される」と定めているのに、
+旧ADR-0040 は「二つの独立実装が一致して初めてクラスが登録される」と定めているのに、
 その一致を外部が確認する手段が repo の内部形式しかない。
 
 必要なのは、仕様から機械可読な KAT を吐き、そのダイジェストをテストで固定すること。
@@ -182,7 +182,7 @@ ADR-0040 は「二つの独立実装が一致して初めてクラスが登録�
 
 ### G1 — `misaka/palw/base0/tests/float_free.rs`
 
-ADR-0040 Decision A を**検査可能にした**。Rust には float 型を禁止する lint が
+旧ADR-0040 Decision A を**検査可能にした**。Rust には float 型を禁止する lint が
 組み込みにも clippy にも無いので、crate 自身のソースを走査するテストとして実装した。
 
 * 走査対象: `misaka-palw-base0` の実行経路 11 モジュール + KAT を述べる 2 ファイル +
@@ -222,7 +222,7 @@ cargo run --release -p misaka-palw-base0 --bin base0-kat > palw-base0-kat-v1.jso
   これが無ければ、配るファイルは「クラスについての言明」ではなく
   「実装 #1 が出力したもの」に過ぎない。
   `SRDHM` と `RoundingShiftRight` の 2 群は vendored gemmlowp でも再生している
-  （著者独立なので、ADR-0040 が**正しい**ことの証拠になる唯一の 2 群）
+  （著者独立なので、旧ADR-0040 が**正しい**ことの証拠になる唯一の 2 群）
 
 `RequantizeWithZero` だけは ref2 に対応関数が無いので、
 ref2 自身のプリミティブから `Saturate8(RSR(SRDHM(acc, mult), shift) + zero)` を組んで検証している。

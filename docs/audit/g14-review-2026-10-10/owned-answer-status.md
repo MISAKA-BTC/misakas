@@ -1,6 +1,6 @@
 # Session-owned multipart DA answer checkpoint — 2026-10-11
 
-This checkpoint implements the dormant consensus transport foundation for G14. It does not complete G14 and does not arm the new objects. ADR-0177 D7 continues to assume a verifier holding the correct registered model.
+This checkpoint implements the dormant consensus transport foundation for G14. It does not complete G14 and does not arm the new objects. 旧ADR-0177 D7 continues to assume a verifier holding the correct registered model.
 
 ## Implemented
 
@@ -46,7 +46,7 @@ The FP job retrieval ceiling is now 125,000 bytes. For the currently shipped pre
 
 The node test build completed successfully. The initial core test run failed the new Flat sizing fixture because it used a held profile, whose class forces Merkle input. The fixture was corrected to use the regular profile; its rebuilt test and the updated real-signature admission gate were still pending at the time this checkpoint was prepared. The previous checkpoint's 29 PASS must not be treated as verification of these new admission changes.
 
-Public multipart history reconstruction, maximum-profile producer/outsider service tests, the current shipping verification round, and the remaining full G14 guarantees are unfinished. Activation remains fail-closed. ADR-0177 D7's registered-model possession assumption is unchanged.
+Public multipart history reconstruction, maximum-profile producer/outsider service tests, the current shipping verification round, and the remaining full G14 guarantees are unfinished. Activation remains fail-closed. 旧ADR-0177 D7's registered-model possession assumption is unchanged.
 
 ## Input/job admission verification completed
 
@@ -70,7 +70,7 @@ The 13 shipping integration targets were rebuilt and passed. The mechanical ship
 
 Evidence: [normal check](evidence/owned-answer-history-check.log), [index tests](evidence/owned-answer-history-store-tests.log), [store/gate regressions](evidence/owned-answer-history-store-regressions.log), [node](evidence/owned-answer-history-node-tests.log), [real multipart service](evidence/owned-answer-history-service-multipart.log), [shipping integration](evidence/owned-answer-history-shipping-tests.log), [shipping pins](evidence/owned-answer-history-shipping-pins.log), [final test build](evidence/owned-answer-history-final-test-build.log), [source/binary recipe](evidence/owned-answer-history-recipe.json).
 
-Next: maximum ordinarily admitted job/input/profile and producer/outsider service budgets; initial/prefix and non-prompt state/material; all active computation/output/state families; cumulative scope/hiding, global memory/economics/inclusion; restart/reorg/pruned IBD and remote authenticated reads; activation and the complete G14 audit. The registered-model possession assumption remains ADR-0177 D7. Full G14 remains unfinished and activation remains fail-closed.
+Next: maximum ordinarily admitted job/input/profile and producer/outsider service budgets; initial/prefix and non-prompt state/material; all active computation/output/state families; cumulative scope/hiding, global memory/economics/inclusion; restart/reorg/pruned IBD and remote authenticated reads; activation and the complete G14 audit. The registered-model possession assumption remains 旧ADR-0177 D7. Full G14 remains unfinished and activation remains fail-closed.
 
 ## Public constraint replay and a near-mass-limit ordinary job — 2026-10-11
 

@@ -1,19 +1,11 @@
 # RFC-0058 — 実行束縛・段階commit・合意資格の実装計画
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。旧SWC1三段乱数は新規FOW1へ移植しない。TB1-EXEC/PANELの別秘密・別freezeと、コアz・四Rootに束縛した唯一のTicketへ接続する。第三のR_ticket、BLS比較案、旧work sourceを新規fallbackにしない。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-日付: 2026-11-17（Asia/Tokyo）  
-状態: **PROPOSED_DESIGN_NOT_ACTIVATED**  
-規範案: [RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)  
-接続先: [RFC-0055](../../../rfc/0055-global-admission-court-calendar-and-one-bps.md) / [RFC-0056](../../../rfc/0056-global-claim-admission-difficulty.md) / [RFC-0057](../../../rfc/0057-court-nonce-and-panel-challenges.md)  
-監査基準: `main@2d8212b634880b0967fbf24b00b41936c2322c14`  
-対応する攻撃・受入条件: [THREAT_MATRIX](../../../maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md)
+日付: 2026-11-17（Asia/Tokyo）
+状態: **PROPOSED_DESIGN_NOT_ACTIVATED**
+規範案: [RFC-0058](../../../rfc/0004-fow1-execution-and-ticket.md)
+接続先: [RFC-0055](../../../rfc/0014-exec-schedule-and-capacity.md) / [RFC-0056](../../../rfc/0014-exec-schedule-and-capacity.md) / [RFC-0057](../../../rfc/0008-g14-panel-and-verification.md)
+監査基準: `main@2d8212b634880b0967fbf24b00b41936c2322c14`
+対応する攻撃・受入条件: [THREAT_MATRIX](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md)
 
 ## 1. 目的と到達範囲
 
@@ -45,11 +37,11 @@
 
 | 領域 | 既存の契約・実装上の足場 | RFC-0058で必要な追加接続 | この作業から導けない結論 |
 | --- | --- | --- | --- |
-| 初回実行commit | [RFC-v2-0016](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)の元実行・完全trace・依存の束縛 | 段階commit、ComputationalWorkKey、ticket、後続Panel抽選の参照を一つにする | 実行の最小実費が証明された |
+| 初回実行commit | [RFC-v2-0016](../../../rfc/0004-fow1-execution-and-ticket.md)の元実行・完全trace・依存の束縛 | 段階commit、ComputationalWorkKey、ticket、後続Panel抽選の参照を一つにする | 実行の最小実費が証明された |
 | 全claim受付 | 0055の全工程予約、0056のTrialSlot／Preseal／公表済みDと有限prefix | 新しいstageごとの先行費用・保持・再開・失敗終了を同じ予算へ入れる | ticket不合格packetの無限到着をネットワーク層で無費用化できる |
-| Panelとcourt | [RFC-v2-0017](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)の完全承認、0057のnonce／scope | 最終実行commit後の独立した抽選contextと、元rootへの肯定・反証を接続 | 全Panelが独立に再計算したと物理的に証明できる |
-| 資料と検査機会 | [RFC-v2-0018](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md) §2.3–2.4、[RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md) | 元scopeの取得・検査・包含・裁定を元時計で完了できる具体的なnative手順 | URL、ACK、別人の受領証だけで当人の全検査機会が成立する |
-| Finalと成功資格 | [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) §5.2・§11A、0048 | 新仕事版のhold／反証／成熟を全credit・fork-choice consumerへ渡す | 旧wire Finalが新たな不可逆確定になる |
+| Panelとcourt | [RFC-v2-0017](../../../rfc/0008-g14-panel-and-verification.md)の完全承認、0057のnonce／scope | 最終実行commit後の独立した抽選contextと、元rootへの肯定・反証を接続 | 全Panelが独立に再計算したと物理的に証明できる |
+| 資料と検査機会 | [RFC-v2-0018](../../../rfc/0009-court-and-claim-final.md) §2.3–2.4、[RFC-0050](../../../rfc/0008-g14-panel-and-verification.md) | 元scopeの取得・検査・包含・裁定を元時計で完了できる具体的なnative手順 | URL、ACK、別人の受領証だけで当人の全検査機会が成立する |
+| Finalと成功資格 | [RFC-v2-0020](../../../rfc/0009-court-and-claim-final.md) §5.2・§11A、0048 | 新仕事版のhold／反証／成熟を全credit・fork-choice consumerへ渡す | 旧wire Finalが新たな不可逆確定になる |
 | Native settlement | `palw_native_settlement_v1.rs`の成熟変換、依存責任、canonical snapshot | 新WorkKeyと新責任時計を既存成熟変換・fact出力へ正しく写像する | 過去fork-choiceへの一時的不正weightの影響が証明済みになる |
 | 取消とpruning | `palw_security_certification_v1.rs`のfrontier再計算とrollback bound | 新版の資格取消、歴史cut、保持、reorgとfloorの対応を閉じる | frontierの再計算だけで分断後の安全な収束が保証される |
 

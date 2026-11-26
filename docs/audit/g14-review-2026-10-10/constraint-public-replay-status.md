@@ -1,6 +1,6 @@
 # Public constrained-job replay — 2026-10-11
 
-Full G14 remains unfinished. ADR-0177 D7 continues to assume a verifier holding the correct registered model, including the applicable tokenizer/config. No production fence is activated by this change.
+Full G14 remains unfinished. 旧ADR-0177 D7 continues to assume a verifier holding the correct registered model, including the applicable tokenizer/config. No production fence is activated by this change.
 
 ## Fixed execution path
 

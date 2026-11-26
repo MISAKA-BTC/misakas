@@ -17,15 +17,15 @@
 
 ## 1. 採択済みの隔離実装方針（本番採択ではない）
 
-- ADR-0192: F02の実供給と配送/収録前提、F03のowner独立共通frontier・全合法分岐事前予約。
-- ADR-0194 A: X3旧tag保持、service別version/namespace。
-- ADR-0197 A: 裁定と未決責任archiveを分離。名目depositはescrowではない。
-- ADR-0198 A: 初回notice **a ≤ d ≤ a+3,120**、original hard **a+10,000**。
-- ADR-0199 A: parameter/promptを含む認証materialと終端intent、未完成bodyの先着占有を避ける。
-- ADR-0188 B: tag230はMerkle root/count/path。draw上限は未採択。
-- ADR-0200 C1: F02にdigest/path開示courtを接続。
-- ADR-0201 S1: 元期限内に実際に受理・完成した正しい履行だけ当該sideを金融解消。期限後の資料だけでは解除しない。
-- ADR-0202 A/RFC-0035: 実入力UTXOで裏付けた独立運用escrow。旧rentはburn、旧depositは名目。金額・新料金・本番有効化は未承認。
+- 旧ADR-0192: F02の実供給と配送/収録前提、F03のowner独立共通frontier・全合法分岐事前予約。
+- 旧ADR-0194 A: X3旧tag保持、service別version/namespace。
+- 旧ADR-0197 A: 裁定と未決責任archiveを分離。名目depositはescrowではない。
+- 旧ADR-0198 A: 初回notice **a ≤ d ≤ a+3,120**、original hard **a+10,000**。
+- 旧ADR-0199 A: parameter/promptを含む認証materialと終端intent、未完成bodyの先着占有を避ける。
+- 旧ADR-0188 B: tag230はMerkle root/count/path。draw上限は未採択。
+- 旧ADR-0200 C1: F02にdigest/path開示courtを接続。
+- 旧ADR-0201 S1: 元期限内に実際に受理・完成した正しい履行だけ当該sideを金融解消。期限後の資料だけでは解除しない。
+- 旧ADR-0202 A/RFC-0035: 実入力UTXOで裏付けた独立運用escrow。旧rentはburn、旧depositは名目。金額・新料金・本番有効化は未承認。
 - role-consentについて追加の形式的A/B確認は不要と再検証した。既承認RFC-0035の実本人同意/current authority/期限/支出上限を実装する。匿名slot=producerと仮定しない。動的な有償provider獲得は採択していない。候補内のdecision review参照。
 
 ## 2. 検証済みの現在地
@@ -38,7 +38,7 @@
 - parameter、Input0、Fixed/history、実Prefix、Tokenizer EOF/key producer、signed terminal/fresh recheck等の段階実装は台帳と各evidenceにある。
 - pruning: **2883727b6** が既存harnessのpostprune pacingを修正。production tick/deadline/cap/assertionを弱めず対象1件118.49秒＋既存実サービス6件275.94秒成功。全shared funded T14は未完。
 - payload: [2026-10-22測定](../../../measurements/2026-10-22-devnet-payload-carrier.md) は4loopback nodeで600RPC受理/600.028秒、観測したselected chain受理90、未観測510、最後mempool505。一般的飽和・予約service・G14全体・door達成を意味しない。旧7tx quiet devnet記録と区別する。owned node/appdir/keyは片付け済み。
-- RFC-0027/ADR-0193のZIP反映は資料として完了。新Account Bond実node、実Panel利益、heartbeat増加率は未測定。10万MSKが十分とはしていない。
+- RFC-0027/旧ADR-0193のZIP反映は資料として完了。新Account Bond実node、実Panel利益、heartbeat増加率は未測定。10万MSKが十分とはしていない。
 
 ## 3. 今回pushするWIPと直近の失敗
 

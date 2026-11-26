@@ -6,4 +6,4 @@
 
 [liveness probe](../operations/node/node-liveness-probe.md) / [hardening](../security/public-deployment-hardening.md) / [状態](../STATUS.md)。
 
-[旧testnet-11起動手順](../history/documentation/2026-10-17/getting-started/run-node.md)は履歴へ分離しました。旧BFT validatorの稼働を設計変更だけで停止する指示ではありません。
+[旧testnet-11起動手順](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/documentation/2026-10-17/getting-started/run-node.md)は履歴へ分離しました。旧BFT validatorの稼働を設計変更だけで停止する指示ではありません。

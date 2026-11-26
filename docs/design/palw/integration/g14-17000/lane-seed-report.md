@@ -1,19 +1,9 @@
 # lane SEED: Panel=1 seat draw and sample seed after the commit (G14 independent review MAJOR-1 / MINOR-1)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 2026-10-26. branch `claude/g14-seed` (base `2119c943b` + review `1653fc09f`).
 
 ## Changes (Panel=1 fence `palw_kernel_route_panel_one_v1` only; unarmed on every network)
-- `consensus/core/src/palw_kernel_route_v1.rs`: added `palw_kernel_panel_one_seed_v1` and `palw_kernel_panel_one_challenge_v1`. They compute `H(domain; tag ‖ claim ‖ anchor.span ‖ anchor.block ‖ anchor.execution_key)` from the existing round seed anchor (ADR-0130/0170, the same kind of anchor Gate C draws from). Also added `palw_kernel_panel_one_anchor_after_commit_v1`, which is true when `anchor.span × span_daa > committed_daa`. An anchor recorded under a longer span length always reads as older, so the check fails closed. No new randomness source.
+- `consensus/core/src/palw_kernel_route_v1.rs`: added `palw_kernel_panel_one_seed_v1` and `palw_kernel_panel_one_challenge_v1`. They compute `H(domain; tag ‖ claim ‖ anchor.span ‖ anchor.block ‖ anchor.execution_key)` from the existing round seed anchor (旧ADR-0130/0170, the same kind of anchor Gate C draws from). Also added `palw_kernel_panel_one_anchor_after_commit_v1`, which is true when `anchor.span × span_daa > committed_daa`. An anchor recorded under a longer span length always reads as older, so the check fails closed. No new randomness source.
 - `consensus/core/src/palw_kernel_route_fold_v1.rs`: past the fence, nothing is drawn at commit time. `draw_panel_one_seats_v1` runs in the kernel tick. It draws only once, for claims that meet all of these conditions:
   - Checking, Panel-licensed and Program;
   - committed at or past the fence;

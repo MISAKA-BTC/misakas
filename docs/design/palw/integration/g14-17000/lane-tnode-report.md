@@ -23,7 +23,7 @@ Branch `claude/g14-tnode2` = predecessor c8f02297b rebased on d8aded6de + c335f4
 | T15 | boundary F0/F1/F5/F6, shipped refusal | real processes on release build | BLOCKED: slice ruleset refused |
 
 Blocker: `PALW_T12_KERNEL_SLICE_FENCES_V1` arms `palw_settlement_once_v1` without `palw_bond_budget_v1`; V2 validation refuses
-("palw_settlement_once_v1 requires the ADR-0176 bond budget fence at or below it"). No node started. Evidence:
+("palw_settlement_once_v1 requires the 旧ADR-0176 bond budget fence at or below it"). No node started. Evidence:
 `docs/evidence/palw/g14-17000/tnode/`.
 
 Binary sha256: private-node 143b7f2a…c867, kaspad d4f6d9c5…bed8, misaka 6be1a4fa…a343 (full values in evidence README).

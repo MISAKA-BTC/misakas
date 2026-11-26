@@ -1,6 +1,6 @@
 # RFC-0026 F04 — court signer and third-party relay
 
-Status: implementation audit / incomplete T08, 2026-10-20. [RFC-0026](../../../rfc/0026-court-policy-master-contract.md) and the [handover P1-3](codex-handover-court-rfc14-2026-10-20.md) govern. No delegation, new signature method, funding-key transfer, fence or activation is introduced.
+Status: implementation audit / incomplete T08, 2026-10-20. [RFC-0026](../../../rfc/0009-court-and-claim-final.md) and the [handover P1-3](codex-handover-court-rfc14-2026-10-20.md) govern. No delegation, new signature method, funding-key transfer, fence or activation is introduced.
 
 ## Existing accepted-control path
 

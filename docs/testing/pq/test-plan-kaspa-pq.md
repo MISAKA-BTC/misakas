@@ -97,7 +97,7 @@ Spec: homomorphic UTXO-set commitment. **Verify current backend (LtHash vs MuHas
 | TOK-4 | circulating-supply RPC == `MISAKA_PREMINE_SOMPI` + emitted | L3 | matches |
 | TOK-5 | `MAX_SOMPI` = 30B never exceeded (incl. bps rounding surplus) | L1/L4 | ≤ cap |
 
-## F. DNS Overlay (ADR-0009 / 0017 / 0018) — the BFT-free PoS finality layer
+## F. DNS Overlay (旧ADR-0009 / 0017 / 0018) — the BFT-free PoS finality layer
 
 All items below are **gated** (`dns_activation_daa_score`); on current nets they
 must be **INERT / byte-identical**. The Active behavior is exercised via the §G
@@ -110,9 +110,9 @@ harness (overlay-active config) and pure-fn tests.
 | DNS-B2 | `effective_bond_status` precedence (slashed>unbonding>activation), DAA-derived | L1 | status correct |
 | DNS-B3 | per-block `ActiveBondView` apply/revert mirrors store; reorg-reversible | L2/L4 | view == store @ pov |
 | DNS-B4 | bond-UTXO spend-gate: locked while Pending/Active/unbonding/Slashed | L2 | non-releasable spend rejected |
-| DNS-B5 | ADR-0016 stake-lock: output-0 value bound to `amount` | L2 | mismatch rejected |
+| DNS-B5 | 旧ADR-0016 stake-lock: output-0 value bound to `amount` | L2 | mismatch rejected |
 
-### F2 — Attestations (all-active, ADR-0017)
+### F2 — Attestations (all-active, 旧ADR-0017)
 | id | item | level | pass |
 |---|---|---|---|
 | DNS-A1 | every active bond attests; NO committee/sortition/ticket/commit-reveal | L1/L4 | self-declared VSC, no sampling |
@@ -164,7 +164,7 @@ harness (overlay-active config) and pure-fn tests.
 | DNS-X1 | equivocation evidence genuineness rule (forged evidence cannot slash) | L2 | forged rejected |
 | DNS-X2 | bond→Slashed mutation + reverts on reorg | L2/L4 | reorg-safe |
 | DNS-X3 | slashing distribution side-effect (reporter reward + burn), atomic | L2 | output == computed |
-| DNS-X4 | non-reveal fault = N/A (commit-reveal removed by ADR-0017) | — | no such path |
+| DNS-X4 | non-reveal fault = N/A (commit-reveal removed by 旧ADR-0017) | — | no such path |
 
 ### F8 — Validator node (Phase 11/12)
 | id | item | level | pass |
@@ -222,7 +222,7 @@ makes the **Active overlay** executable over a real BlockDAG.
 - **simnet/CI:** L1+L2 + DAG-1..6 green; baseline bar green.
 - **devnet:** L3 single-node + L4 mesh (DAG-7); overlay visibility-only stable.
 - **testnet:** all above + overlay `Some` injected, activation rehearsal at a test height; staged-rollout transition observed.
-- **staging-mainnet:** full F (Active) over the harness + a mesh, finality argument restated (ADR-0017 full-participation stake-weighted), reward value-conservation audited, slashing drill, then set the real `dns_activation_daa_score` / `full_reward_split_daa_score`.
+- **staging-mainnet:** full F (Active) over the harness + a mesh, finality argument restated (旧ADR-0017 full-participation stake-weighted), reward value-conservation audited, slashing drill, then set the real `dns_activation_daa_score` / `full_reward_split_daa_score`.
 
 ---
 
@@ -232,5 +232,5 @@ makes the **Active overlay** executable over a real BlockDAG.
 - §D quality-gate bonus + §E quality-bonus + urgency multiplier — deferred (need epoch-cumulative inclusion accumulator; gated on the burn-vs-SecurityRollover decision).
 - DNS finality fee class — unwired (post-subsidy concern).
 - LtHash backend status — confirm vs MuHash.
-- Finality argument restatement (ADR-0017) before mainnet.
+- Finality argument restatement (旧ADR-0017) before mainnet.
 - Redeploy kaspad to devnet mesh (deployed binary predates Phase 10+).

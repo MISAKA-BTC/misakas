@@ -84,7 +84,7 @@ Three facts the table settles that a config file does not:
 
 ## Op-by-op against `PALW-BASE-0`
 
-BASE-0's closed set (ADR-0040 Decision D + H): `EmbedLookup`, `MatMulQuant`, `Requantize`,
+BASE-0's closed set (旧ADR-0040 Decision D + H): `EmbedLookup`, `MatMulQuant`, `Requantize`,
 `RmsNorm`, `RopeTable`, `SoftMax`, `Silu`, `MulElem`, `AddElem`, `Rescale`.
 
 | Qwen2.5 step | BASE-0 op | Expressible? |
@@ -146,7 +146,7 @@ Two amendments would close it:
    reproduce bit-for-bit.
 
 (1) is the smaller change to the *catalog* and the larger change to an *existing* op's semantics;
-(2) is the reverse. **The choice is an ADR-0040 amendment.** Note that G1 is unaffected — a
+(2) is the reverse. **The choice is an 旧ADR-0040 amendment.** Note that G1 is unaffected — a
 multiplicative gain folds exactly into the next matmul and needs neither.
 
 ### G3 — RoPE convention
@@ -176,7 +176,7 @@ serve the node's operand shape. A class can therefore be certified "100% covered
 its eighteen per-layer nodes can never be recomputed — which is the exact failure mode the
 coverage gate exists to prevent.
 
-*Category:* **実装不足** — not an ADR gap. ADR-0040 Decision D defines `MatMulQuant` as
+*Category:* **実装不足** — not an ADR gap. 旧ADR-0040 Decision D defines `MatMulQuant` as
 `i32 acc = Σ (int8 × int8)`, exact, and says nothing about one operand being a weight; the
 restriction is the adjudicator's. The information the refusal claims to lack is available one
 frame up: the caller holds the coordinate, and `canonical_tile_values` already derives the kv
@@ -208,7 +208,7 @@ Measured on the shipped BASE-0 profile, the gate refuses four of its twenty-one 
 *Category:* **実装不足**, and the closure did not need what it first looked like it needed.
 
 The KV aux series (`PalwKvChunkLeafV1`) is **f16** — `2 x head_dim x position_count` little-endian
-f16 bytes — and ADR-0040 Decision D forbids a float cache outright ("`CpyF32F16` does not exist,
+f16 bytes — and 旧ADR-0040 Decision D forbids a float cache outright ("`CpyF32F16` does not exist,
 because no cache holds floats"). So that series could never carry an integer class's cache, and
 mapping the sentinels onto it would have been wrong in the one direction that matters.
 
@@ -277,7 +277,7 @@ is missing. (BASE-0's own profile sets `attn_kv_heads = attn_heads`; Qwen's will
    next matmul, and RoPE's convention is a fixed permutation folded into the q/k rows. Neither
    needs a new consensus op; both must be recorded in the artifact's quantization semantics so a
    verifier reproduces them.
-4. **G2 does need an ADR-0040 amendment** (corrected from this document's first draft). The
+4. **G2 does need an 旧ADR-0040 amendment** (corrected from this document's first draft). The
    bias-column construction needs a row carrying a constant lane, and no BASE-0 op produces one —
    there is no zero point in `QuantParams` and no additive registered term anywhere in the ten
    ops. Adding a zero point to `Requantize` is the smaller catalog change; a new vector-add op is
@@ -393,7 +393,7 @@ extension Phase 3 held in reserve is not needed at these depths.
 ### Two converter defects the sweep found
 
 * **The amplifying gains were unset.** `attn_logit_scale` and `ffn_gate_scale` were
-  `{multiplier: i32::MAX, shift: 0}` — no amplification — which is precisely the state ADR-0040 H
+  `{multiplier: i32::MAX, shift: 0}` — no amplification — which is precisely the state 旧ADR-0040 H
   warns about: an attention logit arrives at `SoftMax` around 0.002 in Qk and the distribution is
   uniform, and the SwiGLU gate degenerates to the linear `x/2`. Measured before the fix: gate
   extremes `(0, 127)` (symmetric, i.e. degenerate) and residual peak 128 (railed).
@@ -454,7 +454,7 @@ nowhere, and two runs agree bit for bit.
 `Base0ShapeV1::validate` bounded EVERY dimension by `MAX_DOT_LEN` (131,071), including `vocab`.
 Qwen2.5's is 151,936, so the real checkpoint was refused with `DotTooLong { got: 151936 }`.
 
-`MAX_DOT_LEN` is the length past which an `i32` accumulator can overflow — which is why ADR-0040
+`MAX_DOT_LEN` is the length past which an `i32` accumulator can overflow — which is why 旧ADR-0040
 Decision E's free reduction order is a *premise* rather than a gift — so it belongs on the
 dimensions that are SUMMED OVER and on nothing else. **`vocab` is an output width, never a
 reduction length**: the unembedding matmul reduces over `d_model` and produces `vocab` values, and
@@ -519,7 +519,7 @@ attenuates and the most a decayed layer can be given is `shift = 0`. The calibra
 floor. The residual peak still reaches 5 of 127 at its worst.
 
 A stream that has decayed needs **amplification**, which is exactly what `Rescale` exists for
-(ADR-0040 Decision H: "requantize cannot: its gain is at most 1 at every parameter"). Closing the
+(旧ADR-0040 Decision H: "requantize cannot: its gain is at most 1 at every parameter"). Closing the
 gap means an amplifying residual — a per-layer `Rescale` before the narrowing — which changes
 BASE-0's own residual arithmetic and is therefore an ADR decision, not a calibration constant.
 

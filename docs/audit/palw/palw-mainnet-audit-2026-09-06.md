@@ -1,6 +1,6 @@
 # PALW mainnet audit, 2026-09-06 — the two-tree pass
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 ## 要旨 (日本語)
 
@@ -12,7 +12,7 @@
 2. **無料で買える行と無料で買える quanta を塞ぐ。** attempt lane の Layer-0 digest は bond 無しでハッシュだけで grind でき、しかもそれが `bits` を動かす計上行になる (weight-and-time-1)。free-prompt では seat が抽出する interval 数を被告自身の job が決めるため、2 回の forward pass が 63 quanta を買う (freeprompt-claims-1)。
 3. **1 ブロックで全ノードが落ちる算術を直す。** PQ ネットでは標準 UTXO の plurality が 2 になり、`calc_storage_mass` が 0 除算で panic する (mass/mod.rs:409)。攻撃コストはブロック 2 個と 4 sompi。
 
-**前回との差。** 前回が閉じたと記録した項目のうち O-12 は card で武装されない fence の裏にあり実質未閉、O-8 は前回自身の修正 (card の fence 表) によって初めて card 上で発火するようになった。さらに ADR-0087/0088/0089/0090 の model market 枝を mainnet 監査が読んだのは今回が初。
+**前回との差。** 前回が閉じたと記録した項目のうち O-12 は card で武装されない fence の裏にあり実質未閉、O-8 は前回自身の修正 (card の fence 表) によって初めて card 上で発火するようになった。さらに 旧ADR-0087/0088/0089/0090 の model market 枝を mainnet 監査が読んだのは今回が初。
 
 ---
 
@@ -31,7 +31,7 @@ guard exists at params.rs:1570" was reporting that audit's own fix rather than a
 | tree | branch | tip | what it is |
 |---|---|---|---|
 | COURT | `palw-t11-da-court-market` | `3c6d6747` | DA court, private prompts, every 2026-09-05 fix |
-| MARKET | `palw-adr0088-0089-impl` | `8146e659` | ADR-0087/0088/0089/0090 model market + EVM |
+| MARKET | `palw-adr0088-0089-impl` | `8146e659` | 旧ADR-0087/0088/0089/0090 model market + EVM |
 
 They diverge at merge-base `32c772cc`. **MARKET has never been read by a mainnet audit** — it did
 not exist when the 09-05 pass ran, so none of its findings can appear on that pass's open list.
@@ -45,7 +45,7 @@ CRITICAL and HIGH survivors, capped at ten → this report. **29 agents in total
 carding-activation · crypto-tx-validity · model-market-evm · prior-open-closure.
 
 No agent built, ran or edited anything. Every cost figure below is derived from constants and
-instruction counts in the source, or from measurements already recorded in ADR-0084; nothing was
+instruction counts in the source, or from measurements already recorded in 旧ADR-0084; nothing was
 measured in this pass.
 
 ### What the leaner shape cost
@@ -72,7 +72,7 @@ should be scored separately.
   `request_pruning_point_snapshots.rs` as read end to end and still missed the largest thing in its
   lane — an unauthenticated p2p flow that runs *two* full PALW-state materializations per 40-byte
   request (below, HIGH). The refuter found it only because it re-read the whole lane. Nine lanes
-  also cover less ground than eighteen dimensions: EVM execution proper, the ADR-0088 proposal /
+  also cover less ground than eighteen dimensions: EVM execution proper, the 旧ADR-0088 proposal /
   evaluation / version-eviction arithmetic, the read-precompile ABI encoders, host security, the
   pruning proof and executor determinism went unread this pass (see the last section).
 
@@ -116,7 +116,7 @@ attacker-reachable defects.
 with no fence above them** (weight-and-time-1/2/3, court-adjudicability-1/2, freeprompt-claims-1/2/3/4,
 crypto-tx-validity-1/2, prior-open-closure-1/2/3, money-mint-1/2/3, p2p-dos-ibd-1,
 carding-activation-1/3/5). Six are behind fences no card arms — the entire model-market set — and
-are MEDIUM or LOW by that rule alone; they matter because ADR-0087/0088/0089 all state activation,
+are MEDIUM or LOW by that rule alone; they matter because 旧ADR-0087/0088/0089 all state activation,
 never regenesis, as their arming model, so those fences *will* be armed on a live chain.
 
 ---
@@ -173,7 +173,7 @@ the attempt lane is priced *by design* (`algo_id_is_priced_by_bits_v2`, pow_laye
 no dormant fence exists to arm in response; the answer is a code change and a flag day. The tree
 carries the empirical proof of the end state: params.rs:8320-8324 records that on Relaunch 5f five
 free-row heartbeat emitters "tightened bits from p = 0.5 to p = 1.5e-3 in 826 blocks and no bonded
-lane could win again". ADR-0083 closed *that* by taking the heartbeat lane out of the row count; the
+lane could win again". 旧ADR-0083 closed *that* by taking the heartbeat lane out of the row count; the
 identical arithmetic re-enters through the lane the repair declares counted. The chain does not
 halt (the heartbeat target is the constant 2⁻²⁴), it degrades to heartbeat-only with a frozen PALW
 state — and because `safe_frontier` advances only when a claim resolves (palw_state_v2.rs:6695) and
@@ -256,7 +256,7 @@ convictions per ~95 blocks, **~300+ per day**, for ~28 MSK of returned capital.
 **Payoff.** `void_and_slash` **burns** (`slashed.collateral -= debit`, :5975-5979) and pays the
 challenger nothing, so this is destruction, not extraction. It also destroys the escrowed reward:
 escrow releases only at `Final` (:2001-2002). Two convictions take a floor-collateral producer
-below `min_collateral_sompi` and out of every eligibility check. A competitor clears the tier ADR-0068
+below `min_collateral_sompi` and out of every eligibility check. A competitor clears the tier 旧ADR-0068
 gives most of the cadence to, for capital it gets back; a short-seller burns ~100 MSK of collateral a
 day.
 
@@ -308,7 +308,7 @@ own doc states the contract being violated: "a seat that read them off the serve
 letting the accused choose the number of intervals" (palw_fp_seat.rs:151-160). With
 `PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1 = 1` a served job declaring `decode_token_limit = 2` yields
 `interval_count = 1`, so the draw is `[0]` — and interval 0 is the unique interval with
-`anchor_covered_call(0) == None`, so the ADR-0082 D9 seat-side checkpoint recompute
+`anchor_covered_call(0) == None`, so the 旧ADR-0082 D9 seat-side checkpoint recompute
 (palw_panel.rs:4147-4186), the one check that would compare the two contexts, never runs. The
 unopened ~510/512 of the step tree costs nothing because `step_range_opening_root_capped_v1`
 rebuilds the root from prover-supplied siblings.
@@ -334,7 +334,7 @@ all.
 
 **Mainnet impact.** Genesis-armed on a card; nothing here is behind a dormant fence. The result is
 ~98% of block production across the two model classes at ~1/256 of the advertised inference cost.
-ADR-0044's "one inference, one ticket" and ADR-0074 D5's "leaves are the work" are both false on
+旧ADR-0044's "one inference, one ticket" and 旧ADR-0074 D5's "leaves are the work" are both false on
 this path.
 
 **Refutation history.** The refuter confirmed every link and corrected two over-claims: a *third
@@ -355,7 +355,7 @@ panelled — what is purchasable is the public chain's issuance and `safe_weight
 **Relation to prior work.** The 09-05 unjudged list has "a claim's price is read from a job context
 the chain never sees and no seat compares to the job (fp_interval.rs:1849)". New: the *sample*
 denominator is producer-chosen too, interval 0 is the unique unanchored interval, the payoff is
-fork-choice weight and issuance, the ADR-0077 D8 arm short-circuits the older random-leaf sampler
+fork-choice weight and issuance, the 旧ADR-0077 D8 arm short-circuits the older random-leaf sampler
 that would have caught it, and the sizing is quantified against the shipped constants.
 
 ---
@@ -375,7 +375,7 @@ P2PKH-ML-DSA-87) · `consensus/src/processes/transaction_validator/tx_validation
 template is 69 bytes, so **every standard UTXO has plurality 2** and an `EvmDepositLock` has 3.
 Upstream's line 63 — "The choice of 100 bytes per unit ensures that all standard SPKs have a
 plurality of 1" — is the invariant that made `sum_ins >= ins_plurality` hold, and widening the
-outpoint id to `Hash64` (ADR-0008) killed it silently while leaving the comment in place. The
+outpoint id to `Hash64` (旧ADR-0008) killed it silently while leaving the comment in place. The
 relaxed-formula escape at `:385-401` is unreachable for any multi-input transaction on a PQ
 network: `outs_plurality == 1` needs a ≤5-byte script, and `outs == 2 && ins == 2` is exactly one
 input and one output. Worked case: two 1-sompi inputs (`ins_plurality = 4`, `sum_ins = 2`), one
@@ -458,7 +458,7 @@ working responder is unreachable for a graph-v5 or graph-v3 capture on both lane
 **Consequence.** An accusation is only admissible on a non-terminal claim, so an accused claim never
 reaches `Final` — its escrow is never paid and its weight never matures — *on top of* losing
 `claim.reserved`. The two tiers are unproducible from block one and pay to try. The slash is
-burned, so the payoff is share capture: ADR-0054 decays a quiet class's share back into the
+burned, so the payoff is share capture: 旧ADR-0054 decays a quiet class's share back into the
 liveness floor, and a floor-class operator converts the model tiers' 978‰ into its own.
 
 **Mainnet impact.** The arming is **unconditional** (unlike `palw_kary_court`, which is gated on
@@ -622,7 +622,7 @@ author's own pinned worst case) · `consensus/core/src/palw_state_v2.rs:254, 266
 `consensus/core/src/dns_finality.rs:6906-6924` (`epochs_finalized_at`), `:1504-1511`
 (`at_two_minute_cadence`), `:3561` (the count cap the sibling has).
 
-**Mechanism.** The cap is 206. ADR-0058 per-red outputs are on for a card
+**Mechanism.** The cap is 206. 旧ADR-0058 per-red outputs are on for a card
 (`palw_pay_entitled_reds_to_their_miner = palw_state_params_v2.is_some()`), so the mergeset half
 reaches 180 on its own: 180 + 1 (§D bounty) + 16 (participation) + 8 (escrow) = **205 against 206**,
 one slot, before any unbounded kind contributes. The author's own pinned worst case leaves **zero**:
@@ -675,7 +675,7 @@ still owed is here, and the trigger is not the "~1-in-L" event both the audit an
 
 ---
 
-#### H-4. The seat's free-prompt capture check adjudicates through the **uncapped** refutation walker — the ADR-0084 U-08 site 1cbcb1f6 did not rewire
+#### H-4. The seat's free-prompt capture check adjudicates through the **uncapped** refutation walker — the 旧ADR-0084 U-08 site 1cbcb1f6 did not rewire
 
 *(lane: court-adjudicability · finder + refuter + second lens (SPLIT — corrections both ways))*
 
@@ -696,7 +696,7 @@ palw_freeprompt_v3.rs:1072-1085). The shape pass one level up already got this r
 (palw_step_leg.rs:1580-1600, whose comment says spelling it `PALW_STEP_MAX_LEAVES` "is a CONVICTION
 of the honest producer of a class the admission gate accepted").
 
-**Reach.** At 103,008 leaves per prefill position (ADR-0084 §7.2), the threshold is ~40 prompt
+**Reach.** At 103,008 leaves per prefill position (旧ADR-0084 §7.2), the threshold is ~40 prompt
 positions; capture bytes are decode-dominated (§7.4's 16-token fold = 9,788,323 B, of which
 9,723,904 is `16 × 151,936 × 4`), so a 41-position/4-token job is ~2.5 MB and ~4.7M leaves — inside
 the 16 MiB transport, over 2²². The class's own canonical job is 6,630,544 leaves. The interval
@@ -724,7 +724,7 @@ in the panel's verdict task rather than through `offload`, which the FPM1 arm th
 use. One attacker-funded job blocks each drawn seat's whole panel loop for 32 full executions per
 pooled payload.
 
-**Relation to prior work.** ADR-0084 §7.1 lists six U-08 sites, all in consensus, all on the close
+**Relation to prior work.** 旧ADR-0084 §7.1 lists six U-08 sites, all in consensus, all on the close
 path; O-1 names those and is marked closed. This site is in `kaspad`, is the **seat's** decision
 rather than the court's, and is in neither list. Also new: the audit and the ADR both reason as if a
 >2²²-leaf capture cannot reach a seat, from a *decode-token* count — but capture bytes scale with
@@ -781,7 +781,7 @@ and all 42 sessions run in parallel — the dense tier's revenue goes to zero, i
 
 Fourteen findings. Six of them (M-9 … M-13, M-16) are behind `palw_model_market` /
 `palw_model_lines` / `palw_model_evm`, which no card arms — MEDIUM by that rule alone, and each is
-a launch blocker *for the day those fences are armed*, which ADR-0087 D6 says will be by activation
+a launch blocker *for the day those fences are armed*, which 旧ADR-0087 D6 says will be by activation
 on a live chain.
 
 ---
@@ -818,7 +818,7 @@ score. This is the 09-05 **unjudged** time/DAA item, established from code here.
 them is not carried at all.** *(second lens lowered this from HIGH)*
 `palw_state_v2.rs:9743-9744` (both fields stored verbatim), `:9445-9467` (the accusation's only
 gates), `:2244-2256` (the doc claiming the pin) · `palw_admission_v2.rs:534-567`
-(`check_palw_attempt_da_pins_v1` — ADR-0072 D8 made real, whose only caller is the **attempt** lane
+(`check_palw_attempt_da_pins_v1` — 旧ADR-0072 D8 made real, whose only caller is the **attempt** lane
 at `:632`/`:687`) · `palw_freeprompt_v3.rs:1087-1089` (the only free-prompt check on either field) ·
 `palw_fp_objects_v3.rs:180-196` (extraction drops `trace_manifest_root`). Writing
 `trace_retention_daa = 0` makes every `DefaultAccused` of that claim refuse `DaOutsideRetention`
@@ -837,7 +837,7 @@ for an honest producer too**, because it also immunizes against griefing accusat
 claim — so the field will drift to 0 network-wide with no adversary at all. Related to the 09-05
 unjudged "a claim's DA window is a number its own producer writes".
 
-**M-4. A chain-legal `EndOfGeneration` claim is excluded from the ADR-0077 D8 interval lane.**
+**M-4. A chain-legal `EndOfGeneration` claim is excluded from the 旧ADR-0077 D8 interval lane.**
 `qwen25_a16_backend.rs:1512-1520` and `:1183-1191`, `qwen36_backend.rs:1152, 1464`,
 `backend.rs:338, 651, 1249` (all six sites hard-pair `decode_tokens_executed = job.decode_token_limit`
 with `stop_reason: ExactBudgetReached`) · `palw_panel.rs:4118-4119, 2661` ·
@@ -850,7 +850,7 @@ answer is padded to the declared budget. *Refuter (SPLIT):* `interval_seat_outco
 `None` does not end the seat's round; control falls through in the same iteration into the
 whole-capture arms, which can still `break 'verdict Some(Valid)`. Corrected claim: a chain-legal
 EOG claim is forced back onto the whole-capture path D8 exists to replace — a liveness/scalability
-regression, hard only where the capture cannot be served (the ADR-0084 material cap). The 09-05
+regression, hard only where the capture cannot be served (the 旧ADR-0084 material cap). The 09-05
 unjudged list names the seat's rebuilt context; the failure direction, the six sites, and the
 `palw_unavailable_abstains` interaction (on a card the outcome is silent exclusion rather than the
 honest producer being slashed, as on testnet-11 today) are new. Single lens.
@@ -873,7 +873,7 @@ effect; the public wRPC listener is loopback unless the operator opts in. Single
 leaves dormant.** `consensus/core/src/fork_id_v1.rs:225-236` (`fork_id_gate_fences_v1` names exactly
 three fields and filters `score == 0`), `:195`, `:273-279` (`Unfenced` returns before the
 `armed_fired_through()` fallback) · armed at `params.rs:8228-8231` · consumed at
-`protocol/flows/src/flow_context.rs:1731-1749` (`Unfenced` → peer kept). A card arms both ADR-0083
+`protocol/flows/src/flow_context.rs:1731-1749` (`Unfenced` → peer kept). A card arms both 旧ADR-0083
 halves at `always()` (score 0, filtered out) and never writes `palw_attempt_activation`, so
 `fork_id_gate_armed_v1(carded) == false` — permanently, and it stays false when the operator later
 schedules any of the other eighteen fences, none of which is in the list. The card's own test reads
@@ -951,7 +951,7 @@ sizing argument is "at most one new claim per block".** *(MARKET)*
 `take(8)`), `:10833/10872/10917` (`model_moves` is a key nonce, never a cap) · `processor.rs:5086-5098`
 · `palw_economic_locus_v1.rs:48, 77-84`, which states the premise, names three places that rest on
 it, and warns "A design that turns one answer into N claims negates the premise all three rest on,
-and owes each of them an argument" — and was not updated when ADR-0087 landed. No per-block object
+and owes each of them an argument" — and was not updated when 旧ADR-0087 landed. No per-block object
 cap applies: the rehearsal's three counters key on `FamilyCertified`, `CourtCloseDeclared` and court
 closes. `pending_payouts` is in the state-root preimage, and **claim rewards live in the same map**,
 interleaved in hash order. At ~15 KB per sell against a 500 KB block, ~33 sells/block writing ~66
@@ -966,7 +966,7 @@ nonce, no carrier, no network domain) · `palw_state_v2.rs:2909-2917, 10877-1091
 guard is `units_in <= held`) · `palw_lifecycle_objects_v2.rs:371-400` (the carrier binder returns
 `Ok(())` for anything that is not a Buy or a Seed) · `palw_lifecycle_objects_v2.rs:433-467` (the
 extraction walk does no payload deduplication) · `misaka/apps/cli/src/palw_model.rs:390`
-(`min_msk_out` defaults to 0). Every ADR-0088 registry object signs over `palw_network_domain_v2()`;
+(`min_msk_out` defaults to 0). Every 旧ADR-0088 registry object signs over `palw_network_domain_v2()`;
 this one does not. A stranger copies the public payload into a new transaction and re-fires it
 whenever the holder holds units again. Not theft of principal — the net leg is paid to the holder —
 but a forced-liquidation and MEV primitive with no revocation and no expiry, and the owner collects
@@ -987,9 +987,9 @@ ADR's own invariant M2 is tested as an identity over the market **row**
 (`paid_in + seed == reserve + net + burned + registrant`) — a bookkeeping tautology true no matter
 what the coinbase does. *Refuter's important correction:* the headline "the 5% burn destroys no
 coin" is half wrong and must not ship as stated — the burned fraction is never paid out of the sink,
-so it is permanently unspendable, exactly as ADR-0087 §2 promises; what is not true is that it
+so it is permanently unspendable, exactly as 旧ADR-0087 §2 promises; what is not true is that it
 leaves the UTXO set. And because Σ payouts ≤ Σ sunk, **spendable** supply never exceeds premine +
-emission, so ADR-0059's 10 B cap is not breached. What survives: ADR-0042 D10's "a carve, never an
+emission, so 旧ADR-0059's 10 B cap is not breached. What survives: 旧ADR-0042 D10's "a carve, never an
 addition" is false for the market lane, and any supply readout that sums the UTXO set — including
 this repo's own `indexes/utxoindex/src/update_container.rs:33`, which adds every new UTXO with no
 spendability test — over-reports by the total ever sunk. `write_model_fee` also "burns" a leg by
@@ -1033,7 +1033,7 @@ would not have removed it; and drop "permanently in `state_root`", since retirem
 (`:8309`). What survives is a mass-priced, per-bond-lifetime state-growth lever plus the SA-2 price
 never being charged — a "closed" row whose commit is inert on every shipped configuration.
 
-**M-15 (bookkeeping).** Two branches close ADR-0084 U-08 with two different fence fields at the same
+**M-15 (bookkeeping).** Two branches close 旧ADR-0084 U-08 with two different fence fields at the same
 three call sites, and no test binds either field to the processor that reads it. COURT:
 `params.rs:1113-1140` (`palw_context_ladder`), `:8218` (the card arms it), `processor.rs:6726,
 6739-6746`, call sites `:4425, 5876, 5940, 6213`. MARKET: `params.rs:1033-1044`
@@ -1128,7 +1128,7 @@ client lands. Fix by inverting the model so `Transaction` may carry *only* a tx-
 **L-6. The EVM market's 128-action budget is first-come and a refused sell costs only gas.**
 *(MARKET)* `consensus/core/src/evm/model_market.rs:66-70` · `misaka/evm/core/src/model_market.rs:1302-1312,
 1329-1336, 1354` (a Sell is accepted on value 0 with only `units == 0` refused; there is no position
-check, because ADR-0089 D6 makes the fold's refusal a settlement rather than a fault) ·
+check, because 旧ADR-0089 D6 makes the fold's refusal a settlement rather than a fault) ·
 `palw_state_v2.rs:10891`. **The refuter killed the load-bearing claim:** "no per-account share, no
 fee-priority ordering, no reservation for honest flow" is false — `mining/src/evm_mempool.rs:643-666`
 selects on `effective_tip(base_fee)` and `:498-512` carries per-sender caps
@@ -1341,7 +1341,7 @@ to a finding.
     refuses an accusation whose disclose window runs past the claim's declared retention, but nothing
     in consensus can see the node's own pruning policy. If the panel's retention pruning is shorter
     than the chain's obligation, an accuser that waits convicts honest producers for free.
-12. **Whether a carded mainnet's genesis class registrations are judged under ADR-0077 Phase B's
+12. **Whether a carded mainnet's genesis class registrations are judged under 旧ADR-0077 Phase B's
     ladder rules at all.** The card arms `palw_context_ladder` from genesis and
     `palw_class_admission_v2.rs:437` gates the Phase B rules on it, but `validate_palw_v2` states
     that genesis registrations are verified against the committed catalog rather than through
@@ -1438,7 +1438,7 @@ loop, market acceptance arms and EVM chain-context step; `processes/evm/mod.rs`;
 `misaka/evm/core/src/executor.rs`'s MarketSettle application and supply accumulator;
 `misaka/evm/core/src/model_market.rs`'s handlers and `write_frame`; the lifecycle may-ride table and
 carrier binding; the three fences and their validation clauses; the handshake gate; the coinbase
-assembly; ADR-0087 §Constraints/Decisions/Invariants and the 0088/0089/0090 implementation tables.
+assembly; 旧ADR-0087 §Constraints/Decisions/Invariants and the 0088/0089/0090 implementation tables.
 
 **prior-open-closure** — the prior audit whole; all 15 follow-through commit messages and two full
 diffs; the card assembly, fence table and set-difference test; the DA accusation/disclosure/sweep
@@ -1449,12 +1449,12 @@ callers; the O-18 predicate and all five call sites; the retarget arithmetic.
 ### What this audit did not read
 
 * **The EVM execution engine proper** — only the market seam was read on both trees.
-* **The ADR-0088 proposal / evaluation / version-eviction fold arms and the usage counters** — the
+* **The 旧ADR-0088 proposal / evaluation / version-eviction fold arms and the usage counters** — the
   market finder read their guards and explicitly declined their arithmetic. The market refuter flags
   this as deserving a lane of its own before arming.
 * **The read-precompile ABI encoders** (`misaka/evm/core/src/model_market.rs` registry/amm/position/facade
   bodies). Declined as "a wrong answer to a caller, not a consensus fault" — which the refuter
-  correctly says understates it once ADR-0089's facade exists, since `market_row` / `position`
+  correctly says understates it once 旧ADR-0089's facade exists, since `market_row` / `position`
   answers are what an on-chain contract prices against.
 * **`mining/src/evm_mempool.rs`** — not in any lane's coverage statement; found only by the market
   refuter, and it is where the ordering, per-sender caps and replacement rule live. It falsified one
@@ -1477,7 +1477,7 @@ callers; the O-18 predicate and all five call sites; the retarget arithmetic.
   at every boundary; both `apply_class_share_growth` and `apply_class_reclamation` refuse a budget
   table stamped for another epoch).
 * **Nothing was built or run.** Every figure is arithmetic over constants or a reading of a call
-  chain. The 09-05 pass's ADR-0084 §7.2/§7.4 measurements are the only empirical inputs used.
+  chain. The 09-05 pass's 旧ADR-0084 §7.2/§7.4 measurements are the only empirical inputs used.
 
 **One process note for the next pass.** Both trees were left byte-identical to their pinned tips.
 The 09-05 pass's first method fault — "the tree was edited while the audit read it", so a refuter

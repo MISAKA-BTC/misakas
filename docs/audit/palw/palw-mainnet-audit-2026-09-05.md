@@ -1,20 +1,20 @@
 # PALW mainnet audit, 2026-09-05 — the carded-mainnet pass
 
-Scope: the code the live public testnet-11 fleet runs — Relaunch 5f plus the ADR-0084 Decision 7
+Scope: the code the live public testnet-11 fleet runs — Relaunch 5f plus the 旧ADR-0084 Decision 7
 line (`palw-adr0084-served-answer` at `32c772cc`), which is 947 commits ahead of `main`. The
 question asked of every candidate finding was the one the 2026-08-30 audit asked:
 
 > **Would this hurt on a mainnet carrying real value?**
 
 "Mainnet" here means the world where `PALW_MAINNET_GENESIS_ARTIFACT_ROOT` and
-`PALW_MAINNET_GENESIS_BONDS` are set: mainnet assembles the RC ruleset (ADR-0042 D11) and the
+`PALW_MAINNET_GENESIS_BONDS` are set: mainnet assembles the RC ruleset (旧ADR-0042 D11) and the
 chain carries value. No previous audit had read that path — the last full one is dated
 2026-08-30, and 1,223 commits and ~152k lines of Rust have landed since.
 
 ## Method, and what it cost
 
 Eighteen adversarial finders, one per consensus dimension, over a survey of the carding path, the
-prior audits' open items, the change surface and ADR-0080–0086. Each finding was then handed to
+prior audits' open items, the change surface and 旧ADR-0080–0086. Each finding was then handed to
 three refuters with distinct lenses (does the mechanism work / where is the guard / is it reachable
 and does it pay), each told to default to *refuted*.
 
@@ -52,14 +52,14 @@ fence `None` — and called `palw_rc_arm_phase1`, which arms three. The other th
 `palw_rc_base_params`, a base mainnet never passes through:
 
 * **`palw_difficulty_priced_rows` dormant while the heartbeat lane is armed from genesis.** That is
-  precisely the state ADR-0083 exists to escape, and it is measured, not theoretical: on Relaunch 5f
+  precisely the state 旧ADR-0083 exists to escape, and it is measured, not theoretical: on Relaunch 5f
   five heartbeat emitters tightened `bits` from p = 0.5 to p = 1.5e-3 in 826 blocks and no bonded
   lane could win again. Mainnet's difficulty window was 2.5× the RC's, so the wedge is deeper.
 * **`palw_uncertified_weightless` dormant.** `validate_palw_v2` refuses to arm it above genesis
   ("it is genesis-only, or dormant"), so an uncertified class's pwu would have entered that chain's
   fork-choice weight **permanently**, and the free-prompt retirement hole — whose end state is
   `load_tip → CarriageInconsistent`, a node that cannot restart — would have been the chain's for life.
-* **`palw_kary_court` dormant.** A card pinning ADR-0082's dense row did not ship a court it could
+* **`palw_kary_court` dormant.** A card pinning 旧ADR-0082's dense row did not ship a court it could
   not run; it refused to boot, and the card had no field with which to say the word.
 
 The arming is now spelled once and every write is only-if-dormant, so it can add a fence a base
@@ -89,7 +89,7 @@ lineage — so that difference is a decision on the record instead of a discover
 
 ### 3. A V2 genesis is minted at the ambient target — `187697f4`, `cc41350b`
 
-ADR-0066: "a V2 network runs at MAX because the class lottery, not the hash target, is its
+旧ADR-0066: "a V2 network runs at MAX because the class lottery, not the hash target, is its
 throttle." Both PALW presets mint at `0x207fffff`. `MAINNET_GENESIS` carries `0x1f7fffff` — one
 compact exponent, 256× harder — inherited from the hash lineage. Carding is a re-mint, so `bits` is
 a value the ceremony chooses, and nothing told it to choose this one: left alone, a carded mainnet
@@ -102,7 +102,7 @@ gate to admit them would have been shaping the rule to agree with the fixture.
 
 ### 4. The coinbase output cap counts the mergeset — `ad984a83`
 
-The cap was `ghostdag_k + 2 + 25`. ADR-0058 pays every entitled in-window **red** its own output,
+The cap was `ghostdag_k + 2 + 25`. 旧ADR-0058 pays every entitled in-window **red** its own output,
 and reds are bounded by the mergeset (180 on every V2 preset), not by `ghostdag_k`. A mergeset with
 more than ~26 entitled reds makes the coinbase *this very node builds* fail its own isolation check
 — the 112-block halt the function's own comment records, reachable by an ordinary wide DAG and
@@ -122,7 +122,7 @@ reintroduced by the faster path beside it. The rule now has one spelling.
 
 ### 6. Host-side and gate repairs — `3f1e6e13`, `4959abcb`, `c85aa191`, and the gateway commit
 
-* **ADR-0079 D4's seed-file guard looked for a shape this tree never writes.** It refused a boot on a
+* **旧ADR-0079 D4's seed-file guard looked for a shape this tree never writes.** It refused a boot on a
   32-byte raw seed; `misaka key gen` hex-encodes, so every seed file is 64 bytes. Both tests wrote
   the raw form — the guard passed on a fixture and would have missed the real mistake.
 * **`expected_reds` labelled passing tests "known red".** It grepped for the test NAME, which
@@ -135,7 +135,7 @@ reintroduced by the faster path beside it. The rule now has one spelling.
 * **`--deny-purpose` named four of eight signing purposes.** The unnameable half is all of PALW,
   including the free-prompt quantum spend: a signer that must never spend could not say so.
 
-### 7. Pinned, not fixed: ADR-0084 U-08 — `fafeda50`
+### 7. Pinned, not fixed: 旧ADR-0084 U-08 — `fafeda50`
 
 The RC ruleset freezes `max_step_leaf_count = 2^26` and its genesis registers the dense graph-v5@512
 row at 52,778,128 worst-case leaves, while the refutation path calls the **uncapped** leg entry
@@ -151,25 +151,25 @@ the item, never change the decision. Items marked **closed** are fixed in the tr
 means the damage is capped but the design question stands; **open** means the fix is a design or
 operator decision this pass does not make. Everything that touches a live chain's validity sits
 behind a fence testnet-11 leaves dormant and a card states from genesis — testnet-11 reaches each
-as a scheduled height (ADR-0083's path (a)) or a re-mint, which is the operator's call.
+as a scheduled height (旧ADR-0083's path (a)) or a re-mint, which is the operator's call.
 
 | # | Status | What landed | Commit |
 |---|---|---|---|
 | O-1 | **closed** | the court's walkers open against the ruleset's ladder past `palw_context_ladder`; the cap is resolved once, at the block's DAA | `1cbcb1f6` |
 | O-2 | **bounded** | a carriage whose frontier stands above the pruning point's own blue score is refused before a byte is rebuilt; the frontier is still not re-derived (the claim that set it may be pruned) | this pass |
 | O-4 | **closed on a card** | `palw_certification_rent` and `palw_chunk_cap_charge` stated from genesis on a card; the repairs existed behind fences no preset armed | this pass |
-| O-7 | **closed, fenced** | `algo_id_is_priced_by_bits_v2` and `Params::palw_receipt_rows_unpriced` — a receipt row leaves the difficulty count; refused unless ADR-0083's first fence is armed at or before it | this pass |
+| O-7 | **closed, fenced** | `algo_id_is_priced_by_bits_v2` and `Params::palw_receipt_rows_unpriced` — a receipt row leaves the difficulty count; refused unless 旧ADR-0083's first fence is armed at or before it | this pass |
 | O-12 | **closed** | `BondRegistered` bounds and prices `capable_classes` under `palw_capability_bound`, by the same function the declaration arm uses | this pass |
 | O-14 | **closed on a card** | a card certifies the free-prompt lane of the classes it registers; testnet-11's pinned set (names 71bbb755…, omits 4277d84f…) is recorded by test and closable there by an on-chain `ClassLaneCertified` | this pass |
 | O-16 | **closed** | declarations offered with a pruning-point state are bounded by the registered class set, one each | this pass |
 | O-17 | **closed** | a per-peer material relay budget in bytes per window, which the claim id cannot move | this pass |
 | O-18 | **closed** | the seat compares leaf counts against the claim's price only when the claim prices its work — one predicate, four sites | this pass |
 | O-3 | open | the open-court concurrency cap is a design choice (one answer to "how much court may one block ask for"); a per-bond bound is a rule change the design has not made | — |
-| O-5, O-6 | open | `output_root` pinned by replay rather than admission, and the block-hash sortition, are ADR-0072/0074 decisions; changing what is pinned is a policy change | — |
-| O-8 | open | no shipped binary constructs `CourtAttnRootClaimed`, so an honest producer of a fused class is convicted by silence at Terminal; the rule is ADR-0082's and the missing half is the responder's software, a feature rather than a patch | — |
-| O-9, O-10, O-11 | open | ADR-0065 D4's abstention, the post-genesis bond floor and the share price are economics decisions; the numbers are the operator's to choose before a mint | — |
-| O-13 | open | attempt blue work as a constant beside a `bits`-priced PoW is ADR-0068 F2 | — |
-| O-15 | open in the tail | the widened coinbase cap absorbs a real validator set with an ordinary mergeset; a maximal mergeset plus more than 16 paid validators still overflows, and bounding the fan-out per block is ADR-0018 §E's to decide | — |
+| O-5, O-6 | open | `output_root` pinned by replay rather than admission, and the block-hash sortition, are 旧ADR-0072/0074 decisions; changing what is pinned is a policy change | — |
+| O-8 | open | no shipped binary constructs `CourtAttnRootClaimed`, so an honest producer of a fused class is convicted by silence at Terminal; the rule is 旧ADR-0082's and the missing half is the responder's software, a feature rather than a patch | — |
+| O-9, O-10, O-11 | open | 旧ADR-0065 D4's abstention, the post-genesis bond floor and the share price are economics decisions; the numbers are the operator's to choose before a mint | — |
+| O-13 | open | attempt blue work as a constant beside a `bits`-priced PoW is 旧ADR-0068 F2 | — |
+| O-15 | open in the tail | the widened coinbase cap absorbs a real validator set with an ordinary mergeset; a maximal mergeset plus more than 16 paid validators still overflows, and bounding the fan-out per block is 旧ADR-0018 §E's to decide | — |
 
 The four fences a card now states and testnet-11 does not (`palw_context_ladder`,
 `palw_receipt_rows_unpriced`, `palw_certification_rent`, `palw_chunk_cap_charge`) are each a
@@ -204,29 +204,29 @@ the handshake rather than at consensus.
 
 | # | What | Where |
 |---|---|---|
-| O-1 | **A dispute of the widest registered class ends `LeafCountOutOfRange` whatever the evidence says.** ADR-0084 U-08. `adjudicate_close_proof_v2` already holds `court: &PalwCourtParamsV2` and passes the executor constant instead of `court.max_step_leaf_count()`. Faked execution on that class is unconvictable — the one thing the court exists to prevent, and the price weight is charged for (ADR-0069). Rewiring changes which closes are valid, so it is an activation: `Params::palw_context_ladder` is the fence ADR-0077 Phase B reserved for it, and it gates nothing today. | `palw_step_refute.rs:2937, 2985, 3726, 3943`; `palw_step_leg.rs:1688, 1702` |
+| O-1 | **A dispute of the widest registered class ends `LeafCountOutOfRange` whatever the evidence says.** 旧ADR-0084 U-08. `adjudicate_close_proof_v2` already holds `court: &PalwCourtParamsV2` and passes the executor constant instead of `court.max_step_leaf_count()`. Faked execution on that class is unconvictable — the one thing the court exists to prevent, and the price weight is charged for (旧ADR-0069). Rewiring changes which closes are valid, so it is an activation: `Params::palw_context_ladder` is the fence 旧ADR-0077 Phase B reserved for it, and it gates nothing today. | `palw_step_refute.rs:2937, 2985, 3726, 3943`; `palw_step_leg.rs:1688, 1702` |
 | O-2 | **`safe_frontier_blue_score` — fork choice's first key — is a carriage scalar nothing re-derives.** `into_state_v2` copies it verbatim; `assert_internal_consistency_v2` never mentions it (checked by hand: no occurrence in 4562–4950). Bound only by the state root, which the attacker authors on its own staged chain, so a first-sync against a hostile peer is pinned to that chain forever — the frontier is monotone and the designed bootstrap-recovery lane is itself defeated by it. Refuters corrected the reach: it needs a full fake headers-proof IBD and an un-raced commit, so it is an eclipse attack, not every first sync. | `palw_state_v2.rs:10305`, `ibd/flow.rs:1999` |
 | O-3 | **The court is squattable.** A single global cap of `turn_deadline_daa` open sessions: fill it and every claim on the chain becomes un-challengeable. | `palw_state_v2.rs:8847` |
-| O-4 | **Two ~60-byte `ObjectChunk`s per block permanently starve the certification lane.** The per-block grading slot is spent before the object is validated, and ADR-0075 SA-1's slot rent is dormant on a carded mainnet. Eight unsigned chunks squat all eight pending-chunk slots. | `processor.rs:5264, 5317`; `palw_state_v2.rs:8722` |
-| O-5 | **`output_root` is a free field inside the priced attempt bytes.** ADR-0072 D8 says every field inside them is pinned; `output_root` is pinned by *replay*, which happens after the block has already won. One inference then buys many lottery draws, paid for only in escrow after the panel reacts. | `palw_attempt_v2.rs:945` |
-| O-6 | **The panel's sortition randomness is a block hash the accused can re-roll at one hash per try** — the code's own comment says it costs one inference. Since ADR-0072 that is false, and ADR-0073 SA-1's p^k bound does not hold either. | `processor.rs:6507`; `palw_freeprompt_v3.rs:588` |
-| O-7 | **The receipt lane pays no proof of work at all, yet its rows count as bits-priced.** A bondless actor retargets the attempt lane off its own chain — ADR-0083's repair, defeated through the other lane. Free receipt blocks also advance the DAA score, so every DAA-denominated PALW deadline can be run ~180× fast and courts won by clock. | `pow_layer0.rs:395`; `difficulty.rs:34` |
+| O-4 | **Two ~60-byte `ObjectChunk`s per block permanently starve the certification lane.** The per-block grading slot is spent before the object is validated, and 旧ADR-0075 SA-1's slot rent is dormant on a carded mainnet. Eight unsigned chunks squat all eight pending-chunk slots. | `processor.rs:5264, 5317`; `palw_state_v2.rs:8722` |
+| O-5 | **`output_root` is a free field inside the priced attempt bytes.** 旧ADR-0072 D8 says every field inside them is pinned; `output_root` is pinned by *replay*, which happens after the block has already won. One inference then buys many lottery draws, paid for only in escrow after the panel reacts. | `palw_attempt_v2.rs:945` |
+| O-6 | **The panel's sortition randomness is a block hash the accused can re-roll at one hash per try** — the code's own comment says it costs one inference. Since 旧ADR-0072 that is false, and 旧ADR-0073 SA-1's p^k bound does not hold either. | `processor.rs:6507`; `palw_freeprompt_v3.rs:588` |
+| O-7 | **The receipt lane pays no proof of work at all, yet its rows count as bits-priced.** A bondless actor retargets the attempt lane off its own chain — 旧ADR-0083's repair, defeated through the other lane. Free receipt blocks also advance the DAA score, so every DAA-denominated PALW deadline can be run ~180× fast and courts won by clock. | `pow_layer0.rs:395`; `difficulty.rs:34` |
 | O-8 | **On a fused-attention class the sweep clocks the responder at ladder-Terminal for an object no shipped binary constructs** and the graph-v5 row cannot produce, so silence convicts the honest producer. | `palw_state_v2.rs:6947` |
 
 ## Open — must fix before real value
 
 | # | What | Where |
 |---|---|---|
-| O-9 | **With `palw_unavailable_abstains` armed no panel seat can be slashed for anything.** ADR-0065 D4 armed it to stop honest seats burning for transport loss; the cost is that a seat majority can void every producer's claim for free, and a void destroys the escrowed worker reward. The fix for one harm is the whole of another. | `palw_state_v2.rs:5941` |
+| O-9 | **With `palw_unavailable_abstains` armed no panel seat can be slashed for anything.** 旧ADR-0065 D4 armed it to stop honest seats burning for transport loss; the cost is that a seat majority can void every producer's claim for free, and a void destroys the escrowed worker reward. The fix for one harm is the whole of another. | `palw_state_v2.rs:5941` |
 | O-10 | **A panel seat is purchasable for 4 millionths of what the genesis registry paid** — the post-genesis bond floor is the fixture's 400,000 sompi against 10,000 KAS a genesis seat. Compounding O-9. | `palw_fp_devnet_v3.rs:438` |
 | O-11 | **Cadence share is purchasable at 1‰ per 40,000 sompi of refundable collateral**; the aggregate-dilution guard protects only the base class and nothing bounds how many classes one bond may register. | `palw_state_v2.rs:7298` |
-| O-12 | **`capable_classes` has two writers and every ADR-0071 amendment guards one** — a `BondRegistered` writes an unbounded, unchecked class set straight into `state_root`. | `palw_state_v2.rs:8151` |
+| O-12 | **`capable_classes` has two writers and every 旧ADR-0071 amendment guards one** — a `BondRegistered` writes an unbounded, unchecked class set straight into `state_root`. | `palw_state_v2.rs:8151` |
 | O-13 | **An attempt block's fork-choice blue work is a constant while its PoW is still priced by `header.bits`**, so the difficulty retarget bounds no header-DAG weight at all. | `ghostdag/protocol.rs:436` |
 | O-14 | **The genesis free-prompt certified set names a dense-tier class the card does not register and omits the one it does**, killing the 489‰ tier's free-prompt lane from genesis. | `palw_e2e_adjudicability.rs:1048` |
 | O-15 | **The deferred quality-bonus and reserve-drip fan-outs emit one coinbase output per included validator with no bound.** Same allowance as O-4's cap; every epoch-crossing block on a mainnet with a real validator set is invalid. (The cap itself is widened by this audit; the *unbounded* fan-out is not.) | `dns_finality.rs:3496` |
 | O-16 | **`PruningPointPalwState.classCarriages` is uncapped**, each entry costing a full uncached state materialization, so one IBD peer can pin the single IBD latch forever. | `ibd/flow.rs:2554` |
 | O-17 | **PALW material and receipt broadcasts are flood-relayed to every peer before any binding to a live claim**, at peer-count amplification, with no rate limit. | `v8/palw_gossip_flow.rs:52` |
-| O-18 | **ADR-0084 D4's attempt-lane interval arm can never file `Valid`**: it compares the opening's real leaf count against `duty.work_leaves`, which every attempt claim sets to 0. | `palw_panel.rs:3979` |
+| O-18 | **旧ADR-0084 D4's attempt-lane interval arm can never file `Valid`**: it compares the opening's real leaf count against `duty.work_leaves`, which every attempt claim sets to 0. | `palw_panel.rs:3979` |
 
 ## Open — should fix
 
@@ -248,7 +248,7 @@ The session limit killed these dimensions' verifiers. Listed so they are not mis
 * **free-prompt**: a claim's price is read from a job context the chain never sees and no seat
   compares to the job (`fp_interval.rs:1849`); the seat rebuilds every job context as if the run
   reached its budget, so a chain-legal `EndOfGeneration` claim is unjudgeable (`qwen25_a16_backend.rs:1483`);
-  a claim's DA window is a number its own producer writes (`palw_state_v2.rs:9395`); ADR-0073 SA-1's
+  a claim's DA window is a number its own producer writes (`palw_state_v2.rs:9395`); 旧ADR-0073 SA-1's
   beacon fold is dormant, so the producer that mines the beacon block gets a free re-roll (`processor.rs:7112`).
 * **time/DAA**: the epoch-boundary chain block cannot be a non-floor attempt block — admission reads
   the parent's budget table against the child's epoch index (`palw_admission_v2.rs:357`); class
@@ -258,7 +258,7 @@ The session limit killed these dimensions' verifiers. Listed so they are not mis
   `epoch_length_blocks`, so `expected_stake` is evaluated at the wrong chain point (`dns_finality.rs:6886`).
 * **gates**: the certificate that licenses a class to carry weight is granted by kernel-set
   containment alone, drilled on an n_ctx-32 toy geometry, so no drill vector can exercise a
-  width-dependent court defect (`palw_e2e_adjudicability.rs:847`); ADR-0077 W10's interval-opening
+  width-dependent court defect (`palw_e2e_adjudicability.rs:847`); 旧ADR-0077 W10's interval-opening
   ceiling is an obligation stated only in a comment, with no registration-time check
   (`palw_gossip.rs:716`).
 * **host security**: the panel's fee-funding recovery scan excludes exactly one bond outpoint rather

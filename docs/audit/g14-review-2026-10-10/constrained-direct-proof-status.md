@@ -1,6 +1,6 @@
 # Public constrained-token direct proof checkpoint — 2026-10-11
 
-Full G14 remains unfinished. ADR-0177 D7 still assumes a verifier holding the correct registered model/tokenizer/config. This checkpoint adds a dormant core proof path; it does not activate any production fence.
+Full G14 remains unfinished. 旧ADR-0177 D7 still assumes a verifier holding the correct registered model/tokenizer/config. This checkpoint adds a dormant core proof path; it does not activate any production fence.
 
 ## Implemented
 

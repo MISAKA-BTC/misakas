@@ -2,7 +2,7 @@
 
 Status: implementation and verification in progress; no activation or production adoption.
 
-The user approved ADR-0194 A (「A：隔離候補で実装・検証（推奨）」). Candidate branch `codex/rfc14-g14-integration-candidate` starts at X3 `0c3cb9f93`; selected main changes come from `0f808b81d`. Neither source branch is merged or rewritten. `pre`, live presets and live t12 remain unchanged.
+The user approved 旧ADR-0194 A (「A：隔離候補で実装・検証（推奨）」). Candidate branch `codex/rfc14-g14-integration-candidate` starts at X3 `0c3cb9f93`; selected main changes come from `0f808b81d`. Neither source branch is merged or rewritten. `pre`, live presets and live t12 remain unchanged.
 
 ## Schema and source boundaries
 
@@ -14,7 +14,7 @@ Service default remains denial-only, even after quota is supplied. Full duty gra
 
 ## Documentation and evidence
 
-RFC-0024/0025/0026 and user RFC-0027/Account Bond material are imported with original asset bytes preserved. [Byte comparison](../../../evidence/palw/g14-integration-candidate-2026-10-20/imported-assets-comparison.json) compares source assets, not network measurements. ADR-0193 Account Bond and ADR-0193 filing clock have different full paths; both are preserved and registered as a number collision. Next local ADR is 0195, RFC 0028. Historical evidence under `g14-completion-2026-10-20` remains source-branch evidence and is not summed into a joint-build pass count.
+RFC-0024/0025/0026 and user RFC-0027/Account Bond material are imported with original asset bytes preserved. [Byte comparison](../../../evidence/palw/g14-integration-candidate-2026-10-20/imported-assets-comparison.json) compares source assets, not network measurements. 旧ADR-0193 Account Bond and 旧ADR-0193 filing clock have different full paths; both are preserved and registered as a number collision. Next local ADR is 0195, RFC 0028. Historical evidence under `g14-completion-2026-10-20` remains source-branch evidence and is not summed into a joint-build pass count.
 
 Account Bond implementation and real operating profit/heartbeat measurements are absent; capital results remain conditional simulation/reaggregation. The user devnet measurement job has not been declared complete or failed by this work.
 

@@ -1,6 +1,6 @@
 # RFC-0026 F02/F03 — 予約サービスと共有 frontier の詳細契約案
 
-**状態:** Proposed / Review Required。2026-10-20 ユーザー指示「推奨案で詳細仕様化を進める」に基づく。[ADR-0192](../../../adr/0192-court-service-opportunity-and-shared-pursuit.md) A/A の詳細化。採択・実装完了・統合・有効化ではない。[RFC-0026](../../../rfc/0026-court-policy-master-contract.md) の 3,120 / 10,000 と旧 claim の ruleset を維持する。
+**状態:** Proposed / Review Required。2026-10-20 ユーザー指示「推奨案で詳細仕様化を進める」に基づく。[旧ADR-0192](../../../rfc/0009-court-and-claim-final.md) A/A の詳細化。採択・実装完了・統合・有効化ではない。[RFC-0026](../../../rfc/0009-court-and-claim-final.md) の 3,120 / 10,000 と旧 claim の ruleset を維持する。
 
 ## 1. 原子的な original acceptance
 

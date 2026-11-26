@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "comparison": "RFC20 baseline -> RFC20/ADR20 reorganization",
+  "checks": {
+    "design/palw/models/qf1-qwen3-8b-profile.json:geometry": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:numeric": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:input": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:generation": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:readout": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:trace": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:commitments": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:attempt": true,
+    "design/palw/models/qf1-qwen3-8b-profile.json:ticket": true,
+    "design/palw/economics/moe3-economic-policy.json:quantity": true,
+    "design/palw/economics/moe3-economic-policy.json:new_market": true,
+    "design/palw/economics/moe3-economic-policy.json:reward": true,
+    "design/palw/economics/moe3-economic-policy.json:models": true,
+    "design/palw/models/qf1/qf1_reference.py": true,
+    "design/palw/models/qf1/conformance-vectors.json": true
+  }
+}

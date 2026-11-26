@@ -1,13 +1,13 @@
 # The extension envelope — bringing something to a MISAKA network
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-*The operator's guide to ADR-0108. The ADR is the reasoning; this is the procedure, with the
+*The operator's guide to 旧ADR-0108. The ADR is the reasoning; this is the procedure, with the
 example manifests in [`extension-manifests/`](../manifests/extensions/) and the output this build
 actually prints.*
 
@@ -52,9 +52,9 @@ report says the chain would refuse it); `verify`, `preflight` and `submit` exit 
 a script that wants "would this be taken?" should branch on `verify`.
 
 The key is named the way every keyed `misaka` command names it — a 0600 seed file or stdin, never
-an argument and never the environment (ADR-0063 SA-1). A manifest carries **no key material**: a
+an argument and never the environment (旧ADR-0063 SA-1). A manifest carries **no key material**: a
 field whose name looks like a key or a signature is refused as unknown before the document is read
-(ADR-0108 SA-6), and `submit` signs with your key, never one the manifest names.
+(旧ADR-0108 SA-6), and `submit` signs with your key, never one the manifest names.
 
 ## The manifest
 
@@ -141,7 +141,7 @@ document nobody executes. Run them from that directory.
 $ misaka --network testnet-11 palw extension verify model-class.json --depth full
   tier       expressible as ClassRegistered, but would be refused: the class is already registered
              under this exact root in testnet-11's genesis: a second registration is DuplicateClass
-  serving    in this build's table: true; needs the chain-class arm to be served: false (ADR-0067 D5)
+  serving    in this build's table: true; needs the chain-class arm to be served: false (旧ADR-0067 D5)
   depth      reached full of full requested
 ```
 
@@ -151,17 +151,17 @@ Full depth recomputes its root with no file on disk.
 
 Two things this kind tells you that no other entrance does:
 
-* **`serving`** (ADR-0108 Decision 8): whether this build's own table carries the class. A class the
+* **`serving`** (旧ADR-0108 Decision 8): whether this build's own table carries the class. A class the
   table does not carry is registered, judged and priced by the chain exactly the same, and served by
-  nobody until an operator arms `with_chain_classes_v1()` (ADR-0067 Decision 5). You learn that
+  nobody until an operator arms `with_chain_classes_v1()` (旧ADR-0067 Decision 5). You learn that
   *before* you register.
-* **weightless** (ADR-0069 Decision 5): a class no end-to-end certified family covers may register —
+* **weightless** (旧ADR-0069 Decision 5): a class no end-to-end certified family covers may register —
   at share 0, earning nothing until some build certifies a backend for it. The report says
   `expressible now as ClassRegistered (weightless)`; it is not a refusal.
 
 A kernel this build cannot adjudicate is **not** refused as a bad manifest — it is a ruleset change,
 naming the kernel: *"kernel 5741…4552 is outside this build's vocabulary — a new kernel is a release
-(ADR-0067)"*. An artifact container no lineage of this build sniffs is a **node extension** naming
+(旧ADR-0067)"*. An artifact container no lineage of this build sniffs is a **node extension** naming
 the lineage.
 
 ### 2. `context-profile` — a new width of a class that exists
@@ -173,7 +173,7 @@ A width is a class: `n_ctx` is a field of the profile and the profile's hash is 
 ```console
 $ misaka --network testnet-11 palw extension verify context-profile.json --depth full
   tier       expressible now as ClassRegistered
-  serving    in this build's table: false; needs the chain-class arm to be served: true (ADR-0067 D5)
+  serving    in this build's table: false; needs the chain-class arm to be served: true (旧ADR-0067 D5)
   depth      reached full of full requested
     [FAIL] registration.new_weights — this root is already registered under another class id …
     artifact_root_form: the inventory root under this profile — the form a court-capable row registers
@@ -214,7 +214,7 @@ $ misaka --network testnet-11 palw extension verify family-certification.json --
   tier       expressible now as FamilyCertified
   checks     7 pass, 0 fail, 2 skipped
     [skip] carriage.single — 754377 bytes is above one carrier's 100000: it rides as 8 ObjectChunk
-           carriers (ADR-0075 Decision 14) — `submit` cuts them
+           carriers (旧ADR-0075 Decision 14) — `submit` cuts them
     [pass] grader
   recomputed
     family_id       43fb5f37…      (what the GRADER returned, not what the evidence claims)
@@ -223,7 +223,7 @@ $ misaka --network testnet-11 palw extension verify family-certification.json --
 ```
 
 At `--depth structural` nothing is graded and the report stops there: the family id is only ever what
-the court's grader returns (ADR-0075 Decision 2). Flip one vector and the refusal carries the
+the court's grader returns (旧ADR-0075 Decision 2). Flip one vector and the refusal carries the
 grader's own words. Without the file, the answer is a **node extension** — "not readable on this
 machine, so nothing here can be graded" — never a pass.
 
@@ -269,8 +269,8 @@ $ misaka --network testnet-11 palw extension verify derived-transformer.json --d
 ```
 
 Nothing rides for a transformer: each *derivation* over it rides per claim as a `DerivedArtifactV1`
-(ADR-0078), so `submit` refuses and names the tier. The id is the hash of the transformer's manifest,
-so **a widened ceiling is a different transformer** (ADR-0078 SA-2) and the declared id no longer
+(旧ADR-0078), so `submit` refuses and names the tier. The id is the hash of the transformer's manifest,
+so **a widened ceiling is a different transformer** (旧ADR-0078 SA-2) and the declared id no longer
 recomputes; a zero ceiling is refused by its own field. An id from the *previous* published source
 tree still resolves (`PRIOR_SOURCE_TREES_SHA256_HEX`) and the report says `resolved_tree prior …`, so
 derivations a live chain already carries stay checkable. A name this build does not ship is a **node
@@ -283,7 +283,7 @@ extension**: publish the manifest (SA-5) or verify on a build that has it.
 
 ```console
 $ misaka --network testnet-11 palw extension verify ruleset-candidate.json
-  tier       ruleset change (flag day) — the fork-id gate (ADR-0072 SA-2) compares heights the moment
+  tier       ruleset change (flag day) — the fork-id gate (旧ADR-0072 SA-2) compares heights the moment
              the schedule is announced; identity unchanged, params id and schedule id move
   fence      palw_heartbeat_transparent: requested 9000000, this build absent
   arming build would print  params 08bf8214…  identity 12e975ef…  schedule 4f3a79d2…
@@ -303,7 +303,7 @@ the arming build *would* print beside what this build prints:
 * a fence this build does not have says so: *the candidate needs a build before it needs a height*;
 * a combination the build refuses (`validate_palw_v2`) is reported with its refusal verbatim.
 
-Activation is ADR-0105 §7's recipe — schedule the height in the preset, rebuild, give the notice. No
+Activation is 旧ADR-0105 §7's recipe — schedule the height in the preset, rebuild, give the notice. No
 manifest activates anything.
 
 ## Preflight and submit
@@ -317,8 +317,8 @@ needs a node (`--rpc`); without one it exits `4` with the connection error.
 
 | kind | what is filed |
 |---|---|
-| `model-class`, `context-profile` | a `ClassRegistered` built by the SDK and signed with your key, which must be the **bond's** — pass `--bond <txid:index>`. Built twice (once to learn the object, once with the signature over it), exactly as `kaspad --palw-register-class` does, and written beside the manifest as `<name>.class-registered.borsh`. When the manifest names `artifact.bytes` or a readable `artifact.path`, a signed `ClassManifestV2` (ADR-0135 manifest V2: the file's byte count, which the registry's row then reads instead of the graph's estimate) is written beside it as `<name>.class-manifest.borsh` and carried with the registration once the model registry's fence is active |
-| `family-certification`, `lane-certification` | the object file itself; over one carrier's 100,000 bytes it is cut into `ObjectChunk`s beside it and submitted in index order (ADR-0075 Decision 14) |
+| `model-class`, `context-profile` | a `ClassRegistered` built by the SDK and signed with your key, which must be the **bond's** — pass `--bond <txid:index>`. Built twice (once to learn the object, once with the signature over it), exactly as `kaspad --palw-register-class` does, and written beside the manifest as `<name>.class-registered.borsh`. When the manifest names `artifact.bytes` or a readable `artifact.path`, a signed `ClassManifestV2` (旧ADR-0135 manifest V2: the file's byte count, which the registry's row then reads instead of the graph's estimate) is written beside it as `<name>.class-manifest.borsh` and carried with the registration once the model registry's fence is active |
+| `family-certification`, `lane-certification` | the object file itself; over one carrier's 100,000 bytes it is cut into `ObjectChunk`s beside it and submitted in index order (旧ADR-0075 Decision 14) |
 | `derived-transformer` | nothing — refused, naming `admission.object: none` |
 | `ruleset-candidate` | nothing — refused, naming the tier (exit `22`) |
 
@@ -362,7 +362,7 @@ Four properties the tool holds up:
 An unsigned receipt verifies as unsigned and says what that means: *"the report is whoever handed you
 this file says it is — nobody vouches for it"*.
 
-## What this does not do (ADR-0108 §8)
+## What this does not do (旧ADR-0108 §8)
 
 * **No `service-descriptor` kind.** `main` has no chain object for a service, so the name is reserved
   and refused as unknown until there is one.
@@ -372,7 +372,7 @@ this file says it is — nobody vouches for it"*.
   certified families the genesis does not — which is why a lane binding's refusal is phrased "judged
   at the genesis state". A `getPalwRegistrationTerms` RPC is the natural next step; the library
   already takes live terms (`PalwExtensionEnvV1::chain_terms`) when a caller can supply them.
-* **The chain-class seal stays** (ADR-0067 Decision 5). The report tells you it is there;
+* **The chain-class seal stays** (旧ADR-0067 Decision 5). The report tells you it is there;
   lifting it is an economics decision about paid seats that this ADR does not make.
 * **One rule no offline verifier can check**: whether the registrant's bond affords the
   registration's exposure (`RegistrationExposureUnaffordable`). It is reported as a skipped check

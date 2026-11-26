@@ -1,19 +1,9 @@
 # RFC-0009 L2 — verifying the PALW fork choice without a full node (lane L2FC, 2026-10-09)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Lane L2FC · branch `rfc9/l2-fork-choice` (from the integration head `b676927de`; integration `b8ae9412b` merged 2026-10-10, with the
-user's design changes ADR-0175–0177 and rule E renumbered ADR-0178; integration `589d9aa3e` merged 2026-10-10 — the Lead's live-drill
+user's design changes 旧ADR-0175–0177 and rule E renumbered 旧ADR-0178; integration `589d9aa3e` merged 2026-10-10 — the Lead's live-drill
 E2E of `palw-remote-miner`, BUDGET round 3 — and the issuer channel wired into the miner, §8) · closes the L2 DESIGN_GAP left by C1r2
-([`rfc-0009-remote-record.md`](../../../evidence/palw/implementation-records/rfc-0009-remote-record.md), round 2) · RFC: [0009 §「検証の 3 層と fork-choice gate」](../../../rfc/0009-palw-remote-miner.md).
+([`rfc-0009-remote-record.md`](../../../evidence/palw/implementation-records/rfc-0009-remote-record.md), round 2) · RFC: [0009 §「検証の 3 層と fork-choice gate」](../../../rfc/0019-clients-rpc-and-diagnostics.md).
 
 Words as in the RFC-0012 record: **MEASURED** (printed by a test on this branch, named), **DERIVED** (arithmetic on shipped constants or
 on a MEASURED number), **ESTIMATE** (a stated assumption), **PROPOSED**, **GAP**. Status words as in the integration matrix.
@@ -24,11 +14,11 @@ Nothing here ran against a live node or network.
 A remote client can verify the PALW fork choice only if three separate things hold, and each needs its own mechanism:
 
 1. **Values bound to an authenticated root.** The comparator's inputs (safe frontier, safe weight, bounded immature → live total)
-   must be read out of a root the chain commits. Today they cannot be: the ADR-0043 state root is a flat preimage in which
+   must be read out of a root the chain commits. Today they cannot be: the 旧ADR-0043 state root is a flat preimage in which
    `safe_weight` sits mid-preimage behind Some-only blocks, so no opening of it is addressable. **PROPOSED: a versioned commitment —
-   the header commits `H(fork-choice leaf ‖ ADR-0043 root)` past a dormant fence — whose opening is 356 B and O(1). The leaf
-   reserves a versioned weight-allocation slot (ADR-0176 D3, §2.5), so a bond-budget-capped weight is committed later without a new
-   envelope version, and it carries no model-availability condition (ADR-0177, §2.6).**
+   the header commits `H(fork-choice leaf ‖ 旧ADR-0043 root)` past a dormant fence — whose opening is 356 B and O(1). The leaf
+   reserves a versioned weight-allocation slot (旧ADR-0176 D3, §2.5), so a bond-budget-capped weight is committed later without a new
+   envelope version, and it carries no model-availability condition (旧ADR-0177, §2.6).**
 2. **Transition validity of that root.** A correct opening of a root on a valid-header branch proves nothing if the root itself is
    not the fold of that branch's history. The fold's inputs are the full node's (UTXO acceptance, mergeset GHOSTDAG, the DAA window,
    the EVM lane, round verdicts, attempt admission); there is no PALW-only replay. **PROPOSED for `VERIFIED_REMOTE`: an attested root
@@ -61,11 +51,11 @@ A sink move that is not an extension of the node's previous sink passes `dns_reo
 |---|---|---|---|
 | 1 | DNS BFT gate (`dns_bft_gate_refusal`) unless `palw_dns_retirement` is active at the incumbent's DAA; it refuses only a candidate abandoning a confirmed anchor in the Active stage | the node's overlay state (stage, confirmed anchor) | the issuer's attested gate facts: Bootstrap / nothing confirmed → the comparator decides; an Active anchor on one side only → STOP |
 | 2 | `decide_deep_reorg_v2` — or, past `palw_reorg_strict_economic_win` (read at the incumbent's DAA), `palw_reorg_strict_economic_win_v1` with the shallow-GHOSTDAG tie callback | both candidates' `PalwCandidateOrderV1`; a tie: depth ≤ 2 DAA, DAA not lowered, GHOSTDAG order | orders: from verified openings; the tie callback: evaluated both ways |
-| 3 | ADR-0065 D2 frontier provenance (`palw_frontier_provenance`, `None` on t12) | bonds minted on the challenger's branch after the fork; their panel seats | counted exactly from two verified leaves (the tip's and the fork block's, §2.1): if the count cannot reach a quorum, D2 cannot veto |
+| 3 | 旧ADR-0065 D2 frontier provenance (`palw_frontier_provenance`, `None` on t12) | bonds minted on the challenger's branch after the fork; their panel seats | counted exactly from two verified leaves (the tip's and the fork block's, §2.1): if the count cannot reach a quorum, D2 cannot veto |
 | — | finality: a candidate below the node's finality point is never weighed | finality depth (600 blue on t12) | a conflict whose fork is ≥ `finality_depth` below either tip is a sealed split → STOP |
 | — | IBD commit (`decide_ibd_commit_v2` / `palw_ibd_commit_strict_economic_v1`) | orders | evaluated with the same inputs |
 
-Every rule above is applied by a node to its own previous sink, with its own stores, so a node's answer is node-local; and ADR-0178
+Every rule above is applied by a node to its own previous sink, with its own stores, so a node's answer is node-local; and 旧ADR-0178
 (rule E, adopted 2026-10-09; lane FINX) changes the comparator itself (§5.4). A light client therefore cannot claim "the canonical
 chain"; it can claim exactly this:
 
@@ -87,10 +77,10 @@ chain"; it can claim exactly this:
 | `safe_frontier_blue_score`, `safe_frontier` | u64, Hash64 | `safe_frontier()` | comparator key 1 (and the frontier block, for reachability checks) |
 | `safe_weight` | u128 | `safe_weight()` | key 2 |
 | `bounded_immature` | u128 | `bounded_immature()` | key 3 (`live_total` is constructed by `PalwCandidateOrderV1::new`, never carried) |
-| `bonds_len` | u64 | `bonds_iter().count()` | D2's count: the registry is append-only (ADR-0065 D5; a bond row is only ever removed by a delta undo), so the bonds minted on a branch after its fork = `bonds_len(tip) − bonds_len(fork block)`, both read off verified leaves |
-| `weight_allocation` | `PalwWeightAllocationSlotV1` (98 B: `version` u16, `allocation_root` Hash64, `capped_safe_weight` u128, `capped_bounded_immature` u128) | `NONE` (version 0, all zero): the fold's weights, budget-clipped by the fold past `palw_bond_budget_v1` | ADR-0176 D3: which versioned bond-budget allocation the comparator's weights are read through (§2.5) |
+| `bonds_len` | u64 | `bonds_iter().count()` | D2's count: the registry is append-only (旧ADR-0065 D5; a bond row is only ever removed by a delta undo), so the bonds minted on a branch after its fork = `bonds_len(tip) − bonds_len(fork block)`, both read off verified leaves |
+| `weight_allocation` | `PalwWeightAllocationSlotV1` (98 B: `version` u16, `allocation_root` Hash64, `capped_safe_weight` u128, `capped_bounded_immature` u128) | `NONE` (version 0, all zero): the fold's weights, budget-clipped by the fold past `palw_bond_budget_v1` | 旧ADR-0176 D3: which versioned bond-budget allocation the comparator's weights are read through (§2.5) |
 
-Every leaf field is already part of the ADR-0043 root except `bonds_len`, which is derived from it, and the slot, which is all zero until
+Every leaf field is already part of the 旧ADR-0043 root except `bonds_len`, which is derived from it, and the slot, which is all zero until
 a bond-budget allocation exists; the leaf adds no state.
 
 ### 2.2 The root a header commits
@@ -105,7 +95,7 @@ at/past the fence: header.palw_state_root = BLAKE2b-512_keyed("misaka-palw/state
   commitment form is a property of the state: every chain child of a block commits its post-state in one form, and the template,
   the validator, the proof server, the carriage import and the native-settlement walk compute the same value through one helper,
   `palw_committed_state_root_v1(state, fence)`.
-* **Nothing else moves.** `PalwChainStateV2::state_root()` (the ADR-0043 preimage), the carriage, the deltas, the stores and the delta
+* **Nothing else moves.** `PalwChainStateV2::state_root()` (the 旧ADR-0043 preimage), the carriage, the deltas, the stores and the delta
   roots keep their bytes; only what a header commits changes. No object tag, delta number, carriage tail or preimage block is taken.
 * **Fence** (allocated by the Lead, registry §2): `Params::palw_fork_choice_commitment_v1: Option<ForkActivation>`, `None` on every
   preset, collapsed from `Some(never())`, refused when armed (`validate_palw_fork_choice_commitment_v1`, inside `validate_palw_v2`) until
@@ -117,7 +107,7 @@ at/past the fence: header.palw_state_root = BLAKE2b-512_keyed("misaka-palw/state
   sink's by reverting the `Weights` / `Frontier` / `LastPoint` / `Bond` entries of each delta — `PalwForkChoiceLeafV1::parent_by`; the
   leaf part of a delta is kept in the row cache only where the fence is configured, boxed, so a dormant row keeps its size).
 
-Why not a block inside the ADR-0043 preimage: it needs a new state field (a carriage tail and a delta entry to journal the switch),
+Why not a block inside the 旧ADR-0043 preimage: it needs a new state field (a carriage tail and a delta entry to journal the switch),
 the opening would be the whole preimage (≈ 4–8 KB), and its offset would depend on every future Some-only block staying in front of
 it. Why not a tree over every collection now: L2 needs four scalars; a tree-shaped L3 is a separate, larger change (the leaf version
 leaves room: a v2 leaf can add a collection-tree root).
@@ -135,7 +125,7 @@ leaves room: a v2 leaf can add a collection-tree root).
    w_immature)` are the leaf's own weights at slot version 0 and the slot's budget-capped weights at a version ≥ 1
    (`PalwForkChoiceLeafV1::order`, the one constructor every reader uses).
 
-L3 composes: past the fence, an op-202 proof is checked against `inner_root` (the opened ADR-0043 root), not against the header root.
+L3 composes: past the fence, an op-202 proof is checked against `inner_root` (the opened 旧ADR-0043 root), not against the header root.
 
 ### 2.4 The leaf names the selected parent (selected-chain verification)
 
@@ -155,9 +145,9 @@ and conflict resolution do not exist there (C1r2's checkpoint rule remains).
 **The tip's own post-state is committed by no header until a child is mined** (the header commits its selected parent's state —
 non-circular by design). So a candidate tip is weighed through its attestation; a child header, when present, is the cross-check.
 
-### 2.5 The weight-allocation slot (ADR-0176 D3)
+### 2.5 The weight-allocation slot (旧ADR-0176 D3)
 
-ADR-0176 bounds claims, reward blocks, rewards and **Final weight** per bond over a common DAA window, and D3 requires that, once
+旧ADR-0176 bounds claims, reward blocks, rewards and **Final weight** per bond over a common DAA window, and D3 requires that, once
 `palw_bond_budget_v1` (lane BUDGET, dormant) is armed, every writer and reader — fork choice, DAA, RPC, EVM, remote clients, undo/reorg/IBD
 — read the **same versioned allocation**. The commitment must therefore be able to carry a budget-capped weight. It does so without a new
 envelope (state-root) version: the v1 leaf reserves a fixed-size slot now.
@@ -190,7 +180,7 @@ Rules, all in code:
 Every later leaf version (FINX's leaf v2 for rule E, §5.4) keeps the v1 fields — the slot included — at their v1 offsets, so the walk
 and the allocation read the same bytes whatever comparator is in force.
 
-### 2.6 No model-availability condition (ADR-0177)
+### 2.6 No model-availability condition (旧ADR-0177)
 
 The chain does not interfere with model acquisition. No leaf, slot, opening, attestation or L2 verdict carries or reads whether a
 registered model can be fetched, served, seeded or leased: the leaf's fields are exactly the table of §2.1 (a fixed 292 bytes, checked
@@ -202,7 +192,7 @@ never weighed, refused or downgraded because a model is or is not available.
 The fold `apply_palw_transition_v7` takes, per chain block: the parent PALW state; the PALW objects of the block's *accepted*
 transactions (acceptance is UTXO validation: funding, fees, mass); the block's own work (attempt admission, which reads the bond, the
 class target and the PoW state); the mergeset's works classified by GHOSTDAG (blues/reds, `merged_non_daa` from the DAA window); the
-EVM lane's staged market actions; ADR-0125 round verdicts; the audit beacon source. **There is no PALW-only replay**: re-executing
+EVM lane's staged market actions; 旧ADR-0125 round verdicts; the audit beacon source. **There is no PALW-only replay**: re-executing
 the fold means running the consensus pipeline.
 
 | Option | What the client needs | testnet-12 cost | Soundness | Verdict |
@@ -287,10 +277,10 @@ follows with the same build.
 | Node-local rule | When the client may resolve a conflict | Otherwise |
 |---|---|---|
 | DNS BFT gate | the gate cannot run at any tip (retired, or no overlay); or every attestation carries the issuer's gate facts and none names an Active-stage confirmed anchor at or above the checkpoint that is not on every candidate's walked selected chain (**Bootstrap**, live testnet-12: nothing confirmed, the gate never refuses) | STOP: "a DNS-final veto may decide" (also when an attestation carries no gate facts) |
-| a bond-budget allocation (ADR-0176 D3, `palw_bond_budget_v1`) | always: BUDGET clips inside the fold, so the opened version-0 weights are the node's (§2.5) | — (a leaf naming a slot version above 0 is refused, never weighed) |
+| a bond-budget allocation (旧ADR-0176 D3, `palw_bond_budget_v1`) | always: BUDGET clips inside the fold, so the opened version-0 weights are the node's (§2.5) | — (a leaf naming a slot version above 0 is refused, never weighed) |
 | D2 frontier provenance | fence inactive at every tip and fork DAA, or for the chosen c and each other o: `!palw_minted_seats_can_reach_quorum_v1(bonds_len(c) − bonds_len(fork(c, o)), panel)` | STOP |
 | finality seal | the fork point is < `finality_depth` blue below each tip | STOP: sealed split |
-| a comparator the v1 leaf cannot feed (ADR-0178 rule E, `palw_fork_choice_rule_e_v1`) | its fence inactive at every tip and fork DAA | STOP (`LeafV1Insufficient`) |
+| a comparator the v1 leaf cannot feed (旧ADR-0178 rule E, `palw_fork_choice_rule_e_v1`) | its fence inactive at every tip and fork DAA | STOP (`LeafV1Insufficient`) |
 
 **The DNS gate in the mode output.** Every established verdict names how the gate was accounted for (`L2DnsGateV1`, printed on the
 trust line beside the issuer): one chain — nothing to refuse; the gate cannot run; **attested outside its Active stage or with nothing
@@ -298,9 +288,9 @@ confirmed (Bootstrap) — it refuses nothing, the comparator decided** (live tes
 candidate. The node serves its gate facts with op 203 (`dnsOverlay`, `dnsStageActive`, the confirmed anchor), read from its own DNS
 state; an unwritten state reads as nothing confirmed outside Active, which is what the gate itself reads.
 
-### 5.4 A comparator that changes (ADR-0178, rule E)
+### 5.4 A comparator that changes (旧ADR-0178, rule E)
 
-Rule E (ADR-0178, adopted 2026-10-09; implemented by lane FINX behind `palw_fork_choice_rule_e_v1`) reads inputs the v1 leaf does not
+Rule E (旧ADR-0178, adopted 2026-10-09; implemented by lane FINX behind `palw_fork_choice_rule_e_v1`) reads inputs the v1 leaf does not
 carry. The contract: **the leaf is versioned by what the in-force comparator reads; a comparator fence that needs more ships its leaf
 version under the same fence.** E's leaf (v2) is specified and built by lane FINX under `palw_fork_choice_rule_e_v1` (agreed with this
 lane 2026-10-09; FINX's note is internal): it keeps the v1 fields at their v1 offsets — **since 2026-10-10 that includes the §2.5 slot,
@@ -350,7 +340,7 @@ The gate is asked before inference and again right before the signature (unchang
 
 ## 8. Implementation (this lane) and allocations
 
-* consensus-core: `palw_fork_choice_commitment_v1` (leaf, the ADR-0176 D3 weight-allocation slot, envelope, opening verify,
+* consensus-core: `palw_fork_choice_commitment_v1` (leaf, the 旧ADR-0176 D3 weight-allocation slot, envelope, opening verify,
   `parent_by`/`parent_by_delta`, the served types and the DNS gate facts), the fence field (Some-only hashed in both fingerprints, `never()` collapse, refused when armed, a fork-id probe arm,
   a `palw_fences_v1` entry).
 * consensus: the five sites through `palw_committed_root_v1`; `palw_fork_choice_openings_v1(blocks)` on the consensus API (the sink, the
@@ -429,9 +419,9 @@ t12's carriage size in debug, at most 16 per request.
 | an issuer the chain contradicts; an opening that does not hold; below the fence | `l2::tests::an_issuer_the_chain_contradicts_and_an_opening_that_does_not_hold_are_refused` |
 | finality seal, D2 from verified leaves, no walk → STOP | `l2::tests::a_sealed_split_and_an_unbounded_frontier_provenance_veto_stop` |
 | rule E in force → a conflict STOPs, a single chain does not | `l2::tests::a_comparator_whose_inputs_the_leaf_does_not_carry_stops_a_conflict` |
-| ADR-0176 D3: one versioned allocation; an unread version refused; version 0 (the fold's, budget-clipped weights) weighed | `l2::tests::a_bond_budget_allocation_is_read_by_one_versioned_slot`, `palw_fork_choice_commitment_v1::tests::the_comparator_reads_the_weights_of_the_allocation_the_slot_names` |
+| 旧ADR-0176 D3: one versioned allocation; an unread version refused; version 0 (the fold's, budget-clipped weights) weighed | `l2::tests::a_bond_budget_allocation_is_read_by_one_versioned_slot`, `palw_fork_choice_commitment_v1::tests::the_comparator_reads_the_weights_of_the_allocation_the_slot_names` |
 | robust dominance = the intersection of in-force rules; the digest covers every field | `l2::tests::robust_dominance_is_the_intersection_of_the_in_force_rules`, `l2::tests::the_attestation_digest_covers_every_field` |
-| commitment: dormant = byte-identical, envelope binds every key (the slot's included), parent-by-delta, fixed 292-byte leaf (ADR-0177: nothing else in it) | `palw_fork_choice_commitment_v1::tests::*` |
+| commitment: dormant = byte-identical, envelope binds every key (the slot's included), parent-by-delta, fixed 292-byte leaf (旧ADR-0177: nothing else in it) | `palw_fork_choice_commitment_v1::tests::*` |
 | the native-settlement roots chain in both forms (dormant, armed, straddling; flat-where-due and forged refused) | `native_settlement::tests::rfc9_l2_the_roots_chain_reads_each_header_in_its_committed_form` |
 | the node commits and serves it past the fence (construction = validation), L1+L2+L3 → `VERIFIED_REMOTE`; slot `NONE`; t12's DNS gate facts non-refusing | `t12_fork_choice_commitment` (pipeline) |
 | op 203 round-trips; simnet serves none | `rpc/core` model tests `test_wrpc_serializer_*palw_fork_choice*`; `rpc_tests::sanity_test` (not run here: the integration crate builds the daemon) |

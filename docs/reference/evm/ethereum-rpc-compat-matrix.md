@@ -1,6 +1,6 @@
 # Ethereum JSON-RPC compatibility matrix (MISAKA eth-rpc adapter)
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Status 2026‑06‑27. The adapter is the `kaspa-eth-rpc` crate (`rpc/eth`) served by kaspad on
 `--evm-rpc-listen` (default `:8545`), HTTP JSON‑RPC 2.0 (+ batch + CORS). It is a thin front end

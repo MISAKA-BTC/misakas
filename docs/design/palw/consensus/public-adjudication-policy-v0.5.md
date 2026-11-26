@@ -1,17 +1,7 @@
 # 公開裁定の方針 v0.5 — TB1乱数とFOW1コア出力
 
-<!-- MAS1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../../../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../../../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../../../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。MAS1対象の公開裁定は後続v0.6へ接続する。v0.5の既存保証を強めたことを、LLM費用定理の完成と扱わない。
-
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
-
-旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
-<!-- MAS1-ADOPTED-20261120-END -->
-
 - 2026-11-20、**ADOPTED_DESIGN_NOT_ACTIVATED**。
-- 正本: [RFC0061](../../../rfc/0061-palw-internal-threshold-beacon.md)、[RFC0062](../../../rfc/0062-palw-function-output-and-work-admissibility.md)、[共通移行契約](../../../governance/palw-tb1-fow1-transition.md)。
+- 正本: [RFC0061](../../../rfc/0006-tb1-randomness-and-release.md)、[RFC0062](../../../rfc/0004-fow1-execution-and-ticket.md)、[共通移行契約](../../../governance/palw-tb1-fow1-transition.md)。
 - v0.4および受理済み旧claimは、その版の意味を保持する。
 
 ## 1. 適用する新規仕事
@@ -32,7 +22,7 @@ TB1のshare保持者はLLMの正しさや台帳Finalを投票で決めない。q
 
 Panelは登録された実入力、y、z、canonical traceの全必須関係を再実行して照合する。Nodeは元claimと固定programへ認証された有界な局所関係を検査する。局所positive、rho一致、share certificate、署名一件だけで成功Finalにしない。
 
-[RFC-v2-0016](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)〜[0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の資料・完全承認・一人の有効反証優先・未解決caseによる成功停止を維持する。最低完全承認数1と、選出Panel人数や正直者の実在は別の条件である。
+[RFC-v2-0016](../../../rfc/0004-fow1-execution-and-ticket.md)〜[0020](../../../rfc/0009-court-and-claim-final.md)の資料・完全承認・一人の有効反証優先・未解決caseによる成功停止を維持する。最低完全承認数1と、選出Panel人数や正直者の実在は別の条件である。
 
 negative、資料要求・応答、局所Court、終端は新beaconを待たない。元期限・元予約・元の署名責任を使い、TB1の準備負荷が既受理の救済容量を消費しない。取得不能は計算不正の自動判定ではない。
 

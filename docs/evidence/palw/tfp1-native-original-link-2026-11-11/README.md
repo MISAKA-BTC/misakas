@@ -1,6 +1,6 @@
 # TFP1とPublicOriginalのnative保存リンク — 2026-11-11
 
-[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)で維持したclaim固有資料の接続作業。モデル重みの独自配信やHF取得不能の認定を追加しない。[前段のtokenizer資料codec](../tokenizer-material-codec-2026-11-11/README.md)を、別claimの資料契約やcaseで使用しないための保存基盤である。
+[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)で維持したclaim固有資料の接続作業。モデル重みの独自配信やHF取得不能の認定を追加しない。[前段のtokenizer資料codec](../tokenizer-material-codec-2026-11-11/README.md)を、別claimの資料契約やcaseで使用しないための保存基盤である。
 
 ## 実装範囲
 

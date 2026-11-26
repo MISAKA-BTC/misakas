@@ -1,6 +1,6 @@
 # Hugging Faceモデルの登録準備
 
-規範入口は [RFC-v2-0002](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md) と [RFC-v2-0003](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0003-model-onboarding-and-artifacts.md)。登録は不変なIdentityの記録であり、モデル資格審査・階層昇格・claim認証の代替ではない。
+正本は [RFC-0002](../../docs/rfc/0002-tensor-ir-kernels-and-runtime.md) と [RFC-0007](../../docs/rfc/0007-bft-model-admission.md)。現行設計は新規モデル追加に共通技術互換とBFT承認を求める。個別claimの認証は独立に行う。
 
 `fetch_hf_checkpoint.py` は完全commit SHAを指定したHF checkpointのデータだけを取得する。全計画の容量上限を重み取得前に検査し、各fileの長さとLFS SHA-256（通常のgit fileはblob SHA-1）を照合する。これはデータの同一性確認である。失敗時は `source-manifest.json` の `complete` がfalseのまま残る。出力先には新しいdirectoryを使う。
 

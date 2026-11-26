@@ -1,8 +1,8 @@
 # PALW ConsensusV2 — mainnet audit (2026-08-28)
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-**Method.** Twelve independent lanes (pull transport, merged work / ADR-0058, class registration,
+**Method.** Twelve independent lanes (pull transport, merged work / 旧ADR-0058, class registration,
 slashing economics, crypto domains, validator spend, mainnet params, panel duty, court/dispute,
 engine determinism, IBD/pruning, fail-open), every finding then put through a two-lens refutation
 panel — *you misread the code* and *the state is unreachable* — with refutation as the default.
@@ -16,7 +16,7 @@ crate path-depending on `kaspa-consensus-core`). Branch `palw-merged-work` at `8
 all the twelve commits of 2026-08-28: the protocol 103→104 material PULL (`f9683553`), the class
 registration ledger rewrite (`41441c96`, `73b537bb`, `cd1bcb3b`, `51a81089`), the qwen3moe class
 family (`aee23f9b`, `fd683397`, `e510e61f`), and the validator coinbase-maturity fix (`8e982b7e`),
-plus ADR-0058 merged work (`3b70e11b`) and the gossip-cap raise (`7a59f037`). None of the eleven
+plus 旧ADR-0058 merged work (`3b70e11b`) and the gossip-cap raise (`7a59f037`). None of the eleven
 blockers closed on 2026-08-22 was found re-opened; two of them (the gossip map's unbounded growth,
 and the merged-blue payment predicate) have **new, different holes on the same seam**, reported
 below as M2-1 and M2-3.
@@ -64,7 +64,7 @@ honest collateral (M2-1, M2-2, M2-7).
 | M1-6 | medium | both | every fence value is in the consensus fingerprint and a mismatch is a hard handshake refusal ⇒ a scheduled fork partitions at deploy time | `consensus/core/src/config/params.rs:891` |
 | M2-1 | critical | M2 | the pull is gated on pool EMPTINESS, and 4 tiny unauthenticated blobs spend a claim's relay budget ⇒ honest producers and honest seats slashed | `kaspad/src/palw_panel.rs:1672` |
 | M2-2 | critical | M2 | unverified foreign material is persisted, pooled and re-broadcast with no bound ⇒ remote disk, RAM and a ~10^5 bandwidth amplifier | `kaspad/src/palw_panel.rs:966` |
-| M2-3 | critical | M2 | ADR-0058 pays a merged block the transition refuses, anti-replay keyed on "a claim exists" | `consensus/src/processes/coinbase.rs:270` |
+| M2-3 | critical | M2 | 旧ADR-0058 pays a merged block the transition refuses, anti-replay keyed on "a claim exists" | `consensus/src/processes/coinbase.rs:270` |
 | M2-4 | critical | M2 | both court parties bisect the accused's own capture ⇒ the ladder can never find a fault, and the sweep then convicts the responder | `kaspad/src/palw_panel.rs:1463` |
 | M2-5 | critical | M2 | 2 of 3 genesis classes have no court responder, and the opening rung convicts on silence | `misaka/palw/base0/src/qwen36_backend.rs:273` |
 | M2-6 | critical | M2 | the class-registration signature covers 5 of the object's 9 fields and nothing binds it to a carrier | `consensus/core/src/palw_state_v2.rs:1437` |
@@ -78,7 +78,7 @@ honest collateral (M2-1, M2-2, M2-7).
 | M2-14 | high | M2 | `backends()` deep-copies every dense class artifact (~1.65 GiB) per duty **and** per pooled material | `kaspad/src/palw_panel.rs:194` |
 | M2-15 | high | M2 | `court_pending` re-accumulates the same responder move every tick under back-pressure | `kaspad/src/palw_panel.rs:1600` |
 | M2-16 | medium | M2 | registration exposure is taken but never checked against a ceiling ⇒ the registry's spam price is unenforced | `consensus/core/src/palw_state_v2.rs:2693` |
-| M2-17 | medium | M2 | the Dormant re-entry path ADR-0056 advertises is unreachable from the shipped node | `consensus/core/src/palw_state_v2.rs:1958` |
+| M2-17 | medium | M2 | the Dormant re-entry path 旧ADR-0056 advertises is unreachable from the shipped node | `consensus/core/src/palw_state_v2.rs:1958` |
 | M2-18 | medium | M2 | a class-registration signature is a bearer token forever: no chain point, no nonce, no incarnation | `consensus/core/src/palw_state_v2.rs:1443` |
 | M2-19 | medium | M2 | `Unavailable` is self-asserted and free to win; seats are one-per-bond, unweighted, on a self-declared operator id | `consensus/core/src/palw_panel_v2.rs:445` |
 | M2-20 | medium | M2 | the RC preset's depth budget: finality 600 against pruning 1144, and a 4,800-DAA lattice over a ~1,144-DAA header horizon | `consensus/core/src/config/params.rs:4519` |
@@ -89,7 +89,7 @@ honest collateral (M2-1, M2-2, M2-7).
 | M2-25 | low | M2 | a single build failure burns the submit budget for every pooled claim in one tick | `kaspad/src/palw_panel.rs:1899` |
 | M2-26 | low | M2 | `Box::leak` in the qwen3moe IR projection, on a per-duty path | `consensus/core/src/palw_qwen36_profile.rs:539` |
 | M2-27 | low | M2 | `safe_frontier` can now name a block that is not on the selected chain | `consensus/core/src/palw_state_v2.rs:3380` |
-| M2-28 | low | M2 | a `#[cfg(test)]` debug probe detached the ADR-0042 doc block from `palw_rc_shipped_params` | `consensus/core/src/config/params.rs:4382` |
+| M2-28 | low | M2 | a `#[cfg(test)]` debug probe detached the 旧ADR-0042 doc block from `palw_rc_shipped_params` | `consensus/core/src/config/params.rs:4382` |
 
 Counts: **critical 11, high 7, medium 10, low 6** — 34 kept, 4 dropped (see §*Dropped*). By
 scenario: 2 critical / 1 high / 3 medium reachable on **M1 today**; the remaining 28 need M2.
@@ -343,7 +343,7 @@ every un-upgraded peer immediately; as more upgrade, two disjoint meshes build t
 about H is involved: the split starts at deploy and lasts the whole rollout, and at 10 BPS with a
 12-hour finality window any realistic public rollout exceeds it, so the last operators to upgrade
 hold a chain the new mesh cannot reorg to. The PALW half is identical: `apply_palw_transition_v4`'s
-step 4b (`palw_state_v2.rs:3286-3336`) runs with no DAA fence and no second code path, so ADR-0058
+step 4b (`palw_state_v2.rs:3286-3336`) runs with no DAA fence and no second code path, so 旧ADR-0058
 itself was a re-mint (`testnet-11` genesis moved `bb0a3ad3…` → `15bab795…`) rather than an
 activation.
 
@@ -495,10 +495,10 @@ error. Answer a pull as a **unicast to the requester**, add a per-peer token buc
 bytes-served budget, refuse to serve a claim the chain does not hold, clone the `Arc` out of the
 mutex before calling it, and move the read to `spawn_blocking`.
 
-### M2-3 `[critical]` ADR-0058 pays a merged block the transition refuses, and the anti-replay key never engages
+### M2-3 `[critical]` 旧ADR-0058 pays a merged block the transition refuses, and the anti-replay key never engages
 `consensus/src/processes/coinbase.rs:270`
 
-**Mechanism.** ADR-0058's new arm pays an in-window red directly to its own miner:
+**Mechanism.** 旧ADR-0058's new arm pays an in-window red directly to its own miner:
 
 ```rust
 if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) {
@@ -514,7 +514,7 @@ if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) {
 `state.claim(&attempt_id).is_some() || !seen_here.insert(attempt_id)` (`processor.rs:4113`), and the
 class lottery (`:4118-4123`). The transition's admission is strictly stronger —
 `PwuClaimNotDerived` (`palw_admission_v2.rs:230-236`), `EpochBudgetExceeded` (`:275-297`),
-`ExposureCeilingExceeded` (`:316-336`) — and ADR-0058 makes a merged work that fails it **SKIP**
+`ExposureCeilingExceeded` (`:316-336`) — and 旧ADR-0058 makes a merged work that fails it **SKIP**
 rather than disqualify the accepting block (`palw_state_v2.rs:3296-3335`, `Err(refused) => Some(...)`
 → `merged_skips.push(...)`, block stands). So a merged block can be PAID while creating no claim, no
 panel duty and no reserved exposure — and the dedup that stops double payment keys on the claim the
@@ -542,15 +542,15 @@ unentitled → `coinbase.rs:283` pays the full §F worker share to the attacker'
 transition then refuses it again, identically, forever. Roughly 30 full worker carves (merge depth
 3600/120 s = 30 blocks) for one inference, paid to a key carrying no claim, no panel duty and no
 reserved exposure — and `apply_attempt`'s `epoch_counters` bump only counts claims that WERE
-admitted, so ADR-0054's share walk and the per-class retarget measure a census the paid blocks are
+admitted, so 旧ADR-0054's share walk and the per-class retarget measure a census the paid blocks are
 not in. Before `3b70e11b` the same value went to the honest merging miner via `red_reward`
-(`coinbase.rs:289-305`), so this is specifically what ADR-0058 changed. Its own end-to-end test
+(`coinbase.rs:289-305`), so this is specifically what 旧ADR-0058 changed. Its own end-to-end test
 demonstrates the benign half ("counter fills to its budget of 200 exactly, 3 excess skipped") and
 never checks that those 3 skipped blocks were still paid.
 
 **Fix.** Do not let two predicates decide payment and accountability. Either derive the coinbase's
 pay set from `claim.accepted_block` after the fold (which needs the coinbase/transition ordering
-inverted — deferred by ADR-0058 §5), or make `palw_v2_unentitled_blues` ask the FULL
+inverted — deferred by 旧ADR-0058 §5), or make `palw_v2_unentitled_blues` ask the FULL
 `check_palw_attempt_admission_v2` against the same live fold state the transition uses, and back the
 anti-replay with a durable seen-attempt-id set that survives `retire_claim`
 (`palw_state_v2.rs:3105-3136`) instead of claim presence. The second is smaller and closes the
@@ -1104,7 +1104,7 @@ different bond. This is the economic backstop M2-8 was supposed to have.
 `reserved_exposure + registration_exposure + registration_exposure_sompi` against
 `collateral × max_exposure_ratio_permille / 1000` and refuse the object when it does not fit.
 
-### M2-17 `[medium]` ADR-0056's Dormant re-entry is unreachable from the shipped node
+### M2-17 `[medium]` 旧ADR-0056's Dormant re-entry is unreachable from the shipped node
 `consensus/core/src/palw_state_v2.rs:1958`
 
 The transition deliberately allows one id to be registered twice —
@@ -1130,7 +1130,7 @@ The preimage contains network_domain, class_id, share_permille, activation_daa a
 bond — and nothing else (`:1443-1448`). `network_domain` is a keyed BLAKE2b over the NetworkId
 **string alone** (`palw_attempt_v2.rs:141-146`): no genesis hash, no pruning point, no ruleset id.
 `activation_daa` is hard-coded 0 by the only builder in the tree (`kaspad/src/palw_panel.rs:681`). So
-the signed bytes are height-independent and incarnation-independent, while ADR-0056 Decision 5
+the signed bytes are height-independent and incarnation-independent, while 旧ADR-0056 Decision 5
 reopens the id for re-registration and calls for "a fresh signature". Two consequences. (a) When a
 class goes Dormant, any stranger can re-carry the original object — optionally with `artifact_root`
 and `canonical` swapped per M2-6, since those are unsigned — and
@@ -1329,7 +1329,7 @@ term give `Ir::inputs` a `Cow<'static, [I]>` so the projection needs no leak.
 ### M2-27 `[low]` `safe_frontier` can name a block that is not on the selected chain
 `consensus/core/src/palw_state_v2.rs:3380`
 
-Step 5 sets `builder.state.safe_frontier = claim.accepted_block;`, and since ADR-0058
+Step 5 sets `builder.state.safe_frontier = claim.accepted_block;`, and since 旧ADR-0058
 `accepted_block` is `origin.carrying_block` (`:4876`), which for a merged work is the merged block —
 at `ghostdag_k = 1` typically a RED. The field's definition three lines above still reads "the
 deepest block ON THIS CHAIN whose PALW work is `Final`" (`:3338-3340`). Every consumer today reads
@@ -1341,13 +1341,13 @@ whose documented invariant is now false, waiting for the first consumer that res
 **Fix.** Record the accepting chain block in a separate field and keep `safe_frontier` chain-scoped,
 or amend the definition and the ADR.
 
-### M2-28 `[low]` A debug probe detached the ADR-0042 doc block from `palw_rc_shipped_params`
+### M2-28 `[low]` A debug probe detached the 旧ADR-0042 doc block from `palw_rc_shipped_params`
 `consensus/core/src/config/params.rs:4382`
 
 Commit `8e982b7e` (whose message describes only the validator maturity fix) inserted
 `#[cfg(test)] mod genesis_probe { #[test] fn t11_genesis_hash_probe() { … eprintln!("t11 genesis: {}", p.genesis.hash); } }`
 (`:4382-4390`) between the seven-line doc block at `:4375-4381` and `pub fn palw_rc_shipped_params()`
-at `:4391`. Doc comments bind to the next item, so the ADR-0042 Decision 11 rationale now documents a
+at `:4391`. Doc comments bind to the next item, so the 旧ADR-0042 Decision 11 rationale now documents a
 test module that asserts nothing, and the function deciding what ruleset a binary ships is
 undocumented. No runtime effect.
 
@@ -1389,7 +1389,7 @@ Four findings that survived the refutation panel did not survive this pass:
 
 * **The EVM lane.** `evm_*_activation_daa_score` is `u64::MAX` on mainnet, and no lane exercised the
   EVM execution, bridge or deposit-lock paths beyond noting the fences.
-* **The free-prompt (ADR-0044) lane** — `palw_freeprompt_v3.rs`, `palw_fp_objects_v3.rs`,
+* **The free-prompt (旧ADR-0044) lane** — `palw_freeprompt_v3.rs`, `palw_fp_objects_v3.rs`,
   `PalwReceiptSpendEnvelopeV3` — was read only where it intersects the shared admission and slashing
   code. Its own commitment/spend contexts are named in M2-23 but not audited.
 * **Arithmetic correctness of the BASE-0 kernels and the SoftFloat second implementation.** The 2026-08-26

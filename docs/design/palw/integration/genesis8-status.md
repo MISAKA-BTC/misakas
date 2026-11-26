@@ -20,7 +20,7 @@ uncensored variant**. Ids keep the original numbering.
 one 32,768-token sequence (freeze-v1 §5.2); the dense TIR classes (#4 #5 #10) declare 32,768; #1 is re-converted with the A16
 converter at `--n-ctx 32768`; #8 is rebuilt with `qwen36-convert --context 32768` (a PALWQ361 artifact bakes its context into its
 header and rotary table; the earlier 512-position runtime repository stays as history).
-Memory design for the long context: [RFC-0020](../../../rfc/0020-long-context-calibration-memory.md).
+Memory design for the long context: [RFC-0020](../../../rfc/0002-tensor-ir-kernels-and-runtime.md).
 
 **Scope: text generation only** (user policy 2026-10-15): token ids in, next-token logits out. Vision towers and projectors
 (mmproj), image/audio/video embedders and processors, and multi-token-prediction (MTP) heads are not computed, not covered, not
@@ -123,7 +123,7 @@ never read or printed.
   accumulators and attention / Gated DeltaNet heads on separate threads. Attention stays one query position at a time over every
   visible key (absolute causal rule) — not chunked attention. Statistics and logits are bit-identical to the one-thread,
   position-by-position reference (`misaka/palw/tir/lower/tests/position_blocks.rs`, `float_ref/tests.rs`; written, not run).
-* **Memory** ([RFC-0020](../../../rfc/0020-long-context-calibration-memory.md)): consumed carries (one full-sequence carry instead
+* **Memory** ([RFC-0020](../../../rfc/0002-tensor-ir-kernels-and-runtime.md)): consumed carries (one full-sequence carry instead
   of two: #2 256 MiB, #3 512 MiB, #6 640 MiB saved at 32K); row-streamed calibration off by default (with it on, a dense tensor
   over its cache is re-read whole at every position; a warning says so); no 32K × 32K score matrix on any genesis path (audit,
   RFC-0020 §5.1); opt-in bit-identical carry spill (`--spill-carries-dir`); `--ram-accounting` writes live/peak bytes by kind and

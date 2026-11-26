@@ -1,0 +1,21 @@
+{
+  "test": "ibd_participation_tests::a_node_that_ran_an_ibd_does_not_report_itself_synced",
+  "profile": "isolated simnet, shallow pruning, PALW disabled",
+  "sourceBlocks": 3500,
+  "freshFollower": true,
+  "agreedDaa": 3500,
+  "agreedSink": "bfbdaeff9b600826fbeb2db148a32734cf8c29bacd1a071038b3b773165c8ad33a6ae52225f3ae41c074faa0394547116565ab730e25547a7e5815d4c48cba33",
+  "agreedPruningPoint": "a64b44688826d9fc8ab28679f7c22aa4ae457882233fda09ca3fb399494920324963c654fd9917c1763c952454eea285b12c1b327101ab5c9b28fc6fde5b1a62",
+  "receivedUtxos": 1499,
+  "elapsedTestSeconds": 104.67,
+  "events": [
+    "2026-11-25 07:14:25.054+09:00 [INFO ] Starting IBD with headers proof with peer 127.0.0.1:34503",
+    "2026-11-25 07:14:27.458+09:00 [WARN ] IBD with headers proof from 127.0.0.1:34503 was unsuccessful (the proof pruning point is not equal to the last pruning point in the list)",
+    "2026-11-25 07:14:54.061+09:00 [INFO ] Starting IBD with headers proof with peer 127.0.0.1:34503",
+    "2026-11-25 07:15:01.071+09:00 [INFO ] Header download stage of IBD with headers proof completed successfully from 127.0.0.1:34503. Committed staging consensus.",
+    "2026-11-25 07:15:01.126+09:00 [INFO ] Finished receiving the UTXO set. Total UTXOs: 1499",
+    "2026-11-25 07:15:03.049+09:00 [INFO ] IBD with peer 127.0.0.1:34503 completed successfully",
+    "Pruned IBD parity at DAA 3500, sink bfbdaeff9b600826fbeb2db148a32734cf8c29bacd1a071038b3b773165c8ad33a6ae52225f3ae41c074faa0394547116565ab730e25547a7e5815d4c48cba33, pruning point a64b44688826d9fc8ab28679f7c22aa4ae457882233fda09ca3fb399494920324963c654fd9917c1763c952454eea285b12c1b327101ab5c9b28fc6fde5b1a62",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 51 filtered out; finished in 104.67s"
+  ]
+}

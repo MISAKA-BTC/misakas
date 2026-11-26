@@ -4,7 +4,7 @@ Verdict: DESIGN/ACCOUNTING, not an attack. All 26,204 coinbase outputs ≥ 50 MS
 escrow 3,200.8465 MSK (producer leg 40/50, panel seat legs 2/50 each = 128/256/384 MSK); no miner/validator/buyback payouts.
 
 - H1 CONFIRMED (cause): PALW pays one carve per claim-bearing block; the schedule (calc_block_subsidy) assumes one per DAA tick;
-  DAA is a slot clock (ADR-0138/0142, ≤1 tick per slot). Live: 3.68 attempt blocks per DAA tick (17,236 / DAA 4,689), 99.7 % became
+  DAA is a slot clock (旧ADR-0138/0142, ≤1 tick per slot). Live: 3.68 attempt blocks per DAA tick (17,236 / DAA 4,689), 99.7 % became
   claims. Ratio ≈ 3.68 × 0.72 × 0.767 (DAA 156.4 s) × 0.96 (Final rate) ≈ 1.9. PoC: audit/emission e6b72dd1c,
   consensus/core/tests/audit_emission_per_daa.rs (k attempts in a mergeset → ≤1 tick, k carves).
 - H2 CONFIRMED: floor class has no absolute cadence control (bits pinned at max, floor outside the epoch budget, class retarget

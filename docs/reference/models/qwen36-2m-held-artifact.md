@@ -6,7 +6,7 @@ It is not interchangeable with the shipped 512-position `qwen36.palwq36`.
 | field | value |
 | --- | --- |
 | catalog model id | `Qwen3.6-35B-A3B/graph-v7@2097152` |
-| graph | ADR-0103 graph-v7 (graph-v6 under the held composition) |
+| graph | 旧ADR-0103 graph-v7 (graph-v6 under the held composition) |
 | `n_ctx` / `max_position` | `2,097,152` |
 | converter default it replaces | `--context 512` (`Qwen3.6-35B-A3B/graph-v3`) |
 

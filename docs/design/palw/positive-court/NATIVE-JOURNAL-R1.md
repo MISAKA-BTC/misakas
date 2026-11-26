@@ -1,6 +1,6 @@
 # Positive native case journal r1 — A0接続契約
 
-2026-10-31。RFC-0044 / ADR-0212の実装用契約。A6が実装する新しいnative履歴のidentityと再生境界を固定する。旧private archiveのcodec・head・初期record数を再利用しない。以下はwire/state owner間の契約であり、実DB・native履歴reader・再生・有効化の成功報告ではない。
+2026-10-31。RFC-0044 / 旧ADR-0212の実装用契約。A6が実装する新しいnative履歴のidentityと再生境界を固定する。旧private archiveのcodec・head・初期record数を再利用しない。以下はwire/state owner間の契約であり、実DB・native履歴reader・再生・有効化の成功報告ではない。
 
 ## 正規eventとidentity
 

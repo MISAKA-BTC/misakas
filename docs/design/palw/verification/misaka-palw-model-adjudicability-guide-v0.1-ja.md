@@ -1,16 +1,16 @@
 # MISAKA PALW モデル裁定可能化ガイド v0.1
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-Status: **v0.1 (2026-09-01)** — [ADR-0069](../../../adr/0069-e2e-adjudicability-is-the-price-of-weight.md)
+Status: **v0.1 (2026-09-01)** — [旧ADR-0069](../../../rfc/0009-court-and-claim-final.md)
 の実務手順書。対象は「新しいモデルを PALW の **weight を持つ LLM class**(cadence を稼ぐクラス)
-として登録したい人」。関連: ADR-0039(catalog が閉じるまで weightless)、ADR-0049(裁定契約)、
-ADR-0067(class は chain data、kernel は build)、ADR-0054/0056(share は生産に従う / permissionless
+として登録したい人」。関連: 旧ADR-0039(catalog が閉じるまで weightless)、旧ADR-0049(裁定契約)、
+旧ADR-0067(class は chain data、kernel は build)、旧ADR-0054/0056(share は生産に従う / permissionless
 登録)。
 
 ---
@@ -23,9 +23,9 @@ PALW の唯一の主張は「ブロックの対価は**実際の LLM 推論**で
 登録(permissionless)と weight(cadence share)は別物だ:
 
 - **誰でも**モデルを登録できる。ただし登録しただけのクラスは *liveness-admissible だが weightless*
-  ——ブロックは作れるが fork-choice weight を持たず、cadence を稼がない(ADR-0039)。
+  ——ブロックは作れるが fork-choice weight を持たず、cadence を稼がない(旧ADR-0039)。
 - **weight を持つ**には、そのクラスが end-to-end で裁定可能——実 backend が実アンカーに対して
-  争議を有罪判定まで最後まで回せること——を **certification** で証明する必要がある(ADR-0069)。
+  争議を有罪判定まで最後まで回せること——を **certification** で証明する必要がある(旧ADR-0069)。
 
 このガイドは、あなたのモデルを weightless から weight-bearing へ引き上げるための手順書だ。
 唯一の完成参照は **BASE-0**(`misaka/palw/base0/src/backend.rs`)。以下、随所でその file:line を
@@ -38,7 +38,7 @@ PALW の唯一の主張は「ブロックの対価は**実際の LLM 推論**で
 | | 何を証明するか | どこで検査されるか | 誰の性質か |
 |---|---|---|---|
 | **静的 (static)** | profile が歩ける step space で、到達する全 kernel を adjudicator が再実行でき、全 node shape が servable | `check_lineage_v1`(SDK)+ `verify_catalog_coverage_v1` / `verify_profile_coverage_v1` → `court_catalog_root` | **class**(chain data) |
-| **E2E** | 実 backend が実アンカーで争議を**有罪判定まで**回せる | Decision 3 の drill → `court_e2e_root`(ADR-0069 で新設) | **build**(kernel + court) |
+| **E2E** | 実 backend が実アンカーで争議を**有罪判定まで**回せる | Decision 3 の drill → `court_e2e_root`(旧ADR-0069 で新設) | **build**(kernel + court) |
 
 登録と liveness に要るのは静的側だけ。**weight には両方**が要る。
 
@@ -82,7 +82,7 @@ weight を持ってはならない、とコード自身が書いている(`misak
 
 ## 3. 手順 — weightless から certified へ
 
-### ステップ 1: グラフを宣言し、エンジンと一致させる(ADR-0049 Decision F)
+### ステップ 1: グラフを宣言し、エンジンと一致させる(旧ADR-0049 Decision F)
 
 profile(`PalwShapeProfileV3`)に、エンジンが実行する**すべての narrowing** を宣言する。宣言と
 実行が食い違うと、その食い違った step は永久に裁定不能になる。
@@ -164,7 +164,7 @@ prefill と decode の両方に少なくとも1 position を含む。`L` が漏�
 
 ### ステップ 6: 提出して weight を得る
 
-- build の **certified family 集合**(ADR-0069 の `court_e2e_root`)に、あなたの family descriptor を
+- build の **certified family 集合**(旧ADR-0069 の `court_e2e_root`)に、あなたの family descriptor を
   加える。証明書は drill を有罪判定まで通した時にのみ sealed constructor から作れる(coverage の
   `PalwReachableKernelSetV1` と同じ偽造不能パターン)。
 - これで `verify_class_admission_v2` / `granted_share_table_v2` が、あなたの family
@@ -222,7 +222,7 @@ BASE-0 が court を最後まで回せる唯一のクラスである理由は、
 
 - **family** — backend の実行系統(BASE-0 / QWEN36 mmap / QWEN25-A16 dense 等)。certification は
   family 単位。登録タームの `PalwRegistrationTermsV2.family` がチェーン上の判定材料。
-- **weightless / weight-bearing** — cadence share が 0 か非0か。ADR-0069 の gate は weight にだけ
+- **weightless / weight-bearing** — cadence share が 0 か非0か。旧ADR-0069 の gate は weight にだけ
   かかり、登録・liveness にはかからない。
 - **covering leaf set** — drill が故障を注入する leaf の集合。全テーブル + prefill/decode を覆う。
 - **`court_catalog_root` / `court_e2e_root`** — build の裁定能力(前者=kernel 単位、後者=E2E)を

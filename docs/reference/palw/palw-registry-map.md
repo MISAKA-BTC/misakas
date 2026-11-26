@@ -1,76 +1,9 @@
 # Where the model registry is — the PALW provenance map
 
-<!-- BMR1-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — BFT継続5%・モデル恒久廃止と用途別bond
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../../adr/0237-bft-model-retirement-and-role-bonds.md)／[BMR1移行](../../governance/model-retirement-transition.md)をBFTの継続報酬・恒久廃止・用途別bond処理の正本とする。最新配分は同一coinbase原資Cの50/20/20/5/5であり、BFTの通常継続報酬は**`F=floor(50C/1000)`（5%）**、Panel/Gate CのMISAKA枠は**`P=floor(50C/1000)`（5%）**。同日途中の10%と可変W/P前段を撤回する。残るPOSITION購入70%とMISAKA LP20%はRFC0068の同じ一回分割・残差規則に従い、5%をさらに二重控除しない。検証者5%内の役割配分は既存の正規planで決める。
-
-正規BFTのモデル恒久廃止で、当該永久LP内actual MISAKA・登録者責任bond・MINING用途bond・未確定mining報酬を100%burn/失効させる。**全Panel/Gate C検証用途bondは、不正者も含め一律にBFT廃止burnから保護**し、個人不正はCourtの個別slashへ分離する。正当に成立した検証報酬の支払を維持し、他モデル資産へ影響させない。兼任は用途別lot（MINING6,000だけburn、PANEL4,000は保護）とし、重複担保・責任中の用途変更は禁止する。
-
-通常のLP撤去禁止を維持し、canonical廃止のactual reserve burnだけを限定例外にする。BFTの没収受取・廃止bountyは0。継続5%報酬を没収額に連動させない。可逆Pause/Resumeと区別し、旧停止専用・LP絶対不処分の記述をこのscopeだけ置換する。旧profile/native/履歴を保持し、BMR1実装・移行・有効化は別工程とする。
-
-**個別Court slashの実回収額は別会計。** 対象offenceから実際に回収したMISAKAをSとし、Panel/Gate C合計の報酬を`E=floor(490S/1000)`、残り`T=S-E`をburnとする（名目49%/51%、端数はburn）。49%は両役割の合計であり、それぞれ49%ではない。不正発見・立証の資格を認証したplanで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFTモデル廃止の100%burn資産をSへ加えず、BFTの没収受取・廃止bountyは0のまま。検証bondがBFT一律burnから保護されることは、本人のCourt個別slash免除ではない。
-<!-- BMR1-ADOPTED-20261126-END -->
-
-<!-- MOE3-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — 全モデル統一・小数POSITION・50/20/20/5/5
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0068](../../rfc/0068-fractional-position-miner-rewards.md)／[ADR0236](../../adr/0236-fractional-position-miner-rewards.md)／[MOE3適用・移行](../../governance/fractional-position-economics-transition.md)を新経済の正本とする。ユーザーの最新指定は、対象coinbase原資Cの**50%をMiner用POSITION購入、20%をLP用POSITION購入、20%をMISAKAのLP、5%をPanel/Gate CへMISAKA、5%をBFTへMISAKA**である。Minerと検証者の受取資産を分け、5%枠内のPanel/Gate C配分は認証済みplanに従う。新しい半々配分等を暗黙設定しない。
-
-整数分割は`F=floor(50C/1000)`、`P=floor(50C/1000)`、`A=floor(200C/1000)`、`J=floor(200C/1000)`、`D=C-F-P-A-J`、`B=D+J`。FがBFT、Pが検証者、AがLP用MISAKA、JがLP用POSITION購入原価、DがMiner用購入原価であり、**通貨の全丸め残差はD**へ置く。B（名目70%）を一括購入し、購入qから`ell=floor(q*J/B)`をLP、`m=q-ell`をMinerへ配る（B>0）。単一モデルにC全額を割り当て、かつCが20の倍数の例ならell=floor(2q/7)で名目2/7 LP・5/7 Minerとなるが、端数時も無条件に2q/7としない。`C=B+A+P+F`、`q=ell+m`を保つ。POSITIONの50%/20%相当は取得原価の按分であり、換金額の保証ではない。
-
-全モデルを係数1.0・各モデルの一意市場・MAD2管理へ統一する。新fork特別区分、追加モデル専用κ、coreの市場/報酬免除、genesisのBFT管理免除を継承しない。originは履歴として保存し、genesisの差は正規creatorがいない点だけとする。POSITIONは小数8桁、`1 POSITION=100,000,000 atoms`として固定精度整数で計算する。
-
-通常AMMはburn5%を維持し、creatorありの総手数料1%/名目net94%、正規genesisのcreatorなしは0%/名目net95%とする。不存在creatorの1%を徴収・追加burnしない。内部購入・LP・配布の追加AMM feeは0。通常の永久LP撤去禁止・claim検証・共通発行/資本/責任capを維持し、BMR1正規廃止の限定burnは後続規範に従う。
-
-同日途中の「80%購入・q/4 LP・60%相当Miner」「Wから可変Panel枠を引いてRへ」「BFT10%」は**今回の固定50/20/20/5/5に置換済み**であり、新規受理に使わない。旧MOE1/MOE2のwhole数量・30/20/50・owner3%・旧claim/wire/native/過去試験は元profileの記録として保持する。MOE3のnative接続・移行実行・本番有効化の完了ではない。
-
-一般/複数モデルでは、RFC0068 §4.3で一度分割したCの各legを結合按分し、各モデルの実予算比`floor(q_i J_i/B_i)`でLP数量を求める。Cが20で割り切れるだけでは各モデルの比率が2/7になるとは限らない。
-<!-- MOE3-ADOPTED-20261126-END -->
-
-<!-- MAS1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MAS1の構造・実用性検査とBFT安全停止
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0065](../../rfc/0065-model-admission-screening-and-bft-stop.md)／[ADR0233](../../adr/0233-model-admission-screening-and-bft-stop.md)／[MAS1適用・移行](../../governance/model-admission-safety-transition.md)を、この新規採掘profileの追加正本とする。ModelRegisteredとMiningAdmissibleを区別し、AdmissionGeneration、PASS/hold、停止集合、rule依存indexを全consumerへ結合する。
-
-構造検査はPASS/FAIL/UNKNOWNを区別し、UNKNOWNは採掘不可のままBFT reviewへ接続する。G-EXEC/G-COLL/G-COSTを維持し、公開・共通の実用性G-USEと停止状態をAND条件へ追加する。BFTはモデル/ruleの停止と条件付き解除に限り、未検査の費用経路の承認・台帳finality・fork choice・reorgの権限を持たない。burnやowner変更で安全停止を解除しない。
-
-旧「モデル品質・モデル単位の検査を一切しない」という文言は、MAS1の採掘資格に関する今回の限定検査へ置換する。一般登録とMOE2市場原子生成、通常取引、coreの経済配分、Panel＋Court、計算validity proof不使用、旧claimの元責任は維持する。旧採択ブロック・原文・実測はその版の履歴であり、今回の数学的証明・native実装・公開activationが完成したという意味ではない。
-<!-- MAS1-ADOPTED-20261120-END -->
-
-<!-- MOE2-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
-
-永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
-
-旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
-<!-- MOE2-ADOPTED-20261120-END -->
-
-
-<!-- MOE1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。MOE1登録recordと追加モデル市場の同時生成、native分類とEconomicPolicy snapshotを登録入口へ接続する。旧struct名だけで新規要件を省略しない。
-
-追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
-
-[RFC0063](../../rfc/0063-additional-model-option-economics.md) / [ADR0231](../../adr/0231-additional-model-option-economics.md) / [適用と移行](../../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
-<!-- MOE1-ADOPTED-20261120-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。既存class/artifact/runtimeのstructは旧版として保持する。新規採掘の登録入口にはFunctionWorkDescriptor、TheoremRuleId、認証されたartifact適合前提、G-EXEC/G-COLL/G-COST、TB1契約を追加する。ModelRegistered、FamilyCertified又は着席だけでFOW1Admissibleとしない。
-
-[TB1](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
@@ -81,10 +14,10 @@ is a **field, a struct or a function**, not a plan to add one. This page is that
 per layer, with the file the row lives in and the ADR that decided it.
 
 It exists because the alternative has a price this repository has already paid: a second spelling
-of a field that already exists (`derived-sets-need-one-spelling`). ADR-0079 §7 disposed of a
+of a field that already exists (`derived-sets-need-one-spelling`). 旧ADR-0079 §7 disposed of a
 proposal to add ten provenance layers by showing that nine of them were already here under other
 names, and unit **R-09** is the instruction to write that mapping down where a reader will find it.
-ADR-0079 §7 is the argument; this page is the index.
+旧ADR-0079 §7 is the argument; this page is the index.
 
 Two conventions, both load-bearing:
 
@@ -100,32 +33,32 @@ Two conventions, both load-bearing:
 
 | layer | the field / struct / function that IS it | file | decided by |
 |---|---|---|---|
-| **① Model registry** | `PalwClassRowV2` / `PalwClassStateV2` — the class **is** the registry row. Its identity is `class_id == profile.shape_profile_id() == H(profile)`: the architecture, the geometry, the quantization map and the context length hash to the id, so a model that differs in any of them is a different class by construction. Admission is permissionless and on-chain (`PalwClassAdmissionCarriageV2`, whose `shape_profile_id()` must equal the registration's `class_id`). | `consensus/core/src/palw_state_v2.rs` (rows), `consensus/core/src/palw_step.rs::shape_profile_id` | ADR-0056, ADR-0067 D1–D2, ADR-0075 |
-| **② Model artifact hash** | `artifact_root` on the registration and on every attempt (`PalwAttemptUnsignedV2`, `PalwClassStateV2::artifact_root`) — *"what artifact openings prove against; an attempt whose `artifact_root` differs is"* not this class's. The worker recomputes SHA-256 **from the bytes** on every load and compares against the pin. | `consensus/core/src/palw_state_v2.rs`, `consensus/core/src/palw_attempt_v2.rs`; gate: `misaka/palw/worker/src/main.rs::pinned_model_path_v2` | ADR-0067 D6, ADR-0079 D9 |
-| — *the registered-class arm of ②* | `resolve_chain_registered` step 4: a holding is admitted only when its **computed** digest equals the registered root — the same rule for a class this build has no compiled row for. | `misaka/palw/sdk/src/sdk.rs::resolve_chain_registered` | ADR-0067 D5, ADR-0079 D9 |
-| **③ Runtime / engine registry** | `PalwRuntimeManifestV2` — worker self-hash, patchset root, `libm_arithmetic_digest`, golden-vector root — plus ADR-0075 Decision 5's kernel-coverage binding (`PalwClassLaneCertificationV2`). There is **one** engine by decision, so this names a *build*, never a choice of engine. | `misaka/palw/worker/src/main.rs::runtime_manifest_v2`; `consensus/core/src/palw_state_v2.rs::PalwClassLaneCertificationV2` | ADR-0053, ADR-0067, ADR-0075 |
-| **④ Input canonicalization** | `prompt_token_ids_hash_v2` (consensus binds the **ids**, never the text) and `fp_job_id_v3` (the job a replayer rebuilds from chain data alone). The template is executor-side and frozen: `TEMPLATE_ID_V1` renders plain-text markers; the segment-wise form (`PalwFpPromptSegmentV1`: `Special(u32)` from the worker manifest, `Text(Vec<u8>)` encoded with specials disabled) is the ADR-0077 Decision 6 arm. | `consensus/core/src/palw_v2.rs::prompt_token_ids_hash_v2`, `consensus/core/src/palw_freeprompt_v3.rs::{fp_job_id_v3, PalwFpPromptSegmentV1}`, `misaka/palw/gateway/src/main.rs::TEMPLATE_ID_V1` | ADR-0044 D10, ADR-0077 D6, ADR-0079 D7 + SA-6 |
-| **⑤ Inference receipt** | `execution_commitment_v3(attempt, execution_anchor)` — the commitment over the whole attempt; the claim and the receipt block carry it. | `consensus/core/src/palw_attempt_v2.rs::execution_commitment_v3` | ADR-0072, ADR-0073, ADR-0074 |
-| **⑥ Output root** | `output_commitment_v2(job_context_hash, generated_token_ids, rendered_output_hash)` — over exactly the emitted ids, bound to the job context that produced them. ADR-0078's derived artifacts are the layer above it. | `consensus/core/src/palw_v2.rs::output_commitment_v2` | ADR-0044, ADR-0078 D2 |
-| **⑦ Deterministic verification** | The court: checkpoint-anchored replay, the seat's `k` sampled intervals compared **exactly**, and bisection to one leaf. Openings prove against the class root; a leaf is either the accused's or it is not. | `consensus/core/src/palw_court_v2.rs`, `palw_step.rs`, `palw_step_leg.rs`, `palw_step_refute.rs`; seat side: `kaspad/src/palw_panel.rs` | ADR-0069, ADR-0077 D8 |
-| **⑧ Resource / cost metering** | Leaves and pwu — an integer count of executed work. `PALW_STEP_MAX_LEAVES` bounds the answer, `work_leaves` counts the work, `palw_expected_attempts_v1` turns a class target into expected attempts, and the per-class epoch budget is denominated in **pwu, never in ramped weight**. Never a clock and never a watt. | `consensus/core/src/palw_step.rs::PALW_STEP_MAX_LEAVES`, `palw_pwu.rs`, `palw_class_daa.rs` | ADR-0045, ADR-0071, ADR-0078 D10 |
-| **⑨ Capability / hardware profile** | ADR-0067 Decision 6's four storage tiers, resolved by the SDK per family (`resolve_*`, the mmap tier for the 33 GiB hybrid). Registration and possession are different acts and nothing may couple them: the registration carries kilobytes and no URL. | `misaka/palw/sdk/src/sdk.rs` | ADR-0067 D6 |
-| **⑩ Artifact store / delivery** | For **outputs**: the gateway returns the answer and the derived artifact to the user; the chain holds the derivation, and the DA obligation covers the trace, not the thing. For **models**: refused — see §3. | `misaka/palw/gateway/src/main.rs`, `misaka/palw/gateway/src/derive.rs` | ADR-0077 D3–D4, ADR-0078 D1 & D6 |
+| **① Model registry** | `PalwClassRowV2` / `PalwClassStateV2` — the class **is** the registry row. Its identity is `class_id == profile.shape_profile_id() == H(profile)`: the architecture, the geometry, the quantization map and the context length hash to the id, so a model that differs in any of them is a different class by construction. Admission is permissionless and on-chain (`PalwClassAdmissionCarriageV2`, whose `shape_profile_id()` must equal the registration's `class_id`). | `consensus/core/src/palw_state_v2.rs` (rows), `consensus/core/src/palw_step.rs::shape_profile_id` | 旧ADR-0056, 旧ADR-0067 D1–D2, 旧ADR-0075 |
+| **② Model artifact hash** | `artifact_root` on the registration and on every attempt (`PalwAttemptUnsignedV2`, `PalwClassStateV2::artifact_root`) — *"what artifact openings prove against; an attempt whose `artifact_root` differs is"* not this class's. The worker recomputes SHA-256 **from the bytes** on every load and compares against the pin. | `consensus/core/src/palw_state_v2.rs`, `consensus/core/src/palw_attempt_v2.rs`; gate: `misaka/palw/worker/src/main.rs::pinned_model_path_v2` | 旧ADR-0067 D6, 旧ADR-0079 D9 |
+| — *the registered-class arm of ②* | `resolve_chain_registered` step 4: a holding is admitted only when its **computed** digest equals the registered root — the same rule for a class this build has no compiled row for. | `misaka/palw/sdk/src/sdk.rs::resolve_chain_registered` | 旧ADR-0067 D5, 旧ADR-0079 D9 |
+| **③ Runtime / engine registry** | `PalwRuntimeManifestV2` — worker self-hash, patchset root, `libm_arithmetic_digest`, golden-vector root — plus 旧ADR-0075 Decision 5's kernel-coverage binding (`PalwClassLaneCertificationV2`). There is **one** engine by decision, so this names a *build*, never a choice of engine. | `misaka/palw/worker/src/main.rs::runtime_manifest_v2`; `consensus/core/src/palw_state_v2.rs::PalwClassLaneCertificationV2` | 旧ADR-0053, 旧ADR-0067, 旧ADR-0075 |
+| **④ Input canonicalization** | `prompt_token_ids_hash_v2` (consensus binds the **ids**, never the text) and `fp_job_id_v3` (the job a replayer rebuilds from chain data alone). The template is executor-side and frozen: `TEMPLATE_ID_V1` renders plain-text markers; the segment-wise form (`PalwFpPromptSegmentV1`: `Special(u32)` from the worker manifest, `Text(Vec<u8>)` encoded with specials disabled) is the 旧ADR-0077 Decision 6 arm. | `consensus/core/src/palw_v2.rs::prompt_token_ids_hash_v2`, `consensus/core/src/palw_freeprompt_v3.rs::{fp_job_id_v3, PalwFpPromptSegmentV1}`, `misaka/palw/gateway/src/main.rs::TEMPLATE_ID_V1` | 旧ADR-0044 D10, 旧ADR-0077 D6, 旧ADR-0079 D7 + SA-6 |
+| **⑤ Inference receipt** | `execution_commitment_v3(attempt, execution_anchor)` — the commitment over the whole attempt; the claim and the receipt block carry it. | `consensus/core/src/palw_attempt_v2.rs::execution_commitment_v3` | 旧ADR-0072, 旧ADR-0073, 旧ADR-0074 |
+| **⑥ Output root** | `output_commitment_v2(job_context_hash, generated_token_ids, rendered_output_hash)` — over exactly the emitted ids, bound to the job context that produced them. 旧ADR-0078's derived artifacts are the layer above it. | `consensus/core/src/palw_v2.rs::output_commitment_v2` | 旧ADR-0044, 旧ADR-0078 D2 |
+| **⑦ Deterministic verification** | The court: checkpoint-anchored replay, the seat's `k` sampled intervals compared **exactly**, and bisection to one leaf. Openings prove against the class root; a leaf is either the accused's or it is not. | `consensus/core/src/palw_court_v2.rs`, `palw_step.rs`, `palw_step_leg.rs`, `palw_step_refute.rs`; seat side: `kaspad/src/palw_panel.rs` | 旧ADR-0069, 旧ADR-0077 D8 |
+| **⑧ Resource / cost metering** | Leaves and pwu — an integer count of executed work. `PALW_STEP_MAX_LEAVES` bounds the answer, `work_leaves` counts the work, `palw_expected_attempts_v1` turns a class target into expected attempts, and the per-class epoch budget is denominated in **pwu, never in ramped weight**. Never a clock and never a watt. | `consensus/core/src/palw_step.rs::PALW_STEP_MAX_LEAVES`, `palw_pwu.rs`, `palw_class_daa.rs` | 旧ADR-0045, 旧ADR-0071, 旧ADR-0078 D10 |
+| **⑨ Capability / hardware profile** | 旧ADR-0067 Decision 6's four storage tiers, resolved by the SDK per family (`resolve_*`, the mmap tier for the 33 GiB hybrid). Registration and possession are different acts and nothing may couple them: the registration carries kilobytes and no URL. | `misaka/palw/sdk/src/sdk.rs` | 旧ADR-0067 D6 |
+| **⑩ Artifact store / delivery** | For **outputs**: the gateway returns the answer and the derived artifact to the user; the chain holds the derivation, and the DA obligation covers the trace, not the thing. For **models**: refused — see §3. | `misaka/palw/gateway/src/main.rs`, `misaka/palw/gateway/src/derive.rs` | 旧ADR-0077 D3–D4, 旧ADR-0078 D1 & D6 |
 
-## 2. The host half — what ADR-0079 added, and where it lives
+## 2. The host half — what 旧ADR-0079 added, and where it lives
 
 None of it is a chain fact. That is Decision 2: the chain cannot observe whether a host ran
 confined, so a confinement claim on the chain would be a vote, and a vote is what a court is not.
 
 | layer | the thing that IS it | file | decided by |
 |---|---|---|---|
-| **Sandbox / capability control** | `ConfinementBackend` and `establish_confinement` — what is **actually in force**, never what was configured; `harden_worker_command` (the `env_clear()` + `PALW_WORKER_ENV_ALLOWLIST` spawn, `PATH` deliberately absent); `worker_working_dir` (an explicit `0700` scratch dir, never `$HOME` or the datadir). | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`) | ADR-0079 D1, D5, SA-4 |
-| **Resource ceiling** | `PALW_WORKER_MAX_RESIDENT_BYTES`, `arm_memory_ceiling`, `attach_to_cgroup`, `resident_bytes` — cgroup v2 `memory.max` where available, a supervisor resident watchdog otherwise. **Not `RLIMIT_AS`**: the hybrid maps 33 GiB. Exceeding it is a `JobFailed`, never a dead node. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`); enforcement: `misaka/palw/agent/src/agent.rs::run_worker_job` | ADR-0079 D6, SA-1 |
-| **Secrets isolation** | `reachable_signing_secrets` — the gateway refuses to boot when a signing secret is reachable in its own view; it holds the executor **public** key only, and the ML-DSA-87 signature belongs to the signer sidecar. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`), `misaka/palw/gateway/src/main.rs` | ADR-0079 D4, D8, SA-2 |
-| **Network egress control** | `listen_is_loopback` / `check_loopback_bind` — every non-loopback bind fails at startup. Public gateway opt-in is removed (ADR-0144). Plus the platform backend's own denial of `socket`/`connect` for the worker. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`), `misaka/palw/gateway/src/main.rs` | ADR-0079 D5, D10 |
-| **Tool / agent permission system** | Decision 8, in the only honest form available: **the model has no tools.** A worker returns token ids; nothing in the tree executes, fetches or shells out on the strength of model output, and the signer signs one message shape — an id it re-derives itself. A policy engine is deferred until something exists to police. | (a prohibition; guarded by `misaka/palw/core/tests/host_security_tree_guard.rs`) | ADR-0079 D8, S10 |
-| **Prompt-injection boundary** | The lexical one, and only that one: untrusted text may not become a control token. The corpus that pins it is `misaka/palw/base0/tests/corpus/special-tokens.txt`. **The protocol does not and cannot promise that a model ignores instructions inside its own context** — obedience is not a consensus property, and Decision 8 is the structural answer instead. | `misaka/palw/base0/tests/special_token_corpus.rs` | ADR-0079 D7, S7, SA-6 |
-| **Security / integrity receipt** | The integrity half is ②'s full read. The posture half is `misaka node security-report` — printed from live state, **signed by nobody**, committed nowhere; it reports the backend in force, the *measured* worker environment, the live listeners, the interpreter fence read off the running node's argv, and the artifact digests. It prints paths and posture, never key material and never prompts. | `misaka/apps/cli/src/security.rs` (`misaka node security-report`) | ADR-0079 D2, D13, S12, SA-7 |
+| **Sandbox / capability control** | `ConfinementBackend` and `establish_confinement` — what is **actually in force**, never what was configured; `harden_worker_command` (the `env_clear()` + `PALW_WORKER_ENV_ALLOWLIST` spawn, `PATH` deliberately absent); `worker_working_dir` (an explicit `0700` scratch dir, never `$HOME` or the datadir). | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`) | 旧ADR-0079 D1, D5, SA-4 |
+| **Resource ceiling** | `PALW_WORKER_MAX_RESIDENT_BYTES`, `arm_memory_ceiling`, `attach_to_cgroup`, `resident_bytes` — cgroup v2 `memory.max` where available, a supervisor resident watchdog otherwise. **Not `RLIMIT_AS`**: the hybrid maps 33 GiB. Exceeding it is a `JobFailed`, never a dead node. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`); enforcement: `misaka/palw/agent/src/agent.rs::run_worker_job` | 旧ADR-0079 D6, SA-1 |
+| **Secrets isolation** | `reachable_signing_secrets` — the gateway refuses to boot when a signing secret is reachable in its own view; it holds the executor **public** key only, and the ML-DSA-87 signature belongs to the signer sidecar. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`), `misaka/palw/gateway/src/main.rs` | 旧ADR-0079 D4, D8, SA-2 |
+| **Network egress control** | `listen_is_loopback` / `check_loopback_bind` — every non-loopback bind fails at startup. Public gateway opt-in is removed (旧ADR-0144). Plus the platform backend's own denial of `socket`/`connect` for the worker. | `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`), `misaka/palw/gateway/src/main.rs` | 旧ADR-0079 D5, D10 |
+| **Tool / agent permission system** | Decision 8, in the only honest form available: **the model has no tools.** A worker returns token ids; nothing in the tree executes, fetches or shells out on the strength of model output, and the signer signs one message shape — an id it re-derives itself. A policy engine is deferred until something exists to police. | (a prohibition; guarded by `misaka/palw/core/tests/host_security_tree_guard.rs`) | 旧ADR-0079 D8, S10 |
+| **Prompt-injection boundary** | The lexical one, and only that one: untrusted text may not become a control token. The corpus that pins it is `misaka/palw/base0/tests/corpus/special-tokens.txt`. **The protocol does not and cannot promise that a model ignores instructions inside its own context** — obedience is not a consensus property, and Decision 8 is the structural answer instead. | `misaka/palw/base0/tests/special_token_corpus.rs` | 旧ADR-0079 D7, S7, SA-6 |
+| **Security / integrity receipt** | The integrity half is ②'s full read. The posture half is `misaka node security-report` — printed from live state, **signed by nobody**, committed nowhere; it reports the backend in force, the *measured* worker environment, the live listeners, the interpreter fence read off the running node's argv, and the artifact digests. It prints paths and posture, never key material and never prompts. | `misaka/apps/cli/src/security.rs` (`misaka node security-report`) | 旧ADR-0079 D2, D13, S12, SA-7 |
 
 ## 3. The refusals, with the reason each was paid for
 
@@ -133,30 +66,30 @@ A refusal without a reason gets re-proposed, so each keeps its argument next to 
 
 | proposed | why it is refused | decided by |
 |---|---|---|
-| A **multi-engine runtime registry** (llama.cpp / vLLM / MLX / TensorRT rows) | One execution family was decided: pure Rust, in the tree, integer. A float path is a path two honest hosts disagree on, and a llama.cpp worker cannot produce a commitment at all — it has no step legs. The registry that exists (③) names a *build*. Other engines are non-consensus conveniences and can never sign a commitment. | ADR-0053, ADR-0079 §7 item 3 |
-| A **tolerance-based receipt verifier** (RBO / p95 "more realistic" attestation) | A tolerant verifier cannot convict, and a check that cannot convict is a vote. This decision was taken against a measured competitor's design. The seat's sampled interval is a *licence*, not a verdict, and it compares exactly. | ADR-0026, ADR-0079 §7 item 7B |
-| **Metering in GPU-seconds, watts or wall clock** | A clock is not adjudicable. Work is metered in leaves and pwu (⑧). Token counts are carried; seconds and watts are operator telemetry and never chain facts. | ADR-0078 D10, ADR-0079 §7 item 8 |
-| A **job scheduler** between the user and the worker | Jobs are self-originated and the attempt is a claim the chain draws; there is no orderer, and inserting one would create a party that chooses who earns. The user chooses an executor; the chain chooses the ticket. | ADR-0074, ADR-0079 §7 |
-| A **chain-side model distribution network** | The registration carries kilobytes and no URL, precisely so a fleet's disk does not grow with strangers' decisions. Model bytes are obtained out of band and admitted only by digest (②). | ADR-0067 D6, ADR-0079 §7 item 10 |
-| A **`security_policy_hash` inside the priced/committed bytes** | A posture the chain cannot verify, committed into bytes that price a lottery, is both an unfalsifiable claim and a grinding surface — every free field inside the priced bytes is a free draw. The exhaustive field-classification test refuses to compile one. | ADR-0072 D8, ADR-0079 D2, S1 |
+| A **multi-engine runtime registry** (llama.cpp / vLLM / MLX / TensorRT rows) | One execution family was decided: pure Rust, in the tree, integer. A float path is a path two honest hosts disagree on, and a llama.cpp worker cannot produce a commitment at all — it has no step legs. The registry that exists (③) names a *build*. Other engines are non-consensus conveniences and can never sign a commitment. | 旧ADR-0053, 旧ADR-0079 §7 item 3 |
+| A **tolerance-based receipt verifier** (RBO / p95 "more realistic" attestation) | A tolerant verifier cannot convict, and a check that cannot convict is a vote. This decision was taken against a measured competitor's design. The seat's sampled interval is a *licence*, not a verdict, and it compares exactly. | 旧ADR-0026, 旧ADR-0079 §7 item 7B |
+| **Metering in GPU-seconds, watts or wall clock** | A clock is not adjudicable. Work is metered in leaves and pwu (⑧). Token counts are carried; seconds and watts are operator telemetry and never chain facts. | 旧ADR-0078 D10, 旧ADR-0079 §7 item 8 |
+| A **job scheduler** between the user and the worker | Jobs are self-originated and the attempt is a claim the chain draws; there is no orderer, and inserting one would create a party that chooses who earns. The user chooses an executor; the chain chooses the ticket. | 旧ADR-0074, 旧ADR-0079 §7 |
+| A **chain-side model distribution network** | The registration carries kilobytes and no URL, precisely so a fleet's disk does not grow with strangers' decisions. Model bytes are obtained out of band and admitted only by digest (②). | 旧ADR-0067 D6, 旧ADR-0079 §7 item 10 |
+| A **`security_policy_hash` inside the priced/committed bytes** | A posture the chain cannot verify, committed into bytes that price a lottery, is both an unfalsifiable claim and a grinding surface — every free field inside the priced bytes is a free draw. The exhaustive field-classification test refuses to compile one. | 旧ADR-0072 D8, 旧ADR-0079 D2, S1 |
 
 ## 4. If you are about to add a field
 
 1. Find the row above that already carries the meaning. If one does, extend it — do not spell it a
    second time.
 2. If the field would live inside priced, committed or certified bytes, it must be **pinned by an
-   equation**, not free: ADR-0072 Decision 8, and the field-classification test that enumerates
+   equation**, not free: 旧ADR-0072 Decision 8, and the field-classification test that enumerates
    every one of them.
 3. If it changes what a node accepts or rejects, or what the state root hashes, it rides a fence:
    a new top-level `Params` field `Option<ForkActivation>`, `None` on every shipped preset,
    classified in `for_each_fence` (`consensus/core/src/config/params.rs` — an exhaustive
    destructure, so the compiler forces the classification).
 4. If it is about the **host** and not the chain, it belongs in `misaka/palw/security/src/lib.rs` (re-exported as `misaka_palw::host_security`)
-   and in the report, and nowhere near a commitment. That is the whole of ADR-0079 Decision 2.
+   and in the report, and nowhere near a commitment. That is the whole of 旧ADR-0079 Decision 2.
 
 ---
 
-**Sources.** ADR-0079 §1 and §7
-(`docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md`) are the
+**Sources.** 旧ADR-0079 §1 and §7
+(`docs/rfc/0003-jobs-tokenizers-and-generation.md`) are the
 argument this page indexes; `docs/adr/README.md` is the ADR index and says which decisions were
 later moved; `SECURITY.md` §3 is the operator-facing statement of the host half.

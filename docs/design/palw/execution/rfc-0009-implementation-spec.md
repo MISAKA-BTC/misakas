@@ -1,17 +1,7 @@
 # RFC-0009 implementation spec — PALW remote miner (lane R9)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Status: implementation spec for branch `rfc9/remote-miner` (off `rcore/int-12` 0b1c11b87). Not part of the DAA-5,300 release.
-Spec of record: [RFC-0009](../../../rfc/0009-palw-remote-miner.md). This file fixes what the RFC leaves open: wire formats, versions, fences,
+Spec of record: [RFC-0009](../../../rfc/0019-clients-rpc-and-diagnostics.md). This file fixes what the RFC leaves open: wire formats, versions, fences,
 numbers, defaults for RFC §8, the test plan, and — per stage — **what is NOT guaranteed yet**.
 
 ## 0. Scope and honesty table
@@ -152,7 +142,7 @@ PalwRedemptionAuthV4 {            // signed by the executor key, ONCE, position-
   version: u16 = 1, network_domain: Hash64,
   claim_id: Hash64, executor_bond: TransactionOutpoint,
   quantum_lo: u32, quantum_hi: u32,        // half-open range of quanta any eligible builder may spend
-  beacon_rule: u8 = 1,                     // 1 = ADR-0044 slot rule fp_draw_slot_v3 on the candidate chain; others refused
+  beacon_rule: u8 = 1,                     // 1 = 旧ADR-0044 slot rule fp_draw_slot_v3 on the candidate chain; others refused
   builder_fee_bps: u16,                    // the share of the subsidy-derived worker reward the miner pays the builder; <= chain cap
   expiry_daa: u64                          // block daa must be <= expiry
 }
@@ -173,7 +163,7 @@ PalwReceiptSpendEnvelopeV4 { spend: PalwReceiptSpendUnsignedV4, builder_signatur
   (`ReceiptV4BelowFence`) at the header stage, so validity below the fence is byte-identical to today.
 
 ### 3.3 Validity (`check_palw_receipt_spend_admission_v5`, producer and verifier share it)
-Items 1–5 and 8 of ADR-0044 Decision 6 are the V3 ones, unchanged. Item 6/7 replaced by:
+Items 1–5 and 8 of 旧ADR-0044 Decision 6 are the V3 ones, unchanged. Item 6/7 replaced by:
 6'. `executor_bond == claim.bond`; the bond exists and is not `Retiring` (default for §8: same as V3 — spend before you retire);
     `executor_pubkey == bond.pubkey`; authorization verifies; `auth.claim_id/executor_bond/network` equal the spend's;
     `quantum_lo ≤ quantum_index < quantum_hi ≤ quanta`; `beacon_rule == 1`; `builder_fee_bps ≤ cap`; `block_daa ≤ expiry_daa`.
@@ -285,13 +275,13 @@ B-2 the court; D-2 state proofs.
 
 ## Model acquisition / allocation amendment — 2026-10-10後続改定
 
-[ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md) governs future model supply and coinbase allocation.
+[旧ADR-0177](../../../rfc/0013-model-work-accounting.md) governs future model supply and coinbase allocation.
 Stage B providers/courts above retain their historical claim-evidence scope, not a new model-publication requirement.
 Future requests must exclude whole weights and cumulative range retrieval and define authenticated operand handling.
 Client fetch status is off-chain telemetry; model-bond accounting, allocation and economic gates remain unimplemented/unactivated.
 
 ## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
 
-[ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+[旧ADR-0177](../../../rfc/0013-model-work-accounting.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。

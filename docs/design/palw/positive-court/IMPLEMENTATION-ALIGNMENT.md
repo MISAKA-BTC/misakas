@@ -11,7 +11,7 @@
 SHA-256: `5d1791e6d3ff9b3a91978acccfd1d774815236c8f43e297cfc0fdbb6b667b4a2`
 
 ```text
-L11: //! 2. **Re-execute independently** with the operator's own copy of the registered model (ADR-0177 D7: a verifier holds the registered
+L11: //! 2. **Re-execute independently** with the operator's own copy of the registered model (旧ADR-0177 D7: a verifier holds the registered
 L12: //!    model; `--palw-kernel-model`, one file a model, matched to a class only by its registered parameter commitments — a model that
 L13: //!    does not open to them is never used). A single-program claim is replayed from the ledger's public commitments alone
 L14: //!    (`pursuit::kernel_check_program_v1`: no producer value is read, nothing is ever demanded of an honest producer). A segmented claim

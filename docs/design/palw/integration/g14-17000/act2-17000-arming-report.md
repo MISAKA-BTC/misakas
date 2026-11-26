@@ -1,15 +1,5 @@
 # Lane ACT2 報告 — DAA 17,000 武装一覧と record/waiver(2026-10-27)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 branch `claude/g14-act2`。push・配備なし。preset には適用していない(`PALW_T12_FULL_ACTIVATION_DAA` などは `None` のまま)。
 
 ユーザー決定(2026-10-27): drill を省略して有効化する。testnet-12 の DAA 17,000(当初 19,000 から変更)で、Panel=1 kernel slice と G14 の 6 family に加え PanelDa(後から追加)を武装する。実行していない要件は waiver として記録する。完了・合格としては記録しない。
@@ -120,7 +110,7 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
   - 15,500 以前を含む各 DAA の fired fork id
   - 17,000 未満の schedule
   - 17,000 未満で武装済みの fence
-- 実測で、fork id の `next` は 17,000 と none とで異なった。fork id は次の fence を告知する設計(ADR-0072 SA-2)なので、これは想定どおりで、`fired` は同一だった。旧 node は `next` の違う peer を受け入れる。ただし、これは配備時の handshake 観察で確かめること。
+- 実測で、fork id の `next` は 17,000 と none とで異なった。fork id は次の fence を告知する設計(旧ADR-0072 SA-2)なので、これは想定どおりで、`fired` は同一だった。旧 node は `next` の違う peer を受け入れる。ただし、これは配備時の handshake 観察で確かめること。
 
 ## 6. 実装の穴(c)
 
@@ -198,7 +188,7 @@ full 一覧の順に並べた(前提が先)。武装は `palw_t12_arm_after_int1
   - validation が測定 record 無しで受け付けるのは、**その目安の policy と完全に一致し、かつ record の測定 slot が pin 済みの `UserDecision` waiver** である場合だけ。
   - placeholder や他の policy は引き続き拒否する(試験あり)。
 - peel(拒否された fence を外して再検証、を繰り返す)の結果:
-  1. `palw_model_tier_v1 needs palw_model_bond_allocation_v1 at or below it` → **(c)**。ADR-0177 allocation の承認済み policy(曲線 f、allocation epoch、seasoning)が空。加えて、ACT が先に報告した rights epoch 720 と bundle 1,000 の不整合がある。値の決定が要る。
+  1. `palw_model_tier_v1 needs palw_model_bond_allocation_v1 at or below it` → **(c)**。旧ADR-0177 allocation の承認済み policy(曲線 f、allocation epoch、seasoning)が空。加えて、ACT が先に報告した rights epoch 720 と bundle 1,000 の不整合がある。値の決定が要る。
   2. Gate C は model tier に依存するので、ここで止まる。
   3. `palw_tir_public_conviction_v1` には frame cost の値(`palw_tir_frame_cost_v1`)が要る。目安値を install すると、**handshake identity が 17,000 未満で変わる**(高さで区切られずに Some-only で hash されるため)。fleet と peer できなくなるので、一覧から外した → **(c)**。identity 側で高さ区切りの hash にする central 変更が要る。
 - それ以外の fence は全部通る(peel の残り = Ok)。fleet identity の 4 試験は、frame cost を外した状態で通ることを確認する必要がある(未実行)。

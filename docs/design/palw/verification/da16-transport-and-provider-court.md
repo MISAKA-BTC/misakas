@@ -1,11 +1,11 @@
 # DA16 — the claim-material provider court, the court scope, and the (off-chain) public-material transport
 
-Lane DA16 (`da16/transport-provider-court`). Re-scoped on 2026-10-10 by [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)
+Lane DA16 (`da16/transport-provider-court`). Re-scoped on 2026-10-10 by [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)
 ("the chain does not interfere with model acquisition"). The lane now owns three things:
 
 1. **The claim-material provider court** (RFC-0009 §4.2): moving a kernel claim's DA responsibility to bonded providers. Dormant behind
    `palw_provider_court_v1`.
-2. **The court scope** (ADR-0177 D2, RFC-0014 §16.4): what any court may demand, the cumulative bound, and how a verifier's own model
+2. **The court scope** (旧ADR-0177 D2, RFC-0014 §16.4): what any court may demand, the cumulative bound, and how a verifier's own model
    operand is authenticated. This is G14C's GAP-06; GAP-05 (availability out of consensus) and GAP-52 (snapshot leaf well-formedness) close
    here too. See §7.
 3. **The public-material transport** (`misaka-palw-remote::public_material`, `palw-evidence artifact-*`): optional, non-consensus
@@ -18,13 +18,13 @@ armable, and nothing ran against a live node or network.
 
 | Question | Decision | Why |
 |---|---|---|
-| Model availability in consensus | **Withdrawn.** The `Artifact` lease subject, the READY/LAPSED state of an artifact pair, the tag-104 gate on it, `AVAILABILITY_REQUIRED` from a lapse, and every charge for not serving model bytes are gone. | ADR-0177 D1: a model not being served may never void, hold, slash or delay anything. |
+| Model availability in consensus | **Withdrawn.** The `Artifact` lease subject, the READY/LAPSED state of an artifact pair, the tag-104 gate on it, `AVAILABILITY_REQUIRED` from a lapse, and every charge for not serving model bytes are gone. | 旧ADR-0177 D1: a model not being served may never void, hold, slash or delay anything. |
 | The `Artifact` variant's bytes | **Kept decodable; refused past the fence at every height.** Discriminant 0 stays reserved. | A-2: below the fence the bytes ride unjudged exactly as before, so no mixed-release split. Past the fence the fold refuses before reading any row, bond or class. |
-| What the court may compel | **Claim-specific units only** (input, trace, state, output, witness hashes). Model bytes come only from a verifier's own copy, authenticated against the REGISTERED root. | ADR-0177 D2. One predicate, `palw_court_scope_v1`, consulted by every demand path the lane can reach. |
+| What the court may compel | **Claim-specific units only** (input, trace, state, output, witness hashes). Model bytes come only from a verifier's own copy, authenticated against the REGISTERED root. | 旧ADR-0177 D2. One predicate, `palw_court_scope_v1`, consulted by every demand path the lane can reach. |
 | Cumulative bound | **Bytes:** model-byte disclosure is 0 per claim and per model, for any number of demands. **Count:** each unit at most once per claim, and ≤ 16 distinct units per (claim, requester operator). | No count cap is shared between requesters, so nothing can starve an honest prosecutor (G14). |
-| A claim charge's reporter share | **ADR-0032's 49% before Final** (it was 500‰), for the 151 challenger and the provider-liable demanders alike; burned whole after Final. | It is the same rate as the route's accuser and demander shares (G14-R4's 490‰ constant), so a self-lapse leaves the coalition the same ≥ 51% floor as a self-reported conviction; see §2.3. |
+| A claim charge's reporter share | **旧ADR-0032's 49% before Final** (it was 500‰), for the 151 challenger and the provider-liable demanders alike; burned whole after Final. | It is the same rate as the route's accuser and demander shares (G14-R4's 490‰ constant), so a self-lapse leaves the coalition the same ≥ 51% floor as a self-reported conviction; see §2.3. |
 | Snapshot leaf well-formedness (GAP-52) | **Make the court total** instead of attesting at registration. A retrieval claim's own entries become a claim-specific demand unit. | A junk leaf has no preimage, so no registration attestation is refutable. See §7.6. |
-| Transport crate | Extend `misaka-palw-remote` (unchanged); the artifact half is **non-consensus**. | Model distribution is off-chain and voluntary (ADR-0177 D1, D2). |
+| Transport crate | Extend `misaka-palw-remote` (unchanged); the artifact half is **non-consensus**. | Model distribution is off-chain and voluntary (旧ADR-0177 D1, D2). |
 
 ## 1. The public-material transport (non-consensus for artifacts)
 
@@ -72,7 +72,7 @@ route.
 
   The transfer is irreversible.
 * **An unanswered 151 charges THAT lease, once per (claim, provider).** The reservation is slashed; the challenger gets its bond back and
-  is paid **the PALW reporter share (49%, ADR-0032) before Final**; the rest is burned (all of it after Final). The provider's other
+  is paid **the PALW reporter share (49%, 旧ADR-0032) before Final**; the rest is burned (all of it after Final). The provider's other
   challenges on the claim settle moot.
   - *Why 49% (G14):* a coalition can void its own claim by charging its own leases through its own Sybil challengers. At 49% it nets a
     loss of ≥ 51% of Σ leases ≥ 51% of the claim's reservation. That is exactly the floor a self-reported conviction leaves at G14-R4's
@@ -95,7 +95,7 @@ route.
   - **anything about model bytes.**
 * **Old vs new:** below the fence, and for every claim never transferred, the producer's path is byte for byte today's.
 
-### 2.4 Artifact availability — WITHDRAWN (ADR-0177 D1)
+### 2.4 Artifact availability — WITHDRAWN (旧ADR-0177 D1)
 
 The former §2.4 is removed from consensus:
 - tag 104 needing ≥ 2 live leases;
@@ -122,7 +122,7 @@ re-opens.
 - lease reservation floor: 100 BILI;
 - challenge bond: 10 BILI; cleared-challenge fee: 1 BILI;
 - response window: 20 DAA; minimum providers: 2; ≤ 8 open challenges per challenger;
-- reporter share: 49% before Final (`palw_provider_reporter_share_v1`, ADR-0032), burned after Final;
+- reporter share: 49% before Final (`palw_provider_reporter_share_v1`, 旧ADR-0032), burned after Final;
 - court scope: ≤ 16 distinct units per (claim, requester operator).
 
 Provider economics and Sybil-independence are EXTERNAL_GATE.
@@ -156,7 +156,7 @@ segmented positions reach this court's hook generically.
 * **R4X.**
   - Snapshot slices and the registered `M0` pre-state are refused past the fence (§7.3).
   - Retrieval entries are a new demand stage, `0xC0 + s` (§7.6).
-  - `r4x_retrieval_…_a_withheld_slice_defaults` asserts behaviour ADR-0177 withdraws once the court scope is in force. It still passes
+  - `r4x_retrieval_…_a_withheld_slice_defaults` asserts behaviour 旧ADR-0177 withdraws once the court scope is in force. It still passes
     because its harness does not arm `palw_provider_court_v1`.
 * **G14-R4.** The demand-bond fate (a burn when a served position's claim is not convicted) is the economic half of the relational bound
   (§7.4).
@@ -200,7 +200,7 @@ segmented positions reach this court's hook generically.
 * **Shared adjudication budget.** A 152 spends the route's per-block budget (EXTERNAL_GATE, MEAS).
 * **V2 held claims.** Transport only (§4). K2S multi-part positions are handled by K2S's own call sites (§7.8).
 
-## 7. The court scope (ADR-0177 D2, RFC-0014 §16.4) — G14C GAP-06, GAP-52
+## 7. The court scope (旧ADR-0177 D2, RFC-0014 §16.4) — G14C GAP-06, GAP-52
 
 ### 7.1 Inventory
 
@@ -290,13 +290,13 @@ producer can exhaust against an honest prosecutor. Two non-griefable options:
    - hash bisection by the verifier, from its own re-execution;
    - then recompute-and-compare of one element against the producer's authenticated leaf hash.
 
-   Reachability is preserved for a model holder (ADR-0177 D7). Mid-claim spot checks under withholding are lost (K2S Route A); Route B,
+   Reachability is preserved for a model holder (旧ADR-0177 D7). Mid-claim spot checks under withholding are lost (K2S Route A); Route B,
    re-execution, remains. This needs element-granular leaf hashes in K2S's v3 tree, and is the only option that makes "never rebuild"
    literal.
 
 ### 7.5 The verifier's own model operand, and the armed t12 routes
 
-**Authentication** is `palw_verify_verifier_model_operand_v1(roots, operand)`, against the class's REGISTERED roots (immutable, ADR-0175):
+**Authentication** is `palw_verify_verifier_model_operand_v1(roots, operand)`, against the class's REGISTERED roots (immutable, 旧ADR-0175):
 - a row or column of `(param, layer)`: `commitments.root() == registered kernel_param_root`, then
   `opening.authenticates(commitments.by_instance[(param, layer)])`. The commitments map is on chain in the kernel class registration, so
   the verifier copies it and needs nothing from the producer;
@@ -313,7 +313,7 @@ Root equality is not proof of computation; the court still evaluates the relatio
 1. a `StepLeaf` answer owes only its claim part (the refutation's step openings, the prompt-ids opening); the accuser supplies
    `artifact_openings` from its own copy in the one-move verdict filing;
 2. a dissection's root claim names parameter coordinates only, and the challenger supplies the openings;
-3. readiness stops publishing plaintext leaves (a user decision: it is a Panel seating condition, PoR-like under ADR-0177 D1).
+3. readiness stops publishing plaintext leaves (a user decision: it is a Panel seating condition, PoR-like under 旧ADR-0177 D1).
 
 **Reachability:**
 - (1) the one-move verdict needs the openings, and any holder of the model supplies them, so withholding the claim part is still the
@@ -350,7 +350,7 @@ from the binder's voluntary publication, unless the instance sets differ (`Insta
   tree's authenticated leaf hash.
 
 No model bytes are compelled, and a false binding becomes refutable without the binder's cooperation. **Decision:** whether failing to
-open one's own commitment's hashes may slash the binder (ADR-0177 D1 forbids penalties only for not serving the model).
+open one's own commitment's hashes may slash the binder (旧ADR-0177 D1 forbids penalties only for not serving the model).
 
 ### 7.8 Where K2S must call the predicate (K2 v4/v5; demand types untouched)
 
@@ -399,7 +399,7 @@ and block an honest prosecutor. So the bound limits what is **disclosed**, never
 - **K2S** must make its v3 row leaves ≤ 64 elements for model-dependent values (v3 is not armed).
 - Mid-claim spot checks under withholding (K2S Route A) are traded for this. Re-execution (Route B) remains.
 
-### 7.10 Identity is fixed (ADR-0175)
+### 7.10 Identity is fixed (旧ADR-0175)
 
 There is no lapse, so no availability path re-binds a class. Past `palw_model_immutable_v1`, a class with any binding row (live or
 refuted) refuses a new binding, so a refuted class needs a new registration. Before that fence, lane D's re-bind after a refutation is

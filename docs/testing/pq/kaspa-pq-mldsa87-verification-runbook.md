@@ -1,7 +1,7 @@
 # kaspa-pq ML-DSA-87 PQ-only 移行 — 動作確認手順書 (PR-19 series)
 
 - 対象: ブランチ上のコミット列 `PR-19-S1 … S11c` + crash 修正（`MISAKA-BTC/misakas` に snapshot push 済）
-- 統治文書: [docs/adr/0019-mldsa87-migration.md](../../adr/0019-mldsa87-migration.md)（rev 1.2 = md2 整合）+ [docs/kaspa-pq-design-mldsa87.md](../../design/pq/kaspa-pq-design-mldsa87.md)
+- 統治文書: [docs/rfc/0001-principles-and-governance.md](../../rfc/0001-principles-and-governance.md)（rev 1.2 = md2 整合）+ [docs/kaspa-pq-design-mldsa87.md](../../design/pq/kaspa-pq-design-mldsa87.md)
 - リポジトリ: `/Users/wata/Downloads/rusty-kaspa-master 2`（パスに空白を含むのでクオート必須）
 
 この文書は **Phases 1-4 + 5a（コミット済み）** が正しく動くことを自分で検証する手順。Phase 5b-5e / 6 / 7 / 8 と実デプロイは**未実施**（末尾参照）。
@@ -10,7 +10,7 @@
 
 ## 0. 何が入ったか（1行サマリ）
 
-署名方式を **ML-DSA-65 → ML-DSA-87**（NIST cat3→cat5）に移行し、**PQ-only 強制**（legacy secp256k1 / P2SH / 非 ML-DSA アドレスを consensus・mempool で実行不能化）+ **64-byte keyed BLAKE2b-512 アドレス**（`kaspa-pq-v2/address/mldsa87`）+ **premine を単一鍵 ML-DSA-87 P2PKH 化** + **genesis 再生成**。新 genesis につき旧チェーンとは非互換。署名 context は v2、caps は 16_384、識別子は `MlDsa87`（md2 整合, ADR-0019 rev 1.2）。
+署名方式を **ML-DSA-65 → ML-DSA-87**（NIST cat3→cat5）に移行し、**PQ-only 強制**（legacy secp256k1 / P2SH / 非 ML-DSA アドレスを consensus・mempool で実行不能化）+ **64-byte keyed BLAKE2b-512 アドレス**（`kaspa-pq-v2/address/mldsa87`）+ **premine を単一鍵 ML-DSA-87 P2PKH 化** + **genesis 再生成**。新 genesis につき旧チェーンとは非互換。署名 context は v2、caps は 16_384、識別子は `MlDsa87`（md2 整合, 旧ADR-0019 rev 1.2）。
 
 主要な確定値:
 | 項目 | 値 |

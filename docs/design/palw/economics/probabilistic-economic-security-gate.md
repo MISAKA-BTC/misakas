@@ -1,15 +1,5 @@
 # PALW 確率・経済安全性ゲート(Probabilistic–Economic Security Gate, PESG)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 **Status:** ユーザーの指示(2026-10-10)による release gate。RFC-0007・RFC-0011・RFC-0014・RFC-0015 を横断する。
 すべての ActiveRewardable 判定と、報酬・consensus work weight・Panel=0 の fence の武装に先立って成立を要求する。
 これは設計・受入仕様であり、実装や測定の完成を意味しない。
@@ -19,7 +9,7 @@
 
 > **2026-10-14改定（ユーザー決定、[PRINCIPLES §0](../../../PRINCIPLES.md)）:** MISAKAの最終Goalは「モデルを非公開にしておくことが経済的に不利になる仕組み」であり、不正の完全排除ではない。
 > 本書の四条件のうち、**条件2（検出確率の下限の証明）と条件4（不正の期待利益が負）は有効化gateから外し、測定・報告する評価指標とする**（UNKNOWNはUNKNOWNと表示し、PASSと書かない）。
-> gateとして残すのは、条件1（検証経路）、条件3（モデルが1人にでも共有され正しいPanelを建てられれば、客観的courtで立証しslashできること）、§6の被害有界化、> ADR-0177の二段評価（モデル全体／所有者個人）である。非公開モデルの`p = 0`は有界化する残余リスクであり、未解決のgateではない。
+> gateとして残すのは、条件1（検証経路）、条件3（モデルが1人にでも共有され正しいPanelを建てられれば、客観的courtで立証しslashできること）、§6の被害有界化、> 旧ADR-0177の二段評価（モデル全体／所有者個人）である。非公開モデルの`p = 0`は有界化する残余リスクであり、未解決のgateではない。
 
 ## 0. 最終目標(四条件)
 
@@ -171,7 +161,7 @@ geometry の大きさで方法を分ける。
 `p_min` は独立性を仮定せず、条件付き確率と保守的な境界から導く。
 - **実測で記録するもの:** 使用 hardware、claim rate、cold model の取得時間、p95/p99、最大 claim 数、DA の混雑、証拠 bytes、carrier 待ち、DAA と実時間の差。
 - **監視者がいない場合:** 監視者がいない、または期限内に検査できない条件では、`p_min` を楽観的に補完しない。独立した FAIL/UNKNOWN として表示する。
-- **閉鎖 model:** ADR-0177 の下では、閉鎖 model の `p` は 0 になり得る。2026-10-14改定: これは未解決の gate ではなく、§6 の上限で有界化する残余リスクとして報告する。
+- **閉鎖 model:** 旧ADR-0177 の下では、閉鎖 model の `p` は 0 になり得る。2026-10-14改定: これは未解決の gate ではなく、§6 の上限で有界化する残余リスクとして報告する。
 
 ### E. 経済攻撃と正直な監視者の収支(ECON)
 
@@ -236,10 +226,10 @@ split 後の徴収可能な pool と整数丸めから下限を立証し、立�
 
 ## 6. 経済的抑止とは独立の被害有界化(safety 上限)
 
-- 未決済の work weight の上限(ADR-0176 の `F_max` と、Final 前の暫定 weight の上限)
+- 未決済の work weight の上限(旧ADR-0176 の `F_max` と、Final 前の暫定 weight の上限)
 - 最大外部損失の上限(EVM・ブリッジ・市場への持ち出し)
 - Final 前の払い出しの禁止(no payout before Final)
-- 共通の拘束期間 `d + W` と、残存責任の担保との分離(ADR-0176 D4)
+- 共通の拘束期間 `d + W` と、残存責任の担保との分離(旧ADR-0176 D4)
 
 これらは BUDGET の engine と各 reward path に実装し、§4 の判定とは別に検証する。
 

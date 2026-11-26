@@ -6,7 +6,7 @@ decision 2026-10-15, RFC-0016 D-V1). Every value is a placeholder (`PALW_RFC0016
 (`PALW_RFC0016_MEASURED_RECORDS_V1` is empty), so validation refuses either fence armed outside an isolated calibration network. Live
 testnet-12 is unchanged: both fences are `None` on every preset and hashed Some-only, so no params or schedule id moves.
 
-Merged in: `origin/integ/adr-0162-0178` (ADR-0176 mode-aware hold, bond formula v2, ADR-0177 V3 allocation) and, through it,
+Merged in: `origin/integ/adr-0162-0178` (旧ADR-0176 mode-aware hold, bond formula v2, 旧ADR-0177 V3 allocation) and, through it,
 `origin/integ/rfc0017-model-eligibility` and `origin/integ/rfc02-rfc06-12-g14` (merge `61e4cf12c`).
 
 **Every row below is one of three:** **implemented** (code on this branch; dormant, unbuilt), **test source** (written, not run), or
@@ -16,7 +16,7 @@ Merged in: `origin/integ/adr-0162-0178` (ADR-0176 mode-aware hold, bond formula 
 
 | Decision | Where |
 | --- | --- |
-| `P_m` is applied to blocks ONCE, by V+; ADR-0177 V3 `block_opportunity` must be off whenever V+ is armed; coinbase-side `P_m` stays the existing allocation's (this also resolves the ADR lane's C4) | refusal `consensus/core/src/palw_rfc0016_v1/values.rs:295`; test source `consensus/core/tests/rfc0016_v1.rs` `lead_decision_p_m_is_applied_to_blocks_once` |
+| `P_m` is applied to blocks ONCE, by V+; 旧ADR-0177 V3 `block_opportunity` must be off whenever V+ is armed; coinbase-side `P_m` stays the existing allocation's (this also resolves the ADR lane's C4) | refusal `consensus/core/src/palw_rfc0016_v1/values.rs:295`; test source `consensus/core/tests/rfc0016_v1.rs` `lead_decision_p_m_is_applied_to_blocks_once` |
 | Mid-epoch reissue is `A_m`-weighted (new rooted state); ~~first-come stays the fallback where `A_m` is unavailable~~ — **superseded by V2 (user decision 2026-10-15): with `A_m` missing nothing is reissued** (§8) | `rights.rs:326`, `:386`; fold `palw_rfc0016_fold_v1.rs:453` |
 | RPC op 255, proto 1330–1331 (confirmed) | §5 |
 
@@ -57,7 +57,7 @@ Merged in: `origin/integ/adr-0162-0178` (ADR-0176 mode-aware hold, bond formula 
 | Pre-Attempt quote (rights + capacity + real queue length) | `palw_rfc0016_fold_v1.rs:625`; the producer's pre-check `palw_class_admits_claim_v1` asks the same gate | implemented |
 | Optional tilt `k` | `rights.rs:463` (pure) | implemented; lottery wiring deliberately absent while `k = 1` (off) — its use is **evidence-only** (§8.6 measurement, then a decision) |
 | B+ comparison `ψ` | `rights.rs:474` | implemented (pure) |
-| ADR-0177 weights interface | `rights.rs:74` (skips the V3 engine's synthetic rows) | implemented |
+| 旧ADR-0177 weights interface | `rights.rs:74` (skips the V3 engine's synthetic rows) | implemented |
 | **RFC-0017 eligibility** (merged): issuance only for a non-probation block right; a Probation class passes V+ (its right is RFC-0017's probation grant); Registered/Lapsed refused by RFC-0017's own gate; entrant clock = Eligible promotion DAA | `palw_rfc0016_fold_v1.rs:42`, `:82`, probation pass-through in `:204` | implemented |
 | Heartbeat / clock / floor untouched | no rights read in the heartbeat lane, the cursor, `bits`, DAA or `palw_work_target_step_v1` | implemented (by construction); H1–H3 **test source** (§6) |
 
@@ -93,7 +93,7 @@ All **test source** (not run) unless marked evidence-only.
 | --- | --- |
 | T1–T7 | `consensus/core/tests/rfc0016_v1.rs` (`t1_…` … `t7_n1_…`) |
 | N1–N7 | `rfc0016_v1.rs` (`t7_n1_…`, `n2_a4_a12_…`, `n3_…`, `n4_a3_…`, `n5_a5_…`, `n6_a10_…`, `n7_…`) |
-| A1, A2 | node scenario A1 in `scripts/drills/rfc0016_sigma_k_measure.py`; the 30-day average and seasoning are the ADR-0177 lane's code (its tests); the measured result is **evidence-only** |
+| A1, A2 | node scenario A1 in `scripts/drills/rfc0016_sigma_k_measure.py`; the 30-day average and seasoning are the 旧ADR-0177 lane's code (its tests); the measured result is **evidence-only** |
 | A3, A4, A5, A7, A9, A10, A12 | `rfc0016_v1.rs` (named by id) |
 | A6 | self-dealing: RFC-0017's commit-then-draw exam and the independence rule own it (RFC-0017 lane tests); RFC-0016's side (no double-counted capital) `n4_a3_…`; the adversarial run is **evidence-only** |
 | A8, H4 | `rfc0016_v1.rs` `a8_h4_…` (pure); node `consensus/src/pipeline/virtual_processor/tests/rfc0016_e2e.rs` `t12_rfc0016_a_second_node_and_a_reorg_reach_the_same_state` |
@@ -122,11 +122,11 @@ All **test source** (not run) unless marked evidence-only.
   a test enumerating fence names may need them.
 * `consensus/src/pipeline/virtual_processor/tests/rfc0016_e2e.rs` uses `T12Chain` helpers (`heartbeat`, `attempt`, `tip_state`) and
   `PalwChainStateV2::safe_weight()`.
-* The regenerated native scanner also caught up ADR-0176's new `PalwBudgetOriginV1` variants (`generated.rs`, `wire_generated.rs`).
+* The regenerated native scanner also caught up 旧ADR-0176's new `PalwBudgetOriginV1` variants (`generated.rs`, `wire_generated.rs`).
 
 ## 8. User decisions 2026-10-15 (V2–V11) — implementation status (branch `integ/decisions-1015`)
 
-Binding text: [user decisions 2026-10-15](../../../history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §2. Every value is a calibration starting point,
+Binding text: [user decisions 2026-10-15](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md) §2. Every value is a calibration starting point,
 never a production value; the measured-value gate still refuses both fences outside an isolated calibration network. Unbuilt and
 untested here (no PASS).
 
@@ -134,7 +134,7 @@ untested here (no PASS).
 | --- | --- | --- |
 | **V2** calibration σ = 0.25, φ = 0.5, pace margin 1.2, `k` = 1 (every candidate still swept); no first-come grant when `A_m` is missing | decided 2026-10-15 → **implemented** (calibration starting set, `k = 1` conformance; past φ without a snapshot only own rights admit — `ReissueUnavailable`); production values: **measurement pending** | `consensus/core/src/palw_rfc0016_v1/values.rs:106`, `:134`, `:160`; `rights.rs:255`, `:447`; test `rights.rs:561`; harness `scripts/drills/rfc0016_sigma_k_measure.py:66` |
 | **V3** entrant reserve ≤ 20 ‰ of total opportunity, ONE pool with RFC-0017's Probation budget (explicit netting); Probation per-model 2 ‰; `S_entry` = the eligible minimum producer bond | decided → **implemented** | `values.rs:116`; `rights.rs:189`; `palw_rfc0016_fold_v1.rs:137` (`S_entry`), `:145`, `:157`; RFC-0017 admission `palw_model_eligibility_fold_v1.rs:170`; validation `values.rs:391`; test `rights.rs:539` |
-| **V4** Q / B / R / F and collateral from measurement | **measurement pending** (ADR-0176 plan; unchanged) | — |
+| **V4** Q / B / R / F and collateral from measurement | **measurement pending** (旧ADR-0176 plan; unchanged) | — |
 | **V5** epoch = 720 DAA (calibration), 30-day window = 21,600 DAA; DAA vs wall-clock drift reported; never "24 h" | decided → **implemented** | `values.rs:122`, `:124`, `:407`; `report.rs:73`, `:118`; RPC `consensus/src/pipeline/virtual_processor/processor/palw.rs:1705`; harness `rfc0016_sigma_k_measure.py:175` |
 | **V6** pass thresholds: 0 invariant violations; honest cap utilization ≥ 80 %; REAL degradation ≤ 5 % vs no-V+ (provisional) | decided → **implemented** in the tooling; the runs: **measurement pending** | `scripts/drills/rfc0016_sigma_k_measure.py:210`–`:212`, `:215`, `:300`; `scripts/sim/palw-rfc0016-vplus-sim.py` (sweep) |
 | **V7** bond-capital-proportional queue shares; a quote is not a right (deterministic re-check); TTL expiry neutral | decided → **implemented**; `L_queue`, `T_queue`, `h`: **measurement pending** | `capacity.rs:195`, `:354`; `palw_rfc0016_fold_v1.rs:37`; tests `capacity.rs:506`, `:517` |

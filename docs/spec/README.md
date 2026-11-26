@@ -1,33 +1,14 @@
-# 仕様 — 規則と適用条件から読む
+# 技術仕様
 
-> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) と [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
+現在の制度・適用条件は[設計原則](../PRINCIPLES.md)と[20本のRFC](../rfc/README.md)から読みます。仕様章はtensor・codec・署名・状態構造の詳細を補います。古いprofileの値や番号を現行の新規採掘へ自動適用しません。
 
-採用済み部分は [原則凍結](../governance/design-freeze.md)。この整理は仕様の実装・検証・本番有効化を宣言しません。
+- [PALW-TIR](palw/04b-tensor-ir.md)
+- [モデルの共通管理](palw/model-tiers.md)
+- [配分と仕事量](palw/model-allocation.md)
+- [bond予算](palw/bond-budgets.md)
+- [claim認証](palw/claim-certification.md)
+- [PQ仕様](pq/kaspa-pq-spec.md)
 
-## 2026-11-08 採択の新しい claim 版
+モデル追加はBFTのみ。全モデルにMOE3の共通管理・係数1.0・市場を適用し、Panel/Courtと独立Gate Cを維持します。未知kernel・codec不正・未定義checkerはBFTのYESでも免除しません。
 
-現行の設計入口は [RFC](../rfc/README.md)。2026-11-08の採択は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) に記録し、**ADOPTED_DESIGN_NOT_ACTIVATED** とします。新しい claim / profile の規範は [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) から参照してください。
-
-新版では Node にモデル本体・全推論・GPU を要求せず、モデル未共有とモデル内 Miner／Panel の全結託を想定します。Miner の資料供給、global pool から独立選出した Panel の非対話 positive、不一致時の対話 negative を組み合わせます。結果固定後に検証を始め、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等も満たした claim だけを成功 Final に進めます。資料不足は成功不可とし、global な正直者の前提、局所証拠と全体承認の区別を維持します。
-
-以下のトピック別文書・仕様章は各出典の版と共通制約の入口です。新版の変更対象は上記の採択文書に従い、従来の `Final` 後認証などを新版へ混在させません。旧署名済み claim、未採択・延期機能の状態、過去の実装記録は変更しません。新しい wire・fence・有効化高さは未割当です。[適用状態](../STATUS.md)。
-
-## PALW の読解用統合版
-
-| 論点 | 文書 |
-| --- | --- |
-| 固定 identity・登録・二階層 | [model-tiers.md](palw/model-tiers.md) |
-| `α`・30日平均・係数・総枠 | [model-allocation.md](palw/model-allocation.md) |
-| Q/B/R/F・拘束・mode・責任 | [bond-budgets.md](palw/bond-budgets.md) |
-| V+ の物理 block 機会 | [block-opportunity.md](palw/block-opportunity.md) |
-| Final と SecurityCertified | [claim-certification.md](palw/claim-certification.md) |
-
-これらは既存の採択済み条項の案内で、独自の新規規則ではありません。詳細の整数算術・境界条件・適用対象は明示した出典に従います。未決事項を推測で補いません。
-
-## 既存の仕様章
-
-[Tensor IR](palw/04b-tensor-ir.md)、[モデル改善を含む章](palw/17-model-improvement.md)、[推論サーフェス](palw/18-inference-surface.md)、[layer-sharded panels](palw/18-layer-sharded-panels.md)、[verification certificates](palw/18-verification-certificates.md)、[PQ](pq/kaspa-pq-spec.md)。
-
-RFC-0003 の画像・動画と RFC-0004 のモデル改善は **mainnet 後へ延期・当面無効**です。これらの仕様や過去の試験が存在しても有効化しません。共有のTIR・テキスト・不変登録・claim認証は別です。[正式方針](../governance/post-mainnet-scope.md)
-
-「18」で始まる三章は別文書です。[番号台帳](../maintenance/numbering.md)を参照し、完全パスで識別します。番号が大きい文書が無条件に優先するのではなく、PRINCIPLESと明示的な採択・置換関係に従います。
+画像・動画採掘とモデル改善はmainnet後へ延期・当面無効です。[適用範囲](../governance/post-mainnet-scope.md)。設計・実装・検証・公開有効化は別です。

@@ -40,7 +40,7 @@
 | **P0-5** header tip と virtual tip が別ルール | **CLOSED**（palw-v2）— 単一 comparator `compare_palw_candidates_v1`（frontier → safe → live → tie-break、`live_total = safe + bounded immature` なので成熟で総量が下がらない）を実装し、`get_headers_selected_tip` を `get_header_download_hint` に改名して**権威ではない**ことを名前とドキュメントで明示。以下は palw-only-v4 時点の分析 — 配線ではない。PALW weight は accepted tx の関数で、header processor は body より上流なので header-only 近似は「2 つ目の fork choice」になり defect そのもの。**headers-selected tip は sync hint であって chain authority ではない**ことを言明し、消費者を監査（IBD の要求先選択と RPC 推定のみ。pruning/finality/acceptance は virtual sink を読む）|
 | **P0-10** bond exposure 上限なし | **CLOSED** — `palw_exposure` (`Σ immature_pwu ≤ collateral / penalty_per_pwu`、prefix-mandatory、bond ごと、overflow は拒否) を chain weight fold に配線。超過分は live weight を失うが block は有効（そうしないと他人の bond に安い commitment を先着させる griefing になる）。`penalty_sompi_per_pwu` は既存の fork-choice fence に追加（6 本目を作らない — β と対で意味を持つため）|
 | **P0-7** executor 除外 ID / operator dedup | **CLOSED** — 除外 ID は bond record から解決、`operator_root` は owner hash（`None` だと 1 operator が k bond で k 席、quorum の購入価格が bond 下限 × k）|
-| **P0-7** no-show 罰則 | **意図的に未実装** — 現状の consequence は「share の没収」（credit は receipt から payee を作るので既に発生している）。それを超える罰則は `BondMutation` に `Slash`（**全額 burn**）しか無く、no-show に配線すると liveness 障害を equivocation と同罰にし、**seated な validator を 1 duty window だけ eclipse すれば担保全額を焼ける**というより安い攻撃を作る。必要なのは partial-forfeit mutation と罰則の大きさ（後者は ADR-0038 が「決めない」と明記する数値パラメータ）|
+| **P0-7** no-show 罰則 | **意図的に未実装** — 現状の consequence は「share の没収」（credit は receipt から payee を作るので既に発生している）。それを超える罰則は `BondMutation` に `Slash`（**全額 burn**）しか無く、no-show に配線すると liveness 障害を equivocation と同罰にし、**seated な validator を 1 duty window だけ eclipse すれば担保全額を焼ける**というより安い攻撃を作る。必要なのは partial-forfeit mutation と罰則の大きさ（後者は 旧ADR-0038 が「決めない」と明記する数値パラメータ）|
 | **P0-8** 法廷が通常ノードで判決不能 | **機構 CLOSED / 母集団は前提待ち** — `palw_artifact` で証明付き operand（leaf は位置も束縛、奇数ノードは promote、tail 付き path は拒否、1 件でも偽なら全体を拒否）。法廷の算術は不変で、oracle だけが「持っているファイル」から「証明された証拠」に変わる。**残るのは inventory の登録**（どの tensor をどの順で行に切るか）で、これは実モデルの shape profile が無いという既知の前提に依存する |
 | **P0-9** bisection court 未完成 | **一部** — 項目 5（`Open` が slash 対象 bond を一意に定められない）を CLOSED：`responder_bond_outpoint` を追加し、解決不能な bond を名指す Open は dispute を開かない（開けると「担保 0 で block を永久 Provisional に留める無料の veto」になる）。項目 1（`mid_state` が何も束縛しない）を **部分 CLOSED**：endpoint 状態 (`lo_state`/`hi_state`) を維持し、そのどちらかを繰り返す開示を拒否。開示を「真」にはしない（full node には決定不能）が、responder を**自分の主張の連鎖に拘束**し、端点が等しい＝分岐が無い区間へ誘導できなくする。この pair は terminal check の anchor pair そのものなので**その不在**はもう terminal を塞がないが、**その弱さは塞ぐ** — 毎 rung 異なる junk を出す responder は依然として区間を誘導でき、これだけを根拠に terminal move を足すと fail-open になる。項目 3（withheld execution の authorship）は**規則 CLOSED**：`PalwWithheldAuthorshipV1` — ladder はまさに「root を publish して実行を withheld した producer」のために存在するのに、step adjudicator は署名済み attestation しか authorship として受け付けず、そういう producer は attestation を出していないため**構造的に作れない object を出さなかったことで挑戦者が課金される** fail-open だった。block commitment がその producer の持つ署名済み主張であり、adjudicator 自身の規律（「admission が先に走るのは配線の性質であって本関数の契約ではない」）に従って**署名を再検証**する。残るは wire への搭載。項目 4（ladder 深さ）を **activation condition として CLOSED**：`class_is_adjudicable_v1` が worst-case step 空間（`n_ctx` 全体を prefill）を測り、ladder が届かないなら `Params` 構築時に拒否。**項目 2（terminal opening）は未着手** — 項目 1 の steering が未解決なので足すと fail-open |
 
@@ -189,7 +189,7 @@ fresh commitment は future panel が未生成でも `Provisional` として det
 - `consensus/src/pipeline/virtual_processor/processor.rs:2742-2758`
 - `consensus/src/pipeline/virtual_processor/processor.rs:6840-6891, 6915-6983`
 - `consensus/src/pipeline/virtual_processor/processor.rs:2163-2181`
-- `docs/adr/0038-palw-is-the-consensus-work.md:511-517, 640-645`
+- `docs/rfc/0011-gate-c-and-consensus-credit.md:511-517, 640-645`
 
 ### 必須修正
 
@@ -211,7 +211,7 @@ weight の全入力を candidate chain point から導出する必要がある�
 
 header processor は PALW fence の状態に関係なく、candidate と previous tip の両方へ `palw = None` を渡している。したがって header-selected-tip store は恒久的に blue work 順である。
 
-ADR-0039 自身がこの site を「変更対象」と明記している。また `safe` の型コメントは IBD、deep reorg、finality に使うとするが、実際の PALW weight wiring は virtual tip ranking に限られている。
+旧ADR-0039 自身がこの site を「変更対象」と明記している。また `safe` の型コメントは IBD、deep reorg、finality に使うとするが、実際の PALW weight wiring は virtual tip ranking に限られている。
 
 ### 影響
 
@@ -220,7 +220,7 @@ P0-3 を直して virtual sink が PALW weight を使い始めても、header re
 ### 根拠
 
 - `consensus/src/pipeline/header_processor/processor.rs:436-449`
-- `docs/adr/0039-palw-only-block-production.md:205-222`
+- `docs/rfc/0015-dag-blocks-and-settlement.md:205-222`
 - `consensus/core/src/palw_chain_weight.rs:90-96`
 
 ### 必須修正
@@ -314,7 +314,7 @@ W1 が要求する「model artifact なしの full node が Merkle-proven operan
 - `consensus/src/pipeline/virtual_processor/processor.rs:2652-2677`
 - `consensus/src/pipeline/virtual_processor/processor.rs:3036-3049, 8565-8575`
 - `consensus/src/pipeline/virtual_processor/processor.rs:2758`
-- `docs/adr/0038-palw-is-the-consensus-work.md:385-391, 639-643`
+- `docs/rfc/0011-gate-c-and-consensus-credit.md:385-391, 639-643`
 
 ### 必須修正
 
@@ -344,7 +344,7 @@ source の test comment 自身が、以下を remaining gap と明記してい�
 - `consensus/core/src/palw_facts.rs:1866-1922`
 - `consensus/core/src/palw_schedule.rs:160-206`
 - `README-ADR0038.md:35-39`
-- `docs/adr/0038-palw-is-the-consensus-work.md:570-573, 609-623`
+- `docs/rfc/0011-gate-c-and-consensus-credit.md:570-573, 609-623`
 
 ### 必須修正
 
@@ -369,7 +369,7 @@ source の test comment 自身が、以下を remaining gap と明記してい�
 - reserved slash exposure
 - maturity / void 前の bond 再利用制限
 
-ADR-0039 にあるのは relay の in-flight candidate 制限案だけであり、private fork や直接 peer 送信に対する consensus rule ではない。class epoch budget も「no enforcement point」と明記される。
+旧ADR-0039 にあるのは relay の in-flight candidate 制限案だけであり、private fork や直接 peer 送信に対する consensus rule ではない。class epoch budget も「no enforcement point」と明記される。
 
 ### 影響
 
@@ -381,7 +381,7 @@ W1 を正しく実装して full node の再推論を外すと、攻撃者は真
 
 - `consensus/core/src/palw_block_commitment.rs:48-62`
 - `consensus/core/src/palw_chain_weight.rs:90-131`
-- `docs/adr/0039-palw-only-block-production.md:350-376`
+- `docs/rfc/0015-dag-blocks-and-settlement.md:350-376`
 - `consensus/core/src/palw_class_daa.rs:300-306`
 
 ### 必須修正

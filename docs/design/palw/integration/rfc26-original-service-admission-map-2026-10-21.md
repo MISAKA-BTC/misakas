@@ -89,12 +89,12 @@ semantic/historyの無応答課金は`staged_selected_default_charge_v1`へ集�
 
 追加候補の`CourtServiceStateV2::check_retains_unresolved`は、元profile/予算、bindingとpacketの契約、供給記録、前向きclockを保存する。旧slotへの事後供給の挿入を拒否する。既存assignmentは、観測clockより前に供給されず、再割当先がそのclockより後の場合だけ動かせる。新packetは元観測clock後のreleaseを要する。これはbookの前向きwriteの不変条件で、供給の真正性・有料original受付・終了許可を生成するvalidatorではない。bookを縮小する汎用更新をterminal resolverの代わりにしない。journalによるundoは前向きwriterを経由せず、元の有効な状態へ戻す。
 
-新archive候補については[RFC-0030](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md)を参照。現depositの名目額は前払escrowではなく、残存collateralと他claim責任を考慮する必要がある。Aの隔離実装指示を、未決責任の解除や新Account Bondの実装・価格採択へ広げない。
+新archive候補については[RFC-0030](../../../rfc/0009-court-and-claim-final.md)を参照。現depositの名目額は前払escrowではなく、残存collateralと他claim責任を考慮する必要がある。Aの隔離実装指示を、未決責任の解除や新Account Bondの実装・価格採択へ広げない。
 
 
 ## F08 A案のprivate archive adapter
 
-親`494361118`からの候補。[RFC-0030 §8](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)と[ADR-0197](../../../adr/0197-court-end-effects-and-pending-liability-archive.md)に従い、`write_court(None)`のservice分岐で元session・phase・両group・全終了証拠を保存し、他sideの未完groupを自動徴収しない。直接close、完成chunk、分割TIR convictionをnative fixtureで部分検査する。正常完成groupのraw bytesを消さずfulfilledと区別し、不整合完成側は既存collateralから実際に徴収したdepositを記録する。
+親`494361118`からの候補。[RFC-0030 §8](../../../rfc/0009-court-and-claim-final.md)と[旧ADR-0197](../../../rfc/0009-court-and-claim-final.md)に従い、`write_court(None)`のservice分岐で元session・phase・両group・全終了証拠を保存し、他sideの未完groupを自動徴収しない。直接close、完成chunk、分割TIR convictionをnative fixtureで部分検査する。正常完成groupのraw bytesを消さずfulfilledと区別し、不整合完成側は既存collateralから実際に徴収したdepositを記録する。
 
 archive key 20 / row 26は新しいprivate末尾ordinalで、既存X3/service/tag230の意味を変えない。名目pending chargeを既存accuser exposureとbond exit holdへ加える。終了causeが未接続、または単に関連するnative処理であるだけなら元court stakeも保持する。実費入金・新Account Bondの資本額・全財源の確保を意味しない。未校正のコピー/hash/snapshot/IO/byte-DAAと全archive走査の仕事を追加profileへ含める必要がある。
 
@@ -103,7 +103,7 @@ archive key 20 / row 26は新しいprivate末尾ordinalで、既存X3/service/ta
 
 ## Archive v5検査と有料originalの境界
 
-親`c153ecc02`の後のprivate検査は、保存した署名・native条件・session/phaseから既存v5を呼び、元state rootに束縛した局所結果を返す。[RFC-0030 §10](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)。旧公開受付の適用時点を置換せず、wire/fee/financial writerへ接続していない。quote/cloneする全state検査scratchはglobal state量に依存するため、全original graphのper-claim上限が閉じたとはしない。借用contextによる共通native v5 kernelへの接続、内側のlegacy allocation/CPU、署名/hash、原子性と物理容量を含めて原本受付へ積算する必要がある。局所resource不足は不正/defaultにせずNativeResourceとして扱う。
+親`c153ecc02`の後のprivate検査は、保存した署名・native条件・session/phaseから既存v5を呼び、元state rootに束縛した局所結果を返す。[RFC-0030 §10](../../../rfc/0009-court-and-claim-final.md)。旧公開受付の適用時点を置換せず、wire/fee/financial writerへ接続していない。quote/cloneする全state検査scratchはglobal state量に依存するため、全original graphのper-claim上限が閉じたとはしない。借用contextによる共通native v5 kernelへの接続、内側のlegacy allocation/CPU、署名/hash、原子性と物理容量を含めて原本受付へ積算する必要がある。局所resource不足は不正/defaultにせずNativeResourceとして扱う。
 
 
 ## 借用recordによるarchive v5 kernel
@@ -124,7 +124,7 @@ This reduces a known source-level duplication before full-profile accounting; it
 
 Parent `65dd205cd`. The new per-fixed-root numerical frontier preserves all pinned children and shares the native shape/interval/numerical fold validators. It has no serialized/rooted authority, signer or notice/funding transition; projections retain the root's historic clock and cannot be installed as live phases. [Implementation/test scope](../../../evidence/palw/g14-integration-candidate-2026-10-20/numerical-frontier-artifact.json).
 
-The next native connection must authenticate original/source/program/leaf and finalize under actual rules, establish one canonical root/signer scope independent of actor session races, and retain every admissible branch. It must not seed a public shared right by reinterpreting a legacy actor/session signature or by creating a fake challenger/session. Per-root `N-1` disclosures cannot stand in for all-leaf/all-root/all-actor cost, actual fees and atomic original reservation. The notice endpoint is separately proposed in [RFC-0031](../../../rfc/0031-shared-court-initial-notice-boundary.md)/[ADR-0198](../../../adr/0198-shared-court-initial-notice-boundary.md); no equality, funding or wire rule is adopted here.
+The next native connection must authenticate original/source/program/leaf and finalize under actual rules, establish one canonical root/signer scope independent of actor session races, and retain every admissible branch. It must not seed a public shared right by reinterpreting a legacy actor/session signature or by creating a fake challenger/session. Per-root `N-1` disclosures cannot stand in for all-leaf/all-root/all-actor cost, actual fees and atomic original reservation. The notice endpoint is separately proposed in [RFC-0031](../../../rfc/0009-court-and-claim-final.md)/[旧ADR-0198](../../../rfc/0009-court-and-claim-final.md); no equality, funding or wire rule is adopted here.
 ## Claim-bound root content without actor sessions
 
 Parent `e69fbcac4`. A named-leaf predicate checks actual retained claim/class/program and artifact/execution/trace binding, arity context and finalize without fabricating a challenger/session. The legacy session guard and root validation body are preserved. [Native corpus cases/source audit and limits](../../../evidence/palw/g14-integration-candidate-2026-10-20/named-root-artifact.json).

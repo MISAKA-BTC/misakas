@@ -1,0 +1,19 @@
+{
+  "claim": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb",
+  "retainedFiles": [
+    {
+      "peer": 3,
+      "file": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb.material",
+      "size": 1599245,
+      "exactProducerCapture": true
+    },
+    {
+      "peer": 3,
+      "file": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb.answer",
+      "size": 112,
+      "exactProducerCapture": null
+    }
+  ],
+  "producerCaptureSha256": "584dd4d79ab84313eda4b3ca90f810f2ec0ec3e8a7ffc5133db807676ae72bcf",
+  "provisional": true
+}

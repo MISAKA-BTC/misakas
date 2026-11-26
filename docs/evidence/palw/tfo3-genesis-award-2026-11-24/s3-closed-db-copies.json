@@ -1,0 +1,37 @@
+{
+  "platform": "macOS APFS",
+  "measurement": "file-private bytes immediately after cloning, before opening scratch",
+  "mode": "--cold-award-settlement",
+  "generations": [
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peer": 0,
+      "daa": 8602,
+      "sourceFilesCopied": 163,
+      "logicalBytes": 11100459593,
+      "filePrivateBytes": 0,
+      "copySeconds": 0.161,
+      "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+      "stateRoot": "4592c453bbecaf53c26b1bc448a4fd0ba02e093749d1233354094696c605f80cb3f50a5e25c802b20da797bc654404d3f3b621c98b00c34ce2e1abbe203a130e",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "acceptedDaa": 7867,
+      "safeFrontierDaa": 7866,
+      "settled": false
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peer": 0,
+      "daa": 8667,
+      "sourceFilesCopied": 163,
+      "logicalBytes": 11256999196,
+      "filePrivateBytes": 0,
+      "copySeconds": 0.11,
+      "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+      "stateRoot": "406b82e76f0aa31da4f56e12698571948c6ddc685e218a664237b4ab358d06a505a551f3ced8d3cc3b8611ce29251a878704f81cedc2e531d82a7f2f37acd8d9",
+      "outpoint": "82af6b1ee7bb6dd9e1b5bf87ff7f3509e31b0045f9771576c42c7ba7358adec19a1835b0c2b32a01a04e7604b0492dc7e5bdfe9834dcb01ad649243255eadf74:0",
+      "acceptedDaa": 7867,
+      "safeFrontierDaa": 7866,
+      "settled": false
+    }
+  ]
+}

@@ -32,17 +32,17 @@ No Head class is registered anywhere, and none earns reward or consensus work we
 
 ## 0a. The user's design changes of 2026-10-10, applied here
 
-* **ADR-0175 — a registration is immutable.** A `Head` class's id binds `borsh(offers)` (§2): the task, the problem, the label map
+* **旧ADR-0175 — a registration is immutable.** A `Head` class's id binds `borsh(offers)` (§2): the task, the problem, the label map
   root, the separator, the entailment label and the position scalar. A different label set, separator or decode input is therefore a
   different class and a **new** registration (`model_registration_id_v1` binds its artifact root); nothing in this profile updates a
   registered class, its head, version, root, Position or AMM. `palw_task_heads_v1` changes what may be *registered*, never what a
   registration *is*, and the census counts a re-registration as its own registration, never as an update (`hf_census/registrations.py`).
-* **ADR-0177 — the chain does not interfere with model acquisition.** No part of the profile (offers, job, acceptance, fence, court
+* **旧ADR-0177 — the chain does not interfere with model acquisition.** No part of the profile (offers, job, acceptance, fence, court
   routing) reads whether a model is served or seeded. Where this document says a verifier checks a `Head` output ("two honest
   verifiers produce the same decision", §3), it means a verifier **that has acquired the registered model** and authenticated it
   against the registered root: outsider-checkability (G14) is conditional on acquisition, and for a model nobody serves the effective
   detection probability can be 0. Nothing here assumes it is not.
-* **ADR-0176 — bond bounds rewards and Final weight.** A `Head` class earns nothing (§6); any reward or weight it would ever earn draws
+* **旧ADR-0176 — bond bounds rewards and Final weight.** A `Head` class earns nothing (§6); any reward or weight it would ever earn draws
   on the bond budget of `palw_bond_budget_v1` (lane BUDGET), which does not exist yet, so the fence stays refused when armed.
 
 ## 1. What a class of the profile is

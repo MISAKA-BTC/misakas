@@ -157,9 +157,9 @@ HW 支援 SHA-256 で ~0.85 s/header、`sha2` ソフトフォールバックで 
 
 **先の 3 件の修正は正しい。** 報告されていた 50.1% / 3.2% の数字も再現した。
 
-### 2.2 新規: ADR-0040 C1 の規範文が C2 の実装と矛盾する（**この監査で新規発見**）
+### 2.2 新規: 旧ADR-0040 C1 の規範文が C2 の実装と矛盾する（**この監査で新規発見**）
 
-ADR-0040 C1 は規範として宣言する:
+旧ADR-0040 C1 は規範として宣言する:
 
 > **C1. Rounding is round-half-away-from-zero, and it happens only in `RoundingShiftRight`.**
 > "One rule, one site. Every other integer operation is exact, so this is the *only* place a value loses information"
@@ -180,7 +180,7 @@ half 条件は `|a·b| ≡ 2^30 (mod 2^31)` なので**任意に構成できる*
 **なぜ重大か。** 直したばかりの欠陥の**極性が反転しただけの同型**である。
 前回は「コードが gemmlowp から外れた」、今回は「コードは gemmlowp に一致したが**仕様文が**コードから外れた」。
 C2 の擬似コードから写した第三者は一致し、C1 の規範文から実装した第三者は 1.57% で不一致 →
-ADR-0027 の法廷では rounding difference ではなく **conviction**。
+旧ADR-0027 の法廷では rounding difference ではなく **conviction**。
 そして `misaka-palw-base0-ref2` も同じ gemmlowp 解釈なので、**差分試験では原理的に見えない**。
 これは既に記録済みの「構造的独立であって著者独立ではない」限界の、具体的で計測された実例である。
 
@@ -200,7 +200,7 @@ return Add(ShiftRight(x, exponent), BitAnd(MaskIfGreaterThan(remainder, threshol
 
 コミットメッセージはこの 2 行を並べて引用しながら、**両者が違う規則を実装していることには触れていない**。
 `eb53ac9` は「~1.8M 入力で spec が upstream と厳密一致」を機械検査で固定したので、
-コードは SHA-256 pin 付きで round-half-up に**確定した**。一方 ADR-0040 C1 の規範文は変更されておらず
+コードは SHA-256 pin 付きで round-half-up に**確定した**。一方 旧ADR-0040 C1 の規範文は変更されておらず
 （`git show eb53ac9 -- docs/adr/0040-*.md` は空）、今も round-half-away を単一規則として宣言している。
 **乖離は縮まらず、機械検査で固定された。**
 
@@ -242,7 +242,7 @@ shift=  8 -> 3906      shift= 32 -> 0       shift= 63 -> 0
 shift= 31 -> 0         shift= 62 -> 0       shift= 64 以上 -> PANIC
 ```
 
-- `s ∈ 32..=63`: ADR-0040 C1 の定義域 `0..=31` の外で、黙って 0 を返す。定義域外を拒否する第三者実装とは結果が割れる。
+- `s ∈ 32..=63`: 旧ADR-0040 C1 の定義域 `0..=31` の外で、黙って 0 を返す。定義域外を拒否する第三者実装とは結果が割れる。
 - `s ≥ 64`: **release でも panic**。公開の総関数における panic は、`palw_base0_ops` が構造的に排除しているはずの
   remote halt そのもの。`rounding_shift_right_64` の overflow panic を i128 で直したのと**同じ欠陥が 32bit 版に残り、
   そちらが refutation 経路側**である。
@@ -257,8 +257,8 @@ shift= 31 -> 0         shift= 62 -> 0       shift= 64 以上 -> PANIC
 
 | 深刻度 | 内容 | サイト |
 |---|---|---|
-| low→**要注意** | `int_recip(v) = (int_rsqrt(v) * int_rsqrt(v)) >> K` が **1 ≤ v ≤ 511 の全てで i64 溢れ**。ADR-0040 の `IntRecip` は総関数ではなく、宣言された定義域の 511 入力で spec と ref2 が別の値を返す | `palw_base0.rs:290` |
-| medium | `rms_norm` の Qk narrowing が `as i32` で**飽和せず wrap**。row 幅 ≥ 16385 で最大活性の符号が反転する。ADR-0040 C3 は "nothing wraps anywhere" と明言 | `palw_base0_ops.rs:194` |
+| low→**要注意** | `int_recip(v) = (int_rsqrt(v) * int_rsqrt(v)) >> K` が **1 ≤ v ≤ 511 の全てで i64 溢れ**。旧ADR-0040 の `IntRecip` は総関数ではなく、宣言された定義域の 511 入力で spec と ref2 が別の値を返す | `palw_base0.rs:290` |
+| medium | `rms_norm` の Qk narrowing が `as i32` で**飽和せず wrap**。row 幅 ≥ 16385 で最大活性の符号が反転する。旧ADR-0040 C3 は "nothing wraps anywhere" と明言 | `palw_base0_ops.rs:194` |
 | medium | `rope_table` の sin 項が i32::MIN 四隅で i64 溢れ（cos 項は溢れないことを導出済み） | `palw_base0_ops.rs:226` |
 | low | RoPE 生成器が未検証の `ln_theta_gen_q` で i128 溢れ、`from_parts` が無制限 vocab で usize 溢れ。`Base0ShapeV1::validate` は非ゼロしか見ていない | `misaka/palw/base0/src/rope.rs:128` |
 | low | `RopeTableV1::digest_bytes` が `cos_q.iter().zip(sin_q.iter())` で長さ不一致を不可視化し、entry 数の接頭辞も無い。`row()` は長さ検査なしで slice | `rope.rs:234` |
@@ -276,7 +276,7 @@ class digest については **偽造方向には injective であることが�
 ### 3.1 認証の不在 — 署名を検証する経路が weight/credit 側に一つも無い
 
 - **receipt の署名がどこでも検証されない**（`palw_facts.rs:342`）。偽造 receipt で捏造フォークを full safe weight まで
-  熟成できる。ADR-0038 の `Final` 前提（「private fork は self-finalize できない」= commit 04c2650）が
+  熟成できる。旧ADR-0038 の `Final` 前提（「private fork は self-finalize できない」= commit 04c2650）が
   **認証されていない receipt の上に乗っている**ので、private-fork 攻撃が復活する。
 - **credit 経路と weight 経路は署名ゼロ**（B1 は slash 2 経路のみ PARTIAL CLOSED、`processor.rs:4864`）。
 - **形式が整うだけの conviction carriage**（署名なし・裁定なし）がブロックの PALW weight を恒久的に無効化する
@@ -315,7 +315,7 @@ class digest については **偽造方向には injective であることが�
 - **`MatMulQuant` が oracle に 1 出力行分の重みしか要求しない**ので 1 要素出力しか再計算できず、
   しかもその失敗が `Unadjudicable` ではなく**チャレンジャーの過失**として報告される（`palw_step_refute.rs:250`）。
 - **「閉じた」BASE-0 catalog が op 9 `Rescale` を欠く**（`palw_step_refute.rs:105`）。
-  ADR-0040 Decision H が「これ無しでは他の 9 つは計算できない」と言っている当の op である。
+  旧ADR-0040 Decision H が「これ無しでは他の 9 つは計算できない」と言っている当の op である。
   つまり 2.2 と同根で、**catalog が閉じたという主張が裁定側にはまだ届いていない**。
 
 ### 3.4 mint 経路 — 前回 9 blocker の回帰
@@ -327,13 +327,13 @@ class digest については **偽造方向には injective であることが�
 | B3 | credit output が予算・上限なしで coinbase に append | **STILL OPEN** | `processor.rs:7173` |
 | B4 | `min_credit_interval_daa` が consensus で未強制 | **STILL OPEN** — §4e の leverage 不等式は vacuous | `palw_schedule.rs:360` |
 | B5 | payee が非一意 `validator_pubkey_hash` × HashMap 順 | **STILL OPEN** — `.find()` で解決し、commitment 自身の `bond_outpoint` は無視 | `processor.rs:4982` |
-| B6 | gate 入力が純関数でない（pruned = 空 Vec = fail-open） | **STILL OPEN、かつ悪化** — ADR-0032 audit-bond spend gate が sink 相対の virtual store を読むブロック妥当性規則になった | `processor.rs:2611`, `utxo_validation.rs:1553` |
-| B7 | algo-4 排他 PoW・hash floor 無し・runtime 不在で panic | **DECIDED but NOT IMPLEMENTED** — panic は残る（意図的、transient は retry が吸収）。ADR-0036 D4 が mainnet の hard precondition とした恒久 hash floor は**未実装**（ADR-0036 は Proposed） | `consensus/pow/src/lib.rs:135` |
+| B6 | gate 入力が純関数でない（pruned = 空 Vec = fail-open） | **STILL OPEN、かつ悪化** — 旧ADR-0032 audit-bond spend gate が sink 相対の virtual store を読むブロック妥当性規則になった | `processor.rs:2611`, `utxo_validation.rs:1553` |
+| B7 | algo-4 排他 PoW・hash floor 無し・runtime 不在で panic | **DECIDED but NOT IMPLEMENTED** — panic は残る（意図的、transient は retry が吸収）。旧ADR-0036 D4 が mainnet の hard precondition とした恒久 hash floor は**未実装**（旧ADR-0036 は Proposed） | `consensus/pow/src/lib.rs:135` |
 | B8 | class identity が libm を pin していない | **PARTIAL** — manifest は libm を運ぶが、credit gate は `runtime_class_id`（タグ文字列のハッシュ）しか照合しない | `palw_credit.rs:149` |
 | B9 | 形式だけの refutation が bond も裁定もなくクレジットを消す | **STILL OPEN** | `palw_carriage.rs:505` |
 
 **9 件中 CLOSED は 0 件。** PARTIAL 3、STILL OPEN 5、DECIDED-not-implemented 1。
-architecture が ADR-0038 で反転したにもかかわらず、mint 経路の consumer 層は `palw-credit-gate-b14` 当時のまま
+architecture が 旧ADR-0038 で反転したにもかかわらず、mint 経路の consumer 層は `palw-credit-gate-b14` 当時のまま
 持ち越されている。
 
 **「bonded / not frozen」は live 呼出サイトで今もハードコード true**（`processor.rs:4930-4938`、監査者が一次確認）:
@@ -362,12 +362,12 @@ class store は Frozen 状態を表現できない（`palw_dispute.rs:219`）。
 
 前回監査で ledger を訂正した経緯があるので、今回も明示する。
 
-1. **ADR-0038 の中心的性質「admission は hash 検査であってモデル実行ではない」が到達不能**
+1. **旧ADR-0038 の中心的性質「admission は hash 検査であってモデル実行ではない」が到達不能**
    （`pow_layer0.rs:426`）。`consensus/pow` は `palw_commitment` を一切読まず、shape 規則は非空を全て拒否する
    （`check_palw_commitment_shape`、`pow_layer0.rs:426-428`）。commit f3455ff の「the header carries its work's claim,
    end to end」は**配管のみの着地**である。malleability は本当に閉じている（`pre_ghostdag_validation.rs:82` に live caller
    あり、監査者が一次確認）が、それは同時にフィールドが完全に inert だということでもある。
-2. **ADR-0038「full nodes stop re-running inference, ever」も未実装**（`pow_layer0.rs:447`）。algo-4 は今も排他 PoW。
+2. **旧ADR-0038「full nodes stop re-running inference, ever」も未実装**（`pow_layer0.rs:447`）。algo-4 は今も排他 PoW。
 3. **fork-choice fence を開けても fork choice は何も変わらない**（`processor.rs:6259`, `header_processor/processor.rs:428`）。
    seam 呼出サイト 2 箇所とも `palw` を `None` ハードコードしており、weight derivation を呼ぶものが無い。
    一方 fence は params fingerprint には入る（`params.rs:733`）ので、**開けると P2P fingerprint だけが割れる**。
@@ -376,10 +376,10 @@ class store は Frozen 状態を表現できない（`palw_dispute.rs:219`）。
    `palw_tip_order_v1` の doc（`params.rs:571`）も「fence は設定できないので常に BlueWorkOnly」と書くが、
    実際の保証は「どの preset も設定していない」だけ（`params.rs:2397` のテストが assert しているのはそちら）。
    構造的保証と設定値は別物である。
-5. **ADR-0039 Decision 5 の epoch weight budget「enforced at admission, by rejection」は存在しない**
+5. **旧ADR-0039 Decision 5 の epoch weight budget「enforced at admission, by rejection」は存在しない**
    （`palw_class_daa.rs:49`）。
-6. **ADR-0039「coverage complete before a class carries weight」に強制点が無い**（`palw_catalog_coverage.rs:128`）。
-7. **ADR-0039 Decision 4 が言う「landed challenge は class と bond outpoint を束縛する」に対し、
+6. **旧ADR-0039「coverage complete before a class carries weight」に強制点が無い**（`palw_catalog_coverage.rs:128`）。
+7. **旧ADR-0039 Decision 4 が言う「landed challenge は class と bond outpoint を束縛する」に対し、
    live な algo-4 seed はどちらも束縛しない**（`pow_layer0.rs:692`）。記述されている 6 成分構成は到達不能な方である。
 8. **`PALW_RUNTIME_MANIFEST_VERSION_V2` は「新しい manifest が名乗ってはいけない版」と doc されるが、
    manifest の `version` フィールドを検証するコードが無い**（`palw_v2.rs:83`）。
@@ -443,7 +443,7 @@ class store は Frozen 状態を表現できない（`palw_dispute.rs:219`）。
 
 ### 短期（ブランチ、並列可能）
 
-4. **ADR-0040 C1 の規範文を訂正**（2.2）。`palw_base0.rs:82-83` のモジュール doc も同時に。
+4. **旧ADR-0040 C1 の規範文を訂正**（2.2）。`palw_base0.rs:82-83` のモジュール doc も同時に。
    放置すると第三者実装が誠実に書くほど有罪になる。安価で、リリース判断を最も変える。
 5. **算術の総関数化** — `rounding_shift_right` の clamp、`int_recip` の v ≤ 511、`rms_norm` の saturating narrowing、
    `rope_table` の sin 項、RoPE 生成器の入力検証。`overflow-checks = true` なので全て release panic であり、
@@ -463,8 +463,8 @@ class store は Frozen 状態を表現できない（`palw_dispute.rs:219`）。
 10. **mint 経路を 1 変更セットで健全化** — B2/B3/B4/B5/B6/B9 と `select_job_panel_v3` の配線。前回と同じ結論で、
     **1 つ欠けると別が fail-open する**。ここで `bonded`/`frozen` のハードコードを消し、
     動く緊急停止（`class_frozen` を live path が読む）を作る。
-11. **~~hash floor の実装~~ → PALW-BASE-0 の登録と常時 Active 化**（B7）— ADR-0036 D4 は
-    ADR-0039 W6′ に**置き換えられた**。mainnet にハッシュ floor は積まない。ブロック生成は
+11. **~~hash floor の実装~~ → PALW-BASE-0 の登録と常時 Active 化**（B7）— 旧ADR-0036 D4 は
+    旧ADR-0039 W6′ に**置き換えられた**。mainnet にハッシュ floor は積まない。ブロック生成は
     全ネットワークで PALW work であり、liveness floor は可搬な整数専用クラス `PALW-BASE-0`
     （catalog が閉じるので任意の CPU で監査・有罪判定できる）。PALW 全断は**意図された大声の停止**で、
     ハッシュ順序への劣化ではない — 常にブロックを出せるハッシュ lane は、work ではなく lane を

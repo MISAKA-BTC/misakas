@@ -1,17 +1,9 @@
-# 平均元本・階層係数・登録総枠
+# 資本配分と仕事量
 
-> 採用済み条項の読解用統合版。新規規則・実装検証・本番有効化ではありません。[状態](../../STATUS.md) / [凍結](../../governance/design-freeze.md)。
+資本配分の上限は[RFC-0012](../../rfc/0012-bonds-budgets-and-slashing.md)、全モデル共通会計は[RFC-0016](../../rfc/0016-position-market-and-rewards.md)、仕事量会計の提案は[RFC-0013](../../rfc/0013-model-work-accounting.md)を参照する。
 
-Minerとclaimに実際に拘束され検証責任を負うVerifierの適格元本を、資金単位で重複せず集計します。待機bond、登録料、AMM/Position、未払予定報酬を追加元本としません。
+係数は全モデル1.0。共通の平均bondに対する3/2乗は機会・影響のcapとして扱い、仕事量へ重ねて報酬倍率にしない。平均期間、seasoning、退出責任、全体発行上限、個別予算を対象profileへ固定する。origin別0.3や登録モデル専用上限は新MOE3へ適用しない。
 
-基準の設計形は30日相当DAAの平均 `S̄_m` に対する `A_m = c_m · S̄_m^1.5`、総枠適用前の相対配分 `P_m = A_m / Σ A_j`。係数を含む同じ配分を物理block機会とcoinbaseに使い、受理blockの報酬へ二重に掛けません。
+MWA1を採用する場合は、modelの有限graph・shape・実処理位置から共通meterでWを計数する。基準機材の秒数、モデル名、任意のBFT倍率でWを置換しない。正しい高速化は許容し、異なるモデルの一回のpromptを一律同額とはしない。
 
-登録tierの合計がκを超えると比例縮小し、縮小分は発行せず、指定階層にも再配分しません。縮小後に再正規化して制限分を復活させる意味には読みません。整数算術・分母ゼロ・端数は出典に従います。
-
-配分目標と実支払を分けます。資本が増えても個別bond上限・総発行は増やしません。α、平均期間、係数、総枠の既存値は今回変更していません。
-
-## 出典と適用条件
-
-[ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md) / [ADR-0179](../../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) / [RFC-0016](../../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) / [RFC-0017](../../rfc/0017-model-eligibility-examination-and-renewal.md)。
-
-[パラメーター台帳](../../governance/parameter-register.md) / [mainnet後への延期](../../governance/post-mainnet-scope.md) / [仕様索引](../README.md)。
+仕事比例の当選時原資とEXEC量は提案状態であり、文書再編で有効化しない。各sourceの予約・消費・未発行終端を一回会計する。

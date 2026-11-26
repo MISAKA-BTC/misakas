@@ -1,0 +1,558 @@
+{
+  "snapshots": [
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "daa": 8602,
+      "byCategory": {
+        "other": {
+          "files": 18199,
+          "logicalBytes": 3369887597,
+          "allocatedBytes": 3409760256,
+          "filePrivateBytes": 4096,
+          "scopePrivateBytes": 4096,
+          "externallyLinkedFiles": 0
+        },
+        "logs": {
+          "files": 140,
+          "logicalBytes": 98857672,
+          "allocatedBytes": 99209216,
+          "filePrivateBytes": 45056,
+          "scopePrivateBytes": 45056,
+          "externallyLinkedFiles": 0
+        },
+        "consensusSst": {
+          "files": 328,
+          "logicalBytes": 18185325707,
+          "allocatedBytes": 18185936896,
+          "filePrivateBytes": 1263226880,
+          "scopePrivateBytes": 1263226880,
+          "externallyLinkedFiles": 0
+        },
+        "consensusBlob": {
+          "files": 122,
+          "logicalBytes": 15430801179,
+          "allocatedBytes": 15431081984,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "otherDbFiles": {
+          "files": 56,
+          "logicalBytes": 2348762,
+          "allocatedBytes": 2465792,
+          "filePrivateBytes": 2056192,
+          "scopePrivateBytes": 2056192,
+          "externallyLinkedFiles": 0
+        },
+        "wal": {
+          "files": 9,
+          "logicalBytes": 153421225,
+          "allocatedBytes": 153427968,
+          "filePrivateBytes": 153427968,
+          "scopePrivateBytes": 153427968,
+          "externallyLinkedFiles": 0
+        },
+        "utxoIndex": {
+          "files": 27,
+          "logicalBytes": 828922,
+          "allocatedBytes": 892928,
+          "filePrivateBytes": 192512,
+          "scopePrivateBytes": 192512,
+          "externallyLinkedFiles": 0
+        },
+        "retainedMaterial": {
+          "files": 72,
+          "logicalBytes": 97253398,
+          "allocatedBytes": 97460224,
+          "filePrivateBytes": 6488064,
+          "scopePrivateBytes": 6488064,
+          "externallyLinkedFiles": 0
+        }
+      },
+      "total": {
+        "logicalBytes": 37338724462,
+        "allocatedBytes": 37380235264,
+        "scopePrivateBytes": 1425440768
+      },
+      "peers": [
+        {
+          "logicalBytes": 11130855327,
+          "allocatedBytes": 11131277312,
+          "scopePrivateBytes": 317947904,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 51144559,
+            "allocatedBytes": 51146752,
+            "filePrivateBytes": 51146752,
+            "scopePrivateBytes": 51146752,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 113,
+            "logicalBytes": 5933773336,
+            "allocatedBytes": 5933985792,
+            "filePrivateBytes": 265981952,
+            "scopePrivateBytes": 265981952,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003380"
+        },
+        {
+          "logicalBytes": 11605317121,
+          "allocatedBytes": 11605815296,
+          "scopePrivateBytes": 916393984,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 51132115,
+            "allocatedBytes": 51134464,
+            "filePrivateBytes": 51134464,
+            "scopePrivateBytes": 51134464,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 112,
+            "logicalBytes": 6346446180,
+            "allocatedBytes": 6346649600,
+            "filePrivateBytes": 858030080,
+            "scopePrivateBytes": 858030080,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003339"
+        },
+        {
+          "logicalBytes": 11181474526,
+          "allocatedBytes": 11181854720,
+          "scopePrivateBytes": 191094784,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 51144551,
+            "allocatedBytes": 51146752,
+            "filePrivateBytes": 51146752,
+            "scopePrivateBytes": 51146752,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 103,
+            "logicalBytes": 5905106191,
+            "allocatedBytes": 5905301504,
+            "filePrivateBytes": 139214848,
+            "scopePrivateBytes": 139214848,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003284"
+        }
+      ]
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "daa": 8667,
+      "byCategory": {
+        "other": {
+          "files": 18349,
+          "logicalBytes": 3370928459,
+          "allocatedBytes": 3411140608,
+          "filePrivateBytes": 4096,
+          "scopePrivateBytes": 4096,
+          "externallyLinkedFiles": 0
+        },
+        "logs": {
+          "files": 147,
+          "logicalBytes": 100425848,
+          "allocatedBytes": 100806656,
+          "filePrivateBytes": 49152,
+          "scopePrivateBytes": 49152,
+          "externallyLinkedFiles": 0
+        },
+        "consensusSst": {
+          "files": 324,
+          "logicalBytes": 18246369764,
+          "allocatedBytes": 18246963200,
+          "filePrivateBytes": 170921984,
+          "scopePrivateBytes": 170921984,
+          "externallyLinkedFiles": 0
+        },
+        "consensusBlob": {
+          "files": 122,
+          "logicalBytes": 15430801179,
+          "allocatedBytes": 15431081984,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "otherDbFiles": {
+          "files": 55,
+          "logicalBytes": 1107708,
+          "allocatedBytes": 1232896,
+          "filePrivateBytes": 307200,
+          "scopePrivateBytes": 307200,
+          "externallyLinkedFiles": 0
+        },
+        "wal": {
+          "files": 9,
+          "logicalBytes": 38822176,
+          "allocatedBytes": 38838272,
+          "filePrivateBytes": 38838272,
+          "scopePrivateBytes": 38838272,
+          "externallyLinkedFiles": 0
+        },
+        "utxoIndex": {
+          "files": 30,
+          "logicalBytes": 809155,
+          "allocatedBytes": 884736,
+          "filePrivateBytes": 36864,
+          "scopePrivateBytes": 36864,
+          "externallyLinkedFiles": 0
+        },
+        "retainedMaterial": {
+          "files": 66,
+          "logicalBytes": 92455327,
+          "allocatedBytes": 92643328,
+          "filePrivateBytes": 53248,
+          "scopePrivateBytes": 53248,
+          "externallyLinkedFiles": 0
+        }
+      },
+      "total": {
+        "logicalBytes": 37281719616,
+        "allocatedBytes": 37323591680,
+        "scopePrivateBytes": 210210816
+      },
+      "peers": [
+        {
+          "logicalBytes": 11287719185,
+          "allocatedBytes": 11288141824,
+          "scopePrivateBytes": 106573824,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 6597247,
+            "allocatedBytes": 6602752,
+            "filePrivateBytes": 6602752,
+            "scopePrivateBytes": 6602752,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 113,
+            "logicalBytes": 6135339881,
+            "allocatedBytes": 6135545856,
+            "filePrivateBytes": 99811328,
+            "scopePrivateBytes": 99811328,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003404"
+        },
+        {
+          "logicalBytes": 11333703481,
+          "allocatedBytes": 11334184960,
+          "scopePrivateBytes": 96878592,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 25627706,
+            "allocatedBytes": 25632768,
+            "filePrivateBytes": 25632768,
+            "scopePrivateBytes": 25632768,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 107,
+            "logicalBytes": 6105329643,
+            "allocatedBytes": 6105526272,
+            "filePrivateBytes": 71110656,
+            "scopePrivateBytes": 71110656,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003369"
+        },
+        {
+          "logicalBytes": 11237389136,
+          "allocatedBytes": 11237789696,
+          "scopePrivateBytes": 6754304,
+          "wal": {
+            "files": 3,
+            "logicalBytes": 6597223,
+            "allocatedBytes": 6602752,
+            "filePrivateBytes": 6602752,
+            "scopePrivateBytes": 6602752,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 104,
+            "logicalBytes": 6005700240,
+            "allocatedBytes": 6005891072,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003308"
+        }
+      ]
+    },
+    {
+      "generation": "bda15b77344d4277b7a1a63c690da3a1",
+      "daa": 8703,
+      "byCategory": {
+        "other": {
+          "files": 18445,
+          "logicalBytes": 3371894518,
+          "allocatedBytes": 3412328448,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "logs": {
+          "files": 154,
+          "logicalBytes": 101618425,
+          "allocatedBytes": 102010880,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "consensusSst": {
+          "files": 341,
+          "logicalBytes": 18670980325,
+          "allocatedBytes": 18671611904,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "consensusBlob": {
+          "files": 122,
+          "logicalBytes": 15430801179,
+          "allocatedBytes": 15431081984,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "otherDbFiles": {
+          "files": 56,
+          "logicalBytes": 1057911,
+          "allocatedBytes": 1179648,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "wal": {
+          "files": 12,
+          "logicalBytes": 777453639,
+          "allocatedBytes": 777482240,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "utxoIndex": {
+          "files": 30,
+          "logicalBytes": 820646,
+          "allocatedBytes": 897024,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        },
+        "retainedMaterial": {
+          "files": 68,
+          "logicalBytes": 94054684,
+          "allocatedBytes": 94248960,
+          "filePrivateBytes": 0,
+          "scopePrivateBytes": 0,
+          "externallyLinkedFiles": 0
+        }
+      },
+      "total": {
+        "logicalBytes": 38448681327,
+        "allocatedBytes": 38490841088,
+        "scopePrivateBytes": 0
+      },
+      "peers": [
+        {
+          "logicalBytes": 11577604367,
+          "allocatedBytes": 11578036224,
+          "scopePrivateBytes": 0,
+          "wal": {
+            "files": 4,
+            "logicalBytes": 250628504,
+            "allocatedBytes": 250638336,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 117,
+            "logicalBytes": 6180980333,
+            "allocatedBytes": 6181191680,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003445"
+        },
+        {
+          "logicalBytes": 11781227234,
+          "allocatedBytes": 11781742592,
+          "scopePrivateBytes": 0,
+          "wal": {
+            "files": 4,
+            "logicalBytes": 263716932,
+            "allocatedBytes": 263729152,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 114,
+            "logicalBytes": 6312999415,
+            "allocatedBytes": 6313213952,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003414"
+        },
+        {
+          "logicalBytes": 11665375748,
+          "allocatedBytes": 11665780736,
+          "scopePrivateBytes": 0,
+          "wal": {
+            "files": 4,
+            "logicalBytes": 263108203,
+            "allocatedBytes": 263114752,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusSst": {
+            "files": 110,
+            "logicalBytes": 6177000577,
+            "allocatedBytes": 6177206272,
+            "filePrivateBytes": 0,
+            "scopePrivateBytes": 0,
+            "externallyLinkedFiles": 0
+          },
+          "consensusWalCompression": "kNoCompression",
+          "optionsFile": "OPTIONS-003348"
+        }
+      ]
+    }
+  ],
+  "intervals": [
+    {
+      "fromDaa": 8602,
+      "toDaa": 8667,
+      "delta": {
+        "logicalBytes": -57004846,
+        "allocatedBytes": -56643584,
+        "scopePrivateBytes": -1215229952
+      },
+      "categoryDeltas": {
+        "consensusBlob": {
+          "logicalBytes": 0,
+          "allocatedBytes": 0,
+          "scopePrivateBytes": 0
+        },
+        "consensusSst": {
+          "logicalBytes": 61044057,
+          "allocatedBytes": 61026304,
+          "scopePrivateBytes": -1092304896
+        },
+        "logs": {
+          "logicalBytes": 1568176,
+          "allocatedBytes": 1597440,
+          "scopePrivateBytes": 4096
+        },
+        "other": {
+          "logicalBytes": 1040862,
+          "allocatedBytes": 1380352,
+          "scopePrivateBytes": 0
+        },
+        "otherDbFiles": {
+          "logicalBytes": -1241054,
+          "allocatedBytes": -1232896,
+          "scopePrivateBytes": -1748992
+        },
+        "retainedMaterial": {
+          "logicalBytes": -4798071,
+          "allocatedBytes": -4816896,
+          "scopePrivateBytes": -6434816
+        },
+        "utxoIndex": {
+          "logicalBytes": -19767,
+          "allocatedBytes": -8192,
+          "scopePrivateBytes": -155648
+        },
+        "wal": {
+          "logicalBytes": -114599049,
+          "allocatedBytes": -114589696,
+          "scopePrivateBytes": -114589696
+        }
+      },
+      "allocatedBytesPerDaa": -871439.7538461538,
+      "peerAllocatedBytesPerDaa": [
+        2413300.184615385,
+        -4178928.2461538464,
+        860538.0923076923
+      ]
+    },
+    {
+      "fromDaa": 8667,
+      "toDaa": 8703,
+      "delta": {
+        "logicalBytes": 1166961711,
+        "allocatedBytes": 1167249408,
+        "scopePrivateBytes": -210210816
+      },
+      "categoryDeltas": {
+        "consensusBlob": {
+          "logicalBytes": 0,
+          "allocatedBytes": 0,
+          "scopePrivateBytes": 0
+        },
+        "consensusSst": {
+          "logicalBytes": 424610561,
+          "allocatedBytes": 424648704,
+          "scopePrivateBytes": -170921984
+        },
+        "logs": {
+          "logicalBytes": 1192577,
+          "allocatedBytes": 1204224,
+          "scopePrivateBytes": -49152
+        },
+        "other": {
+          "logicalBytes": 966059,
+          "allocatedBytes": 1187840,
+          "scopePrivateBytes": -4096
+        },
+        "otherDbFiles": {
+          "logicalBytes": -49797,
+          "allocatedBytes": -53248,
+          "scopePrivateBytes": -307200
+        },
+        "retainedMaterial": {
+          "logicalBytes": 1599357,
+          "allocatedBytes": 1605632,
+          "scopePrivateBytes": -53248
+        },
+        "utxoIndex": {
+          "logicalBytes": 11491,
+          "allocatedBytes": 12288,
+          "scopePrivateBytes": -36864
+        },
+        "wal": {
+          "logicalBytes": 738631463,
+          "allocatedBytes": 738643968,
+          "scopePrivateBytes": -38838272
+        }
+      },
+      "allocatedBytesPerDaa": 32423594.666666668,
+      "peerAllocatedBytesPerDaa": [
+        8052622.222222222,
+        12432156.444444444,
+        11888640.0
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "sourceManifestSha256": "17697d9bf0ce11702519dcd2ed2b0fe0a7a27674dae075a34a6d4c5dd3fc621a",
+  "verifiedSourceFiles": 118,
+  "capPerNodeBytes": 30000000000,
+  "combinedCapBytes": 60000000000,
+  "volumeFloorBytes": 12884901888,
+  "phases": [
+    {
+      "test": "round16_prepare_closed_receiver",
+      "intervalSeconds": 1,
+      "minimumFreeBytes": 14002798592,
+      "peakArchiveScratchAllocatedBytes": 1002668032,
+      "peakReceiverAllocatedBytes": 487981056,
+      "peakCombinedAllocatedBytes": 1409097728,
+      "samples": 254,
+      "stop": null,
+      "exit": 0,
+      "elapsedSeconds": 258.06,
+      "observations": [
+        "Round 16 TCP: imported point=0e210616d5fec9c179d51c0630e3f2e7306617add03fb83c3782f3cfd63445cef884c1560595fc9d475d8268c292ac8e3334733335d17561f696e0c2360a2d37 root=e818ba7fd0ec19e48dbedc6de7d34d1b2486cd81668482513da8f5fbe280156902b8443403f01e89dde4122d08fadf9d7e59bf89d61fcf1b41cc96f6480e7a68 UTXOs=73",
+        "2026-11-25 12:44:23.949+09:00 [INFO ] IBD: 74920 missing block bodies to sync from peer 127.0.0.1:64190 (header sync complete; first 3f580c94443d3d468c62c4ff0d459616b4b1f0ad9d5d509619233950a1d35682463a00e670ffb2a2bd79331f070e4e000114324973443607dc5728a6a322f87b DAA 13798, last 375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA 51258)",
+        "Round 16 TCP: closed receiver DAA=28004 root=\"227c46d5f6fb6a13a2083eedb622e5b669fe2323c4a0031278ce1925fbaa39a2f651f67baaada3a2902fb1ffa2374b828b7e1b6ce50cfd1f6434779b9cfb11e5\" UTXOs=73"
+      ]
+    },
+    {
+      "test": "round16_resume_closed_receiver_to_archival_tip",
+      "intervalSeconds": 1,
+      "minimumFreeBytes": 13951844352,
+      "peakArchiveScratchAllocatedBytes": 910073856,
+      "peakReceiverAllocatedBytes": 538513408,
+      "peakCombinedAllocatedBytes": 1396654080,
+      "samples": 238,
+      "stop": null,
+      "exit": 101,
+      "elapsedSeconds": 241.65,
+      "observations": [
+        "2026-11-25 12:46:22.410+09:00 [INFO ] IBD: 46309 missing block bodies to sync from peer 127.0.0.1:64250 (header sync complete; first 656079ae48e2f8f52a16769f3c8499c42e3a7930903f6099a1a76213649282b334c5d0039a184c62d8f02ef3e159bafb7e90d17452218df998dcf5efd9858940 DAA 28104, last 375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA 51258)",
+        "Round 16 TCP: closed receiver DAA=36271 root=\"d622b6aba66c981b425a4505b45a60466e7006729fb438cc0e6a52d1f13f7763c9d846958f69e6bd02cfb4d8fbd90df014f82bb43fe37f31dc694a6a4faeb4b6\" UTXOs=73",
+        "bounded Round 16 sync phase did not reach its target: Elapsed(())"
+      ]
+    },
+    {
+      "test": "round16_resume_closed_receiver_to_archival_tip",
+      "intervalSeconds": 1,
+      "minimumFreeBytes": 13705900032,
+      "peakArchiveScratchAllocatedBytes": 911122432,
+      "peakReceiverAllocatedBytes": 783020032,
+      "peakCombinedAllocatedBytes": 1641160704,
+      "samples": 141,
+      "stop": null,
+      "exit": 101,
+      "elapsedSeconds": 143.11,
+      "observations": [
+        "2026-11-25 12:50:04.781+09:00 [INFO ] IBD: 29776 missing block bodies to sync from peer 127.0.0.1:64301 (header sync complete; first 9645811595cbf0b2a9529ffdf65d0c9b854598203fde95bb80eeaa76f09e27290d7ee6cff99d7dfb0bc1ad7ed9b665756b2d09835d22abe23ee8a54ad5d847e9 DAA 36370, last 375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA 51258)",
+        "Round 16 TCP: matched tip=375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA=51258 root=964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1 UTXOs=73",
+        "actual socket/flow/manager owners close before cold reopen: Elapsed(())"
+      ]
+    },
+    {
+      "test": "round16_cold_terminal_receiver_matches_archive",
+      "exit": 0,
+      "stop": null,
+      "elapsedSeconds": 15.32,
+      "intervalSeconds": 1,
+      "samples": 15,
+      "minimumFreeBytes": 13779972096,
+      "peakArchiveScratchAllocatedBytes": 865660928,
+      "peakReceiverAllocatedBytes": 705314816,
+      "peakCombinedAllocatedBytes": 1563435008,
+      "observations": [
+        "Round 16 TCP: matched tip=375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA=51258 root=964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1 UTXOs=73",
+        "Round 16 TCP: matched tip=375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA=51258 root=964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1 UTXOs=73",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1525 filtered out; finished in 11.10s"
+      ]
+    },
+    {
+      "test": "round16_disconnect_during_archival_history_read",
+      "exit": 0,
+      "stop": null,
+      "elapsedSeconds": 43.68,
+      "intervalSeconds": 1,
+      "samples": 43,
+      "minimumFreeBytes": 13745917952,
+      "peakArchiveScratchAllocatedBytes": 983900160,
+      "peakReceiverAllocatedBytes": 671494144,
+      "peakCombinedAllocatedBytes": 1655394304,
+      "observations": [
+        "Round 16 TCP: matched tip=375685dae358517620e83b3954fa7321c7c679a41aa6ece905bfafceb243a1bf82ddf103d51399faae1d6bc38c767dcb3eae677b749d23d5f4481e3371ed7604 DAA=51258 root=964c48a7a7f6c29d17a45972f388a451dc66db898a1897b1f0877503ce77a08d6b06dd3ce528e91163124a9ef980a88aaa5ad2d615befa134911c9627401b2c1 UTXOs=73",
+        "Round 16 TCP: disconnected during archival history read; all flow and manager owners released in 38.655627167s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1526 filtered out; finished in 39.32s"
+      ]
+    }
+  ],
+  "receiverRocksDbFinishedCompactions": 105,
+  "snapshot": {
+    "subset": "peer-0 PALW retention, input identity and native stopped-run markers",
+    "sourceGenerations": [
+      "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "72e6a8b458184ee6ab3b67ac939f918b",
+      "bda15b77344d4277b7a1a63c690da3a1"
+    ],
+    "rollingSnapshotsCreated": 3,
+    "rollingRetained": 2,
+    "pinnedRetained": 1,
+    "restoredAndComparedToSourceDaa": [
+      8667,
+      8602
+    ],
+    "directorySyncSamples": 43,
+    "peakSampledAllocationBytes": 56303616,
+    "minimumSampledVolumeFreeBytes": 13863989248,
+    "postRotationUsage": {
+      "files": 75,
+      "logicalBytes": 44861157,
+      "allocatedBytes": 45047808,
+      "filePrivateBytes": 73728,
+      "scopePrivateBytes": 73728,
+      "externallyLinkedFiles": 0
+    }
+  }
+}

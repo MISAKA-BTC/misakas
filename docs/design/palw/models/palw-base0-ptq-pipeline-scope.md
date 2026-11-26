@@ -6,13 +6,13 @@ to surface. Measured against `misaka-palw-base0` and `consensus/core/src/palw_ba
 
 **Why this exists.** `artifact.rs` states the gap in one sentence — *"Producing weights that are
 good — quantising a trained model into `i8` at these shapes — is a separate data pipeline and is
-not in this crate."* ADR-0040 agrees and calls it "a tooling question". That pipeline is the last
+not in this crate."* 旧ADR-0040 agrees and calls it "a tooling question". That pipeline is the last
 missing piece of P0-8b once BASE-0 is chosen as the weight-bearing class, and this is its shape.
 
 The central finding is that **the pipeline is not the hard part.** The hard part is that the engine
 as written cannot faithfully represent any pretrained transformer, for three reasons that are
 architectural rather than numerical (§5), plus one that bounds how large a model can ever be (§6).
-All of them are fixable inside the existing kernel catalog — no ADR-0040 amendment — but all of
+All of them are fixable inside the existing kernel catalog — no 旧ADR-0040 amendment — but all of
 them change the step space, so they must be settled **before** the `PalwShapeProfileV3` is written,
 not after.
 
@@ -102,7 +102,7 @@ factor simply propagates into the next `g`. Only four sites pin the scale:
 
 | site | requirement |
 |---|---|
-| `SoftMax(Rescale(raw, attn_logit_scale))` | logits must arrive at true Qk, or the distribution is uniform (ADR-0040 H) |
+| `SoftMax(Rescale(raw, attn_logit_scale))` | logits must arrive at true Qk, or the distribution is uniform (旧ADR-0040 H) |
 | `SiLU(Rescale(·, ffn_gate_scale))` | pre-activation must arrive at true Qk, or `IntSigmoid` returns ≈0.5 and the gate degenerates to `x/2` |
 | `AddElem(h, projected)` | **both operands must share one σ** — this is the only *binding* constraint between two different sites |
 | `RmsNorm` | **none** — the input scale cancels exactly (`x/rms(x)` is invariant under `x → c·x`), which is why the op takes no input scale |
@@ -112,7 +112,7 @@ correct, because whatever `σ_h` has drifted to, the norm erases it. `residual_r
 see §6.
 
 **Do not model `Requantize` in float during calibration.** It rounds twice (at bit 31 inside
-`SRDHM`, then again at `shift`) while `Rescale` rounds once; ADR-0040 H records that the two differ
+`SRDHM`, then again at `shift`) while `Rescale` rounds once; 旧ADR-0040 H records that the two differ
 by up to one unit and are not interchangeable. `SRDHM` also rounds half **up** (toward +∞), not
 half-away-from-zero, and rounds the magnitude before reapplying the sign. The calibrator must call
 the reference implementation, not a `f64` approximation of it.
@@ -187,7 +187,7 @@ in every layer. From §3, `σ_h_new = σ_h_old / g_res`. So:
 
 There is no third option and no per-layer knob. This is the classic reason int8 transformer
 implementations keep the residual in wider precision — and BASE-0 cannot, because `AddElem` is
-`i8 → i32` by ADR-0040 Decision D. Widening it is a **new kernel**, i.e. the one change that would
+`i8 → i32` by 旧ADR-0040 Decision D. Widening it is a **new kernel**, i.e. the one change that would
 re-open the catalog.
 
 **Measured 2026-08-21 — see `docs/palw-base0-depth-measurement-2026-08-21.md`. Two corrections
@@ -210,7 +210,7 @@ better. So:
 **Depth is not a wall.** 24–32 layers is arithmetically reachable; the residual binds quality, not
 liveness. Mitigation 1 (per-layer `residual_requant`) survives as *useful* rather than *required* —
 it places the budget, it does not enlarge it. The only thing that enlarges it is `AddElem` at a
-wider type (`i16` buys 10–11 bits per write), which is a new kernel and an ADR-0040 amendment.
+wider type (`i16` buys 10–11 bits per write), which is a new kernel and an 旧ADR-0040 amendment.
 
 ---
 
@@ -288,10 +288,10 @@ agreement rate over a fixed prompt set.
 
 `MAX_DOT_LEN` was `133_144`, derived from `i32::MAX / (127 · 127)`, while `requantize` clamps to
 `[-128, 127]` and can therefore emit `-128`, whose worst-case product is `128 · 128 = 16_384`.
-Unreachable at any realistic shape, but not a premise ADR-0040 Decision E could use: it held over a
+Unreachable at any realistic shape, but not a premise 旧ADR-0040 Decision E could use: it held over a
 subset of the operand type while nothing range-checks an artifact's weight bytes.
 
-**Fixed 2026-08-20**: `MAX_DOT_LEN = 131_071`, derived from the whole of `int8`, with ADR-0040 C3
+**Fixed 2026-08-20**: `MAX_DOT_LEN = 131_071`, derived from the whole of `int8`, with 旧ADR-0040 C3
 amended to match. Restricting the operand range instead was rejected — it would have changed frozen
 catalog op 2. The pipeline therefore does **not** need to avoid `-128`; the full `i8` range is
 legal for weight codes.

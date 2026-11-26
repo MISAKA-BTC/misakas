@@ -16,20 +16,20 @@
 
 ## 1. 仕様の正本(先に読む順)
 
-1. [RFC-0026 — court の主契約](../../../rfc/0026-court-policy-master-contract.md)(Draft、current court policy)。時計の表、帰責、責任期間、置換表、未決事項(§9)、受入試験 T01〜T15(§10)。**ほかの RFC と食い違ったら、ここを基準にします。**
-2. [RFC-0014](../../../rfc/0014-panel-independent-fraud-prosecution.md) の末尾の 2 節:「改定 — 2026-10-19」(ユーザーが方針として採用)と「整合性修正 — 2026-10-19」。
-3. [RFC-0024](../../../rfc/0024-court-door-3200-to-ctx-2m.md)(Draft):A = 最終裁定の 1 位置化、B = 2 段の先読み開示、C = 先行取得と強制開示、付録 C = 逐次 step 搬送の削減。
-4. [RFC-0025](../../../rfc/0025-scalable-objective-court-many-models-mass-disputes.md)(Draft):大量の court の容量予約、混雑延長、pruning / IBD。
+1. [RFC-0026 — court の主契約](../../../rfc/0009-court-and-claim-final.md)(Draft、current court policy)。時計の表、帰責、責任期間、置換表、未決事項(§9)、受入試験 T01〜T15(§10)。**ほかの RFC と食い違ったら、ここを基準にします。**
+2. [RFC-0014](../../../rfc/0009-court-and-claim-final.md) の末尾の 2 節:「改定 — 2026-10-19」(ユーザーが方針として採用)と「整合性修正 — 2026-10-19」。
+3. [RFC-0024](../../../rfc/0009-court-and-claim-final.md)(Draft):A = 最終裁定の 1 位置化、B = 2 段の先読み開示、C = 先行取得と強制開示、付録 C = 逐次 step 搬送の削減。
+4. [RFC-0025](../../../rfc/0009-court-and-claim-final.md)(Draft):大量の court の容量予約、混雑延長、pruning / IBD。
 5. 末尾に注記を足した RFC-0008(R8-WINDOW)、RFC-0009(court signer)、RFC-0023(段階 1 / 2)。
-6. 監査報告 [0026-assets/audit-report.md](../../../rfc/0026-assets/audit-report.md)(F01〜F11)。
+6. 監査報告 [0026-assets/audit-report.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/rfc/0026-assets/audit-report.md)(F01〜F11)。
 
 ## 2. branch とコードの所在(2026-10-20 時点)
 
 | branch | head | 中身 |
 |---|---|---|
 | `release/t12-16000` | `b522cbe4d` | `consensus/core/src/palw_court_capacity_v1.rs`(court 専用の block 予算、予約枠、期限順の割当、新規 claim の受付制限、囮の価格。休眠、値は仮)。読む範囲の解析(`misaka/palw/tir/exec/tests/frame_measure.rs`)と、artifact の必要部分だけを読む経路(`misaka/palw/tir/exec/src/node/partial.rs`)。rothschild の ML-DSA-87 化。`docs/measurements/` |
-| `g14/door-design` | `2a6ea1a4f` | ADR-0189〜0191。履歴 tile の二分探索と 1 位置化(`palw_tir_history_bisection_v1.rs`)。指名 custodian の登録簿(tag 245、state field と processor 接続、`palw_tir_designated_answers_v1.rs`)。door の導出(`palw_tir_frame_cost_v1.rs`)。court の検証 CPU の計測試験(`consensus/core/tests/palw_tir_court_verify_cpu.rs`) |
-| `codex-free/d2-x3` | `05fcf7b5c` | D2 / X3(ADR-0188)。X3 の固定期限と、開いている DA session による Final の保留。node 試験 31 件が通過。`x3_req_5c`(reorg)は `#[ignore]` で未検証 |
+| `g14/door-design` | `2a6ea1a4f` | 旧ADR-0189〜0191。履歴 tile の二分探索と 1 位置化(`palw_tir_history_bisection_v1.rs`)。指名 custodian の登録簿(tag 245、state field と processor 接続、`palw_tir_designated_answers_v1.rs`)。door の導出(`palw_tir_frame_cost_v1.rs`)。court の検証 CPU の計測試験(`consensus/core/tests/palw_tir_court_verify_cpu.rs`) |
+| `codex-free/d2-x3` | `05fcf7b5c` | D2 / X3(旧ADR-0188)。X3 の固定期限と、開いている DA session による Final の保留。node 試験 31 件が通過。`x3_req_5c`(reorg)は `#[ignore]` で未検証 |
 | `pre` | 最新 | RFC-0024〜0026 と、この文書 |
 
 `pre` には `palw_court_capacity_v1.rs` がありません。実装は上の branch から始め、統合はユーザーの承認を得てから行います。

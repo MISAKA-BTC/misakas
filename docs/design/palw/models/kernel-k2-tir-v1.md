@@ -1,21 +1,11 @@
-# The kernel route: K2-TIR-v1/v2/v3 (ADR-0172 / versioned-kernels.md §§K.0–K.8 / RFC-0011 §§15–16 / RFC-0004 §0)
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
+# The kernel route: K2-TIR-v1/v2/v3 (旧ADR-0172 / versioned-kernels.md §§K.0–K.8 / RFC-0011 §§15–16 / RFC-0004 §0)
 
 Status: reference implementation in `misaka-palw-kernel`, **dormant**. The consensus fence `palw_probabilistic_constraints_v1`
 exists with **no activation height** (`None` on every preset, Some-only in both fingerprints, refused when armed). The shipped
 schedule lists K2-TIR-v1, v2 and v3 as `Implemented`; every registration checked against it returns `KERNEL_NOT_ACTIVE`.
 This document is the completion matrix of the RFCs' implementable items; it is not a soundness review and not an activation proposal.
 
-Precedence: RFC-0004/0011, the [Kernel design](versioned-kernels.md), ADR-0172 and ADR-0173 are the design of record for this route. Where the existing network code says otherwise, the crate follows the RFC and the difference is listed in §4.
+Precedence: RFC-0004/0011, the [Kernel design](versioned-kernels.md), 旧ADR-0172 and 旧ADR-0173 are the design of record for this route. Where the existing network code says otherwise, the crate follows the RFC and the difference is listed in §4.
 
 ## 1. The kernels
 
@@ -92,7 +82,7 @@ here (an external gate: review, measurement, real-chain drill, activation).
 | §17 A2–A9 consensus state (lines, epochs, objects, job family, rewards) | ◐ | the legacy Phase F modules exist in `consensus/core` (`palw_improve_*`); their kernel-route variants wait for the fence |
 | §17 A12–A15 second implementation, drills, audits, soak | ✖ | external |
 
-### 2026-10-07 mission-alignment amendments (RFC-0004/0005/0007/0011, ADR-0173, RFC-0015 §1.1)
+### 2026-10-07 mission-alignment amendments (RFC-0004/0005/0007/0011, 旧ADR-0173, RFC-0015 §1.1)
 
 | Item | Status | Where / evidence |
 | --- | --- | --- |
@@ -134,13 +124,13 @@ here (an external gate: review, measurement, real-chain drill, activation).
 * **Improvement**: the live `palw_improvement_v1` example fixes candidates to Phase F v10; on this route an epoch pins kernels and
   composition profiles first, and grading uses the pinned set.
 * **Evidence**: live claims commit captures and FOLD prefixes that only producers and bound seats read; here every node value and
-  every stage input is committed and wired, so a fresh public bond can open and convict (ADR-0173).
+  every stage input is committed and wired, so a fresh public bond can open and convict (旧ADR-0173).
 * **Generative classes**: live `palw_gen_v1` classes use the step tree and close sizing; here a pipeline stage is a kernel claim
   over its v1 view and its edges are exact relations.
 
 ## 5. Open (external gates, in the order the RFCs place them)
 
-1. Independent soundness review of the composition, the alias bounds and the CRT argument (RFC-0011 §15.4, ADR-0172 §6).
+1. Independent soundness review of the composition, the alias bounds and the CRT argument (RFC-0011 §15.4, 旧ADR-0172 §6).
 2. Review of the beacon as unbiased under withholding; a transcript construction if a GKR family is ever proposed (§15.3).
 3. Cost on real models: producer, verifier, DA, court and dispute load for 9B-8k, validated long context and Kimi K3 (§15.6–15.7).
 4. Node values carry row/column Merkle commitments (`merkle.rs`): a `MatMul` scalar court opens one row of X, one column of W and one row of Y (O(k + n) bytes). Other courts open the one instance they recompute; Merkle tiling of those (e.g. a long `ReduceSum`) is a further suite extension if measurements call for it.

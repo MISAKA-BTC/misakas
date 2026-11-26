@@ -35,7 +35,7 @@ is the licence rate.
 
 DAA ran at ~165 s (967 DAA in 44.4 h). 93 of the 130 claims were bound, unbound and bound again (cause not found).
 
-**The loop.** A claim binds only in a block that is or merges an OPERATOR's attempt at or past its slot (ADR-0165 §00.9).
+**The loop.** A claim binds only in a block that is or merges an OPERATOR's attempt at or past its slot (旧ADR-0165 §00.9).
 With the room full the 8k producer holds, so no operator REAL attempt is mined; the claims wait for the floor producers'
 anchor duty, which fires after 30 slots plus the bond's stagger (ibm b1: 36). Bind waits, licences wait, the room stays full.
 

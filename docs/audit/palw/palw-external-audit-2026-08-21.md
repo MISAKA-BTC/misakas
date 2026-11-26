@@ -91,7 +91,7 @@ tile_index)` の出力をcaptureするinstrumentationを入れ、実行と同時
 | Qwen2.5 unembed 151,936×1,536 | 約222.6 MiB |
 
 `palw_qwen25_profile.rs:418-437` も、courtテストでは実1.5B geometryではなく1層・hidden 32・vocab 48
-の小型probeを使っていると明記しています。一方 ADR-0046 はcourt closeを「152KBより十分小さい」と
+の小型probeを使っていると明記しています。一方 旧ADR-0046 はcourt closeを「152KBより十分小さい」と
 想定しています。現実のコードと二桁から三桁違います。人類の「one tile」という言葉が、またしても
 全体を意味していました。
 
@@ -155,7 +155,7 @@ row_start／byte_len／quantization record／canonical order を含め、重複�
 `consensus/src/processes/palw_state_v2_sync.rs:8-29`（state syncはdormant、callerはPR-10）、
 `palw_chain_weight.rs:43-44`（chain weightはconsensus-inert）、
 `palw_fork_authority_v2.rs:11-15`（tip/IBD/pruning/finalityへの配線は将来）、
-ADR-0043 `:8-10`（headerの `palw_state_root` fieldはPR-10）。
+旧ADR-0043 `:8-10`（headerの `palw_state_root` fieldはPR-10）。
 
 **影響**: PALW stateがheaderにcommitされない／tip selectionがPALW weightを使わない／IBD・pruning・
 deep reorgがPALW authorityを使わない／restart・reorg時にV2 stateを追従させるlive callerがない／
@@ -163,9 +163,9 @@ ConsensusV2 testnet presetがない。
 
 ## C-08 V2 bondの経済的ロックが未実証
 
-`palw_carriage_v2.rs:334-345` ではoutput 0を担保として登録します。しかしADR-0046 `:100-106` が要求する
+`palw_carriage_v2.rs:334-345` ではoutput 0を担保として登録します。しかし旧ADR-0046 `:100-106` が要求する
 「retirementまでoutpointをspend不能にする／slash分をcanonical burn scriptへ送る／slash分をfeeとして
-minerへ戻さない」というV2 spend gateは、提供されたsnapshotでは確認できません。ADR-0046 `:171-174` も、
+minerへ戻さない」というV2 spend gateは、提供されたsnapshotでは確認できません。旧ADR-0046 `:171-174` も、
 このwiringは後でlandすると明記しています。
 
 **影響**: state上ではbondが存在していても、UTXOを先に使えてしまうならslashは帳簿上の数字になります。
@@ -202,7 +202,7 @@ skip扱いです。race由来のstale transactionはskipでよいですが、不
 
 ### M-02 state-root ADRと実コードがずれている
 
-ADR-0043のroot preimageには class shares／epoch budgets／receipt targets／pending payouts などが
+旧ADR-0043のroot preimageには class shares／epoch budgets／receipt targets／pending payouts などが
 ありませんが、実コード `palw_state_v2.rs:1345-1389` には含まれています。pre-liveなので直せますが、
 ruleset fingerprintを固定する前にADRとgolden vectorを一致させる必要があります。
 
@@ -293,13 +293,13 @@ finding was re-checked against it before any fix was written. Status as of 2026-
 | C-06 | **reproduces** | partially fixed — `PalwArtifactInventoryV1` with its rejection rules (`f3f4ca4b`). The production builder from a real checkpoint remains |
 | C-07 | **STALE on this branch.** `header.palw_state_root` is a real field (`header.rs:234`), the pipeline disqualifies on `header.palw_state_root != parent_root` (`processor.rs:1161`), and IBD consults `decide_ibd_commit_v2` (`protocol/flows/src/ibd/flow.rs:1809`) | three real blockers remain instead of six: `current_attempt` hardwired to `None` (`processor.rs:1211`), subnetworks `0x4a`/`0x4b` unrouted at tx validation, and no `NetworkId` mapping to a ConsensusV2 network |
 | C-08 | **reproduces** — `slash_bond` (`palw_state_v2.rs:1908`) decrements a `u64` and touches no output | not fixed |
-| H-01 | reproduces | decided by ADR-0049 H; code not unified |
+| H-01 | reproduces | decided by 旧ADR-0049 H; code not unified |
 | H-02 | reproduces | coverage now sweeps coordinates (`0bf60aa1`) but is still not called from `verify_class_admission_v2` |
 | H-03 | points at `palw_carriage_v2.rs`, **absent from this branch** | admission-side ceilings landed (`0a7eb1e4`); the carriage-side limit is a different lane |
 | H-04 | reproduces | measured and pinned by a tripwire; the shipped constants are unchanged |
-| H-05 – H-08 | reproduce | not fixed. H-08's naming settlement is decided in ADR-0049 G and `execution_class_id` is still a flat digest |
+| H-05 – H-08 | reproduce | not fixed. H-08's naming settlement is decided in 旧ADR-0049 G and `execution_class_id` is still a flat digest |
 | M-01 | points at `palw_carriage_v2.rs`, **absent from this branch** (it lives on `palw-rc-audit-fixes`, `c1425406`). The equivalent here is `palw_lifecycle_objects_v2`, which carries no signature check | not applicable as written; unexamined here |
-| M-02 | **reproduces** — `state_root()` covers `class_shares` (`palw_state_v2.rs:1450`) and `receipt_targets` (`:1460`); ADR-0043 mentions neither. A code comment (`:101`) attributes the addition to ADR-0045, so it is ADR-0043 that has not followed | not fixed |
+| M-02 | **reproduces** — `state_root()` covers `class_shares` (`palw_state_v2.rs:1450`) and `receipt_targets` (`:1460`); 旧ADR-0043 mentions neither. A code comment (`:101`) attributes the addition to 旧ADR-0045, so it is 旧ADR-0043 that has not followed | not fixed |
 | M-03 | **reproduces** — the probe geometry is `layer_count: 1, hidden_dim: 32, vocab_size: 48` (`palw_qwen25_profile.rs:487`) | not fixed |
 
 **Two findings the audit could not have made from the snapshot**, both raised by the same
@@ -309,8 +309,8 @@ adversarial sweep and both verified here:
   called `check_palw_attempt_admission_v2`, which takes no verifier; admission item 2 compares two
   public values. Anyone could mine under anyone's bond, and one solved PoW minted unlimited distinct
   valid blocks. Fixed in `9e047dc4`, mutation-checked — reverting it makes a forged block become the
-  sink. ADR-0042 Decision 3c's deferral rested on a premise this removed, and needs re-deciding.
-* **`MAX_DOT_LEN` was derived from `127²` while `requantize` emits `-128`**, so ADR-0040 Decision E's
+  sink. 旧ADR-0042 Decision 3c's deferral rested on a premise this removed, and needs re-deciding.
+* **`MAX_DOT_LEN` was derived from `127²` while `requantize` emits `-128`**, so 旧ADR-0040 Decision E's
   free-reduction-order premise held over a subset of the operand type. Fixed, with a `const`
   assertion so the bound cannot be raised past what an `i32` accumulator survives.
 

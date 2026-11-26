@@ -13,8 +13,8 @@ is unverified source (no build, no run) until the consolidated validation phase.
 | `palw_native_mining_v39` | stage actions 73–79 and the `PNR9` receipt-block carriage (algo 7) | `validate_palw_native_mining_v39`: every prerequisite below armed at or below it, then the isolated calibration profile or a pinned `PALW_NATIVE_MINING_MEASURED_RECORDS_V39` record for the exact policy (EMPTY) |
 | Final27 + OPV (`palw_native_final_v27`, `palw_panel_free_v1`) | prerequisites of both | their own validators |
 | RFC-0018 Gate C (`rfc0018_v1` mirror, table 136) | claim-level drawn approval for every mining claim | `validate_palw_rfc0018_v1` |
-| ADR-0176 bond budget (`palw_bond_budget_v1`; its policy's `export_cap_permille` ≤ 0.51) | Q/B/R/F, exposure, hold, allocation clip | `validate_palw_bond_budget_v1` |
-| ADR-0179 model tier (`palw_model_tier_v1`) | c_m = 1.0 genesis/annual-fork, 0.3 registered; applied once in A_m | `validate_palw_model_tier_v1` |
+| 旧ADR-0176 bond budget (`palw_bond_budget_v1`; its policy's `export_cap_permille` ≤ 0.51) | Q/B/R/F, exposure, hold, allocation clip | `validate_palw_bond_budget_v1` |
+| 旧ADR-0179 model tier (`palw_model_tier_v1`) | c_m = 1.0 genesis/annual-fork, 0.3 registered; applied once in A_m | `validate_palw_model_tier_v1` |
 
 **testnet-12 DAA 14,000 (release plan 2026-10-15):** both owning39 fences ship dormant unless a reviewed change pins a
 measured-value record for the exact policy before the release candidate is cut. The record carries the digests of the evidence in
@@ -58,7 +58,7 @@ node checks the signer against the original owner rows for 48/50/54/55/68/69 bef
 - Master: `--mode master --id <master>` → aggregate83 plus every component's job audit under one anchor.
 - Anchor: the node exporter serves `NativeStateEnvelopeV39`; where rule E is in force at the parent DAA it serves the Rule-E V2
   leaf, otherwise the V1 leaf (`palw_accept.rs`, anchor39 branch). **Dependency:** the header-side root does not yet commit the
-  V2 leaf (`palw_committed_state_root_v1` is V1-only; lane L2FC/ADR-0178). Rule E is dormant and refused armed everywhere, so a
+  V2 leaf (`palw_committed_state_root_v1` is V1-only; lane L2FC/旧ADR-0178). Rule E is dormant and refused armed everywhere, so a
   rule-E anchor fails closed at the auditor until that lane wires it.
 - Receipts (A6/A8): `native_receipt_window_driver_v39.py` → `palw-native-receipt-audit39` → `native_receipt_window_audit_v39.py`.
   Two frozen windows, full denominators, named per-Master statuses; never sampled or shortened.
@@ -68,12 +68,12 @@ node checks the signer against the original owner rows for 48/50/54/55/68/69 bef
 ## 4. Mining (73–79, dormant)
 
 - 73 register (`prepare_mining_register_v39`): template Master with an original Final, registrant share ≤ policy maximum; the
-  model's economic class retains `HOLD_MODEL`. Tier is ADR-0179's (0.3 for every registration); **no model-level exam,
+  model's economic class retains `HOLD_MODEL`. Tier is 旧ADR-0179's (0.3 for every registration); **no model-level exam,
   probation, renewal or promotion** (user decision 2026-10-15, round 5). A registration admits claims after the original
   maturity DAA only.
-- 74 seat / 76 exit or retire (`prepare_mining_seat_v39`): seat stake is an ADR-0176 KernelRoute liability.
+- 74 seat / 76 exit or retire (`prepare_mining_seat_v39`): seat stake is an 旧ADR-0176 KernelRoute liability.
 - 75 commit (`prepare_mining_commit_v39`): canonical work from real positions, final lengths and every component's compute;
-  price clipped by the ADR-0176 plan (`plan_native_mining_budget_v39`, formula v2 `NativeFunded`); the claim enters RFC-0018
+  price clipped by the 旧ADR-0176 plan (`plan_native_mining_budget_v39`, formula v2 `NativeFunded`); the claim enters RFC-0018
   Gate C as a `'V'` subject (commit-then-draw, m-of-k, inner-75 attestations, sweep).
 - 77 issue (`prepare_mining_subject_v39(77, 0, claim)`): a receipt only when the claim is SecurityCertified and the native
   Gate C predicate holds; otherwise the claim closes and its budget is released.
@@ -91,6 +91,6 @@ consulted by any v39 path.
 ## 6. Before any activation proposal
 
 Measured A6/A8 over two windows on the target ruleset; independent native Final and redemption replays; RFC-0018 Gate C,
-ADR-0176 budget and ADR-0179 tier activation; the header-side Rule-E V2 commitment if rule E is part of the same release; the
+旧ADR-0176 budget and 旧ADR-0179 tier activation; the header-side Rule-E V2 commitment if rule E is part of the same release; the
 initial seven models stay `NOT_RUN` until their own launch evidence exists (`initial-seven-models-v1.json`), with no forced
 Active, no equal 1/7 split and no invented initial bonds; α = 1.5 and the 30-day eligible-bond allocation unchanged.

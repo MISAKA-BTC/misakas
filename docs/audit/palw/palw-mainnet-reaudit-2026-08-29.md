@@ -409,7 +409,7 @@ both halves, and the corrected statement is narrower — severity dropped `high`
   assumption the panel draw already makes (`2·quorum > seat_count`), not a defect of this changeset.
 
 What is real, and what M2-7's repair leaves standing, is the **other side of the ledger**: nothing
-in the transition ever *pays* a `PalwPanelSeatV2`. ADR-0033's `PalwPaidAttesterV1` pays the V1
+in the transition ever *pays* a `PalwPanelSeatV2`. 旧ADR-0033's `PalwPaidAttesterV1` pays the V1
 credit lane's attesters and is referenced nowhere outside `palw_credit.rs`; `palw_credit` is `None`
 on every shipped preset including the ConsensusV2 RC one; and the block's escrowed carve is
 released to the worker, not the panel.

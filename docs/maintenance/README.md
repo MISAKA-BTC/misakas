@@ -1,39 +1,35 @@
-# 文書の保守・検査
+# 文書の検査と差替え
 
-[整理・反映手順](REORGANIZATION.md) / [検査結果](validation-report.md) / [旧新パス](path-map.md) / [番号台帳](numbering.md) / [全文書](catalog.md)。
+現行RFCは[20本の設計](../rfc/README.md)、ADRは[20本の判断理由](../adr/README.md)です。旧71RFC・235ADRの本文と改訂コピーを残しません。今回の更新はdocsだけを対象とし、runtime・台帳・公開設定を変更しません。
 
-## 実行
+## 差替え
 
-リポジトリまたは配布packageのルートから、Python 3の標準ライブラリだけで実行します。
+ZIP内のdocsを現在のdocsと差し替えてください。既存docsへの単純な上書き展開だけでは、ZIPに含まれない旧RFC・ADRは削除されません。作業ブランチ上で差分を確認し、同梱のremoval-manifestにある文書削除も適用してください。ユーザーの未コミット作業は上書きせず分離します。
 
-```sh
-python3 docs/maintenance/check_docs.py
-python3 -m unittest discover -s docs/maintenance -p 'test_*.py' -v
+## 検査
+
+リポジトリrootから以下を実行します。
+
+```bash
 python3 docs/maintenance/generate_indexes.py
+python3 docs/maintenance/check_design_docs.py
+python3 docs/maintenance/check_docs.py
 ```
 
-通常モードは新規不備の回帰検査です。既存の欠落参照は [known-link-issues.json](known-link-issues.json) に原文との対応付きで残し、PASSを「全リンク正常」としません。既知の不備も失敗させる場合は `--strict` を指定します。baselineを一括更新して新規不備を隠しません。
+RFC20本・ADR20本・連番・責務・policy・現行リンクの検査と、旧補助資料を含む全docsのリンク検査を分けます。元ZIPに不足していた証跡を作ったことにせず、全体検査の失敗数も記録します。これらは文書検査であり、PALW runtimeの検証ではありません。
 
-## 対象と限界
+## 削除した文書への参照
 
-新しいリンク不備、番号衝突、主文書索引の不整合、必須入口、rootへの未分類ファイル、パラメーター台帳の基本形式、画像・動画・改善の文書上の延期/無効化方針を確認します。実際のnode無効化、プロトコルの意味、承認の真正性、build/test/有効化は検証しません。
+ここへ移したリンクの旧対象は、今回削除した文書履歴、改訂コピー、旧RFCの補足添付です。このページはその内容・証拠を代替しません。旧仕様は[RFC対応表](../rfc/MAPPING.md)と[ADR対応表](../adr/MAPPING.md)から現行の担当RFCへ進んでください。内容の配置先は[責務対応](content-responsibility-map.json)で確認できます。削除対象は[一覧](removal-manifest.json)にpathとサイズだけを記録し、本文は保存しません。
 
-外部URLとdocs外のコード参照は取得しません。Markdownの完全なCommonMark実装ではなく、見出しfragmentはGitHub形式の近似です。[機械出力](validation-summary.json)。
+旧実測の説明から削除資料へ進んだ場合、その旧実測の再現に必要な資料がこの配布物で全て揃うとは主張しません。実行ログと生データの保持はRFC本文の保存とは分けています。
 
-## CI
+## 検査範囲
 
-既存CIのdocs変更ジョブからcheckerとunit testを呼び出します。入力ZIPに含まれない `.github/workflows/` や `scripts/ci-gates.sh` は変更していません。文書チェックを実装の安全性検証の代用にしません。
+Markdownのローカル参照、RFC/ADR各20本の番号と相互参照、主要policy、提案状態を静的に確認します。外部URL、リポジトリ本体のコード、実台帳、BFTの実投票、費用下界、合意安全性、公開有効化はこの検査では確認しません。
 
-[元資料manifest](migration-manifest.json) / [リンク修正](link-rewrites.json) / [反映ツール試験](tool-test-results.json)。
+## pre への適用時の参照比較
 
-## 統合版の履歴
+初回適用時の `pre`（`f839ef0dc0307b58ed6cc280e631b1e1d34f733c`）と同一の解析器で比較しました。当初の811件のうち761件は `pre` で既に欠落しており、残る50件は公開準備記録からS3・pruned IBD・TB1・FOW1の証跡への参照でした。Git履歴の45ファイルと、そのうち1件が参照する2ファイルを元の内容で収録しました。既存の欠落は参照元・参照先・見出し・件数が適用前と一致する場合だけ許容します。反映直前の `pre`（`d28cd043db55bd95dd4343b19700b5859fbf4685`）でも同じ比較を行い、新規欠落が0件であることを確認しました。全docsの検査結果は [検査記録](full-docs-validation.json) を参照してください。
 
-閲覧・編集は [ADR](../adr/README.md) と [RFC](../rfc/README.md) に集約しました。統合版の本文・対応表・registryは[整理直前のコミット](https://github.com/MISAKA-BTC/misakas/tree/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs)で参照できます。統合版のファイルやハッシュを前提とする過去の改訂検査は、各改訂の対象コミットで実行します。
-
-## PALW claim の診断
-
-`getPalwKernelClaim` に128桁の16進 claim IDを渡すと、対応ノードの `diagnosticJson` に選択親、state root、DAA、段階ごとの理由コードと次の操作が返ります。状態 root を保持していない場合は理由コードを返します。古い RPC 応答はこのフィールドが空です。
-
-`last_local_failure` は照会した選択親で最後に拒否された候補です。候補ブロック、DAA、原因と同じ原因の連続回数を含み、台帳上の決定とは独立しています。別の選択親に切り替わった場合、その親で観測した結果を表示します。段階を担当する処理が未接続なら `not_implemented`、当該スナップショットから具体的な結果が確認できない場合は `not_recorded` と表示します。
-
-TB1 の `Halted` は再起動後も停止します。履歴走査の上限超過は、対象の選択親、走査位置、上限を含みます。走査方法や利用できる履歴を確認してください。
+マニフェストの元版にない改訂スナップショット356件は、適用前のGitオブジェクトに照合し、マニフェストに追加して削除しました。過去の証跡への参照には、必要に応じて適用前コミットの固定リンクを使います。

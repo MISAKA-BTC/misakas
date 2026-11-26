@@ -1,8 +1,8 @@
 # kaspa-pq 量子耐性完了設計書
 
-- 文書版: 1.1（ML-DSA-87 版）。**v2 整合追補 (2026-06-01)**: 署名 context は `kaspa-pq-v2/{tx,sighash}/mldsa87`、address payload は keyed BLAKE2b-512(`kaspa-pq-v2/address/mldsa87`)、caps は 16_384、識別子は `MlDsa87` に rename 済み。本書の該当値は更新済（経緯は ADR-0019 Revision 1.2）。
+- 文書版: 1.1（ML-DSA-87 版）。**v2 整合追補 (2026-06-01)**: 署名 context は `kaspa-pq-v2/{tx,sighash}/mldsa87`、address payload は keyed BLAKE2b-512(`kaspa-pq-v2/address/mldsa87`)、caps は 16_384、識別子は `MlDsa87` に rename 済み。本書の該当値は更新済（経緯は 旧ADR-0019 Revision 1.2）。
 - 作成日: 2026-05-30 / リポジトリ凍結: 2026-05-31
-- 統治 ADR: [docs/adr/0019-mldsa87-migration.md](../../adr/0019-mldsa87-migration.md)（本書を採用）
+- 統治 ADR: [docs/rfc/0001-principles-and-governance.md](../../rfc/0001-principles-and-governance.md)（本書を採用）
 - 目的: 既存コードを「ML-DSAを一部導入した実験実装」から、「PQネットワークとして量子耐性を主張できる実装」へ変更するための設計を定義する。
 
 ## 1. 結論

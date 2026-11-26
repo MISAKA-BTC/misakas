@@ -26,7 +26,7 @@ So the 3.37 GiB an 8k replay reserved is two terms, neither of which is the repl
 | trace scratch | 1.67 | `prefill_run_positions` (64) × one position's committed trace at the widest history (≈ 9.3 MB at 1,024 rows) × `PALW_PREFILL_RUN_COPIES_V1` (3) | a node-local choice of width; every width commits the same bits |
 
 And the shared copy was not safe where it sat: under the host's pressure the kernel evicted it and replays refaulted it 4 KiB at a
-time at 6–11 MB/s (ADR-0112 §1, `misaka/palw/base0/src/mmap.rs`; 845 MB/s for large reads) — the minutes 5.104's replays spent.
+time at 6–11 MB/s (旧ADR-0112 §1, `misaka/palw/base0/src/mmap.rs`; 845 MB/s for large reads) — the minutes 5.104's replays spent.
 
 ## 2. How each holding is held (CP1)
 
@@ -35,10 +35,10 @@ time at 6–11 MB/s (ADR-0112 §1, `misaka/palw/base0/src/mmap.rs`; 845 MB/s for
 | dense A16 `.palwart` (the 8k class) | `DenseLineageV1::load` → `ReadOnlyMap` (`PROT_READ`, `MAP_PRIVATE`, whole file) → `decode_artifact_file_mapped_v1` | the int8 slabs, `Int8SlabV1::Mapped`: **1,694.6 of 1,716.0 MiB** (walked on the real 8k file) | the a16 store 17.35 MiB (`.to_vec()` at decode), the rotary table 4.0 MiB, small tables; ~20 MiB of `A16Engine` parameter tables per execution; a per-resolve clone of the owned part (`dense_artifacts`) | the file (1.68 GiB) |
 | dense, platform that cannot map | `decode_artifact_file_v1` (owned) | — | the whole file | the file |
 | IR container (`PALWTIR1`, Phase H) | `TirArtifactV1::open`: `MappedFile` (`PROT_READ`, `MAP_PRIVATE`), params `Cow::Borrowed` in place (64-byte aligned, LE); root streamed at load | all params | the plan, the param index; the inventory tree on the first court opening | the file (no resource profile: + the 0.5 GiB estimate) |
-| Qwen3.6 `.palwq36` under ADR-0112 | `open_artifact_with_residency`: `ReadOnlyMap` for the header and embedding rows; the always-set and the routed-expert LRU `pread` into OWNED buffers | the embedding rows touched | the residency budget (always-set ~1.86 GiB + experts), per process, not shared | 0 (the budget is counted at load) |
+| Qwen3.6 `.palwq36` under 旧ADR-0112 | `open_artifact_with_residency`: `ReadOnlyMap` for the header and embedding rows; the always-set and the routed-expert LRU `pread` into OWNED buffers | the embedding rows touched | the residency budget (always-set ~1.86 GiB + experts), per process, not shared | 0 (the budget is counted at load) |
 | the floor (derived) | minted from the seed | — | the derived artifact | 0 |
 
-The comment at `qwen25_a16_backend.rs` (`artifact_read_probe_v1`, ADR-0077 SA-6: "this tier's artifact is owned memory … no mapped
+The comment at `qwen25_a16_backend.rs` (`artifact_read_probe_v1`, 旧ADR-0077 SA-6: "this tier's artifact is owned memory … no mapped
 page can fault under a job") and `lineage.rs` ("owned whole") predate "Mapped, not read" in `DenseLineageV1::load`: on a POSIX node
 the weights are a mapping, they are refaulted under pressure, and they are pinned when the policy allows (int-10.2). Both comments
 now say so; the probe still answers `Ok`, and its doc names the remaining gap (a file truncated in place under the mapping).
@@ -46,7 +46,7 @@ now say so; the probe still answers `Ok`, and its doc names the remaining gap (a
 **Who reserves what** (all through `role_memory_need_for_backend_or_chain_v1` on the very backend instance that then executes, so
 the figure is the instance's): producer (`producer`), SEAT-R full seat (`full-seat`: attempt, free prompt, the legacy path), SEAT-S4
 partial seat (`partial-seat`, streamed fold), court close (`court`), interval seat (`interval-seat`), DA answer (`da-answer`), S3
-sampler (`s3-sampler`), whole-capture sampling (`full-seat capture`), ADR-0160 audit and operator DA (`operator-da`), J1 probe
+sampler (`s3-sampler`), whole-capture sampling (`full-seat capture`), 旧ADR-0160 audit and operator DA (`operator-da`), J1 probe
 (`j1-probe`), replay filer (`replay-filer`, `replay-bisect`, `held-dissection`), held evidence (`held-evidence`, bytes) — each the
 holding's incremental bytes + the role's working set. The readiness proof lane reserves its 32 MiB carve and asks
 `capacity_admits(full-seat need)`. The pre-check before a duty (`replay_memory_budget_v1`) is a dry run of the full seat.
@@ -138,7 +138,7 @@ resume on a borrowed backend, the replay filer and the held court keep reserving
 So the reservation and the run can never disagree.
 
 **Where the width is chosen.** SEAT-R full seat (attempt, free prompt, the legacy path), SEAT-S4 partial seat, the court's close, the
-interval seat, the S3 sampler, the whole-capture sampler, the ADR-0160 audit and operator DA, the J1 probe, and the producer. **The
+interval seat, the S3 sampler, the whole-capture sampler, the 旧ADR-0160 audit and operator DA, the J1 probe, and the producer. **The
 producer** takes the same rule: 64 whenever its need fits (the attempt is a race and the widest width is the fastest), narrower only
 where the attempt would otherwise HOLD — an attempt that holds produces nothing, one at 16 positions takes a few percent longer
 (timed below).
@@ -177,7 +177,7 @@ Mac (10 cores) while other lanes built — load average 30 at the start, 75 at t
 Every width committed the same execution root, trace root, work leaves and output root (asserted); peak RSS 2.6 GiB. The host's
 load is the largest term here — the same width took 61 % longer at the end than at the start — so the table bounds the width's own
 cost rather than measuring it: 32 and 16 cost a few percent against the first 64 and 8 a quarter, never the 2.45× of stepping one
-position at a time. ADR-0117's idle measurement of the prefill alone (graph-v5, 508 positions, 12 cores) is the other bound: 64 →
+position at a time. 旧ADR-0117's idle measurement of the prefill alone (graph-v5, 508 positions, 12 cores) is the other bound: 64 →
 32 +11 %. So **narrowing an 8k replay from 64 to 32 costs 4–11 % of its time and halves its trace scratch**; 16 a little more.
 
 **Reported.** A reservation the ledger narrowed is logged (once a minute per role: the need at the width taken and what the cap's

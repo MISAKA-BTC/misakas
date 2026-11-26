@@ -12,7 +12,7 @@
 
 G14-onlyのバイナリ、過去の19 suite、新たな限定候補の試験は、それぞれ記録されたソース・範囲の証拠である。全機能候補の成功証拠に付け替えない。G14の既存予定はDAA18400、FULLは`None`を維持する。このgoalは公開ネットワークの追加有効化を宣言しない。
 
-RFC-0037の採択とversion割当、およびRFC-0042/ADR-0210の新双方署名供給契約の採択は、会話内のユーザー承認済みとして引き継ぐ。旧署名・wire・IDの意味を新契約へ遡及変更しない。
+RFC-0037の採択とversion割当、およびRFC-0042/旧ADR-0210の新双方署名供給契約の採択は、会話内のユーザー承認済みとして引き継ぐ。旧署名・wire・IDの意味を新契約へ遡及変更しない。
 
 ## 実装と受入の担当
 
@@ -39,7 +39,7 @@ RFC-0037の採択とversion割当、およびRFC-0042/ADR-0210の新双方署名
 
 ## 初期mainnetと隔離実装の境界
 
-[RFC-0033](../../../../rfc/0033-d2-readiness-root-opening-availability.md)と[ADR-0200](../../../../adr/0200-d2-readiness-root-opening-availability.md)のC1は詳細仕様化・隔離実装の承認であり、公開金融契約・pre統合の採択とは区別する。後続のdraw/fee/slash数値決定だけで未接続の資金移動を完成扱いにしない。隔離codec・literal署名・開示・期限・no-supply・undoの検査を記録し、公開ready/信用を迂回して許可しない。RFC-0034も採択済み隔離S1範囲と未採択の公開有料dispatchを区別する。
+[RFC-0033](../../../../rfc/0010-materials-and-funded-delivery.md)と[旧ADR-0200](../../../../rfc/0009-court-and-claim-final.md)のC1は詳細仕様化・隔離実装の承認であり、公開金融契約・pre統合の採択とは区別する。後続のdraw/fee/slash数値決定だけで未接続の資金移動を完成扱いにしない。隔離codec・literal署名・開示・期限・no-supply・undoの検査を記録し、公開ready/信用を迂回して許可しない。RFC-0034も採択済み隔離S1範囲と未採択の公開有料dispatchを区別する。
 
 RFC-0016のレポートは既存の受付用容量計算へ接続し、認証済み入力が揃う場合のcapacity/shortfallと、欠測時のNoneを検査する。診断用試験の成功を全体の最終候補の証拠へ付け替えない。
 

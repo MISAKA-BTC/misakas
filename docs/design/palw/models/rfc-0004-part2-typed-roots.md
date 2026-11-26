@@ -1,15 +1,5 @@
 # RFC-0004 Part II — computation specifications with typed roots (lane R4X, 2026-10-08)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Branch `rfc4/part2-typed-roots` (base `a15a8e212`). Spec of record: RFC-0004 Part II §§II.1–II.4; direction note
 `beyond-weight-files.md`. Everything here is **dormant**: it sits on the kernel route (tag 110), which is behind
 `palw_probabilistic_constraints_v1` (refused at every real height), and the typed kinds additionally need the typed-roots kernel
@@ -67,7 +57,7 @@ Accepted combinations (v1), anything else refused by name (`KIND_COMBINATION_UNS
 | `[CompositeV1]` | composite class | same |
 
 `extension` in Memory/Retrieval/Composite is the digest of the typed-roots descriptor `K2-TR-v1`; a class names it, so a later
-`K2-TR-v2` is a new class id (a descriptor's meaning is append-only, ADR-0172). A kind the binary does not know does not decode
+`K2-TR-v2` is a new class id (a descriptor's meaning is append-only, 旧ADR-0172). A kind the binary does not know does not decode
 (`Malformed`); a known kind whose extension is not Active is `KERNEL_NOT_ACTIVE [typed-roots]`; a kind the Active extension does not
 list is `KERNEL_EXTENSION_REQUIRED [<kind>]`; a Memory slot over a `Hist` state is `KERNEL_EXTENSION_REQUIRED [memory-hist-carry]`.
 
@@ -395,7 +385,7 @@ matrix: CODE / DESIGN / POLICY / EXTERNAL).
 | 4 bounded localisation and objective adjudication by one outsider | one step (§2.3); the fresh outsider rebuilds every step from the rows, the chain's head and DA | one item (§3.3), one session per prosecution | one stage or edge (§4) | — (shown: kernel `typed_roots::*`, node `r4x_*`, each with a fresh outsider over rows a second node replays) |
 | 5 collectable collateral consistent with the maximum gain | a claim's gain includes the line's future: a lie that reaches Final moves the head every later job computes from; rolled back by a post-Final conviction within the liability horizon, permanent after it | the gain of a promoted / suppressed item is external to the reward | one reservation for the whole pipeline | POLICY: the OPV reservation (interim 1,000 BILI) from max gain ÷ detection probability; DESIGN: a memory class's **line value at risk** belongs in that gain (a per-class declared bound, or a liability horizon that scales with it) |
 | 6 resources, cost and incentive for an honest verifier in time | a whole-claim check is `S` step checks (parallel); the window must fit them | detecting a missed item scans the snapshot: `N · item` bytes fetched once per class (amortised), `N · D` MACs per claim (`retrieval_claim_material_bytes_v1`) | Σ over stages | EXTERNAL (MEAS): `T_check` per kind on real sizes; POLICY: a window ≥ `T_beacon + T_fetch + T_check + T_localize + T_file + T_margin` per class, the accuser reward |
-| 7 dispute, DA/default, Final and reorg consistency | the route's lifecycle; Final advances the line, a post-Final conviction rolls it back, a superseded claim never moves it; the line is ledger rows, folded per block (replayed by a second node) | the route's | the route's | CODE (FINX): rule E (ADR-0178) before the release; (closed at the G14-R4 merge: GAP-5 escrow for spec jobs; a memory job stranded by a moved head has its escrow returned by the idle-escrow rule) |
+| 7 dispute, DA/default, Final and reorg consistency | the route's lifecycle; Final advances the line, a post-Final conviction rolls it back, a superseded claim never moves it; the line is ledger rows, folded per block (replayed by a second node) | the route's | the route's | CODE (FINX): rule E (旧ADR-0178) before the release; (closed at the G14-R4 merge: GAP-5 escrow for spec jobs; a memory job stranded by a moved head has its escrow returned by the idle-escrow rule) |
 
 **RFC-0004 §II.4 item 6 (census).** `SUPPORTED_KINDS_V1` is the predicate a census reads: a repository that is a complete computation
 of a supported kind (for example a retriever + index + generator repository as a Composite) belongs in `D_complete` and counts as

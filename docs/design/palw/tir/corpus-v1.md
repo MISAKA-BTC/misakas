@@ -64,7 +64,7 @@ param, a state or a commit, PALW-TIR-5); the set is frozen at Phase E, and `prim
 
 | name | dtype | meaning |
 | --- | --- | --- |
-| code | `i16`, values in `±32767` | an A16 activation (ADR-0047); the carry, K/V rows, most commit points |
+| code | `i16`, values in `±32767` | an A16 activation (旧ADR-0047); the carry, K/V rows, most commit points |
 | w8 | `i8` param | a weight code; per-channel scale in the narrowing params |
 | acc | `i64` | an exact accumulator (a `MatMul`, a `ReduceSum`) |
 | wide | `i128` | a fixed-point product before its rounding (`x·m` with `m` an `i64` multiplier) |
@@ -92,7 +92,7 @@ Written as functions; each expands into the listed primitives.
 | `Angles(pos)` | two-level tables: `Div_Floor(pos, 2^b)`, `Sub`, 4 `Gather`s, angle addition, `Div_Floor(2^24)` (spec 04b §11.3) | Floor |
 | `Attn(q, K, V)` | `HistAppend` K and V, `Transpose`, `MatMul` over `d`, `N`, `Softmax_up`, `N` to Q15 codes, `MatMul` over `H`, `N` | as above |
 | `L2(x)` | `ReduceSum` of squares, `Log2Floor`, shift into `[2^24, 2^26)`, `IntRsqrt`, `Mul`, `Div_Floor(2^(9+e))`, `Clamp` | Floor, IntRsqrt, Saturate |
-| `Softplus`, `ExpRef`, `Decay` | the ADR-0052 compositions of `IntExp` and `IntLn` | IntExp, IntLn, Floor, Saturate |
+| `Softplus`, `ExpRef`, `Decay` | the 旧ADR-0052 compositions of `IntExp` and `IntLn` | IntExp, IntLn, Floor, Saturate |
 | `Pow2(s)` | `Gather([2^0 … 2^62], Clamp_idx(s, 0, 62))` — a variable shift is a gather and a `Mul`/`Div` | Saturate (the clamp) |
 | `Conv_w(x; state, taps)` | `Concat(State[w−1,C], x[1,C])`, `Slice` last `w−1` → `StateWrite`, `Mul` by taps, `ReduceSum` over the window | none (exact) + the narrowing after |
 | `MapHeads_g / _t(x)` | grouping `Reshape[k,1,d]→Broadcast[k,r,d]→Reshape[v,d]`; tiling `Reshape[1,k,d]→Broadcast[r,k,d]→Reshape[v,d]` | none |
@@ -257,7 +257,7 @@ w   = Gather(p, idx) : q24[k];  (normalise: w·IntRecip(Σw) >> 24; × scaling f
 Wg_e = Gather(W_gate_exps: w8[E, F, D], idx) : w8[k, F, D]        -- routed_expert_matmul structurally
 g  = MatMul(Wg_e, h[D,1]) : acc[k, F, 1] → N → q24;  up likewise;  m = N(SiLU(g)·up)
 y  = MatMul(Gather(W_down_exps, idx) : w8[k, D, F], m[k, F, 1]) : acc[k, D, 1] → N → i32 rail [k, D]
-out = N(MatMul(w[1,k], y[k,D]) : acc[1,D])          -- ONE accumulator (ADR-0052 C)
+out = N(MatMul(w[1,k], y[k,D]) : acc[1,D])          -- ONE accumulator (旧ADR-0052 C)
 (+ shared expert FFN; Qwen2-MoE: × Sig(Lin(h; w_sg[1,D])))
 ```
 
@@ -444,7 +444,7 @@ new primitive. **MLA** (C8/§4 DeepSeek).
 | scaling factor | DeepSeek `routed_scaling_factor` | a Q24 `Mul` + `Div_Floor` |
 
 **Ties.** Q24 probabilities underflow to exact zeros on confident tokens; `TopK`'s lowest-index rule
-and index-order output make the committed selection a function of the values (ADR-0052 B). Float
+and index-order output make the committed selection a function of the values (旧ADR-0052 B). Float
 `torch.topk` breaks ties in an implementation-defined order — the IR's rule is a (documented) choice,
 and a fidelity matter only.
 
@@ -536,7 +536,7 @@ the same function. The legacy convention becomes explicit.
    any wide normalisation precise. The alternative (a 127-way `Compare` ladder) costs 127× per element.
 3. **`Div` with a tensor divisor and three rules.** One primitive is every rounding shift of 04a
    (`Floor`, `HalfUp` = SRDHM, `HalfAwayFromZero` = `RoundingShiftRight`), every static shift (divisor
-   a const `2^s`), every per-channel or **per-token** shift — the per-token lift of ADR-0102
+   a const `2^s`), every per-channel or **per-token** shift — the per-token lift of 旧ADR-0102
    (`RequantizeByToken`) is `Div(·, Pow2(Gather(shift_table, token)))` — every mean (`÷ n`), and
    exact data renormalisation (the fenced Kimi router's `(w·ONE)/sum`). It replaces `ShiftRight`,
    `DivConst` and the fused `Requantize`/`Rescale`.
@@ -621,7 +621,7 @@ cost vector, spec 04b §8). A primitive stays only if no composition meets that.
 | Div | the only rounding operation; its three rules are 04a's; a shift is `Div` by `2^s` (so `ShiftRight` is dropped). |
 | Clamp | the only saturating narrowing; `Select`+`Compare` cannot narrow the dtype (the output interval would be the union of the branches). |
 | Log2Floor | a `Compare` ladder against 127 powers of two costs 127× per element. |
-| IntExp, IntRsqrt, IntLn | fixed-iteration algorithms whose integer steps are defined by 04a/ADR-0052; composed from the others they would cost a full algorithm's worth of nodes per element and could not be matched by the frozen KAT vectors as one site. `IntRecip` IS a composition (`IntRsqrt`, `Mul`, `Div`) at equal cost and is dropped. |
+| IntExp, IntRsqrt, IntLn | fixed-iteration algorithms whose integer steps are defined by 04a/旧ADR-0052; composed from the others they would cost a full algorithm's worth of nodes per element and could not be matched by the frozen KAT vectors as one site. `IntRecip` IS a composition (`IntRsqrt`, `Mul`, `Div`) at equal cost and is dropped. |
 | Compare | the only producer of a predicate. |
 | Select | the only data-dependent choice between values. |
 | TopK | a selection with a normative tie rule and a committed output; `Sort` is not needed, `ArgMax` is `TopK(1)`. |
@@ -685,7 +685,7 @@ useful, never whether a claim is valid.
 
 Anchors: the live A16 Qwen2.5-1.5B class measures top-1 0.877 calibrated and 0.917 held out (57/48
 positions, `palw_base0_a16.rs` header); the GDN integer recurrence measures 9.1e−4 → 1.1e−3 relative
-output error from 128 to 2,048 steps (ADR-0052 E) — flat, which is what the drift column requires. A
+output error from 128 to 2,048 steps (旧ADR-0052 E) — flat, which is what the drift column requires. A
 family that misses its row is a quantisation problem (calibration, per-group scales, wider codes), not
 an IR problem, and is reported as such (RFC open question 3).
 

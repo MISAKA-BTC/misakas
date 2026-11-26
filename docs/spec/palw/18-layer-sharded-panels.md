@@ -1,15 +1,5 @@
 # PALW spec — 18. Layer-sharded panels
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **Normative.** This chapter specifies RFC-0006 (adopted 2026-10-03, every open question at its recommended
 > default): a seat of an IR class verifies a **cell** of a claim — a contiguous range of layers crossed with a
 > position segment — from the claim's committed boundary rows and only that range's weights, and a claim of a class
@@ -150,7 +140,7 @@ flat, **shard-major**, each shard `[outsider?] ++ s_shard class seats` with `s_s
   (its seats are distinct duties with distinct masks, §18.5; its lock accumulates, §18.7).
 - **The outsider.** Where the claim is outsider-judged (`palw_claim_is_outsider_judged_v1`: a bought class past
   `palw_admission_independence`), each shard's slice leads with its outsider, drawn from the base-class population exactly as
-  ADR-0147 draws the claim's, under the outsider ticket domain with the shard in the ticket seed. One operator holds at
+  旧ADR-0147 draws the claim's, under the outsider ticket domain with the shard in the ticket seed. One operator holds at
   most one outsider seat of a claim, and a shard's outsider operator is not also a class seat of that shard.
 - **A short shard** refuses the whole draw by name (`InsufficientEligibleShardBonds { shard, needed, available }`); a sharded
   class never falls back to a flat panel. A panel bound under a plan whose length is not `S_L × stride` is a flat panel (bound

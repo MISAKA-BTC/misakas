@@ -10,6 +10,6 @@ RFC-0017による改定では階層係数を含む配分を使い、tier fence�
 
 ## 出典と適用条件
 
-[RFC-0016](../../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) / [RFC-0017](../../rfc/0017-model-eligibility-examination-and-renewal.md) / [ADR-0179](../../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) / [RFC-0018](../../rfc/0018-dag-parallel-multi-model-consensus.md)。
+[RFC-0016](../../rfc/0012-bonds-budgets-and-slashing.md) / [RFC-0017](../../rfc/0007-bft-model-admission.md) / [旧ADR-0179](../../rfc/0007-bft-model-admission.md) / [RFC-0018](../../rfc/0011-gate-c-and-consensus-credit.md)。
 
 [パラメーター台帳](../../governance/parameter-register.md) / [mainnet後への延期](../../governance/post-mainnet-scope.md) / [仕様索引](../README.md)。

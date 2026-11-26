@@ -1,15 +1,5 @@
 # PESG-B — worst-case fault placement and the detection probability (PESG §4 B, T2)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Lane PESG-B, branch `pesg/detection-bounds` (from integration `0fc729c55`), 2026-10-10. This is the B part of the
 [Probabilistic–Economic Security Gate](../economics/probabilistic-economic-security-gate.md). It fills in the T1 coverage table for B and gives
 the T2 analysis: the probability and cryptography terms. The original PESG-B lane added only the tests in
@@ -38,7 +28,7 @@ capable honest verifier who **runs** the profile's check, on time and with the m
 | Typed roots: memory, retrieval, composite | memory: as v2 per step plus derived boundaries; retrieval: complete scan; composite: union of its stages | as v2 (memory); none (retrieval) | as v2 (memory); `1 − 2^-256` (retrieval) | **PASS** (conditional) |
 | Sampled conformance (S5) | random sampled draws (prompts with replacement, leaves without replacement) | one faulty leaf; one trigger prompt | leaf: `1 − ((N−s)/N)^r`; trigger prompt: about 0 | **FAIL** (sparse faults; the vector-logits relation has no court, T1 FAIL) |
 | Complete-check bootstrap conformance | complete check | none | 1 (`ε = 0`) | **PASS** |
-| Legacy V2 route (Panel V2, S1/S3, ADR-0077 interval draw) | under T3 collusion: none (the seats' replay); random interval draws (`k = 4` of `N`) and a voluntary watchdog | the last interval, a selection lie | 0 under T3; at most `1 − (1 − k/N)^h` with `h` honest seats (1.34 % at `h = 1`, `N = 299`) | **FAIL** |
+| Legacy V2 route (Panel V2, S1/S3, 旧ADR-0077 interval draw) | under T3 collusion: none (the seats' replay); random interval draws (`k = 4` of `N`) and a voluntary watchdog | the last interval, a selection lie | 0 under T3; at most `1 − (1 − k/N)^h` with `h` honest seats (1.34 % at `h = 1`, `N = 299`) | **FAIL** |
 
 **Note on "conditional".** The v1/v2/v3/memory figures assume that the honest verifier reads the whole claim: every position's
 values, once each. That is how `OutsiderV1::check_program` works (`ScopeV1::WholeClaim`). Whether such a read finishes inside
@@ -93,7 +83,7 @@ exactly one relation, with no omission, no duplicate and no weaker checker. Lemm
 | Segment entry/exit state roots | **C** (recomputed from the commitments) | chain at inclusion | `evidence.rs:184` |
 | Each delivered token (greedy decode) | **C** | O | `check_program` |
 | Generation length (`len = max_new_tokens > 0`, fixed reward) | **C** — exact public job binding; a wrong length is refused before reward eligibility (F-B1 fixed) | chain at inclusion | `job.rs` `generation_length_matches_v1` |
-| Model-weight binding (param commitments ↔ artifact root) | **C**, refutable by a verifier that holds the bytes (tag 105); conditional on acquisition (ADR-0177) | O | readiness matrix, GAP 1 withdrawn |
+| Model-weight binding (param commitments ↔ artifact root) | **C**, refutable by a verifier that holds the bytes (tag 105); conditional on acquisition (旧ADR-0177) | O | readiness matrix, GAP 1 withdrawn |
 | Interim Panel seats (PanelLicensed) | **A + C** on `WholeClaim`, but with **public coins grindable by the claim id** (`palw_kernel_interim_seed_v1`) | seats | not soundness-bearing (SG-05) |
 
 ### 2.2 K2-TIR-v3 pipelines (`ClaimBodyV1::Pipeline`)
@@ -137,7 +127,7 @@ relation exists to cover.
 | sampled vector **logits / commit digests** | **S** | **none** (SG-11) → **N1** |
 | complete-check bootstrap (`PostComplete`, tag 109) | **C** in the fold (every input, every leaf) | not needed (the fold computed it) |
 
-### 2.7 Legacy V2 route (Panel V2: ADR-0133 S1/S3, ADR-0077 Decision 8, ADR-0098)
+### 2.7 Legacy V2 route (Panel V2: 旧ADR-0133 S1/S3, 旧ADR-0077 Decision 8, 旧ADR-0098)
 
 | Relation | Method | Who |
 |---|---|---|

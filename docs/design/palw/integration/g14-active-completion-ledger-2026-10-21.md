@@ -6,7 +6,7 @@ The previous integration request is complete: `pre` was pushed at `537843abe`, p
 
 ## Decisions carried forward
 
-ADR-0192 A/A: recorded real reserved supply under explicit delivery/inclusion premises; owner-independent claim-common frontier and advance reservation of every permitted branch. ADR-0194 A: isolate candidates, preserve X3 tags and separate service namespace. ADR-0197 A: separate correct adjudication from unresolved liability archive. ADR-0198 A: inclusive initial notice `a <= d <= a+3,120`, unchanged hard `a+10,000`. ADR-0199 A: authenticated primitive material including parameters/prompt and terminal intents, without exclusive unfinished body ownership. ADR-0188 B: root/count and digest authentication paths selected for isolated tag230 work; draw cap remains unadopted. ADR-0200 C1: F02 digest/path disclosure court selected. ADR-0201 S1: only actual timely correct fulfillment discharges that side. ADR-0202 A: real-UTXO-backed operational escrow selected for detailed isolated implementation; implementation remains absent. None adopts production financial/network values or arms a fence.
+旧ADR-0192 A/A: recorded real reserved supply under explicit delivery/inclusion premises; owner-independent claim-common frontier and advance reservation of every permitted branch. 旧ADR-0194 A: isolate candidates, preserve X3 tags and separate service namespace. 旧ADR-0197 A: separate correct adjudication from unresolved liability archive. 旧ADR-0198 A: inclusive initial notice `a <= d <= a+3,120`, unchanged hard `a+10,000`. 旧ADR-0199 A: authenticated primitive material including parameters/prompt and terminal intents, without exclusive unfinished body ownership. 旧ADR-0188 B: root/count and digest authentication paths selected for isolated tag230 work; draw cap remains unadopted. 旧ADR-0200 C1: F02 digest/path disclosure court selected. 旧ADR-0201 S1: only actual timely correct fulfillment discharges that side. 旧ADR-0202 A: real-UTXO-backed operational escrow selected for detailed isolated implementation; implementation remains absent. None adopts production financial/network values or arms a fence.
 
 ## Required implementation and evidence
 
@@ -22,7 +22,7 @@ ADR-0192 A/A: recorded real reserved supply under explicit delivery/inclusion pr
 | P2 / localization and evidence | Named-root check, all-child numerical frontier, existing fold checks, edge range assembly and shared material builder | Full original dependency closure and legal families, lookahead/single-position integration, multiproof and actual whole-evidence comparison; real-model door <=3,120. SC64 remains unattained where actual signatures alone exceed it |
 | Recovery failure | [Pruning repair](../../../evidence/palw/g14-completion-2026-10-21/pruning.md): strict targeted1 and six-case actual service suite pass; no deadline/assertion weakening | Full shared-original restart/reorg/pruned IBD under funded service and all-family stress; these six legacy-service cases are not that campaign |
 | R-D2-NODE / READY / COVER | Claim-part replacement node component evidence exists; B root/path codec:8 selected passes, native ingress still absent; original exact digest refutation exists; named/adversarial and original-wide numerical parameter footprint tests pass | Full family/daemon signoff; READY native literal-seat authorization, explicit draw cap, resource/fee/state/wire/fence integration; COVER exact finalize read-set admission without compelled producer model bytes |
-| RFC-0027 / ADR-0193 | Imported report and original assets distinguish old-log reaggregation, conditional capital simulation and assumed-price sensitivity | Document import is complete within its scope. New Account Bond code/adoption and actual operating node/profit/heartbeat measurements are absent; any G14 financing that relies on them must first supply that evidence. Neither minimum100,000 nor example12,000/claim proves viable operating capital |
+| RFC-0027 / 旧ADR-0193 | Imported report and original assets distinguish old-log reaggregation, conditional capital simulation and assumed-price sensitivity | Document import is complete within its scope. New Account Bond code/adoption and actual operating node/profit/heartbeat measurements are absent; any G14 financing that relies on them must first supply that evidence. Neither minimum100,000 nor example12,000/claim proves viable operating capital |
 
 ## RFC-0026 T01–T15 completion audit
 
@@ -104,7 +104,7 @@ Next primary integration work is the original coordinator: derive canonical comp
 | Packet | 34,000 B (V1 `PALW_G14_PACKET_BYTES_V1`) | lane VAL | M-C measurement |
 | Charge per coordinate | `⌈max response bytes / 34,000⌉` packets, size never refuses | coordinator 2026-10-26 | M-C |
 | Work per class | V11 op_work `[5,13,1,11]` (recorded; not enforced alone) | M-RHO median | per-op M-C work measurement |
-| Capacity | `Q = Σ packets ≤ c·W`, c = 1 packet/DAA, W = 10,000; else original admission refused | ADR-0192 addendum | M-C, V-values revision |
-| Order | earliest deadline, then coordinate id; slot recorded in v2 query row | ADR-0192 addendum | user decision |
+| Capacity | `Q = Σ packets ≤ c·W`, c = 1 packet/DAA, W = 10,000; else original admission refused | 旧ADR-0192 addendum | M-C, V-values revision |
+| Order | earliest deadline, then coordinate id; slot recorded in v2 query row | 旧ADR-0192 addendum | user decision |
 
 Status: implemented on `claude/g14-f03b2`, native fold tests only. Not armed, no real-node T05.

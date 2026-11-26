@@ -6,7 +6,7 @@
 
 目的は、Studioの同一claimが **quote → 署名 → canonical受理 → 独立Panel検証 → Final → 当選権利の一回消費 → 対応ブロック受理** まで進む実装候補を固定することである。設定案の作成、旧quoteの改善、ローカルfixtureの成功を、この達成の代わりにしない。
 
-契約の意味に関わる部分は [RFC-0054](../../../rfc/0054-public-t12-original-admission-profile.md) / [ADR-0222](../../../adr/0222-public-t12-original-admission-profile.md) の未採択レビュー案に分離した。数値案の作成を採択と扱わない。
+契約の意味に関わる部分は [RFC-0054](../../../rfc/0020-devnet-release-and-migration.md) / [旧ADR-0222](../../../rfc/0020-devnet-release-and-migration.md) の未採択レビュー案に分離した。数値案の作成を採択と扱わない。
 
 ## 1. 推奨する決め方
 
@@ -20,7 +20,7 @@
 - 原受理を `a` とし、noticeは **a+3,120 DAA**、hardは **a+10,000 DAA**。取得・再試行・reorg・交代で時計をリセットしない。DAAを秒へ固定換算しない。
 - モデル計算の暗号学的な正しさの証明、モデルの取得成功証明、モデル単位の審査は導入しない。HF固定版とroot/hashの照合はデータ同一性確認に限る。
 - Minerによるモデル重みの独自配信・モデル用消失訂正・Nodeのモデル可用性サンプリングを必須にしない。claim固有の入力・trace・openingと局所courtは維持する。
-- 追加モデルのburn停止・登録者burn解除、genesis/年次fork指定の除外、1.0/0.3の二階層は[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)とPRINCIPLESを維持する。停止/解除のburn額は本候補のoriginal資金とは別であり、ここでは変更しない。
+- 追加モデルのburn停止・登録者burn解除、genesis/年次fork指定の除外、1.0/0.3の二階層は[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)とPRINCIPLESを維持する。停止/解除のburn額は本候補のoriginal資金とは別であり、ここでは変更しない。
 - `Final` は承認に加え、未解決caseなし・必要な検査機会・資金/期限/依存条件を満たすこと。公開URL、他者の取得receipt、ローカル再計算一致だけでは成功させない。
 
 ## 3. Panelと受付量の候補

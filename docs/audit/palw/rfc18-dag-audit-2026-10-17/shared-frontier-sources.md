@@ -27,7 +27,7 @@
   4758 |         voided_daa: u64,
   4759 |         reason: PalwVoidReasonV2,
   4760 |     },
-  4761 |     /// **ADR-0062 SA-3: a data-availability accusation is open on this claim.**
+  4761 |     /// **旧ADR-0062 SA-3: a data-availability accusation is open on this claim.**
   4762 |     ///
   4763 |     /// The claim is still LIVE — its reservation is held, its escrow is neither paid nor
   4764 |     /// destroyed — and it resolves one of two ways, both arithmetic:
@@ -154,7 +154,7 @@
  15066 |         && claim.accepted_blue_score > old_frontier.0
  15067 |     {
  15068 |         builder.state.safe_frontier_blue_score = claim.accepted_blue_score;
- 15069 |         // **This hash is the claim's CARRYING block, which since ADR-0058 need not be on the
+ 15069 |         // **This hash is the claim's CARRYING block, which since 旧ADR-0058 need not be on the
  15070 |         // selected chain** (audit M2-27). For a merged work it is the merged block — at
  15071 |         // `ghostdag_k = 1` typically a RED. The pair is still coherent (both halves describe that
  15072 |         // same block), and every consumer today reads only the blue score, which is what fork
@@ -455,7 +455,7 @@
     20 | use kaspa_hashes::ZERO_HASH64;
     21 | 
     22 | /// What the sink's PALW state says about the transactions the selected chain accepted at one DAA
-    23 | /// score (ADR-0127 Decision 3).
+    23 | /// score (旧ADR-0127 Decision 3).
     24 | #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     25 | pub struct PalwSettlementV1 {
     26 |     /// The DAA score of the chain block the state stands at — the point this answer is true at.
@@ -485,11 +485,11 @@
     50 |     pub gate_c_in_force: bool,
     51 | }
     52 | 
-    53 | /// **The settlement read** (ADR-0127 Decision 3) — `state` is the sink's, `params` the rules it was
+    53 | /// **The settlement read** (旧ADR-0127 Decision 3) — `state` is the sink's, `params` the rules it was
     54 | /// folded under, `daa_score` the accepting chain block's DAA score (a UTXO entry's
     55 | /// `block_daa_score`).
     56 | ///
-    57 | /// The frontier names the block that CARRIED its claim, which since ADR-0058 may be a merged block
+    57 | /// The frontier names the block that CARRIED its claim, which since 旧ADR-0058 may be a merged block
     58 | /// whose own DAA score is below the chain block that accepted it; what orders the chain is the
     59 | /// accepting block. So the frontier is dated by its claim's `accepted_daa` while the state retains
     60 | /// the claim, and by `frontier_header_daa` — the carrying header's DAA score, the conservative
@@ -758,7 +758,7 @@
    608 | /// counts toward participation (registered in the common past). Participation: the distinct common bonds of attempt records —
    609 | /// one per bond, however many records it has; safe weight: the `Final` records' weights; live total: safe plus the uncapped live
    610 | /// weights plus, per bond, F-W's `min(Σ staged, W_cap(collateral))` over its capped live records; records an allocation governs
-   611 | /// (ADR-0176 D3): per `(bond, version, window)`, `min(Σ final, F_max)` to the safe weight and `min(Σ final + Σ provisional,
+   611 | /// (旧ADR-0176 D3): per `(bond, version, window)`, `min(Σ final, F_max)` to the safe weight and `min(Σ final + Σ provisional,
    612 | /// F_max)` to the live total; the frontier: the deepest `Final` record below the oldest live one (the fold's resolved-prefix rule
    613 | /// restricted to the records).
 ```
@@ -838,7 +838,7 @@
    208 | ### 7.2 認証述語(前提に基づく認証)
    209 | 
    210 | 1. **commit:** 支配されたclaimの`Final`で、claim・producer・母集団の切断点を固定する(`commit_at_final_v1`、`consensus/core/src/palw_security_certification_fold_v1.rs:45`)。
-   211 | 2. **draw:** commitより厳密に後のexecution laneのseed anchor(ADR-0130)から作るseedで、**global pool**(Active、commitの`verifier_maturity`前に登録、最小担保以上、producerのoperatorを除く)から`m`位置を担保比例・復元抽選する(`palw_certification_pool_admits_v1`、`palw_security_certification_v1.rs:280`、RFC-0017/R7-ECONの抽選を再利用)。**モデル保有の有無で母集団を絞らない**。
+   211 | 2. **draw:** commitより厳密に後のexecution laneのseed anchor(旧ADR-0130)から作るseedで、**global pool**(Active、commitの`verifier_maturity`前に登録、最小担保以上、producerのoperatorを除く)から`m`位置を担保比例・復元抽選する(`palw_certification_pool_admits_v1`、`palw_security_certification_v1.rs:280`、RFC-0017/R7-ECONの抽選を再利用)。**モデル保有の有無で母集団を絞らない**。
    212 | 3. **attest:** 抽選されたbondは期限内に、そのclaimを再実行して判定を署名する(RFC-0017のinner 75を、exam idの代わりにcertification idで使う、`try_attest_claim_certification_v1`、fold `:111`)。
    213 | 4. **decide:** `k`位置以上が`Reproduced`(mismatchなし)で、claimがまだ`Final`、未解決の告発がなく、**G14公開告発window**(`prosecution_window_daa`)が`Final`から経過したら`Certified`(`palw_certification_verdict_v1`、`:320`)。期限までに`k`未満なら`NotCertified`、母集団不足は`NoPopulation`、`certify_by`までに抽選できなければ`Expired`、`Final`でなくなれば`Withdrawn`。**1 claimにつき1回、再試行なし、classごとに数える**(attemptの有界化と計数)。network全体のepoch当たり抽選数にも上限がある。
    214 | 5. **公開check経路:** 決定論的な公開検査(G14完了classの公開material)が固定されたclassは、告発window経過で`PublicCheckCertified`。このbinaryでは固定classは0件(`PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1 = &[]`)。
@@ -895,7 +895,7 @@
    265 | 
    266 | **header commitment(GAP-R4、2026-10-15に解消):** rule E かつ(rule E v2 または Gate C)が state の点で効くとき、header は **rule-E leaf v3** を commit する(`palw_fork_choice_rule_e_leaf_v3.rs`): window の record を認証状態込みで、registry を `(bond, collateral)` で、registry の資本合計を leaf に。どの文法かは読み手自身の ruleset が点で決める(`palw_rule_e_commit_form_v1`: flat / v1 / rule-E v2 / rule-E v3)。node は `palw_committed_state_root_v2` を commit し、v39 anchor・L2 client(`verify_committed_opening_v2`)・carriage RPC は同じ `palw_verify_committed_leaf_v2` で開く。v3 の fence 未満では v1/v2 の envelope は byte 単位で不変(leaf v2 の window leaf は認証状態の field を含まない)。native settlement の roots chain は、rule E 下では各 row の post-state から commit root を計算する(rule-E leaf は delta から逆算できないため)。RFC-0012のnative settlementも、fence以後は`Final`遷移ではなく認証遷移を成熟workの証拠とする(`palw_native_settlement_v1.rs:161`、`:338`、`:404`)。
    267 | 
-   268 | ### 7.9 ADR-0177の変更(明示)
+   268 | ### 7.9 旧ADR-0177の変更(明示)
 ```
 
 

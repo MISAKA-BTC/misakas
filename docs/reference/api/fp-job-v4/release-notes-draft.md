@@ -9,8 +9,8 @@ Frozen).
 * **Deterministic decode controls on the mining lane**: repeat, frequency and presence penalties over
   a window of generated tokens, `logit_bias` (including bans), stop token sequences — all integer,
   all inside the job id, all replayed by the panel.
-* **Sampling (ADR-0082 D11)**: temperature and seed, the seeded Gumbel-max argmax.
-* **Pay for decode (ADR-0082 D10)**: claims earn on their executed decode work; the prompt's prefill
+* **Sampling (旧ADR-0082 D11)**: temperature and seed, the seeded Gumbel-max argmax.
+* **Pay for decode (旧ADR-0082 D10)**: claims earn on their executed decode work; the prompt's prefill
   is priced at zero.
 * **FP Job V4 wire**: the V3 job plus `DecodeConfigV4`, hashed under its own domain. V3 bytes are
   unchanged.

@@ -14,15 +14,15 @@ product of this tree, so the tree keeps the two things that decide what a reader
 
 A claim puts COMMITMENTS on chain — the roots over its trace, its output and its execution — and
 the bytes behind them stay with the executor, reaching the claim's five drawn seats over an
-authenticated pull (ADR-0077 Decision 16). A piece becomes public exactly when somebody **demands**
-it: a data-availability accusation the executor answers on chain (ADR-0062), which costs the
+authenticated pull (旧ADR-0077 Decision 16). A piece becomes public exactly when somebody **demands**
+it: a data-availability accusation the executor answers on chain (旧ADR-0062), which costs the
 accuser if the answer comes. So:
 
 | shown | why |
 |---|---|
 | the attempt lane's input | a pure function of the block's anchor — any reader recomputes it without this site |
 | counts, work, class, claim, block, DAA | the claim carries them on chain |
-| ADR-0078 derived artifacts | the kind, transformer, id and size are on chain: what a free prompt published |
+| 旧ADR-0078 derived artifacts | the kind, transformer, id and size are on chain: what a free prompt published |
 | a disclosure | the chain carries it because a demand forced it — marked `disclosed on demand` |
 
 | not shown | why |

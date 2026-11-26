@@ -2,7 +2,7 @@
 
 **Status:** design (2026-10-12). The fence exists, dormant and refused when armed (`validate_palw_2026_10_12_ruling_fences_v1`).
 **Ruling:** user, 2026-10-12 ([register](../integration/mainnet-spec-register-2026-10-12.md) §3): close, with a dormant restriction fence, the
-testnet-12 routes that compel model bytes (ADR-0177 D2, RFC-0014 §16.4, [DA16 §7.5](da16-transport-and-provider-court.md)).
+testnet-12 routes that compel model bytes (旧ADR-0177 D2, RFC-0014 §16.4, [DA16 §7.5](da16-transport-and-provider-court.md)).
 Seat readiness is **out of scope** (user, 2026-10-12): it is the Panel's possession proof for seating (N1/N2), not a court demand.
 
 ## Scope
@@ -30,7 +30,7 @@ finalize). Taking the operands out of the producer's move needs a party that hol
 3. If the challenger does not supply them by its turn deadline, the session ends as the **challenger's default**: the accusation lapses,
    the producer is not charged, and the claim's other ends resume (the same outcome as an accuser that stops answering a dissection).
 
-**Why the challenger:** under ADR-0177 D7, G14 holds only for a verifier that holds the registered model. Such a verifier can supply
+**Why the challenger:** under 旧ADR-0177 D7, G14 holds only for a verifier that holds the registered model. Such a verifier can supply
 the rows; one that cannot was never able to finish the dissection. Silence by the producer is unaffected: a producer that does not file
 its root claim still defaults as today.
 

@@ -12,7 +12,7 @@
 - **必ず読むもの**
   - `docs/audit/palw/design-reviews/rfc-completion-audit-2026-10-17-status.md`(各項目の現状とコードの位置)
   - `docs/audit/palw/design-reviews/consolidated-validation-2026-10-15.md` §6〜§8
-  - `docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md`、`docs/adr/0185-*.md`
+  - `docs/rfc/0009-court-and-claim-final.md`、`docs/adr/0185-*.md`
   - `docs/design/palw/rfc-completion-audit-2026-10-17/report_ja.md` の RFC08・09・10・12 の節
 
 ## 2. 決定済みのこと(ユーザー判断、変更しない)

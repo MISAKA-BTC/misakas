@@ -1,20 +1,20 @@
-# Derived artifacts (ADR-0078): what was made from it is committed; the thing never rides
+# Derived artifacts (旧ADR-0078): what was made from it is committed; the thing never rides
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-This page is the operator's and the consumer's half of ADR-0078. The chain's half is the ADR.
+This page is the operator's and the consumer's half of 旧ADR-0078. The chain's half is the ADR.
 
 ## The shape, in one screen
 
 ```text
 POST /v1/chat/completions  { messages, "derive": "scene" }          ← the person asks for a kind
    │
-   ▼  one inference (ADR-0077 R0): the answer, the commitment, the claim id
+   ▼  one inference (旧ADR-0077 R0): the answer, the commitment, the claim id
    │
    ├─ grammar `scene/v1` canonicalizes the answer      → canonical DSL   (dsl_hash)
    ├─ transformer `scene/glb/v1` builds the artifact    → GLB bytes       (artifact_hash, artifact_bytes)
@@ -52,12 +52,12 @@ of them beyond `kind != 0`.
 | contract | 22 | `code/v1` | `contract/evm/v1` | `.mcod` | 4 MiB | 16 MiB | 7,710,000,000 evm-gas |
 | json | 28 | `json/v1` | `json/canonical/v1` | `.json` (RFC 8785 / JCS canonical bytes; the artifact IS the canonical DSL) | 1 MiB | 1 MiB | 1,048,576 canonical-dsl-byte |
 
-The three ceilings are ADR-0078 SA-2's, and they are manifest fields: they are in `transformer_id`'s
+The three ceilings are 旧ADR-0078 SA-2's, and they are manifest fields: they are in `transformer_id`'s
 preimage, so loosening one is a NEW transformer and the derivations made under the old one stay
 checkable against the old id. `palw-derive list` prints them; `palw-derive manifest --transformer
 <name|id>` prints the whole manifest with its exact preimage.
 
-### `code` and `contract`: where the initcode actually runs (ADR-0078 SA-1, ADR-0079 Decision 12)
+### `code` and `contract`: where the initcode actually runs (旧ADR-0078 SA-1, 旧ADR-0079 Decision 12)
 
 Both rows execute a program a model wrote, so neither runs in the process that asked for it.
 
@@ -72,7 +72,7 @@ Both rows execute a program a model wrote, so neither runs in the process that a
   in-process fallback** — a missing runner is a refusal, which is what "the row does not ship
   without it" means. A killed, over-ceiling or denied run is `no object` (Decision 2's
   parse-failure arm), never a different artifact: the backend cannot change a number, only refuse
-  one (ADR-0079 S4).
+  one (旧ADR-0079 S4).
 * **The gas ceiling and the state fixture are part of `transformer_id`.** The fixture is an empty
   world plus one funded deployer at nonce 0 under a zero block environment; its digest and every
   gas ceiling are hashed into the *run manifest*, whose digest rides in the transformer manifest's
@@ -82,7 +82,7 @@ Both rows execute a program a model wrote, so neither runs in the process that a
 * **External toolchains** for `code` (rustc → wasm32, solc, clang → wasm32) are manifests run by
   the hermetic runner in `misaka-palw-derive::kinds::code`; none is registered — an external
   toolchain is named only when its two-architecture drill passes on the fleet (Decision 11). Its
-  runner now enforces ADR-0079 Decision 12: it refuses on a host whose confinement backend is
+  runner now enforces 旧ADR-0079 Decision 12: it refuses on a host whose confinement backend is
   `none` (no backend, no socket denial, no run), and refuses when a bond or wallet key is
   reachable in the process's environment or in the directories the caller names — *the build's
   output is never executed on a host that holds a key*.
@@ -91,9 +91,9 @@ Running the crate's tests therefore builds two binaries: `cargo test -p misaka-p
 `cargo test -p misaka-palw-derive --lib` does not build binaries, and every EVM test then fails
 naming the absent runner — that is the gate holding, not a broken test.
 
-### `json`: the answer's own shape (ADR-0096 Decisions 3 and 9)
+### `json`: the answer's own shape (旧ADR-0096 Decisions 3 and 9)
 
-The eighth row of ADR-0078 Decision 8's table, and its id is 28, not 8: Decision 9's candidate
+The eighth row of 旧ADR-0078 Decision 8's table, and its id is 28, not 8: Decision 9's candidate
 table had already given 8 to `text`, and an id is assigned once and never reused. It is the one
 kind whose DSL is not a language of this tree's — the DSL is the answer's JSON text, the grammar
 `json/v1` is RFC 8785 (the JSON Canonicalization Scheme), and the transformer `json/canonical/v1`
@@ -109,7 +109,7 @@ members sorted by UTF-16 code units, numbers in ECMAScript `Number::toString` fo
 `1E30` → `1e+30`, an integer past 2^53 → the nearest double, as I-JSON reads it — "numbers outside
 JSON's canonical form" is the row's own not-covered column), strings with exactly the RFC's escapes,
 no insignificant whitespace. Anything else is a refusal by name and never a repair: a code-fenced
-answer is a parse failure, not unwrapped (ADR-0078 Decision 2). A refusal derives nothing and the
+answer is a parse failure, not unwrapped (旧ADR-0078 Decision 2). A refusal derives nothing and the
 inference still certifies and mines (X4). It is asked for like every kind — `"derive": "json"` —
 and it is ALSO the derivation the entrance makes on its own when the request carried a
 `response_format` and no `derive` (Decision 3's advisory mode: "the `json` kind is derived when it
@@ -179,7 +179,7 @@ Request fields, beside the OpenAI ones:
 |---|---|
 | `"derive": "<kind or transformer>"` | derive after the inference; absent = the answer is the product |
 | `"serve_dsl": true` | elect this claim's DSL into the data-availability obligation (default off) |
-| `"response_format"` (OpenAI's) | ADR-0096 Decision 3: the shape rides the prompt as text, the answer is checked after the fact (`misaka.format`), and it is derived under `json` when it parses unless `derive` named another kind |
+| `"response_format"` (OpenAI's) | 旧ADR-0096 Decision 3: the shape rides the prompt as text, the answer is checked after the fact (`misaka.format`), and it is derived under `json` when it parses unless `derive` named another kind |
 
 Gateway flags: `--derive-seed <file>` (the bond key's 32-byte seed — the gateway then signs the
 object itself; without it the object is left unsigned for the rail), `--artifact-inline-max <bytes>`
@@ -237,7 +237,7 @@ The tool re-runs the grammar and the transformer and compares `dsl_hash`, `artif
 `artifact_bytes`; with the ids, the job's context and the family it recomputes the claim's
 `output_root`.
 
-**`--network` names the attempt rule the root is recomputed under** (ADR-0152 v3.1 post-edit 4):
+**`--network` names the attempt rule the root is recomputed under** (旧ADR-0152 v3.1 post-edit 4):
 testnet-12 arms `palw_offence_attribution`, so its roots are CoreV1's — the context and the ids
 over the EMPTY rendering, for every family — while testnet-11 and older keep each family's keyed
 rendering (Legacy). The floor's root is the same under both, so `base0` needs no `--network`; a
@@ -261,7 +261,7 @@ passes. So that path reports `binding_checked: false` and says
 `consistent-given-the-supplied-answer`, which is true and is not "this artifact came from that
 inference".
 
-The join is the RENDERING. ADR-0077 Decision 2 makes the answer's bytes every token's bytes
+The join is the RENDERING. 旧ADR-0077 Decision 2 makes the answer's bytes every token's bytes
 concatenated, so the ids and the answer are one fact spelled twice: a derivation belongs to a claim
 exactly when the DSL it canonicalizes is the rendering of that claim's ids. The second form does
 that — it renders the ids and re-runs the derivation over those bytes, never over an answer you
@@ -300,10 +300,10 @@ A caller that branches on the exit code alone cannot tell a checked binding from
 both are 0. Branch on `binding_checked`; the verdict prints its own `exit_status` note saying so.
 
 **Exit 2 carries two different verdicts, and the word says which.** `MISMATCH — a demonstrable
-false object (ADR-0078 Decision 5)` is the refutation: re-running the named grammar and
+false object (旧ADR-0078 Decision 5)` is the refutation: re-running the named grammar and
 transformer over this answer gives something else. Nothing on chain convicts the executor for it
 (Decision 5 says so plainly); what it costs is the executor's name on a provenance anyone can show
-is wrong. `UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)` is *not* an
+is wrong. `UNVERIFIABLE — this build does not publish that manifest (旧ADR-0078 SA-5)` is *not* an
 accusation: `transformer_id` covers `misaka/palw/derive/src/`, so any build whose derive crate
 differs by a byte publishes different ids and simply cannot re-run the derivation — run
 `palw-derive manifest --all` to see the ids the build in your hand does have. Both exit 2, because
@@ -340,7 +340,7 @@ later voids "is a derivation of a voided claim, and says so when read".
 
 **`output_token_ids` are on NO chain, by design.** The claim commits
 `output_root = output_commitment_v2(job_context_hash, ids, family_rendered_hash)` and nothing else,
-because ADR-0044 Decision 8's sentence about not silently publishing prompts applies to answers
+because 旧ADR-0044 Decision 8's sentence about not silently publishing prompts applies to answers
 word for word. So verification is a comparison of two independent sources: the chain's side comes
 from these calls, and the ids, the job's CONTEXT, the family and the canonical DSL come from the
 gateway's own response (`misaka.output_token_ids`, `misaka.job_context`, `misaka.job_context_hash`,
@@ -398,8 +398,8 @@ re-runs the grammar and the transformer over THOSE bytes
 |---|---|---|
 | `consistent — binding_checked: true; …` | 0 | every row re-runs AND its DSL is the rendering of this claim's ids under the tokenizer the claim pins |
 | `consistent-given-the-supplied-answer — binding_checked: false; …` | 0 | every row re-runs over the bytes you supplied; `binding_not_checked_because` names which of the four inputs was missing |
-| `MISMATCH — a demonstrable false object (ADR-0078 Decision 5)` | nonzero | a row disagrees; the field is named with both values |
-| `UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)` | nonzero | `transformer_id` names a source tree this build is not; nobody running it can check the derivation either way |
+| `MISMATCH — a demonstrable false object (旧ADR-0078 Decision 5)` | nonzero | a row disagrees; the field is named with both values |
+| `UNVERIFIABLE — this build does not publish that manifest (旧ADR-0078 SA-5)` | nonzero | `transformer_id` names a source tree this build is not; nobody running it can check the derivation either way |
 | (a refusal, no verdict printed) | nonzero | a file that is not there, a `--tokenizer` that is not the one the claim pins, or a `--job-context` and `--job-context-hash` that are not the same job |
 
 A caller that branches on the exit code alone cannot tell a checked binding from an unchecked one —

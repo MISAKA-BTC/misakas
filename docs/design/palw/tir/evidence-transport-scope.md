@@ -38,9 +38,9 @@ That is kilobytes per accusation, not the capture.
 
 ## Options
 
-- **A. Raise the cap or stream captures.** 40–625 MB per claim per seat. ADR-0084 measured 748 MB × 5 peers
+- **A. Raise the cap or stream captures.** 40–625 MB per claim per seat. 旧ADR-0084 measured 748 MB × 5 peers
   tearing down the p2p flows. Rejected.
-- **B. A served IR annex (ADR-0084's shape, consensus-inert).** On request, the producer serves one small
+- **B. A served IR annex (旧ADR-0084's shape, consensus-inert).** On request, the producer serves one small
   authenticated object per `(claim, leaf)`: leaf `L`'s preimage and opening, the row's trace tile and
   openings, and the ids. A seat pulls it once its replay parts from the claim, then builds its accusation
   over `TirEvidenceV1::challenger`. Node-only, no fence. But a lying producer can simply not serve it.

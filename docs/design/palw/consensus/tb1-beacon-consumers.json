@@ -3,8 +3,8 @@
   "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
   "adopted_date": "2026-11-20",
   "timezone": "Asia/Tokyo",
-  "normative_spec": "docs/rfc/0061-palw-internal-threshold-beacon.md",
-  "function_spec": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+  "normative_spec": "docs/rfc/0006-tb1-randomness-and-release.md",
+  "function_spec": "docs/rfc/0004-fow1-execution-and-ticket.md",
   "transition_spec": "docs/governance/palw-tb1-fow1-transition.md",
   "identifiers_are": "logical names; not assigned native wire tags or activated enum values",
   "scheme": "PALW-TB1 / TB1-BGW-PQ",
@@ -239,5 +239,5 @@
     "FOW1_function_collision_or_cost_theorem_proved": false,
     "MODEL_AUDIT_MODEL_STOP_covered_by_upstream_tests": false
   },
-  "model_admission_spec": "docs/rfc/0065-model-admission-screening-and-bft-stop.md"
+  "model_admission_spec": "docs/rfc/0007-bft-model-admission.md"
 }

@@ -1,6 +1,6 @@
 # 追加モデルburn停止planner — 2026-11-11
 
-[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[実装追補](../../../design/palw/integration/additional-model-burn-pause-2026-11-11.md)。commit `6511a880e`。
+[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)／[実装追補](../../../design/palw/integration/additional-model-burn-pause-2026-11-11.md)。commit `6511a880e`。
 
 coreの未署名plannerを実装し、対象2テストが成功した。[raw log](tests.log)、[source SHA](sources.sha256)、[binary SHA](binary.sha256)、[検証範囲](summary.json)を保存した。既存shared target・opt-level 0・incremental無効のcore lib testを使用。build 2分59秒、テスト0.05秒。
 

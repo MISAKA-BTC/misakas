@@ -1,0 +1,147 @@
+{
+  "genesisHash": "85151853ecab03e6686c6103ebeaa6d1ec7d20b8e588ee6e5cf381e8094189e8316923cc8fd3e42738ae58527d78dbb0506b30f481efa49ec29aa0daebc7b33c",
+  "consensusParamsId": "5006b87d4ece91b3fd0d6c2aec1da5daea35b9d3c1c83a37bfb6a361b5bb510c",
+  "acceptedAttempt": {
+    "tip": "8b3bf541f12c56be802c0f542c39ab8d5ac96688544e38e402bbe97b2dfb4b365598843d9908ca011da3c5dbaa3522feb9e6be0b36569ccf8b83d1a008cd2cc8",
+    "claim": {
+      "acceptedBlock": "8b3bf541f12c56be802c0f542c39ab8d5ac96688544e38e402bbe97b2dfb4b365598843d9908ca011da3c5dbaa3522feb9e6be0b36569ccf8b83d1a008cd2cc8",
+      "acceptedBlueScore": 23,
+      "acceptedDaa": 11,
+      "boundDaa": null,
+      "claimId": "d0e1abbe54fdb9a32c8893058aa1b77070c31e89ead7e5ab9b9c761947c2f69f61f1479881a24b287c903082cbdf4dcb1ce200b6625052167c87ea0d3dfed3c9",
+      "claimLocalSettlement": null,
+      "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "committedSompi": "320095402740",
+      "escrowedRewardSompi": 320084650080,
+      "execLane": null,
+      "executorBond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+      "freePrompt": false,
+      "openCourts": 0,
+      "payoutPendingSompi": null,
+      "phase": "provisional",
+      "phaseDaa": 0,
+      "phaseDeadlineDaa": 31,
+      "quanta": 0,
+      "quantaSpent": 0,
+      "reboundDaa": null,
+      "reservationSplit": null,
+      "reservedSompi": "10752660",
+      "seats": [],
+      "securityCertification": "pending",
+      "voidReason": null,
+      "workLeaves": 0
+    },
+    "gateCGoverns": true,
+    "outputRoot": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+    "retainedBytes": 1599245,
+    "retainedSha256": "584dd4d79ab84313eda4b3ca90f810f2ec0ec3e8a7ffc5133db807676ae72bcf"
+  },
+  "independentPanels": [
+    {
+      "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:5",
+      "fee": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:46",
+      "operator": "df1d609ab76f50cec852c96a04b4c5bf0aade4d0b8b63588e5056fa908801558d454f0e89a6525d1100d4c7826ed507001532a0cd379e2c9bc42c96fff9c46c8"
+    },
+    {
+      "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:6",
+      "fee": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:47",
+      "operator": "2571c49a0da17d48299644444cd0bb780c8e771ad681145b69f32ce4a89f3761e1932d5c1501199dc021ed6a5364da1cd4e53d1c308a6608f2b4a260cb696f60"
+    },
+    {
+      "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:7",
+      "fee": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:48",
+      "operator": "8c233127fb18d395a8a4980b8a058e4fd86f83329002c62ccb168dd6a56abaf24be14e477b91edbdb4a054aca6ea4ac9aa3ed1335974c5ff2c932d306fd0fac0"
+    }
+  ],
+  "claimProgress": [
+    {
+      "tip": "8b3bf541f12c56be802c0f542c39ab8d5ac96688544e38e402bbe97b2dfb4b365598843d9908ca011da3c5dbaa3522feb9e6be0b36569ccf8b83d1a008cd2cc8",
+      "daa": 11,
+      "phase": "provisional",
+      "seats": [],
+      "deadline": 31,
+      "reason": null,
+      "certification": "pending"
+    },
+    {
+      "tip": "1ad6052582b5ff6047f5e5bcfe4a42027282235b1c2f16a1da8e7d370aa29778b4b4732b6d16aaf7acd7fad4ab76f206f0aa6195c1c9cc8a62795223580b9e3a",
+      "daa": 42,
+      "phase": "provisional",
+      "seats": [],
+      "deadline": 31,
+      "reason": null,
+      "certification": "pending"
+    }
+  ],
+  "nodeExitCodes": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "coldReadback": {
+    "tip": "b82bc4acd424e9d458dcfa7ec14fcff07e930dc47f3f9f9d5e0bbab3fd4996c4b7d3c18a47cd1497480753a17e9af8483573c341fd67abd89e342884690c6f83",
+    "daa": 43,
+    "backstop": 611,
+    "phaseDeadline": 31,
+    "g14PanelSeed": null,
+    "phase": "provisional",
+    "certification": "pending",
+    "assignments": {
+      "assignments": [],
+      "available": true,
+      "tipDaa": 43,
+      "truncated": false
+    },
+    "bonds": [
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:0",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:1",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:2",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:3",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:5",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:6",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      },
+      {
+        "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:7",
+        "registered": 0,
+        "collateral": 93906321001040,
+        "declaredForClass": true
+      }
+    ]
+  }
+}

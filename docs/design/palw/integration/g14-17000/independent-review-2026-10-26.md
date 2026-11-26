@@ -38,7 +38,7 @@
   - F02 の duty と default。
   - X3 の hard deadline。
   - settlement once の reorg・restart・IBD・pruned import の経路。
-  - ADR-0192 の共通 frontier。
+  - 旧ADR-0192 の共通 frontier。
   - beacon source を producer が操作できるかどうか。
   - Panel route との shadow comparison で判定が設計上一致するか。
   - e2e 試験(`g14_kernel_route_e2e/canonical/`)。

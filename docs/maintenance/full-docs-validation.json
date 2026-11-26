@@ -1,0 +1,23 @@
+{
+  "mode": "no-new-regressions",
+  "passed": true,
+  "markdown_files": 615,
+  "targets": {
+    "ok": 4312,
+    "outside-package-unchecked": 336,
+    "external-unchecked": 158,
+    "missing-doc-file": 763
+  },
+  "primary_documents": {
+    "adr": 20,
+    "rfc": 20
+  },
+  "known_issue_occurrences": 763,
+  "new_issue_occurrences": 0,
+  "failures": [],
+  "limitations": [
+    "Offline, limited Markdown parser; not a full CommonMark renderer.",
+    "External URLs, code outside docs, protocol semantics and actual runtime/activation are not verified.",
+    "Release-scope checks validate documentation only, not node disablement."
+  ]
+}

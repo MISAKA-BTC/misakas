@@ -1,6 +1,6 @@
 # QF1 logical trace schema v1
 
-正本は[RFC0066](../../../../rfc/0066-qwen3-fow1-execution-and-readout.md)。**ADOPTED_DESIGN_NOT_ACTIVATED**。以下はlogical recordのbyte schemaであり、既存native tagの割当・実装済み宣言ではない。
+正本は[RFC-0005](../../../../rfc/0005-qf1-qwen3-execution-profile.md)。**ADOPTED_DESIGN_NOT_ACTIVATED**。以下はlogical recordのbyte schemaであり、既存native tagの割当・実装済み宣言ではない。
 
 ## 共通型
 
@@ -37,7 +37,7 @@ T個のDecisionは`j=0..T−1`、`position=L−1+j`。j=0はprompt末尾の処�
 
 ## ReadoutChunk
 
-RFC0066のmessageを4096-byte単位に切る。総長をM、chunk数を`H=ceil(M/4096)`とする。k番目はoffset=4096k、length=min(4096,M−offset)、consumed_bytes=offset+length、final_flag=1 iff k=H−1。値1以外の真値表現を許さない。
+RFC-0005のmessageを4096-byte単位に切る。総長をM、chunk数を`H=ceil(M/4096)`とする。k番目はoffset=4096k、length=min(4096,M−offset)、consumed_bytes=offset+length、final_flag=1 iff k=H−1。値1以外の真値表現を許さない。
 
 chain_afterは8個の64-bit BLAKE2b内部wordのlittle-endian連結。最初の入力chainはRFC7693のIVにdigest length64/key length0/fanout1/depth1のparameterを適用したもの。次は直前chunkのchain_after。counter高64 bitは0。非最終chunkの32 compressionは全てfinal=0、最終chunkの最後のcompressionだけfinal=1。最終圧縮blockの余りを0で埋め、counterには実際のmessage長だけを入れる。
 
@@ -57,4 +57,4 @@ B(p)はprogram/commit layout/stageから導出する。資源上限とu64範囲�
 
 ## 一claimの認証で省略しないこと
 
-model/program/StateMap/数値parameterは登録instanceへ、全TirValue/Decision/Stop/HashChunk/Endは元Minerが固定したR_tauへ、X/Y/Zは同じsの四Rootへ結び付く。別instance、別layer、別位置、別sの本物のleafを提出しても期待index/rootに一致せず拒否する。資料がなくこの関係を開けなければ、未検証の成功へ進めずMAS1/資料caseを適用する。
+model/program/StateMap/数値parameterは登録instanceへ、全TirValue/Decision/Stop/HashChunk/Endは元Minerが固定したR_tauへ、X/Y/Zは同じsの四Rootへ結び付く。別instance、別layer、別位置、別sの本物のleafを提出しても期待index/rootに一致せず拒否する。資料がなくこの関係を開けなければ、未検証の成功へ進めず、当該claimの資料caseを適用する。モデルのBFT採用は資料取得・claim検証の省略を認めるものではない。

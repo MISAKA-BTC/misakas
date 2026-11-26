@@ -332,7 +332,7 @@ validator-core `build_fp_commitment_tx_with_tir_public_original_v1`、kaspad の
 - [ ] 不正claimや失効したbondを使った生成資格・claim-backed work・block opportunityが、テンプレート生成だけでなく、受信blockの検証・合意受理でも拒否されることを保証する。
   — **実装（既存規則の再利用、ソースのみ・未検証）**: void された claim は Final にならず、receipt spend は受信検証（`palw.rs:9724`、Final を要求）と
   template 側の spendable 一覧（`palw.rs:3433`、Final・未没収 root のみ）の両方で拒否。execution-proving の違反は root で没収。有罪の producer は
-  ADR-0160 の intent-class funnel で forfeiture＋freeze になり、admission（`palw_admission_v2.rs:652` `ProducerFrozen`）と producer readiness
+  旧ADR-0160 の intent-class funnel で forfeiture＋freeze になり、admission（`palw_admission_v2.rs:652` `ProducerFrozen`）と producer readiness
   （frozen）で拒否。このため fence は `palw_capacity_aggregate_liability` を要求する（`params.rs:4970`）。RFC-0016 の bond-weighted opportunity は
   未統合（担当外）。
 - [ ] work weight、Final weight、coinbase、model配分の対象額、escrow、FinalReward等、当該不正を根拠に支払う全経路を照合し、既存方針どおり拒否／失効／保留を反映する。

@@ -10,6 +10,6 @@
 
 ## 出典と適用条件
 
-[ADR-0176](../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) / [RFC-0016](../../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)。
+[旧ADR-0176](../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限) / [RFC-0016](../../rfc/0012-bonds-budgets-and-slashing.md)。
 
 [パラメーター台帳](../../governance/parameter-register.md) / [mainnet後への延期](../../governance/post-mainnet-scope.md) / [仕様索引](../README.md)。

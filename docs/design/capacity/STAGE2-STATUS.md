@@ -1,4 +1,4 @@
-# ADR-0160 stage 2 (rcore/cap-s1) — status: gate PASS
+# 旧ADR-0160 stage 2 (rcore/cap-s1) — status: gate PASS
 
 Same branch and base as stage 1 (`rcore/cap-s1` off `c3dbaee3c`; nothing armed anywhere; the t12 pins
 `dbbc9104…` / `5de80e64…` / `7c652212…` unmoved). Commits: `091856e1b` (consensus: F-Q, F-S, the credit
@@ -6,7 +6,7 @@ under the door), `9901010ff` (kaspad: the operator's audit duty), and this statu
 
 ## What stage 2 is
 
-The user's plan (2026-09-26/27): **Q** = the audit door (ADR-0160 v3 D-23, §5.9) and **S** = issuance slots
+The user's plan (2026-09-26/27): **Q** = the audit door (旧ADR-0160 v3 D-23, §5.9) and **S** = issuance slots
 with outstanding / burst / rate caps (§6), "DoS/queue controls only, never the safety mechanism"; gate =
 "mass claims keep liability, rate and outstanding controlled; detection must be an on-chain observable
 (audit receipts)". Each rule behind its own dormant fence in `PALW_T12_CAPACITY_FENCES_V1`.

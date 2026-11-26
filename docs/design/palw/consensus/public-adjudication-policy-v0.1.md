@@ -1,9 +1,9 @@
 # 公開裁定の方針 v0.1
 
-> **後続採択 2026-11-08:** 新しいclaim版のNode非保有・モデル秘匿／寡占・非対話positive・検証先行Finalは[公開裁定の方針v0.2](public-adjudication-policy-v0.2.md)と[RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)に従う。本v0.1の原本文と既存Batch v5の時計・履歴は保持する。
+> **後続採択 2026-11-08:** 新しいclaim版のNode非保有・モデル秘匿／寡占・非対話positive・検証先行Finalは[公開裁定の方針v0.2](public-adjudication-policy-v0.2.md)と[RFC-v2-0016〜0020](../../../rfc/README.md)に従う。本v0.1の原本文と既存Batch v5の時計・履歴は保持する。
 
 - 状態: 2026-11-07 のユーザー採択。この文書が公開裁定の上位設計である。配置は有効化ではない。出荷 preset は武装しない。P0–P3 には試験がある。P4 の debug 印刷は class の受理ではない。P5 は未了。main へは push していない。T12 の upgrade はない。
-- 関係: [設計原則 §8](../../../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定)、[設計原則 §9](../../../PRINCIPLES.md#9-モデルの二階層モデル単位の検証は不採用2026-10-15ユーザー決定)、[RFC-0047](../../../rfc/0047-batch-court-time-contract.md)
+- 関係: [設計原則 §8](../../../PRINCIPLES.md)、[設計原則 §9](../../../PRINCIPLES.md)、[RFC-0047](../../../rfc/0009-court-and-claim-final.md)
 - 対象: 新しい Batch 時計版 `PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5` だけ。既に署名された claim は古い規則のままである。
 
 ## 何をするか
@@ -142,7 +142,7 @@ HEAD は `2afa6ccf47efca499fc95fb7f3bb1468698c7837` である。この作業ツ�
 ?? docs/design/palw/consensus/public-adjudication-policy-v0.1.md
 ?? docs/design/palw/tir/evidence/
 ?? docs/evidence/
-?? docs/rfc/0047-batch-court-time-contract.md
+?? docs/rfc/0009-court-and-claim-final.md
 ```
 
 `g14_native_funded_batch_candidate_v1` は、このツリーでは計画時拒否ではない。`cargo test -p kaspa-consensus-core --offline --lib -- g14_native_funded_batch_candidate_v1` は ok だった（フィルタ 5 件が 19.21 秒で通り、そのうちこの 1 件も ok）。fixture は Batch v5 の見積を Complete として受理し、テストは最後まで戻った。これは測定した Qwen 再実行ではなく、ライブ fleet の fingerprint でもない。

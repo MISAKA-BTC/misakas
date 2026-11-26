@@ -1,41 +1,24 @@
-# Beyond weight files — PALW as verifiable useful AI computation (direction note)
+# モデルの重み以外の状態を扱う境界
 
-Status: **direction, not an implementation gate** (user, 2026-10-08). Nothing here joins the "every RFC implemented, then one activation"
-scope; it records how future work must be shaped so that the current designs do not hard-wire "AI model = one fixed weight file".
+本書は[PALW-TIRとkernel](../../../rfc/0002-tensor-ir-kernels-and-runtime.md)の補助設計です。新しいモデルを追加する承認経路は、状態の種類にかかわらず[BFT YES/NO](../../../rfc/0007-bft-model-admission.md)だけです。
 
-## Principle
+## 認証する対象
 
-MISAKA is a chain that **registers, executes and settles independently verifiable useful AI computation** — not a registry of LLM weight
-files. Model families will change (Transformer → SSM/hybrid → models with memory updated during inference → retrieval- and tool-centred
-systems of small models); the invariant that does not change is **G14**: an ordinary bonded verifier outside any Panel, from public
-authenticated material only, reaches an objective conviction or a correctly classified DA/default. A computation that cannot meet that
-is not rewardable, whatever its architecture.
+モデルの実行で参照する資料は、重みだけとは限りません。対応するkernelがある場合には、次の対象も実行仕様と元claimへ束縛します。
 
-User's outlook (2026-10, subjective, for planning only): weights + external memory/retrieval/tools — very likely widespread; models that
-update memory or some parameters during inference — likely; many small models + external data replacing one giant checkpoint for many
-uses — likely; weight-free methods replacing general LLMs — unlikely in 5–10 years; today's Transformer + weight file as the sole
-standard — unlikely.
-
-## The generalisation: an authenticated computation specification plus its state set
-
-A class binds a versioned specification (kernel/plan ids, RFC-0005 / ADR-0172) and **typed roots** for whatever the computation reads:
-
-| Kind | Bound | What G14 needs |
+| 対象 | 固定する内容 | 個別claimで必要な検証 |
 | --- | --- | --- |
-| Weight model (today) | artifact (weight) root | as today: commitments, localisation, exact court |
-| Inference-time memory | memory root + an update rule expressible in the active kernel | pre/post-state roots public per step; a fault localised to one update step and judged exactly |
-| Retrieval | a reference-data snapshot root + a deterministic retrieval rule | the snapshot's public availability (DA); a retrieval result judged per item |
-| Composite (models + tools) | a pipeline of such specifications; tool stages only as verified kernels | per-stage localisation (RFC-0003 edge courts, extended) |
+| モデル重み | 正確なartifact rootと期待parameter index | 認証openingと規範演算 |
+| 推論中の状態 | 初期root、更新規則、状態上限 | read/write順序と前後状態の一致 |
+| 検索資料 | 入力snapshot rootと決定論的検索規則 | 参照した資料、選択関係、取得可能性 |
+| 複合モデル | 各stageのdescriptorと依存関係 | stage間の入出力一致と局所反証 |
 
-Already in place: TIR `StateWrite` / `HistAppend`, fixed recurrent state and held history judged by the court (Qwen3.5 GDN, Mamba);
-RFC-0003 pipeline classes with edge courts; RFC-0004 parent/candidate classes; versioned typed ids for kernels, plans and policies.
+この表は将来を含む表現範囲であり、各種類が現在実装されているという宣言ではありません。対応していない意味論は新しいkernel実装と互換移行が必要です。BFTの採用だけで未対応演算を実行可能にしません。
 
-## What stays forbidden
+## 保つ条件
 
-Arbitrary external APIs, unverified Python, or any step an outsider cannot re-derive from public material. A new semantic that the
-active kernel cannot express is a versioned kernel extension (a coordinated, fenced protocol change), never a per-model escape hatch.
+実行は有界かつ再現可能で、Panelが必要な資料から再実行でき、Courtが局所関係を裁定できる必要があります。任意の外部API応答や未認証の可変データを、合意上の入力として無条件に信用しません。
 
-## For current work
+型付きrootは「何を参照したか」を識別します。重み・状態・検索資料のrootを区別しても、それだけで実行の正当性や新規計算費用を証明したことにはなりません。個別claimのPanel・Court・独立Gate C、仕事の一回性と会計を維持します。
 
-New object and state layouts should carry typed, versioned root kinds rather than assuming exactly one weight root, where that costs
-nothing today; census reclassification must not drop a repository merely because it is not a weight checkpoint once such a kind exists.
+モデルの追加承認、kernelの技術的互換性、個別claimの検証は別の判定です。技術検査が成功しても自動登録せず、BFT YESを計算量の数学的保証へ読み替えません。

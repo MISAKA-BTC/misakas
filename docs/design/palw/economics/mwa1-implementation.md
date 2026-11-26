@@ -1,6 +1,6 @@
 # MWA1 — 実装接続・API・検証計画（RFC0070 companion）
 
-状態: **PROPOSED_DESIGN_NOT_ACTIVATED**。ここでのRust型名・RPC名は案であり、native API、wire number、fenceを割当済みではない。[RFC0070](../../../rfc/0070-model-work-accounting-and-exec-credit.md)／[ADR0238](../../../adr/0238-model-work-accounting-and-exec-credit.md)が規範案。
+状態: **PROPOSED_DESIGN_NOT_ACTIVATED**。ここでのRust型名・RPC名は案であり、native API、wire number、fenceを割当済みではない。[RFC0070](../../../rfc/0013-model-work-accounting.md)／[ADR0238](../../../rfc/0013-model-work-accounting.md)が規範案。
 
 ## 1. 実装単位と依存関係
 
@@ -121,7 +121,7 @@ Native readerを一箇所で共有する。RPC例（名称は案）:
 | T08 | BFT票のWorkProfileId改変、UNKNOWN測定 | 改変拒否。UNKNOWN測定はBFT採否と分離 |
 | T09 | theta 0、1、2^256、境界T==theta | strict less、overflowなし、事後変更拒否 |
 | T10 | Final前/未認証/落選/正規当選 | 正規資格成立以外のreward/credit拒否 |
-| T11 | R_max>budget、ADR-0176上限不足 | 受付前に拒否。winner時の追加資金・clipなし |
+| T11 | R_max>budget、旧ADR-0176上限不足 | 受付前に拒否。winner時の追加資金・clipなし |
 | T12 | 複数modelとC端数、model zero | MOE3結合按分、D残差、qJ/B、zero no-op、dust |
 | T13 | 49/51の分割回収、自己受給、廃止burn | 累積差分、二重報酬拒否、検証bond保護 |
 | T14 | EXEC W=0,Q-1,Q,Q+1、整数最大幅 | 有限予約、正規丸め、0除算なし、上限超過拒否 |

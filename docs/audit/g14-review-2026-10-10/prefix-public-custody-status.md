@@ -1,6 +1,6 @@
 # Prospective public prefix custody
 
-This contract is defined only for a claim accepted under the independent staged-public-court fence, from an accepted signed FP prefix job and an immutable registered prefix-state relation. It preserves ADR-0177 D7: a verifier supplies its own correctly held model/tokenizer/configuration. Public prefix source obligations concern the claim's original authenticated execution leaves, not model publication.
+This contract is defined only for a claim accepted under the independent staged-public-court fence, from an accepted signed FP prefix job and an immutable registered prefix-state relation. It preserves 旧ADR-0177 D7: a verifier supplies its own correctly held model/tokenizer/configuration. Public prefix source obligations concern the claim's original authenticated execution leaves, not model publication.
 
 The producer's signed commitment covers `fp_claim_id_v3`, including the job and execution root. At acceptance the rooted custody contract retains that execution root, exact job identity, registered CU ruleset identity, acceptance clock and hash of the original staged terms. Later paid clock extensions do not rewrite this original identity.
 

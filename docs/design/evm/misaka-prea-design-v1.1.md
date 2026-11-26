@@ -1,6 +1,6 @@
 # MISAKA PQルート型EVM資産管理 設計書 v1.1
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **文書種別:** セキュリティ・コンセンサス・ウォレット統合設計
 **対象コード:** `MISAKA-BTC/misakas` 公開 `main`（snapshot `2e4e04a378c2ddfca5a2428d99cbb4218f280969` 基準）＋ローカル監査remediation差分

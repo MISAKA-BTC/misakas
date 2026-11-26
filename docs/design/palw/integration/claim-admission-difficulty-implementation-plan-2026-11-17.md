@@ -1,18 +1,10 @@
 # 全claim受付難易度 — 実装接続計画（2026-11-17）
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。FOW1は固定Ticketとslot IDの処理順を使用し、独立ADMISSION抽選や二重difficultyを重ねない。未知の受付順位を要する別controlを明示採用する場合だけ、専用freeze後のTB1-ADMISSIONを使う。受付seedから第三の採掘機会を作らない。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-- 規範案: [RFC-0056](../../../rfc/0056-global-claim-admission-difficulty.md)
-- 決定案: [ADR-0224](../../../adr/0224-global-claim-admission-difficulty.md)
-- 容量・継続保護: [RFC-0055](../../../rfc/0055-global-admission-court-calendar-and-one-bps.md)
+- 規範案: [RFC-0056](../../../rfc/0014-exec-schedule-and-capacity.md)
+- 決定案: [旧ADR-0224](../../../rfc/0014-exec-schedule-and-capacity.md)
+- 容量・継続保護: [RFC-0055](../../../rfc/0014-exec-schedule-and-capacity.md)
 - source基準: `MISAKA-BTC/misakas main@2d8212b634880b0967fbf24b00b41936c2322c14`
-- 実入口の根拠: [SOURCE_AUDIT.md](../../../maintenance/revisions/2026-11-17-admission-difficulty/SOURCE_AUDIT.md)
+- 実入口の根拠: [SOURCE_AUDIT.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/maintenance/revisions/2026-11-17-admission-difficulty/SOURCE_AUDIT.md)
 - 状態: **PROPOSED_DESIGN_NOT_ACTIVATED。以下は接続する作業と完了条件であり、実装済み・測定済みの報告ではない。**
 
 ## 1. 完成させる経路

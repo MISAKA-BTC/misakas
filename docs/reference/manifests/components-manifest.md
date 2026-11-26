@@ -4,7 +4,7 @@
 without the digest matching.** Every component a person needs — the node, the CLI, the family
 workers, the gateway, the rail, the class artifacts, and on the Studio's side the runtime, the
 shell and the engines it stages — is one row of one JSON file, `components.json`, that both
-repositories publish with their releases and both check (ADR-0096 Decision 10). The row says
+repositories publish with their releases and both check (旧ADR-0096 Decision 10). The row says
 where the bytes are and what they hash to; an installer that finds the file somewhere else
 (beside the executable, in `engines/`, on `PATH`, in the models directory) verifies it against
 the same digest before it runs it, and a file that does not match is not that component, whatever
@@ -48,7 +48,7 @@ a different file; the validator refuses an unsorted one for that reason.
 | `archive_sha256`, `archive_size` | hex64, integer | with `member` | the zip's digest, so a downloader can verify the transport before extracting and verify the member after |
 | `class_id` | 128 lowercase hex | `artifact` | the class the artifact pairs with (`palw-class inspect` prints it; the Studio's `PalwClassSpec.class_id_hex` is the same value) |
 | `artifact_root` | 128 lowercase hex | `artifact` | the INVENTORY root the chain pins (`getPalwProducerFacts.artifactRoot`; `qwen36-run --root-only` for the hybrid tier) — not the file's sha256, which is a different digest of the same bytes |
-| `tokenizer_commitment` | 128 lowercase hex | `tokenizer-table` | what the artifact header's `tokenizer_commitment` names (`Base0ArtifactV1::tokenizer_commitment_of`); a table row is how a v6 class serves it beside the artifact (ADR-0096 Decision 8) |
+| `tokenizer_commitment` | 128 lowercase hex | `tokenizer-table` | what the artifact header's `tokenizer_commitment` names (`Base0ArtifactV1::tokenizer_commitment_of`); a table row is how a v6 class serves it beside the artifact (旧ADR-0096 Decision 8) |
 | `model_id`, `convert_command`, `notes` | string | no | the chain's model id string; the command that reproduces the artifact from the public weights; anything else |
 
 Unknown keys are refused, top level and row. A new key is a schema change — a second table in
@@ -83,7 +83,7 @@ reads.
   same sha256 by a test.
 * The cross-repository check: the Studio's CI fetches the node manifest its own manifest names
   (offline, the pinned copy) and asserts that every `engine`, `worker`, `gateway` and `node` id
-  the Studio can spawn is a row in it (ADR-0096 invariant 10). A binary this tree stops building
+  the Studio can spawn is a row in it (旧ADR-0096 invariant 10). A binary this tree stops building
   fails the Studio's build, not a person's evening.
 * Anyone, by hand: `scripts/release/misaka-components-manifest.py --check components-<triple>.json
   <dir>` over an extracted release verifies every row's file against its digest and exits
@@ -219,7 +219,7 @@ which is the cross-repository check in miniature.
 The floor class (`PALW-BASE-0`) has no row: its artifact is derived from a seed on every node, so
 there is nothing to point at and nothing to download. A tokenizer-table row has the binary rows'
 shape with `platform: "any"` and `tokenizer_commitment` in place of `class_id`/`artifact_root`;
-none is listed because no shipped class serves one yet (ADR-0096 Decision 8 is behind a fence
+none is listed because no shipped class serves one yet (旧ADR-0096 Decision 8 is behind a fence
 that is `None` on every preset), and a row with an invented commitment would be exactly the kind
 of pointer this file exists to forbid.
 
@@ -261,6 +261,6 @@ install.
 * It does not carry the artifact bytes or say who may download them. `hf://` rows point at the
   public repositories the Studio's table already named, and the license lives with the weights.
 
-Related: [ADR-0096](../../adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md)
+Related: [旧ADR-0096](../../rfc/0019-clients-rpc-and-diagnostics.md)
 (Decision 10, invariants 10–11), [docs/model-requests.md](../../operations/models/model-requests.md) (how a new
 artifact row comes to exist), `scripts/release/misaka-components-manifest.py --self-test`.

@@ -1,8 +1,8 @@
 # HF固定版の新規取得・同じStudio候補の再計算 — 2026-11-11
 
-後続の[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)により、取得可否のnative認定は廃止された。本記録はoff-chain取得・同一性・再計算の証跡であり、追加モデルのburn停止・解除を許可する証明ではない。
+後続の[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)により、取得可否のnative認定は廃止された。本記録はoff-chain取得・同一性・再計算の証跡であり、追加モデルのburn停止・解除を許可する証明ではない。
 
-[RFC-0052](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)の取得経路について、モデルファイルを置いていない新規directoryへ匿名で実取得し、固定recipeで変換したモデルを使って同じStudio候補を再計算した。**ローカル取得・再計算の成功であり、公開T12受理・選出Panelの承認・Finalではない。** host全体には既存モデルが別directoryに存在した。新しいprocessが読むモデルは今回の取得・変換先に固定した。
+[RFC-0052](../../../rfc/0010-materials-and-funded-delivery.md)の取得経路について、モデルファイルを置いていない新規directoryへ匿名で実取得し、固定recipeで変換したモデルを使って同じStudio候補を再計算した。**ローカル取得・再計算の成功であり、公開T12受理・選出Panelの承認・Finalではない。** host全体には既存モデルが別directoryに存在した。新しいprocessが読むモデルは今回の取得・変換先に固定した。
 
 ## 結果
 

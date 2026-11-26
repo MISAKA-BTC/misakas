@@ -1,15 +1,5 @@
 # Positive Court — 最新ZIPのソース照合
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 確認日は2026-10-31。過去回答のコード行番号を再利用せず、今回のZIPから確認した。既存ソースのコメントには過去の状態説明もあるため、現在のネットワーク稼働状態まで証明するものではない。
 - 入力: `misakas-main (1)(1).zip`
 - ZIP SHA-256: `38ccb4ed8387b345b8c3c2627885d49070fb3872ee0f57a330d7b62eb2710b37`
@@ -20,8 +10,8 @@
 | ファイル | SHA-256 | 行数 |
 |---|---|---:|
 | `docs/PRINCIPLES.md` | `7de5364029db47b54ba9bce6c895ac49ce3084b29acc539922a2ad077d548900` | 348 |
-| `docs/rfc/0014-panel-independent-fraud-prosecution.md` | `b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8` | 1043 |
-| `docs/rfc/0026-court-policy-master-contract.md` | `8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687` | 194 |
+| `docs/rfc/0009-court-and-claim-final.md` | `b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8` | 1043 |
+| `docs/rfc/0009-court-and-claim-final.md` | `8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687` | 194 |
 | `consensus/core/src/palw_security_certification_v1.rs` | `df4814edd71d1d3ffbc7e9e6f8842f02a542c77208ca44ce96f1817f4af28227` | 863 |
 | `consensus/core/src/palw_security_certification_fold_v1.rs` | `487010ee6cc57ae04e0496b36cd8371f18af854e321470684505b6d2c35f6214` | 1240 |
 | `kaspad/src/palw_kernel_roles.rs` | `cf409624bab5668fa746bfcb54a8b091ca1a954f87169362c1f330754dbc9ca0` | 926 |
@@ -32,18 +22,18 @@
 | `consensus/core/src/config/params/full_activation_v1.rs` | `aa83311c999769fe5ba52d3f06a5025924c601a6c67c0a48a38be3255d5bafa3` | 512 |
 | `consensus/core/src/palw_row_stream_v1.rs` | `f8a783e325f8e920c071292057fdd27a17d46ff663e68e7bbefe4da66ddf19ed` | 454 |
 | `misaka/palw/sdk/src/lib.rs` | `45ffa21a9117f6e3eec219427006794ba572b8ca13946d6f282d5930b429fe98` | 670 |
-| `docs/rfc/0029-owner-independent-shared-tir-query-data.md` | `9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e` | 224 |
-| `docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md` | `da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36` | 68 |
-| `docs/rfc/0035-court-original-funded-contract-and-role-consent.md` | `746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042` | 135 |
-| `docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md` | `cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759` | 201 |
-| `docs/rfc/0036-authenticated-palw-state-map-and-row-access.md` | `2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920` | 90 |
-| `docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md` | `55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3` | 89 |
-| `docs/rfc/0040-authenticated-prefix-work-dependencies.md` | `73c697298446b50af899349f1f32147c5da5300beef81c8c19b39c60b2fcf7e3` | 43 |
-| `docs/rfc/0018-dag-parallel-multi-model-consensus.md` | `3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390` | 429 |
-| `docs/rfc/0017-model-eligibility-examination-and-renewal.md` | `6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc` | 46 |
-| `docs/rfc/0019-annual-model-upgrade.md` | `ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e` | 446 |
-| `docs/rfc/0041-genesis-bond-free-bootstrap.md` | `eb0d90281513b079f0075ae58ca66dbef383eee2e30bd5e2cd9478d0f8ea582d` | 30 |
-| `docs/adr/0209-genesis-bond-free-bootstrap.md` | `17d64fc16ff93a4bb80336c6ef3274a78b403ee06c7d79b5cca0df0c93def867` | 17 |
+| `docs/rfc/0010-materials-and-funded-delivery.md` | `9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e` | 224 |
+| `docs/rfc/0010-materials-and-funded-delivery.md` | `da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36` | 68 |
+| `docs/rfc/0010-materials-and-funded-delivery.md` | `746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042` | 135 |
+| `docs/rfc/0009-court-and-claim-final.md` | `cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759` | 201 |
+| `docs/rfc/0018-storage-pruning-and-ibd.md` | `2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920` | 90 |
+| `docs/rfc/0018-storage-pruning-and-ibd.md` | `55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3` | 89 |
+| `docs/rfc/0004-fow1-execution-and-ticket.md` | `73c697298446b50af899349f1f32147c5da5300beef81c8c19b39c60b2fcf7e3` | 43 |
+| `docs/rfc/0011-gate-c-and-consensus-credit.md` | `3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390` | 429 |
+| `docs/rfc/0007-bft-model-admission.md` | `6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc` | 46 |
+| `docs/rfc/0007-bft-model-admission.md` | `ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e` | 446 |
+| `docs/rfc/0012-bonds-budgets-and-slashing.md` | `eb0d90281513b079f0075ae58ca66dbef383eee2e30bd5e2cd9478d0f8ea582d` | 30 |
+| `docs/rfc/0012-bonds-budgets-and-slashing.md` | `17d64fc16ff93a4bb80336c6ef3274a78b403ee06c7d79b5cca0df0c93def867` | 17 |
 | `docs/AGENTS.md` | `bcf4ed4283f8b96714dd7901248c9f204e79dd7989ee155ac1c97b5b5b0e70e1` | 13 |
 | `AGENTS.md` | `c3ded94d9a07d9fd3fd99fb1e5ebbafeea54f51f693c99059ac899aba31cb6af` | 76 |
 
@@ -58,7 +48,7 @@ L43: この節は本書の他の節と下位の全文書に優先する。§2・
 L44: 最終条件・有効化gateとする記述は、この節に従って読む。
 L45:
 L46: 1. **経済Goal。** モデルを共有して外部minerのbond参加を増やしたモデルが、非公開のまま自己資本だけで採掘するモデルより、
-L47:    モデル全体として多くの配分を得る構造を実現する（モデル別のブロック生成機会とcoinbase配分、7日平均bondの`α = 1.5`（2026-10-16 ユーザー決定、2026-10-22 再確認。旧 30 日）、[ADR-0177](adr/0177-model-bond-allocation-without-availability-consensus.md)）。
+L47:    モデル全体として多くの配分を得る構造を実現する（モデル別のブロック生成機会とcoinbase配分、7日平均bondの`α = 1.5`（2026-10-16 ユーザー決定、2026-10-22 再確認。旧 30 日）、[旧ADR-0177](../../../rfc/0013-model-work-accounting.md)）。
 L48:    chainはモデルが共有されたかを判定せず、実際に拘束されたbond資本と、検証が成立したかだけを読む。非公開は次の二つで不利になる。
 L49:    - 公開モデルへbondが集まる結果として、閉鎖モデルが相対的な配分を失う。
 L50:    - 検証attestation gate（ECON round 2、readiness §3f）により、bondから抽選された検証者が自分のモデルのコピーでclaimを検査し、
@@ -66,10 +56,10 @@ L51:      所定数が承認しないmodel-epochにはモデル配分を払わ�
 L52:      理由は「検証が承認されなかった」であり「モデルが配布されなかった」ではない。claim・escrow・Final・weight・slashには触れない。
 L53: 2. **共有されたモデルの不正は客観的に裁ける。** 登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、
 L54:    そのモデルのclaimの不正は、claim固有の公開・認証済み証拠から局所化し、客観的なcourtで立証してslashできる。これを制度要件とする（§3、
-L55:    [ADR-0173](adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)）。
+L55:    [旧ADR-0173](../../../rfc/0009-court-and-claim-final.md)）。
 L56: 3. **非公開モデルの不正は有界化する残余リスクである。** 誰にもモデルが共有されず実効的な検出確率が0（`p = 0`）になる場合、
 L57:    不正の排除は保証しない。これは有効化を止める安全性gateではなく、bond単位のBlock / Reward / Final Weight上限、共通拘束期間、
-L58:    Final前の払い出し禁止で被害を有界化する残余リスクとして扱う（[ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)）。
+L58:    Final前の払い出し禁止で被害を有界化する残余リスクとして扱う（[旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md)）。
 L59:    上限は正直なminerにも不正なminerにも同じに適用する。
 L60: 4. **検出確率と期待利益は評価指標である。** 検出確率の下限の証明と「不正の期待利益が負」は、最終条件・有効化gateにしない。
 L61:    測定・導出して報告する評価指標とし、未知の値はUNKNOWNと表示する。根拠のない検出確率の仮定、検査対象外の演算を検査済みと表示すること、
@@ -104,7 +94,7 @@ L243: ## 9. モデルの二階層とモデル単位の検証の不採用 — 202
 L244:
 L245: **本節は原則凍結した前提である。** 通常は再審・変更しない。変数・パラメーター調整と重大問題時の例外変更は [§11](#design-freeze) に従う。例外では新規 RFC と新規 ADR の両方の採択、設計責任者の明示的承認、対象節の改定を要する。今回、階層規則や数値は変更しない。
 L246:
-L247: 1. **genesis と年次フォークで指定されたモデルは 1.0 である。** 年 1 回程度のソフトフォークまたはハードフォークで、モデル ID と固定 artifact root の組を承認リスト(ApprovedModels)に追加する。追加のみで、既存モデルは上書きしない(ADR-0175)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
+L247: 1. **genesis と年次フォークで指定されたモデルは 1.0 である。** 年 1 回程度のソフトフォークまたはハードフォークで、モデル ID と固定 artifact root の組を承認リスト(ApprovedModels)に追加する。追加のみで、既存モデルは上書きしない(旧ADR-0175)。リストへの指定は政策的決定であり、「公開されている」「独立検証可能である」ことの技術的証明ではない。
 L248: 2. **後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。** 昇格・更新・失効・試行手数料はない。何年経っても、どれだけ使われても 0.3 のままである。**1.0 になる経路は、年次フォークでの指定だけである。**
 L249: 3. **モデル単位の検証・審査は行わない(不採用)。** 理由: モデルに対して検証を行うと、その検証において何を信頼するか(誰が・何を根拠に「正しく共有・運用されている」と判断するか)という問題が新たに発生し、それは解決しない。モデルの公開状況・保持者数・取得可能性・共有状況をチェーンが審査することはしない。
 L250: 4. **係数は配分の重みに一度だけ掛ける。** `A_m = c_m · S̄_m^1.5`(α=1.5、7 日平均の適格 bond。2026-10-16 ユーザー決定・10-22 再確認、旧 30 日)。この P_m を物理ブロック機会(RFC-0016 V+)と coinbase 配分の両方に使い、受理ブロックの報酬に重ねて掛けない。登録モデル全体に発行上限を設け、多数登録で 0.3 の枠を増やせない。
@@ -121,10 +111,10 @@ L333: 変数・パラメーターの調整も、構造と不変条件を維持�
 L334:
 L335: 本書の「恒久」「再審しない」「変更不可」は通常の変更禁止として維持し、重大問題の例外手続きは本節に統一する。本書自体の改定にも設計責任者の明示的承認を要する。意味不変の実装・修正・最適化・試験・文書整備は継続できる。未採択 Draft の採用・技術方式の撤回・稼働有効化は今回行わない。
 L336:
-L337: 正本: [設計凍結](governance/design-freeze.md)。[ADR-0181](adr/0181-design-freeze-and-controlled-change.md) / [RFC-0021](rfc/0021-design-freeze-and-documentation-governance.md)。
+L337: 正本: [設計凍結](governance/design-freeze.md)。[旧ADR-0181](../../../rfc/0020-devnet-release-and-migration.md) / [RFC-0021](rfc/0021-design-freeze-and-documentation-governance.md)。
 ```
 
-### `docs/rfc/0014-panel-independent-fraud-prosecution.md`
+### `docs/rfc/0009-court-and-claim-final.md`
 
 ```text
 L35:
@@ -167,7 +157,7 @@ L71:
 L72: ## 1. 現行コードの到達点
 ```
 
-### `docs/rfc/0026-court-policy-master-contract.md`
+### `docs/rfc/0009-court-and-claim-final.md`
 
 ```text
 L26: ## 2. 時計(F01・F09)
@@ -236,7 +226,7 @@ L13: //! 1. **Commit** at `Final` (the claim, its producer and the participating
 L14: //!    no bond registered within `verifier_maturity_daa` of it, and never the producer's own operator).
 L15: //! 2. **Draw** `m` positions, stake-weighted with replacement, from that GLOBAL pool (never "the model's holders": a closed model's
 L16: //!    registrant cannot fill it), with a seed from the first execution-lane seed anchor strictly later than the commit
-L17: //!    (`round_seed_anchor`, ADR-0130) — randomness that did not exist when the claim was fixed.
+L17: //!    (`round_seed_anchor`, 旧ADR-0130) — randomness that did not exist when the claim was fixed.
 L18: //! 3. **Attest** within `attest_window_daa`: each drawn bond re-executes the claim and signs a verdict (the RFC-0017 attestation object,
 L19: //!    kernel inner 75, naming the certification id instead of an exam id).
 L20: //! 4. **Decide**: `Certified` iff at least `k` positions attested `Reproduced` (no mismatch), fewer than `veto` positions attested a

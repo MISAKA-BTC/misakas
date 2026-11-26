@@ -2,7 +2,7 @@
 
 **版:** Draft v0.1 — EVM Lane Scalability Baseline & Optimization Tracks
 **日付:** 2026-06-11
-**位置づけ:** [EVM 設計書 v0.4](misaka-evm-design-v0.4.md)(ADR-0020)の実装最適化編。v0.4 の凍結ルール(§3 mergeset delayed acceptance / §4 commitment / §7 二段階 cap)は本書で**変更しない** — 本書の主対象は commitment 値を変えない node-local 最適化であり、consensus 変更を要する項目(O8/O10)は明示的に区別して activation 判断(O13)に接続する。
+**位置づけ:** [EVM 設計書 v0.4](misaka-evm-design-v0.4.md)(旧ADR-0020)の実装最適化編。v0.4 の凍結ルール(§3 mergeset delayed acceptance / §4 commitment / §7 二段階 cap)は本書で**変更しない** — 本書の主対象は commitment 値を変えない node-local 最適化であり、consensus 変更を要する項目(O8/O10)は明示的に区別して activation 判断(O13)に接続する。
 **規律:** 性能主張は v0.4 §18 に従う — 本書の全数値は (a) 実コードの凍結定数(file:line 付き)、(b) ライブ devnet-EVM メッシュの実測(`be1e998`)、(c) その二つからの算術、のいずれかであり、出所を必ず併記する。推定値は「推定」と明記する。
 
 ## 0. 結論

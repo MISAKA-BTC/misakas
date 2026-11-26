@@ -1,6 +1,6 @@
 # RFC-0026 F07 — dependency horizon source audit
 
-Status: implementation investigation / Proposed integration contract, 2026-10-20. Based on the RFC14/G14 completion branch after `4f55a837d`. [RFC-0026 section 3.3](../../../rfc/0026-court-policy-master-contract.md) remains authoritative. No new ruleset, wire, preset or existing signed claim is changed by this record.
+Status: implementation investigation / Proposed integration contract, 2026-10-20. Based on the RFC14/G14 completion branch after `4f55a837d`. [RFC-0026 section 3.3](../../../rfc/0009-court-and-claim-final.md) remains authoritative. No new ruleset, wire, preset or existing signed claim is changed by this record.
 
 ## Required bound and component correction
 

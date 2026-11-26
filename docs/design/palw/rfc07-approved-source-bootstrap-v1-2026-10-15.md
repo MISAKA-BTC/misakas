@@ -8,7 +8,7 @@
 
 承認済み source を旧 OPV path へ再ラベルする変更や、collector の circularity guard を削除する変更では解消しない。新しい version の bootstrap provenance と selected-approval source path/policy が必要である。RFC0016/0017/ADR の実装は対象外。
 
-モデル単位の審査・資格・昇格を source の条件に追加しない。モデル二階層は凍結した [PRINCIPLES §9](../../PRINCIPLES.md#9-モデルの二階層とモデル審査の不採用2026-10-15ユーザー凍結前提) に従う。ここで扱う承認は全階層に必要な claim 単位の認証であり、登録モデルの 0.3 / 1.0 を変更しない。
+モデル単位の審査・資格・昇格を source の条件に追加しない。モデル二階層は凍結した [PRINCIPLES §9](../../PRINCIPLES.md) に従う。ここで扱う承認は全階層に必要な claim 単位の認証であり、登録モデルの 0.3 / 1.0 を変更しない。
 
 ## 新契約の境界
 

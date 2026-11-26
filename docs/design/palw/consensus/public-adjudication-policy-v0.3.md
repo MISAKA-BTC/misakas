@@ -2,7 +2,7 @@
 
 採択日: 2026-11-09 / 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-[RFC-0049](../../../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../../../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)の新claim/profileに適用する。詳細の規範所有者は[RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)。[v0.1](public-adjudication-policy-v0.1.md)・[v0.2](public-adjudication-policy-v0.2.md)とその採択記録は保持し、以下の追加契約についてのみ新版が優先する。
+[RFC-0049](../../../rfc/0004-fow1-execution-and-ticket.md)と[旧ADR-0217](../../../rfc/0009-court-and-claim-final.md)の新claim/profileに適用する。詳細の規範所有者は[RFC-v2-0016〜0020](../../../rfc/README.md)。[v0.1](public-adjudication-policy-v0.1.md)・[v0.2](public-adjudication-policy-v0.2.md)とその採択記録は保持し、以下の追加契約についてのみ新版が優先する。
 
 ## 1. 何を保証するか
 
@@ -10,19 +10,19 @@
 
 ## 2. 小さな反証へ落とせるclaimだけを受理する
 
-Minerは初期状態、全状態遷移、終端と出力の対応を含む記録を先に固定する。全relation familyが元claim・演算・座標・型・数値規則・依存へ結び付き、誤った実行なら少なくとも一つの認証された局所関係を反証できるprofileだけを受理する。後からPanelが作った未署名の細分traceをMinerの主張にしない。[16](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md)・[19](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md)。
+Minerは初期状態、全状態遷移、終端と出力の対応を含む記録を先に固定する。全relation familyが元claim・演算・座標・型・数値規則・依存へ結び付き、誤った実行なら少なくとも一つの認証された局所関係を反証できるprofileだけを受理する。後からPanelが作った未署名の細分traceをMinerの主張にしない。[16](../../../rfc/0004-fow1-execution-and-ticket.md)・[19](../../../rfc/0009-court-and-claim-final.md)。
 
 ## 3. 一人の異議と反証を多数決で消さない
 
-一人の適格noticeはnative未解決状態を作り、解決まで成功を止める。一人の有効な反証は、他のPanelの承認数にかかわらず元claimを無効化する。完成証拠はMinerの再署名・通常Panelの許可・悪意側の共同提出を必要としない。不一致の局所化には対話を使えるが、提出済み反証の裁定を追加対話で遅らせない。[18](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md)。
+一人の適格noticeはnative未解決状態を作り、解決まで成功を止める。一人の有効な反証は、他のPanelの承認数にかかわらず元claimを無効化する。完成証拠はMinerの再署名・通常Panelの許可・悪意側の共同提出を必要としない。不一致の局所化には対話を使えるが、提出済み反証の裁定を追加対話で遅らせない。[18](../../../rfc/0009-court-and-claim-final.md)。
 
 未認証資料、root不一致、私的な未受信申告だけを計算有罪としない。偽異議の棄却、供給義務違反、資源停止、未検証終了を区別する。
 
 ## 4. 成功の入口を一つにする
 
-正常系では独立選出者が所定の全体検証を行い、[17](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0017-noninteractive-positive-verification.md)の範囲付き承認を提出する。局所positiveや署名だけを全体の数学的証明としない。
+正常系では独立選出者が所定の全体検証を行い、[17](../../../rfc/0008-g14-panel-and-verification.md)の範囲付き承認を提出する。局所positiveや署名だけを全体の数学的証明としない。
 
-必要承認・必須局所検査・公開検査機会・依存・資金条件の成立に加え、適格な未解決異議がなく、計算反証・失効・期限切れがないことを[20](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の単一gateで確認する。同一blockでは、そのblockの適格異議・反証と失効を処理してから成功・creditを反映する。未成立は規定期限でAbortし、成功へ分類しない。
+必要承認・必須局所検査・公開検査機会・依存・資金条件の成立に加え、適格な未解決異議がなく、計算反証・失効・期限切れがないことを[20](../../../rfc/0009-court-and-claim-final.md)の単一gateで確認する。同一blockでは、そのblockの適格異議・反証と失効を処理してから成功・creditを反映する。未成立は規定期限でAbortし、成功へ分類しない。
 
 ## 5. 資料・容量・時計
 

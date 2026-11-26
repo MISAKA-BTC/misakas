@@ -1,9 +1,0 @@
-{
-  "kind": "rfc",
-  "command": [
-    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
-    "/workspace/scratch/a3438b5a601e/lp_revision_20261120/work/docs/rfc-v2/check_integrity.py"
-  ],
-  "exit_code": 1,
-  "runtime_executed": false
-}

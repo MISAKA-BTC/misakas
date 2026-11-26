@@ -6,7 +6,7 @@ llama.cpp が構造的にできないことを狙っている。float 実行で�
 FMA の縮約が全部答えを変えるので、二台のマシンが一致することを約束できない。だから float 系の
 検証方式は reduction order とスレッド数と FMA ポリシーを全部 pin する羽目になる（Gensyn RepOps、
 Thinking Machines の batch-invariant kernel は約 34〜61% のスループットを払っている）。
-**整数実行はこのカテゴリごと消す** — ADR-0040 Decision E。
+**整数実行はこのカテゴリごと消す** — 旧ADR-0040 Decision E。
 
 ## Qwen3.6-35B-A3B の到達点（2026-08-26）
 
@@ -21,7 +21,7 @@ median rank 0**（チャンスは 124,160）で予測する。これがアーキ
 **コサイン 0.9967 / rank 相関 0.9598 / top-1 151/155 / top-5 155/155**、`FAITHFUL`。
 
 **テキストが入ってテキストが出る**（2026-08-26 の実測ログ。`qwen36-chat` はこの記録の後、
-ADR-0077 W0 — 捕捉なしに答えるバイナリをツリーに残さない — により削除された。同じ推論を今日
+旧ADR-0077 W0 — 捕捉なしに答えるバイナリをツリーに残さない — により削除された。同じ推論を今日
 走らせるなら `palw-qwen36-fp-worker --mode v3-serve` を `misaka-palw-gateway` の下に置く。
 下の「今日の走らせ方」を参照）:
 
@@ -59,7 +59,7 @@ root を**計算**して chain の登録と照合（宣言ではなく導出）�
 per-class DAA は実現産出の share へ retarget するので、9 秒/job はブロック生成として実用域 —
 job の大きさは遅延を買うだけで weight は産出に比例する。
 
-### court 側も閉じた（ADR-0039 の前提条件）
+### court 側も閉じた（旧ADR-0039 の前提条件）
 
 `palw_step_refute` に **A16 tier 9 + Qwen3.6 固有 14 の計 23 descriptor** を追加し、裁定は
 エンジンと同じ関数を呼ぶ（裁定器が算術を再実装したら、裁定器自身のバグを持つ）。
@@ -77,7 +77,7 @@ page cache は「エキスパート」を知らないページ LRU なので、�
 unembedding）を追い出す。→ 常駐制御をエンジン側に:
 
 - **always-set は pin**（routed expert 以外を open 時に MADV_WILLNEED、返さない）
-  — **2026-09-11 に ADR-0112 で置き換え**: MADV_WILLNEED はフリートの virtio ディスクでは何も先読みしなかった(draw は 4 KiB fault ×300 万で 20 分)。always-set は open 時に fd 経由で読み切って所有、routed expert は router が選んだ瞬間に並列 pread して LRU、予算の既定は artifact の 1/5。
+  — **2026-09-11 に 旧ADR-0112 で置き換え**: MADV_WILLNEED はフリートの virtio ディスクでは何も先読みしなかった(draw は 4 KiB fault ×300 万で 20 分)。always-set は open 時に fd 経由で読み切って所有、routed expert は router が選んだ瞬間に並列 pread して LRU、予算の既定は artifact の 1/5。
 - **routed expert はバイト予算つき LRU**（admission=WILLNEED, eviction=DONTNEED —
   private read-only map では無損失でページを落とすだけ）
 - **router が commit した瞬間に選ばれた 8 個 × 3 tensor の range を一括 prefetch**
@@ -214,12 +214,12 @@ Qwen2.5-1.5B 実寸（28層・hidden 1536・ffn 8960・GQA 12/2・vocab 151,936�
 
 | 層 | 実体 | 状態 |
 | --- | --- | --- |
-| 算術仕様 | ADR-0040（int8 tier）+ ADR-0047（A16 = W8A16 tier） | 凍結、KAT 17,881 ベクタで外部化済み |
+| 算術仕様 | 旧ADR-0040（int8 tier）+ 旧ADR-0047（A16 = W8A16 tier） | 凍結、KAT 17,881 ベクタで外部化済み |
 | 参照実装 | `consensus/core/src/palw_base0{,_ops,_a16}.rs` | 裁定器が走らせるコード |
 | 第 2 実装 | `misaka-palw-base0-ref2`（構造独立）+ vendored gemmlowp（著者独立） | 差分テスト済み |
 | エンジン | `misaka/palw/base0/src/engine{,_a16}.rs` | A16 は本流へ移植済み |
 | **高速カーネル** | `misaka/palw/base0/src/kernels.rs` | **NEON + rayon、本項で新設** |
-| GPU | なし（ADR-0053 で Metal 経路ごと撤去。float は裁定不能で、整数 GPU カーネルは 1 行も無い） | **未着手** |
+| GPU | なし（旧ADR-0053 で Metal 経路ごと撤去。float は裁定不能で、整数 GPU カーネルは 1 行も無い） | **未着手** |
 
 ## 高速化が「安全である」根拠
 
@@ -293,7 +293,7 @@ SIMD は i32 レーンで累算したい。`|w| ≤ 128`、`|x| ≤ 32767` な�
 ## 今日の走らせ方（2026-09-03 追記）
 
 このページの `qwen36-chat` / `base0-chat` の実行例は 2026-08-26 の**測定記録**であって、
-今日の手順ではない。両バイナリは ADR-0077 Decision 1 / 不変条件 W0 で削除された：
+今日の手順ではない。両バイナリは 旧ADR-0077 Decision 1 / 不変条件 W0 で削除された：
 「捕捉のない答えを返すバイナリはツリーに残さない」。`court_capable: false` は、もはや
 このツリーのランタイムが取りうる状態ではない。
 
@@ -314,4 +314,4 @@ MISAKA_PALW_NETWORK_ID=testnet-11 \
   ジョブごとに 8 分かけていたのはこの部分だった。
 * 同じジョブの 4 つの root は `v3-job` と `v3-serve` で**バイト一致**する（W6）。常駐は
   コストの決定であって、意味論の決定ではない。
-* 手順・フラグ・露出の上限は [testnet11-join-mining.md](../../../history/networks/testnet-11/testnet11-join-mining.md) §7。
+* 手順・フラグ・露出の上限は [testnet11-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-join-mining.md) §7。

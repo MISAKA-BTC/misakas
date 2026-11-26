@@ -17,7 +17,7 @@ Tag 156 is the numbered reacquisition follow-up; delta 201 and tail `0xF0` retai
 ## 0. The bar, and why the legacy route fails it today
 
 The producer and EVERY Panel seat collude: every seat signs `Valid` / receipts. One public bonded verifier outside the Panel,
-registered after genesis, holding its own copy of the registered model (ADR-0177), using only public authenticated material,
+registered after genesis, holding its own copy of the registered model (旧ADR-0177), using only public authenticated material,
 must reach one of:
 
 - an objective conviction for computation fraud or a job / input / output / state violation covered by an active plan;
@@ -36,7 +36,7 @@ G14C's matrix (`g14-completion-matrix.md` §3.9, branch `g14/completion`) record
 
 What already works on testnet-12 and is reused unchanged:
 - one-move court accusations (`ShardCourtAccused`, `CheckpointAccused`) land whatever court is open past `palw_offence_attribution`
-  (armed at genesis), and a void by any route closes every court session neutrally (ADR-0152 §4-ter C3);
+  (armed at genesis), and a void by any route closes every court session neutrally (旧ADR-0152 §4-ter C3);
 - a disclosed held `StepLeaf` is adjudicated by the one-move verdict: a guilty answer convicts the producer
   (`convict_by_court_verdict_v1`), an honest one refutes the session;
 - an unanswered unit defaults (DA-7): `ProducerWithholding`, S1 live / S3 after Final;
@@ -69,7 +69,7 @@ Past the fence, the three adjudicators no longer refuse a proof because another 
 - The processor's gate and the fold's consumer call the `_at` forms with the rule the fence gives at the block — one reading at
   both sites, as for every adjudicator.
 - The conviction itself is the existing funnel. A live claim is voided (`CourtFraud`), and the void closes every open court
-  session NEUTRALLY (challenger reservation released, nobody slashed, ADR-0152 §4-ter C3) and every DA session with exposure
+  session NEUTRALLY (challenger reservation released, nobody slashed, 旧ADR-0152 §4-ter C3) and every DA session with exposure
   returned and `refuted_held` refunded (DA-6), and — new — every reservation on the claim (§3.6). That is one deterministic
   transition: conviction, session ends, exposure settlement and deadline release in the same block.
 - Nothing said INSIDE a court can close another session; only a completed objective proof does.
@@ -251,8 +251,8 @@ descends. The operator module's producer/signer filter is a discovery preference
 **Residuals, named.**
 - **Reward front-running by the producer.** A guilty disclosed leaf rewards the accuser whose session demanded the unit FIRST. A
   colluding producer knows its own lie, so its Sybil can demand the guilty unit first and take the named reward (or the DA
-  default's). This is ADR-0032's self-reporting: the producer recovers `r` of what it is slashed, its net loss ≥ (1 − r) of the
-  collected slash. The deterrence analysis must use the net figure (ADR-0176 D6). Not closed here.
+  default's). This is 旧ADR-0032's self-reporting: the producer recovers `r` of what it is slashed, its net loss ≥ (1 − r) of the
+  collected slash. The deterrence analysis must use the net figure (旧ADR-0176 D6). Not closed here.
 - **Inclusion.** All of the above assumes the honest verifier's carriers are included within the network's inclusion bound
   (RFC-0014 §2.1). Censorship by every block producer is outside the bar.
 - **Post-`Final` reservations** hold only the vesting row and the locks; DA-5's pause does not apply to a terminal claim.
@@ -274,7 +274,7 @@ descends. The operator module's producer/signer filter is a discovery preference
 - The deposit is DA-6's session exposure at the claim's stage, with INTF's share (§3.2). Nothing new is paid out.
 - A conviction uses the existing funnel (S2/S3, U3, the forfeits, the reporter reward R-1 at INTF's `r`). The reservation changes
   WHEN a claim may end, never what a conviction charges.
-- **ADR-0176 (lane BUDGET).** This lane adds no reward and no consensus weight. Its one interaction with the bond budget is a
+- **旧ADR-0176 (lane BUDGET).** This lane adds no reward and no consensus weight. Its one interaction with the bond budget is a
   DEFERRED `Final`: the claim's B/R/F reservation, taken at claim acceptance, must be re-checked at the deferred `Final` exactly as
   at an undeferred one, and `reuse_not_before = d + W` is unchanged (a hold neither releases nor extends the budget). The hook
   BUDGET's engine owns is `finalize_claim`'s re-check; this lane builds no part of that engine.

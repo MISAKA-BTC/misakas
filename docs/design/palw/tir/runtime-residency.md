@@ -1,6 +1,6 @@
 # PALW-TIR runtime residency — an IR class's weights are read within a budget, in tiers read off its program
 
-> **Design record and implementation (lane M2, branch `tir/residency`, 2026-10-01).** ADR-0112 for
+> **Design record and implementation (lane M2, branch `tir/residency`, 2026-10-01).** 旧ADR-0112 for
 > every IR class: the generic executor (`misaka-palw-tir-exec`) gains a runtime residency, the SDK's
 > IR lineage takes the node's residency policy, and `kaspad` reports and prices IR classes the way it
 > reports and prices the Qwen3.6 mapping. **Node software throughout: no object, rule, fence,
@@ -24,10 +24,10 @@ cache and says why.**
 
 ## 1. Why
 
-ADR-0112 §1 measured the fleet: weights read through mapping faults arrive at 6–11 MB/s on the
+旧ADR-0112 §1 measured the fleet: weights read through mapping faults arrive at 6–11 MB/s on the
 fleet's virtio disks, against 845 MB/s for reads sized to a tensor — 12.8 GiB and three million major
 faults a draw, twenty-minute draws — and even fully page-cached, owned buffers prefilled four times
-faster. ADR-0112 fixed it for the hand-written Qwen3.6 runtime (`Qwen36ResidencyV1`). The generic path
+faster. 旧ADR-0112 fixed it for the hand-written Qwen3.6 runtime (`Qwen36ResidencyV1`). The generic path
 did not have it: `TirArtifactV1` bound every param instance IN PLACE from a read-only mapping
 (`node/mapped.rs`), `ParamData` borrowed slices of it, and RFC-0004's composites bound the parent's
 params from the parent's mapping. That is fine for today's small IR classes and fatal for the
@@ -97,7 +97,7 @@ converted):
 | fifth | ⌈weights / 5⌉ |
 | routed capacity at budget `B` | `B − pinned − in flight` |
 
-The policy is ADR-0112's (`TirResidencyPolicyV1`, mapped one-to-one from the SDK's
+The policy is 旧ADR-0112's (`TirResidencyPolicyV1`, mapped one-to-one from the SDK's
 `PalwWeightResidencyV1`): `PageCache` (`--palw-class-resident-bytes 0`: mapped, as before, kept for
 comparison), `Bytes(b)` (stated), `FifthOfTheWeights` (the default where the host cannot be read),
 `FifthWithin(spare)` (the default where it can). **A stated budget below the floor is refused** with
@@ -105,7 +105,7 @@ the floor and its three terms in the message; **a default below the floor declin
 with `TirResidencyDeclinedV1 { budget, floor, fifth, weights, routed }` — nobody asked for a number
 that cannot run. A class that routes nothing has a floor near its size, so its fifth is always under
 it and it stays on the page cache by default, exactly as before (`kaspad` says so in an info line); a
-class that routes and is declined is the case ADR-0112 was written for, and `kaspad` warns. At the floor the routed cache holds exactly one token's routed rows, so a
+class that routes and is declined is the case 旧ADR-0112 was written for, and `kaspad` warns. At the floor the routed cache holds exactly one token's routed rows, so a
 forward never re-reads what it read earlier in the same forward; the in-flight term keeps a row a
 gather is copying alive past an eviction inside the budget.
 
@@ -125,7 +125,7 @@ gather is copying alive past an eviction inside the budget.
 * **Openings and trees** read pieces and chunks through the descriptor (`TirByteSourceV1`;
   `TirInventoryTreeV1::{open_with, operands_with, multiproof_with, from_leaves}`) — a court close never
   materialises an instance to open a 32 KiB leaf.
-* **Nothing is mapped** under a residency (`TirArtifactV1::is_mapped() == false`): ADR-0112 I-4 holds
+* **Nothing is mapped** under a residency (`TirArtifactV1::is_mapped() == false`): 旧ADR-0112 I-4 holds
   by construction.
 * **Composites** (RFC-0004): one store per parent root in a process (`tir_weight_store_for_root_v1`),
   shared by every candidate of that parent — `TirArtifactV1::open_composite_over(parent, …)` takes the
@@ -138,7 +138,7 @@ gather is copying alive past an eviction inside the budget.
 * **Executor** (`params.rs`, `rows.rs`, `exec.rs`): `TirParams::serve_rows` installs a `TirRowSourceV1`
   for the unbound instances; the `Gather` arm takes the row path when its data is a row-served
   param's view at the site `TirPlan::rows` recorded (`tir_row_sites_v1`, structural, so a plan holds it
-  for every artifact); the first gather of a route group admits the whole group (ADR-0112 Decision 4).
+  for every artifact); the first gather of a route group admits the whole group (旧ADR-0112 Decision 4).
   Indices are checked exactly as the whole-instance kernel checks them, before anything is read. A
   fused region that would read a row-served param whole runs on the generic kernels.
 * **SDK** (`lineages/tir.rs`): `load` passes the node's policy; the summary line names the budget,
@@ -197,7 +197,7 @@ plus its gathered rows, ESTIMATED at 845 MB/s):
 | granite-3.1-3b-a800m | 3.19 | 0.37 | 2.81 (0.56) | 0.95 | 0.64, SHORT | 2.8 GiB, 4 s |
 | qwen2.5-7b (dense) | 7.72 | 6.70 | 0 | 6.70 | 1.54, SHORT | 0.03 GiB |
 
-The ratio is a property of the mixture (ADR-0112 §8): routing few of many experts (8 of 128, 10 of
+The ratio is a property of the mixture (旧ADR-0112 §8): routing few of many experts (8 of 128, 10 of
 512) holds the floor inside a fifth; routing two of eight (Mixtral) or eight of forty (Granite) does
 not, and those stay on the page cache by default unless a budget at least the floor is stated; a
 dense model's floor is its size. At a long canonical job a replay touches nearly every expert once,
@@ -244,7 +244,7 @@ So the executor API and its identity tests ship; the duty keeps its executor.
 
 ## 9. Not done here
 
-* **Reading and computing a layer overlapped** (ADR-0112 §8's last bullet): an admission reads a
+* **Reading and computing a layer overlapped** (旧ADR-0112 §8's last bullet): an admission reads a
   group, then the gathers compute it.
 * **Promotion**: a row hot enough to be worth pinning is still an LRU entry.
 * **The evaluation executor on the typed backend**, which would make RFC-0004's adjacent same-item

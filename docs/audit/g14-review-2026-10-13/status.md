@@ -730,7 +730,7 @@ Commits `5a00bbaff` and `ea58a730c`. Nothing was built, tested or run.
   cleanup.
 - The core sidecar reader now reads in 16 KiB chunks, which is the node file reader's bound.
 - Caveat: no in-node executor runs a Float32 class. The integer families are the only FP
-  families, by ADR-0053/0077. A Float32 executor plugs in by retaining `float_public_material_v1`
+  families, by 旧ADR-0053/0077. A Float32 executor plugs in by retaining `float_public_material_v1`
   as its run material.
 
 **2. TIR prefix-state: relation core implemented; family wiring specified; still refused.**
@@ -779,7 +779,7 @@ Commits `5a00bbaff` and `ea58a730c`. Nothing was built, tested or run.
     `660fa4fbc`;
   - test-only PoCs: `misaka/palw/kernel/tests/c4r4.rs`, `challenge/tests/c4r4_grinding.rs` and the
     `g14_kernel_route_e2e` c4r4 modules, all present here at their post-reorg paths, plus
-    `consensus/core/tests/c4r4_reporter_share_49.rs`, which covers ADR-0032's 49% reporter-share
+    `consensus/core/tests/c4r4_reporter_share_49.rs`, which covers 旧ADR-0032's 49% reporter-share
     economics;
   - the round-4/4b adversarial-record doc sections.
 - None of it is code for the active plan (the staged legacy/TIR/Float32 route).

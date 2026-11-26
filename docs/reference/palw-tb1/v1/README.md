@@ -1,6 +1,6 @@
 # PALW-TB1の上流参照fixture
 
-[RFC0061](../../../rfc/0061-palw-internal-threshold-beacon.md) / [新profileの移行](../../../governance/palw-tb1-fow1-transition.md)。
+[RFC0061](../../../rfc/0006-tb1-randomness-and-release.md) / [新profileの移行](../../../governance/palw-tb1-fow1-transition.md)。
 
 添付のPython参照モデルを内容変更なしで収録する。完全BGW、PQ暗号、native合意、DB、holder選出、空batch、consumer別永続消費、追加SCHEDULE/ROLE/ADMISSION、FOW1関数定理を実装・証明するものではない。FIELD=2^127−1やdeterministic randomはfixture専用で、RFC0061のp=2^521−1を用いる本番suiteではない。実suiteへ接続してはならない。
 

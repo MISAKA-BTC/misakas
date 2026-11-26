@@ -1,36 +1,5 @@
 # Full-activation readiness — what stands between each fence and arming it
 
-<!-- MOE2-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../../../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../../../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../../../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
-
-永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
-
-旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
-<!-- MOE2-ADOPTED-20261120-END -->
-
-
-<!-- MOE1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。旧owner5%・buyback5%・非譲渡のPASSはMOE1の実装証拠ではない。新規登録原子性・同期transfer・資金保存・core市場winddownを別gateで確認する。
-
-追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
-
-[RFC0063](../../../rfc/0063-additional-model-option-economics.md) / [ADR0231](../../../adr/0231-additional-model-option-economics.md) / [適用と移行](../../../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
-<!-- MOE1-ADOPTED-20261120-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **適用時期の現行方針（2026-10-17 文書化）:** RFC-0003 の画像・動画と RFC-0004 のモデル改善は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
 > 旧「全 RFC 完成」条件から延期範囲の肯定的完成・性能評価を外す。ただし対象経路の閉鎖確認、共有コードがテキスト・合意・認証・会計・回復に及ぼす問題は免除しない。
 
@@ -62,7 +31,7 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 | Fence (RFC) | Today | Blockers | Owner / next step |
 | --- | --- | --- | --- |
 | `palw_audit_1004_v1`, `palw_gen_range_twin_v1`, `palw_model_court_window`, `palw_receipt_spend_v4` (former int-13 list) | ready; processor + chain-block E2E (`t12_int13_flag_day_crossing`, `rfc9_v4_chain_e2e`) | EXTERNAL: the drill that crosses them (template: `t12-daa9000-drill-plan.md`, cancelled for 9,000) | rides the full-activation release |
-| `palw_probabilistic_constraints_v1` (RFC-0011 K2 route + RFC-0014 G14) | real node, dormant; validation refuses arming; 63 `g14_` tests | CODE: C4 round-3 F-05 (OPV lane cap), GAP-R7 accuser seal, GAP-11 flake, GAP-5 FinalReward funding (G14-R4); cached ledger per block instead of O(rows) rebuild (GAP 8); mempool acceptance gate (GAP 10); pipeline claims' header wire form (GAP 6); conformance: a court for vector logits/commit digests, lying-claim griefing of conformance. DESIGN: K2 at real scale — per-position roots, segments ≤ 1,024, a per-prosecution public-byte bound, row-tiled court openings, authenticated prompt tiles (9B-8k refuses on 12.6 TB public bytes, 6.99 GB retained, 8,192 sessions, a 2 GB opening); artifact binding equality — **GAP 1 withdrawn by ADR-0177** (refutable from bytes by any verifier that acquired the model; no availability guarantee). POLICY: the challenge policy's security level (interim 2 bits), interim terms. EXTERNAL: soundness review of the composition, 9B-8k measurement | G14-R4 (running) for the CODE items it owns; a K2-scale lane next |
+| `palw_probabilistic_constraints_v1` (RFC-0011 K2 route + RFC-0014 G14) | real node, dormant; validation refuses arming; 63 `g14_` tests | CODE: C4 round-3 F-05 (OPV lane cap), GAP-R7 accuser seal, GAP-11 flake, GAP-5 FinalReward funding (G14-R4); cached ledger per block instead of O(rows) rebuild (GAP 8); mempool acceptance gate (GAP 10); pipeline claims' header wire form (GAP 6); conformance: a court for vector logits/commit digests, lying-claim griefing of conformance. DESIGN: K2 at real scale — per-position roots, segments ≤ 1,024, a per-prosecution public-byte bound, row-tiled court openings, authenticated prompt tiles (9B-8k refuses on 12.6 TB public bytes, 6.99 GB retained, 8,192 sessions, a 2 GB opening); artifact binding equality — **GAP 1 withdrawn by 旧ADR-0177** (refutable from bytes by any verifier that acquired the model; no availability guarantee). POLICY: the challenge policy's security level (interim 2 bits), interim terms. EXTERNAL: soundness review of the composition, 9B-8k measurement | G14-R4 (running) for the CODE items it owns; a K2-scale lane next |
 | `palw_panel_free_v1` (RFC-0015 OPV) | real node, dormant (struct fence with admission list + terms). **Not in the full-activation set** (RFC-0015 amendment 2026-10-12, N5: Panel=0 is not activated; the release that arms the K2 route leaves this `None`) | everything of the K2 route above, plus POLICY: the OPV admission list and terms | with the K2 route |
 | `palw_permissionless_panel_v1` (RFC-0010 V3 Panel) | production fold, shard draw, non-seat accusation guard and RPC/CLI implemented, dormant; validation refuses arming | POLICY/EXTERNAL: approved production beacon scheme, bias/withholding/participation and economics (approval registry empty). DESIGN/CODE: objective seal finality and an immutable epoch source-profile snapshot (verification currently reads mutable eligibility). EXTERNAL: fresh cohort with the fleet removed, production-beacon → binding → prosecution → Final/redemption, real pruning-proof recovery. Reference-source node tests cannot pass those gates. See [2026-10-10 audit](rfc-0010-dormant-implementation.md) | after the K2/OPV bundle |
 | `palw_dns_retirement_v1` (RFC-0012) | dormant; zero-DNS matrix x0–x15 | POLICY: D1 (first `safe` ≥ 5,400 DAA — analysis in `rfc-0012-policy-proposal.md` §10), D, W, operator/class caps, horizon. CODE: a claim reaching Final through the processor with EVM on, real pruned IBD with EVM state, attack tests and `safe` readiness reasons (X12b running). EXTERNAL: wallets/tooling, runbook, drill | X12b (running) |
@@ -79,7 +48,7 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 | RFC-0002 / 0011 | the HF-majority acceptance bar (RFC-0011: one-sided 95% lower bound ≥ 90% over all public repos); census re-measurement running (COV-P4) | CODE + measurement |
 | RFC-0001 | proposals P1–P4 — **verified on `small/rfc1-13-9-items`** (5c7f7b397, f01425068, 3c16eee55). Limits: P3's canonical door is not called by the node; when it is wired it needs its OWN dormant fence, because `palw_fp_job_v5` is ARMED on t12. P4 has no concrete tokenizer and no gateway route for the Text arm. The cancel frame `MPCX` needs gateway and worker shipped together | CODE (P3 wiring, P4 route) |
 | G14-for-rewards (lane D GAP 6/3) | H1 on a running devnet: a class whose kernel is KERNEL_NOT_ACTIVE and that has no PUBLIC_PROSECUTION_COMPLETE moved Candidate → Probation once 8 seats proved readiness — the V2 lifecycle consults seats/readiness only, and only classes that began onboarding are gated. From the full-activation release every NEW class must pass the onboarding/G14 gate before it can earn; whether live Panel-route classes are grandfathered is a user decision | CODE + POLICY |
-| fork-choice safety + partition healing (FINX, ADR-0178 — renumbered from 0175, 2026-10-10) | **rule E adopted (user, 2026-10-09)**: search every tip, count claims over each tip's exclusive past, bonded participation first once the fork is deep; details internal (FINX branch). Ships in the full-activation release and is a **hard prerequisite for arming `palw_dns_retirement_v1`** | CODE (fence; FINX implementing) |
+| fork-choice safety + partition healing (FINX, 旧ADR-0178 — renumbered from 0175, 2026-10-10) | **rule E adopted (user, 2026-10-09)**: search every tip, count claims over each tip's exclusive past, bonded participation first once the fork is deep; details internal (FINX branch). Ships in the full-activation release and is a **hard prerequisite for arming `palw_dns_retirement_v1`** | CODE (fence; FINX implementing) |
 | verifier incentive (PRINCIPLES §6 condition 6; C4R4 round 4) | proof bytes don't depend on the verifier's salt, so the liar's own Sybil can seal first and take the whole bounty of its own conviction: deterrence holds, but honest verifiers earn nothing. Timing alone can't fix it. Sketch (G14R, node record §8, end-of-lane item 14): pre-committed watcher salts, with a bounty paid only for a fault inside the watcher's salted sample, split equally among every covering watcher, and priced against MEAS's T_check. Needs a new inner kind and a per-class sampler | DESIGN (blocks rewards under §6) |
 | liveness | a minority that was partitioned ~41 min never rejoins (DNS reorg gate DominanceViolation) and one node deadlocks after "Chain participation held" — found by H1 on the devnet; the code is in int-12 too (LIVE-R1 investigating) | CODE (HIGH) |
 
@@ -100,9 +69,9 @@ Today **no fence is armable**. Integration continues; no new fence for rewards, 
 4e. K2 v4 (real-scale) detection policy: the drawn share q of claims re-executed after commit, and how P_run (the chance a drawn
     watcher actually runs and files) is derived. Per-claim detection is q·P_run; until these are set, v4 classes do not earn.
     Source: `k2-real-scale.md` §11 (SG-06). This is Q-01 made concrete.
-4f. ADR-0175 clarifications (INTF audit, 2026-10-10; text proposals for the user, no code change needed):
+4f. 旧ADR-0175 clarifications (INTF audit, 2026-10-10; text proposals for the user, no code change needed):
     - RFC-0004 §II.3's "promoted … with its root recorded on the line" means a new independent registration (`CandidateSelected`).
-    - ADR-0175 should state that a Memory registration fixes its update rule and initial memory state, while the line's current
+    - 旧ADR-0175 should state that a Memory registration fixes its update rule and initial memory state, while the line's current
       state evolves as independent material.
     The full-activation release must arm `palw_model_immutable_v1`. `palw_improvement_v1` is already ARMED on t12, so the
     ordering is a release-checklist item, not a validation rule. `palw_typed_roots_v1` (dormant) requires
@@ -127,7 +96,7 @@ production approval on hold. Panel=0 activation deferred** — it needs measurem
 * **Final reward** — option A, user-pays escrow; invariant `payouts ≤ existing issuance + collected fees + pre-funded`, no double
   counting, no double payment across reorg / re-application / duplicate redemption; a self-posted job pays a non-refundable cost.
   Subsidy carves (B/C) later, separately designed and reviewed.
-* **Units** — the coin is Misaka, ticker BILI (ADR-0174); `SOMPI_PER_KASPA` = 10^8 is a legacy constant name for 1 BILI; "KAS" in
+* **Units** — the coin is Misaka, ticker BILI (旧ADR-0174); `SOMPI_PER_KASPA` = 10^8 is a legacy constant name for 1 BILI; "KAS" in
   older reports is that legacy label; amounts and units unchanged.
 
 > **2026-10-12:** OPV admission is now derived (`opv_eligibility_v1`, E1–E7), not the manual `admitted_classes` described below, and the coded bootstrap reaches beacon sources only through `OpvFinal` (Panel=0). With Panel=0 not activated the bootstrap is unreachable: new reward profiles stay dormant until an independent bootstrap is designed and verified (register N3).
@@ -200,20 +169,20 @@ Panel configuration, an outside verifier who found a fault can carry an objectiv
 
 | Change | What it means for the release | Lead's application |
 | --- | --- | --- |
-| **ADR-0175** — registered models are permanently immutable; improvements register independently; Position/AMM never retarget | `palw_model_immutable_v1` (pre's code: lifecycle objects that would mutate a registration are refused past it, the carrying block stands; `model_registration_id_v1`) is a new dormant fence of the release | in the fence inventory; A2U2 adds the refused lifecycle objects to the central table; INTF audits RFC-0004 Part II (memory lines, II.3 "promotion") against it — a memory line is independent material and never moves a registration's head/version/root/Position |
-| **ADR-0032 amendment** — the PALW reporter share 10% → **49%** (R-core R-1 and DA-6 exposure) | as merged from `pre` it is unfenced and commits the share into the R-core+ params id, so testnet-12's params id moves and the live 10% history would be re-read at 49% | the ADR itself requires "a versioned migration that does not reinterpret the past 10% accounting": **INTF puts it behind the dormant fence `palw_reporter_share_v2`** (10% below, 49% at/after; Some-only hashed), so the t12 ids stay int-12's and 49% rides the single release |
-| **ADR-0176** — bond and a common DAA window bound claims, reward blocks, rewards and Final weight (Q/B/R/F); capacity multiplication preserves total credit; `reuse_not_before = d + W`; reservation at acceptance re-checked at every payout/Final | a new accounting rule over EVERY reward-bearing path (Attempt, Free Prompt, claim-backed blocks, receipts, EXEC slices/riders, escrow, settlement readers, fork choice) — **every reward / consensus-weight fence is blocked until it exists** | new lane **BUDGET** (opus): dormant engine `palw_bond_budget_v1`; W, rho mapping, cap values are POLICY (not set) |
-| **ADR-0177** — the chain does not interfere with model acquisition: MISAKA Torrent, Bonded Seeders, Seeder rewards, PoR / Full Fetch / leases / TRDC / FPR and availability-based reward/weight suspension are **withdrawn**; model coinbase allocated by distinct locked miner capital `S_m` through `f(S_m)` inside the existing budget; **G14 is conditional on acquiring the registered model**; court demands are claim-specific (no weight-file/range requests, a cumulative scope) | (a) DA16's artifact-availability half (the `Artifact` lease subject, §2.4 READY gating of tag 104, `AVAILABILITY_REQUIRED`, provider slashing for artifact unavailability) leaves consensus; the claim-material provider court (RFC-0009) stays. (b) "GAP 1: artifact binding equality needs RFC-0014 §16 availability" is **withdrawn** — the binding is refutable by any verifier that has the bytes (tag 105), with no availability guarantee. (c) a new allocation engine | DA16b re-scopes and inventories court units (D2) with K2S2; BUDGET implements `C_{b,m}` / `S_m` / `R_m` behind `palw_model_bond_allocation_v1`; ECON evaluates `f` and open-vs-closed economics (D6); MEAS measures acquisition-conditional `p` |
-| ADR numbering | the user's ADR-0175 is "immutable registrations"; next free is **ADR-0178** | rule E (FINX's `0175-fork-choice-…`) is renumbered **ADR-0178** |
+| **旧ADR-0175** — registered models are permanently immutable; improvements register independently; Position/AMM never retarget | `palw_model_immutable_v1` (pre's code: lifecycle objects that would mutate a registration are refused past it, the carrying block stands; `model_registration_id_v1`) is a new dormant fence of the release | in the fence inventory; A2U2 adds the refused lifecycle objects to the central table; INTF audits RFC-0004 Part II (memory lines, II.3 "promotion") against it — a memory line is independent material and never moves a registration's head/version/root/Position |
+| **旧ADR-0032 amendment** — the PALW reporter share 10% → **49%** (R-core R-1 and DA-6 exposure) | as merged from `pre` it is unfenced and commits the share into the R-core+ params id, so testnet-12's params id moves and the live 10% history would be re-read at 49% | the ADR itself requires "a versioned migration that does not reinterpret the past 10% accounting": **INTF puts it behind the dormant fence `palw_reporter_share_v2`** (10% below, 49% at/after; Some-only hashed), so the t12 ids stay int-12's and 49% rides the single release |
+| **旧ADR-0176** — bond and a common DAA window bound claims, reward blocks, rewards and Final weight (Q/B/R/F); capacity multiplication preserves total credit; `reuse_not_before = d + W`; reservation at acceptance re-checked at every payout/Final | a new accounting rule over EVERY reward-bearing path (Attempt, Free Prompt, claim-backed blocks, receipts, EXEC slices/riders, escrow, settlement readers, fork choice) — **every reward / consensus-weight fence is blocked until it exists** | new lane **BUDGET** (opus): dormant engine `palw_bond_budget_v1`; W, rho mapping, cap values are POLICY (not set) |
+| **旧ADR-0177** — the chain does not interfere with model acquisition: MISAKA Torrent, Bonded Seeders, Seeder rewards, PoR / Full Fetch / leases / TRDC / FPR and availability-based reward/weight suspension are **withdrawn**; model coinbase allocated by distinct locked miner capital `S_m` through `f(S_m)` inside the existing budget; **G14 is conditional on acquiring the registered model**; court demands are claim-specific (no weight-file/range requests, a cumulative scope) | (a) DA16's artifact-availability half (the `Artifact` lease subject, §2.4 READY gating of tag 104, `AVAILABILITY_REQUIRED`, provider slashing for artifact unavailability) leaves consensus; the claim-material provider court (RFC-0009) stays. (b) "GAP 1: artifact binding equality needs RFC-0014 §16 availability" is **withdrawn** — the binding is refutable by any verifier that has the bytes (tag 105), with no availability guarantee. (c) a new allocation engine | DA16b re-scopes and inventories court units (D2) with K2S2; BUDGET implements `C_{b,m}` / `S_m` / `R_m` behind `palw_model_bond_allocation_v1`; ECON evaluates `f` and open-vs-closed economics (D6); MEAS measures acquisition-conditional `p` |
+| ADR numbering | the user's 旧ADR-0175 is "immutable registrations"; next free is **旧ADR-0178** | rule E (FINX's `0175-fork-choice-…`) is renumbered **旧ADR-0178** |
 
-New POLICY items for §3: ADR-0176 `W`, the rho ↔ Q/B/R/F mapping and the cap values; ADR-0177 `f`, its range, the allocation epoch/snapshot and its tie to `W`, and the numeric bar for "publication is overwhelmingly better than closed self-funding" (to be fixed before ECON's evaluation); the activation of `palw_reporter_share_v2` with the single release.
+New POLICY items for §3: 旧ADR-0176 `W`, the rho ↔ Q/B/R/F mapping and the cap values; 旧ADR-0177 `f`, its range, the allocation epoch/snapshot and its tie to `W`, and the numeric bar for "publication is overwhelmingly better than closed self-funding" (to be fixed before ECON's evaluation); the activation of `palw_reporter_share_v2` with the single release.
 
 ## 3d. G14 completion — the user's top priority (2026-10-10)
 
 The user, 2026-10-10: finish RFC-0015's Panel=0 precondition first. Even if the producer and ALL Panel seats collude, then for
 computation fraud and for job / input / output / state / DA violations covered by an active plan, ONE public bonded verifier outside
 the Panel reaches an objective conviction (or the correct DA default, or the dismissal of an honest claim) from public authenticated
-material only, never the producer's secret state. ADR-0177 makes this conditional on the verifier having the registered model.
+material only, never the producer's secret state. 旧ADR-0177 makes this conditional on the verifier having the registered model.
 
 The authoritative gap matrix is lane G14C's `docs/design/palw/g14-completion-matrix.md` (branch `g14/completion`, 82a176a77).
 **No reward-bearing plan family meets G14 today.**
@@ -226,7 +195,7 @@ Common to every family:
 | Owner | Gaps |
 | --- | --- |
 | G14R | GAP-00: carry C4R4's fixes; the salted-seal reorg test; green on `b8ae9412b`. It heads the integration order: G14R + A2U, then OPVB, C4R4, K2S, X8R |
-| G14C | GAP-01..04: one canonical node harness (post-genesis bond, fresh node / IBD / pruned import, RPC, all seats collude, ADR-0177 non-interference); GAP-10 (other K2 lie types); GAP-71b; GAP-50/51 typed roots; GAP-20/21 pipelines |
+| G14C | GAP-01..04: one canonical node harness (post-genesis bond, fresh node / IBD / pruned import, RPC, all seats collude, 旧ADR-0177 non-interference); GAP-10 (other K2 lie types); GAP-71b; GAP-50/51 typed roots; GAP-20/21 pipelines |
 | K2S | GAP-32 (merge r4-fixes), GAP-30 (v4 node recovery and lie types), GAP-31 (canonical 8k held), GAP-40 (v5) |
 | DA16 | GAP-05 (artifact availability out of consensus), GAP-06 (claim-specific scope), GAP-52 (snapshot binding) |
 | X8R | GAP-60 (slice DA default on the node), GAP-61 (the real reward gate in place of the test seam), GAP-62 (initial boundary), GAP-63 (merge and rebuild) |
@@ -281,13 +250,13 @@ execution cap, and whether market fee income counts in R_max.
 - **Follow-up rulings (2026-10-10), on ECON round 2:**
   - **The design: linear `f` with a verification-attestation gate.** Per model-epoch, stake-drawn verifiers (m = 47, k = 24, both an
     unapproved interim policy) each check a sampled Final claim with their own copy, and the allocation is paid only when k attest.
-  - **The gate is consistent with ADR-0177 D1.** It withholds only the model-allocation subsidy, and the reason is "verification
+  - **The gate is consistent with 旧ADR-0177 D1.** It withholds only the model-allocation subsidy, and the reason is "verification
     was not attested", never "the model was not served". Claims, escrow, Final, weight and slashing are untouched, and there is no
     availability audit and no slash.
   - **The adversary bound is 1/3** of capital and of verifier stake, as in BFT. The bars fail at 0.40 / 0.44.
   - **BUDGET implements it now**, as an extension of `palw_model_bond_allocation_v1`. The values are an unapproved policy.
 
-## 3g. ADR-0177 goal changed: bond-aggregation advantage (user, 2026-10-10)
+## 3g. 旧ADR-0177 goal changed: bond-aggregation advantage (user, 2026-10-10)
 
 The goal is now "strongly favour models that gather more effective locked miner bond", no longer "favour publication itself".
 Publication is the means by which other miners can join; equal capital is treated equally whoever owns it.
@@ -351,7 +320,7 @@ Source: the user, with the reasoning in codex's `docs/audit/g14-review-2026-10-1
 |---|---|
 | RFC-12 values | D = 3; work W = 6,331,093,440 pwu (revisit with a measured census); operator concentration 400‰; class concentration 1000‰ for now, re-evaluate 600‰ once ≥ 3 REAL classes hold mature work. Maturity stays max(acceptance + 5,400 DAA, the later retirement deadline). Legacy DNS evidence horizon 10,080 DAA. If a new G14 path's deadline is longer, maturity extends with it. |
 | fee-only Round / market fee | A fee-only Round is NOT counted in B_max; it is limited at allocation by a separate, capital-proportional ExecutionCap. In v1 the market fee is NOT in R_max; expected fee income enters the economic-safety computation. |
-| Budget window W | 400 DAA as the drill-interim value, only for profiles that satisfy L ≤ W and the slot cap; NOT applied as-is to long G14 staged paths. Distinct from RFC-12's work W. **Superseded 2026-10-14/15 (user):** the common hold is 7-day-equivalent DAA for Panel=0 and 1-day-equivalent DAA for Panel=1, per-day equalized (ADR-0176 amendment; code: V3 budget policy, `palw_bond_budget_v1/hold.rs`, dormant); 400 DAA and 280–436 DAA are code drift, kept only for the V2 mechanics probe. |
+| Budget window W | 400 DAA as the drill-interim value, only for profiles that satisfy L ≤ W and the slot cap; NOT applied as-is to long G14 staged paths. Distinct from RFC-12's work W. **Superseded 2026-10-14/15 (user):** the common hold is 7-day-equivalent DAA for Panel=0 and 1-day-equivalent DAA for Panel=1, per-day equalized (旧ADR-0176 amendment; code: V3 budget policy, `palw_bond_budget_v1/hold.rs`, dormant); 400 DAA and 280–436 DAA are code drift, kept only for the V2 mechanics probe. |
 | G14-L (34 sessions vs parallel lanes) | Not approved as a reinterpretation. A new explicit contract: 34 lifetime sessions + 64 lanes/session + 128 extra lanes/reservation. Full guarantee withheld until: cumulative scope 16 vs a first round of 36 lanes is closed, re-acquisition after pruning, retained RAM, and the maximum profile reaching its terminal. |
 | Rule E + DNS retirement arm path | Approved for salted drills only: E armed at or before retirement; genesis, network and parameter identity separated from public testnet-12; fix the remote L2 client's fixed `rule_e: None` (R12 WIP `rfc12/r12-wip`); verify node/client agreement, partition rejoin and pruned IBD. Normal-preset activation is a separate decision. |
 
@@ -359,13 +328,13 @@ Source: the user, with the reasoning in codex's `docs/audit/g14-review-2026-10-1
 
 Recorded in [rfc-adr-review-resolution-2026-10-12.md](../../../audit/palw/design-reviews/rfc-adr-review-resolution-2026-10-12.md) and the full proposal
 [panel1-bond-budget-model-capital-amendments-2026-10-12.md](../economics/panel1-bond-budget-model-capital-amendments-2026-10-12.md); every affected ADR/RFC
-(ADR-0166/0173/0176/0177, RFC-0001/0002/0003/0004/0006/0007/0008/0010/0011/0012/0014/0015) carries a dated 2026-10-12 section.
+(旧ADR-0166/0173/0176/0177, RFC-0001/0002/0003/0004/0006/0007/0008/0010/0011/0012/0014/0015) carries a dated 2026-10-12 section.
 - **X1 withdrawn:** model distribution is free (no obligation on registrants), but Miner and Panel MUST hold the registered model, and each claim
-  still needs its computation/verification/adjudication/Final conditions — ADR-0177 now says so in a D1 supplement and a D7 note.
+  still needs its computation/verification/adjudication/Final conditions — 旧ADR-0177 now says so in a D1 supplement and a D7 note.
 - **Priorities:** N1/N2 keep Miner/Panel possession and independent Panels (RFC-0002 `class_seated`); N3 an independent Work Beacon
   bootstrap, new reward profiles Dormant until then; X3 a fixed per-claim `hard_deadline`; N4/X2 publicly unverifiable paths leave
   reward-bearing PALW; N5 Panel=0 not activated; W1 `le64(n+1)`; W2 FP V4 text rules unchanged, TextStream gets its own; X4/X5 wording.
-- **Proposals (undecided):** Panel=1 interim mode with bounded replacement and positive-evidence Final; ADR-0176 rolling Bond/time ledger;
+- **Proposals (undecided):** Panel=1 interim mode with bounded replacement and positive-evidence Final; 旧ADR-0176 rolling Bond/time ledger;
   Miner+Panel claim-bond aggregation with a 1.3–2× coefficient (its relation to the interim α = 1.5 curve, the Panel-bond inclusion and the
   block-opportunity scope are recorded as open, not silently adopted). Acceptance tests B01–M01 and C01–C18 are specified, not run.
 
@@ -374,9 +343,9 @@ Recorded in [rfc-adr-review-resolution-2026-10-12.md](../../../audit/palw/design
 `docs/PRINCIPLES.md` §0. MISAKA's final goal is that keeping a model closed is economically worse; eliminating fraud is not a goal.
 - PESG conditions 2 (proven detection lower bound) and 4 (negative attack EV) are reported metrics, not activation gates. Counter-example A no longer blocks by itself; B and C still do.
 - If a model is shared with even one party who can stand up a correct Panel, its fraud is localized from claim evidence, convicted in objective court and slashed. That is required.
-- A closed model's `p = 0` is a residual risk bounded by ADR-0176's per-bond caps, the common hold and no payout before Final.
-- Acceptance adds ADR-0177's two-stage evaluation: (a) the model's total bond / allocation share / scale, closed vs shared; (b) whether the original owner's own share rises, including the self-funding alternative.
-- **Allocation finalized later the same day (user, 2026-10-14; RFC-0015 §8.5.5, ADR-0177):** α = 1.5 adopted (the μ proposal kept for comparison only); `S_m` = miner + claim-bound permissionless verifier capital, deduplicated; a 30-day-DAA average; `P_m = S̄^1.5 / Σ S̄^1.5` sets both each model's block opportunity and its coinbase budget, applied once; `W` = 7 days of DAA for the per-bond Q/B/R/F caps. **Miner rewards are never paid to the model registrant**: the registrant earns the 5 % ModelPosition trade fee (ADR-0114, past `palw_model_leg_v2`; it was 1 % under ADR-0087), and the 5 % reward buyback (ADR-0091) pays no leg. Required before activation: new models are not starved of block opportunity under α = 1.5; verifier participation, liability, hold and reward rules, including bond-without-checking, are defined.
+- A closed model's `p = 0` is a residual risk bounded by 旧ADR-0176's per-bond caps, the common hold and no payout before Final.
+- Acceptance adds 旧ADR-0177's two-stage evaluation: (a) the model's total bond / allocation share / scale, closed vs shared; (b) whether the original owner's own share rises, including the self-funding alternative.
+- **Allocation finalized later the same day (user, 2026-10-14; RFC-0015 §8.5.5, 旧ADR-0177):** α = 1.5 adopted (the μ proposal kept for comparison only); `S_m` = miner + claim-bound permissionless verifier capital, deduplicated; a 30-day-DAA average; `P_m = S̄^1.5 / Σ S̄^1.5` sets both each model's block opportunity and its coinbase budget, applied once; `W` = 7 days of DAA for the per-bond Q/B/R/F caps. **Miner rewards are never paid to the model registrant**: the registrant earns the 5 % ModelPosition trade fee (旧ADR-0114, past `palw_model_leg_v2`; it was 1 % under 旧ADR-0087), and the 5 % reward buyback (旧ADR-0091) pays no leg. Required before activation: new models are not starved of block opportunity under α = 1.5; verifier participation, liability, hold and reward rules, including bond-without-checking, are defined.
 - Closure is made uneconomic in two ways, with no judgement of whether a model was shared: bond gathers on shared models, and the verification-attestation gate (§3f) pays no allocation to a model-epoch nobody could attest.
 
 ## 5. Lanes for every remaining item (user, 2026-10-08 ~20:40: 「未完了の残りに対してもエージェントを立てて完了して」)

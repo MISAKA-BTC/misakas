@@ -1,11 +1,11 @@
-# The OpenAI surface, v1 — conformance corpus (ADR-0096 Decision 1)
+# The OpenAI surface, v1 — conformance corpus (旧ADR-0096 Decision 1)
 
 Every file here is one request against `POST /v1/chat/completions` and the verdict the surface
 must give it, in the shape `{"request": {…}, "expect": {"verdict": "accepted" | "refused",
 "reason_contains": "…", "ignored_fields": […]}}` (`reason_contains` is required for a refusal and
 absent for an acceptance; `ignored_fields`, when present, is the exact SET of names the response's
 `misaka.ignored_fields` must carry — compared without regard to order, because the order is the
-order an entrance met them in and two entrances need not share it). The corpus pins what ADR-0096 Decision 1 decides: content
+order an entrance met them in and two entrances need not share it). The corpus pins what 旧ADR-0096 Decision 1 decides: content
 parts flatten and a non-text part is refused by its type and position; tool turns, `tools` and
 `tool_choice` are admitted (Decision 2); `response_format` is admitted inside the JSON-Schema
 subset and refused by keyword outside it (Decision 3); a temperature is refused with the fence's
@@ -22,7 +22,7 @@ The gateway runs the corpus in `misaka/palw/gateway/src/surface.rs`
 and then hashes the directory (`OPENAI_SURFACE_V1_CORPUS_SHA256`: SHA-256 over each file's name,
 a NUL, its bytes, a NUL, in byte-sorted name order). The Studio mirrors the directory into its own
 tree, runs the same files through its `/v1`, and pins the same digest, so the two entrances cannot
-drift apart without one of the two tests going red; ADR-0096 §9 records the digest both trees
+drift apart without one of the two tests going red; 旧ADR-0096 §9 records the digest both trees
 carry. The digest is the seam: a file changed in one tree and not the other is a red test, not a
 silent difference in what a person's app is allowed to send.
 
@@ -32,14 +32,14 @@ the SDK defaults are the point); for a refusal, quote the part of the sentence t
 field and the rule, not the whole sentence; run `cargo test -p misaka-palw-gateway --lib
 conformance_corpus`, take the new digest from the failure message, update the constant in
 `surface.rs`, mirror the file into the Studio and update its constant in the same change, and
-append the digest to ADR-0096 §9. A case that only passes on an armed network (a temperature on
+append the digest to 旧ADR-0096 §9. A case that only passes on an armed network (a temperature on
 `fp_decode_rules`, a committed format on `fp_decode_constraint`) does not belong here — the
 corpus is what every shipped network answers today.
 
 ## Where the two entrances differ, by decision
 
 Five cases carry an `expect.studio` object — the verdict the STUDIO's `/v1` gives the same
-request, where ADR-0096 Decision 1's table makes the two entrances differ on purpose: a sampling
+request, where 旧ADR-0096 Decision 1's table makes the two entrances differ on purpose: a sampling
 knob is the engine's on the Studio and the lane's on the gateway (cases 10 and 12 — the Studio
 decides after parsing, when the engine is known, and maps or refuses per `node.sampling_policy`,
 Decision 4); `response_format` is shape-checked by the Studio and handed to the engine, while the

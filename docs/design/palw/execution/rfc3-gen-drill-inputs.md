@@ -72,7 +72,7 @@ Liar bonds 10..13 and their keyring are lane C's (`$WORK_DIR/liars/`).
   (`docs/evidence/rfc3-gen-close-price-2026-10-02.md`); a lie at the first leaf of every cone-closable kind (61) convicted in one lying run
   and 32 independent single lies convicted at their own leaves, honest claims acquitted, every close admissible in the one-move
   accusation; lies at denoise positions 1–3 through the post-written latent convicted, the price counting the committed write of the
-  previous position for every element a cone reads. 2 kinds are dissected (the CLIP stages' fused-attention outputs: ADR-0103's held
+  previous position for every element a cone reads. 2 kinds are dissected (the CLIP stages' fused-attention outputs: 旧ADR-0103's held
   dissection, as every LLM class; root claim 15,863 B measured / 15,883 B priced).
 * **CHECKPOINT 4** (`misaka/palw/tir/lower/tests/sd3_three_way.rs`): the SD3 pipeline composed by each of the reference evaluator, the typed
   backend and ref2 from its OWN earlier stages' outputs — 102 stage positions and 2,176 committed nodes over the four evaluation jobs,

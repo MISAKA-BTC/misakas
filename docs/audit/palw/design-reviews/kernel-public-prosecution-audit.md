@@ -4,14 +4,14 @@ Status (revised 2026-10-08): **reference level only.** The in-process ledger bel
 path, the carrier-size fit of every bound and the shared exposure ledger are tracked as GAP in
 [`g14-integration-matrix.md`](../../../design/palw/integration/g14-integration-matrix.md), which supersedes the earlier "repository-level complete" line.
 
-This audit traces the property ADR-0173 and RFC-0015 §1.1 (G14) ask of the kernel route, as code in this repository:
+This audit traces the property 旧ADR-0173 and RFC-0015 §1.1 (G14) ask of the kernel route, as code in this repository:
 
 > The producer and **every** fixed Panel seat collude. One ordinary bonded verifier outside the Panel — without producer-private
 > state, Panel-private state, a served view or any seat's local capture, using only canonical public authenticated material —
 > detects and localizes any fault an Active `VerificationPlanV1` covers (and every job / input / output / state / DA violation),
 > and reaches an objectively adjudicated conviction, or a correctly classified availability/default outcome.
 
-The vehicle is `misaka-palw-kernel` (ADR-0172). Its consensus rules are exercised on an **in-process chain**
+The vehicle is `misaka-palw-kernel` (旧ADR-0172). Its consensus rules are exercised on an **in-process chain**
 (`ledger.rs`, `KernelLedgerV1`): a deterministic fold of blocks of bond, class, job, claim, Panel, proof, demand and response
 transactions. Every outsider in the tests is a **fresh node**: it replays the block sequence from genesis and reads committed
 values only from a public DA store of bytes (minus what the producer withholds) or from values served on chain in answer to
@@ -70,7 +70,7 @@ Derived from code, never declared (`gate.rs`): `public_prosecution_complete_v1` 
 (`NoCourt`, `PrivateCourt`, `UnknownChecker`, `PrivateMaterial`, `Unbounded`, `WrongDescriptor`, `NoEdgeCourt`, `Stage`). The
 ledger's class registration **requires** it (a class without it never exists, so no job, claim, Final or reward does);
 `reward_eligible_v1` references it for any other reward path. The live consensus route (Panel replay, held/fused classes under
-ADR-0069) keeps its own rules; the kernel route's fence `palw_probabilistic_constraints_v1` is dormant and refuses arming.
+旧ADR-0069) keeps its own rules; the kernel route's fence `palw_probabilistic_constraints_v1` is dormant and refuses arming.
 
 ### Resource bounds per path
 
@@ -91,7 +91,7 @@ ADR-0069) keeps its own rules; the kernel route's fence `palw_probabilistic_cons
 
 None of these is a repository-level gap; each needs something outside this repository.
 
-1. Independent soundness review of the composition, the alias bounds and the CRT argument (RFC-0011 §15.4, ADR-0172 §6).
+1. Independent soundness review of the composition, the alias bounds and the CRT argument (RFC-0011 §15.4, 旧ADR-0172 §6).
 2. Review of the beacon as unbiased under withholding (§15.3). (Outsiders do not depend on it: they check with their own salt.)
 3. Real-hardware measurement of producer, verifier, DA, court and dispute load for 9B-8k, validated long context and Kimi K3
    (§15.6–15.7) — the bounds above are finite and enforced, their real values are measured there.

@@ -37,7 +37,7 @@
     34 | 
     35 | | 障害 | 現状 | 本RFC |
     36 | | --- | --- | --- |
-    37 | | sibling間の順序依存 | 共有上限(DAA当たり発行予算、network room、per-bond)で競合したとき、consensus order(blue workとhash)の先頭が勝つ。ADR-0170のseed anchorは「最後に採用されたattempt」で決まる | canonical sibling order(モデル間round robin、§4) |
+    37 | | sibling間の順序依存 | 共有上限(DAA当たり発行予算、network room、per-bond)で競合したとき、consensus order(blue workとhash)の先頭が勝つ。旧ADR-0170のseed anchorは「最後に採用されたattempt」で決まる | canonical sibling order(モデル間round robin、§4) |
     38 | | Panel anchorの特権 | testnet-12はDAA 750からgenesisの8 operator bondのattemptだけがanchor(lane A)。headerだけで判定し、merged workで拒否されたattemptもanchorになり得る | 許可不要の集約anchor(§5) |
     39 | | 未認証claimの合意credit | `Final`のclaimはsourceを問わずfrontierを進め、settlementはattemptの`Final`を数え、rule Eはvoidされたattemptも数える。閉鎖モデルの自作自演でもfinalityが進む。testnet-12の現在の保護はDNS-BFT gateに依存しており、DNS-BFTは廃止済み | Gate C: `SecurityCertified`だけがcreditを生む(§7)、rule E v2(§6) |
     40 | | DAG幅 | 120 s / k = 1 / parents 10 / mergeset 180。長時間推論(p50 340 s)はk = 1でほぼ全てRED | 休眠schedule仕様とstub(§8) |
@@ -55,7 +55,7 @@
    103 | * **I-S2(独立記録):** 各claimは自分のbond・class・carrying blockで記録される(`attempt_id_v2`、`execution_key`、`accepted_block`)。Panelは`claim_id`で鍵付けされ、seedはclaim idを含む(`palw_panel_draw_seed_v1`)。siblingのPanel・escrow・報酬を混同しない(MUST)。
    104 | * **I-S3(順序非依存):** 一つのaccepting blockが採用するmerged attemptの集合は、mergesetの**集合**の関数でなければならない(MUST)。色・blue work・merge順・到着順に依存しない。
    105 | * **I-S4(モデル間公平):** 共有上限で競合したとき、各モデルのsiblingが1件ずつ採用されてから、どのモデルの2件目も採用される(round robin)。
-   106 | * **I-S5(seed anchor):** ADR-0170のseed anchorは、同じspanで採用されたattempt(自身・merged、BLUE/RED)のうち`H(domain ‖ execution key)`が最小のもの。last-write-winsではない(`record_round_seed_anchor_of`、`transition_builder.rs`)。
+   106 | * **I-S5(seed anchor):** 旧ADR-0170のseed anchorは、同じspanで採用されたattempt(自身・merged、BLUE/RED)のうち`H(domain ‖ execution key)`が最小のもの。last-write-winsではない(`record_round_seed_anchor_of`、`transition_builder.rs`)。
    107 | * **I-S6(selected parentのsibling):** siblingのうちGHOSTDAGがselected parentに選んだものは、自分のblockの遷移で先に採用される(merger のmergesetに入らない)。どれが選ばれるかはGHOSTDAGの決定的な規則(blue work、次にblock hash)で決まり、到着順にもmerge順にも依存しない。block hashを動かすには勝ちticket(推論1回)がもう一度要る。共有上限で負けるのは、このselected parentを除いたmergeset内のsiblingで、それはcanonical順で決まる。
    108 | 
    109 | ### 4.2 規則(fence以後、accepting blockのDAAで判定)
@@ -73,7 +73,7 @@
    121 | | ID | 試験 | 合格条件(記録する値) | 実装 |
    122 | | --- | --- | --- | --- |
    123 | | T-1a | 3モデル・3 miner・別Panel、同じ親からsibling(in-process、k = 1) | 3 blockともmergerの過去にある(selected parent/BLUE/RED)。3 claimとも自分のbond・class・carrying blockで記録 | `consensus/src/pipeline/virtual_processor/tests/rfc0018_dag_siblings.rs` |
-   124 | | T-1b | 同じblock群を別nodeへ、3 siblingの到着順を全6通り | sink、selected parent、blues、reds、PALW state root(採用claim・消費した上限・escrow)、safe frontier、ADR-0170 seed anchorが一致 | 同上 |
+   124 | | T-1b | 同じblock群を別nodeへ、3 siblingの到着順を全6通り | sink、selected parent、blues、reds、PALW state root(採用claim・消費した上限・escrow)、safe frontier、旧ADR-0170 seed anchorが一致 | 同上 |
    125 | | T-1c | sibling fence armで同じ2試験 | 同上 | 同上 |
    126 | | T-1d | canonical順は集合の関数、round robin、非attempt slot不変 | 回転・逆順で同じ列。3モデルの先頭3件は3モデル | `palw_rfc0018_v1/tests.rs` |
    127 | | T-1e | 実process: 3 producer nodeを分離して同じbaseから3モデルを同時採掘、再接続 | 各siblingの色、claim記録、帰属、Panelがclaimごとに別 | `scripts/drills/rfc0018_dag_drill.py siblings` |
@@ -102,7 +102,7 @@
    208 | ### 7.2 認証述語(前提に基づく認証)
    209 | 
    210 | 1. **commit:** 支配されたclaimの`Final`で、claim・producer・母集団の切断点を固定する(`commit_at_final_v1`、`consensus/core/src/palw_security_certification_fold_v1.rs:45`)。
-   211 | 2. **draw:** commitより厳密に後のexecution laneのseed anchor(ADR-0130)から作るseedで、**global pool**(Active、commitの`verifier_maturity`前に登録、最小担保以上、producerのoperatorを除く)から`m`位置を担保比例・復元抽選する(`palw_certification_pool_admits_v1`、`palw_security_certification_v1.rs:280`、RFC-0017/R7-ECONの抽選を再利用)。**モデル保有の有無で母集団を絞らない**。
+   211 | 2. **draw:** commitより厳密に後のexecution laneのseed anchor(旧ADR-0130)から作るseedで、**global pool**(Active、commitの`verifier_maturity`前に登録、最小担保以上、producerのoperatorを除く)から`m`位置を担保比例・復元抽選する(`palw_certification_pool_admits_v1`、`palw_security_certification_v1.rs:280`、RFC-0017/R7-ECONの抽選を再利用)。**モデル保有の有無で母集団を絞らない**。
    212 | 3. **attest:** 抽選されたbondは期限内に、そのclaimを再実行して判定を署名する(RFC-0017のinner 75を、exam idの代わりにcertification idで使う、`try_attest_claim_certification_v1`、fold `:111`)。
    213 | 4. **decide:** `k`位置以上が`Reproduced`(mismatchなし)で、claimがまだ`Final`、未解決の告発がなく、**G14公開告発window**(`prosecution_window_daa`)が`Final`から経過したら`Certified`(`palw_certification_verdict_v1`、`:320`)。期限までに`k`未満なら`NotCertified`、母集団不足は`NoPopulation`、`certify_by`までに抽選できなければ`Expired`、`Final`でなくなれば`Withdrawn`。**1 claimにつき1回、再試行なし、classごとに数える**(attemptの有界化と計数)。network全体のepoch当たり抽選数にも上限がある。
    214 | 5. **公開check経路:** 決定論的な公開検査(G14完了classの公開material)が固定されたclassは、告発window経過で`PublicCheckCertified`。このbinaryでは固定classは0件(`PALW_SECURITY_PUBLIC_CHECK_CLASSES_PINNED_V1 = &[]`)。
@@ -124,7 +124,7 @@
    247 |         if self.round_lane.is_none() {
    248 |             return parents.into_iter().map(sortable).max().unwrap().hash;
    249 |         }
-   250 |         // ADR-0125: a round block is never a selected parent. Where a block names chain parents, the
+   250 |         // 旧ADR-0125: a round block is never a selected parent. Where a block names chain parents, the
    251 |         // heaviest of them is its selected parent. Where it names only round blocks — which the header
    252 |         // stage admits for a round block alone — its selected parent is the heaviest of their anchors,
    253 |         // which is not a direct parent: the lane extends itself without re-naming the chain block it
@@ -167,13 +167,13 @@
    316 |         // Get the mergeset in consensus-agreed topological order (topological here means forward in time from blocks to children)
    317 |         let ordered_mergeset = self.ordered_mergeset_without_selected_parent(selected_parent, parents);
    318 | 
-   319 |         // ADR-0105: the selected parent's blue score, from which each `Weighted` candidate's walk
+   319 |         // 旧ADR-0105: the selected parent's blue score, from which each `Weighted` candidate's walk
    320 |         // floor is derived below. Read only where the fence is configured.
    321 |         let transparency_base = self
    322 |             .heartbeat_transparent
    323 |             .map(|transparency| (self.ghostdag_store.get_blue_score(selected_parent).unwrap(), transparency.merge_depth));
    324 | 
-   325 |         // ADR-0125: which candidates are round blocks, read once. A round block is red, always, and
+   325 |         // 旧ADR-0125: which candidates are round blocks, read once. A round block is red, always, and
    326 |         // is not counted against anybody — so it is added before any coloring walk and never reaches
    327 |         // one, and it is not among the candidates that could still turn blue in the bound below.
    328 |         let round_flags: Vec<bool> = match self.round_lane {
@@ -188,13 +188,13 @@
    337 |                 continue;
    338 |             }
    339 |             let lane = self.lane_coloring(blue_candidate, selected_parent);
-   340 |             // ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
+   340 |             // 旧ADR-0105: the lowest blue score a `Weighted` candidate's coloring walk may reach once it
    341 |             // has passed over a heartbeat. The new block's blue score is the selected parent's plus
    342 |             // its final mergeset blues, which are at most the blues already added (the selected
    343 |             // parent included) plus every candidate not yet colored (this one included). A candidate
    344 |             // whose selected-chain ancestor sits at or above `that - merge_depth` is in the future of
    345 |             // the new block's merge-depth root, which is where `check_bounded_merge_depth` requires
-   346 |             // every red to be. (ADR-0125: round blocks can never be blue, so they are not counted —
+   346 |             // every red to be. (旧ADR-0125: round blocks can never be blue, so they are not counted —
    347 |             // without them this is the count it always was.)
    348 |             let weighted_floor = match (lane, transparency_base) {
    349 |                 (LaneColoring::Weighted, Some((selected_parent_blue_score, merge_depth))) => {
@@ -246,7 +246,7 @@
   5187 |         selected_parent: BlockHash,
   5188 |         mut candidates: VecDeque<BlockHash>,
   5189 |         pruning_point: BlockHash,
-  5190 |         // ADR-0125: the round tips, offered after the chain's own candidates. Empty where the lane
+  5190 |         // 旧ADR-0125: the round tips, offered after the chain's own candidates. Empty where the lane
   5191 |         // is not configured.
   5192 |         round_tips: Vec<BlockHash>,
   5193 |     ) -> (Vec<BlockHash>, GhostdagData) {
@@ -287,7 +287,7 @@
   5228 |         virtual_parents.push(selected_parent);
   5229 |         let mut mergeset_size = 1; // Count the selected parent
   5230 | 
-  5231 |         // ADR-0068 Phase 1 (F3a/F5): the heartbeat width tracking, `None` where the lane is not
+  5231 |         // 旧ADR-0068 Phase 1 (F3a/F5): the heartbeat width tracking, `None` where the lane is not
   5232 |         // armed (no header can be a heartbeat there, so the set is vacuously empty and the
   5233 |         // per-member header reads are skipped). The selected parent is in the mergeset, so it
   5234 |         // seeds the set. Admissibility is decided over the WHOLE accumulated set — flat bound,
@@ -308,7 +308,7 @@
   5249 |             paced = self.palw_clock_floor.is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
   5250 |         }
   5251 | 
-  5252 |         // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
+  5252 |         // 旧ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
   5253 |         // wide with chain tips cannot starve the lane of every merge.
   5254 |         let round_reserve = usize::from(!round_tips.is_empty() && max_block_parents > 1);
   5255 |         // Try adding parents as long as mergeset size and number of parents limits are not reached
@@ -478,10 +478,10 @@
   9895 |                     // the deep fence. An attempt block is never a heartbeat, so this equals the
   9896 |                     // coinbase-declared subsidy body validation pinned.
   9897 |                     self.coinbase_manager.calc_block_subsidy(header.daa_score),
-  9898 |                     // ADR-0126: and the carve, at the lower of the attempt block's score and the
+  9898 |                     // 旧ADR-0126: and the carve, at the lower of the attempt block's score and the
   9899 |                     // accepting block's — the block whose coinbase pays and withholds it.
   9900 |                     self.palw_escrow_for_carrier_at(*blue, header.daa_score, point.daa_score),
-  9901 |                     // ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
+  9901 |                     // 旧ADR-0132 Upgrade C: the merged block's own `bits`, the lottery its forward faced.
   9902 |                     header.bits,
   9903 |                     header.clone(),
   9904 |                 )),
@@ -522,7 +522,7 @@
  14814 |     }
  14815 | 
  14816 |     // 4b. The mergeset's work — blues and reds alike — in consensus order, selected parent
- 14817 |     //     excluded (ADR-0058).
+ 14817 |     //     excluded (旧ADR-0058).
  14818 |     //
  14819 |     //     Each attempt passes the full stateful admission against the LIVE fold state — not the
  14820 |     //     parent state the processor's per-blue pre-checks ran against — because the works ahead
@@ -533,7 +533,7 @@
  14825 |     // **RFC-0018 §4 (`palw_dag_sibling_attribution_v1`, at THIS accepting block's DAA): the canonical sibling order.** Past the fence
  14826 |     // the attempts of the mergeset are admitted in a round robin over model classes, each class by `H(domain ‖ execution key)` —
  14827 |     // a function of the mergeset SET, not of GHOSTDAG colour or merge order — so concurrent siblings of different models share any
- 14828 |     // contended per-block cap round by round and the ADR-0170 "last admitted" anchor is canonical. Non-attempt works keep their
+ 14828 |     // contended per-block cap round by round and the 旧ADR-0170 "last admitted" anchor is canonical. Non-attempt works keep their
  14829 |     // slots. Below the fence (every shipped network) the identity permutation: the consensus order, byte for byte.
  14830 |     let sibling_order: Vec<usize> =
  14831 |         if builder.params.rfc0018_v1().is_some_and(|mirror| mirror.sibling_attribution_at(ctx.daa_score)) {
@@ -557,7 +557,7 @@
  14849 |                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
  14850 |                 Some(admission) => {
  14851 |                     // **the boundary-budget fence is false, and its value is inert here**
- 14852 |                     // (ADR-0045 D2; mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
+ 14852 |                     // (旧ADR-0045 D2; mainnet audit 2026-09-06, M-2). This runs against the LIVE fold state, and
  14853 |                     // step 3b's `ensure_epoch_budgets` has already written the table for
  14854 |                     // `ctx.daa_score`'s epoch — so the stored snapshot matches and the fence's
  14855 |                     // branch is unreachable. Passing `true` would be a rule change on every
@@ -569,11 +569,11 @@
  14861 |                         admission,
  14862 |                         ctx,
  14863 |                         envelope,
- 14864 |                         // ADR-0045's boundary fence is inert here: `ensure_epoch_budgets` has
- 14865 |                         // already installed the live epoch's table. ADR-0123's release is
+ 14864 |                         // 旧ADR-0045's boundary fence is inert here: `ensure_epoch_budgets` has
+ 14865 |                         // already installed the live epoch's table. 旧ADR-0123's release is
  14866 |                         // resolved once for this block and must remain armed in the fold.
  14867 |                         //
- 14868 |                         // **ADR-0149 §6: and the canonical-work height rides too.** Left at its
+ 14868 |                         // **旧ADR-0149 §6: and the canonical-work height rides too.** Left at its
  14869 |                         // default this re-run judged every merged attempt past the fence on the
  14870 |                         // DECLARED rule while the node's pre-check (`palw_v2_merged_works`, which
  14871 |                         // passes the height) judged it on the derived one — no merged attempt could
@@ -586,7 +586,7 @@
  14878 |                             canonical_work_daa: builder.extras.canonical_work_daa,
  14879 |                             base_known_draw: builder.base_known_draw(),
  14880 |                             audit_2026_09_23_active: builder.extras.audit_2026_09_23_active,
- 14881 |                             // ADR-0152 SR-7: the raw second-clock depth the fold's own ceiling reads.
+ 14881 |                             // 旧ADR-0152 SR-7: the raw second-clock depth the fold's own ceiling reads.
  14882 |                             settled_anchor_depth: builder.read().settled_anchor_depth(),
  14883 |                             // Lane V02: the pair `held_charge_block_active_v1` reads, so item 8 counts a held
  14884 |                             // session at its charge past the fence as `gate_room` does.
@@ -600,10 +600,10 @@
  14892 |                             let checkpoint = builder.try_checkpoint()?;
  14893 |                             // B-1: past the deep fence a merged claim escrows its carve, carved from the
  14894 |                             // MERGED block's own subsidy — the accepting coinbase withholds that same
- 14895 |                             // carve. Below the fence, false → escrows nothing (ADR-0058 D5),
+ 14895 |                             // carve. Below the fence, false → escrows nothing (旧ADR-0058 D5),
  14896 |                             // byte-identical to before. Read before the &mut borrow of `builder`.
  14897 |                             let escrows_reward = builder.extras.audit_2026_09_11_deep_active;
- 14898 |                             // ADR-0165: its colour in THIS block's mergeset, read before the &mut borrow of `builder`.
+ 14898 |                             // 旧ADR-0165: its colour in THIS block's mergeset, read before the &mut borrow of `builder`.
  14899 |                             let floor_event =
  14900 |                                 PalwFloorEventSourceV1::of_merged_block(builder.extras.merged_reds.contains(&merged.carrying_block));
  14901 |                             match apply_attempt(
@@ -615,7 +615,7 @@
  14907 |                                     carrying_block: merged.carrying_block,
  14908 |                                     escrows_reward,
  14909 |                                     escrow_subsidy: merged.subsidy,
- 14910 |                                     // ADR-0126: resolved at the MERGED block's DAA, never this block's.
+ 14910 |                                     // 旧ADR-0126: resolved at the MERGED block's DAA, never this block's.
  14911 |                                     escrow_carve: merged.escrow_carve,
  14912 |                                     execution_key: merged.execution_key,
  14913 |                                     carrying_bits: merged.bits,
@@ -625,7 +625,7 @@
  14917 |                                 },
  14918 |                             ) {
  14919 |                                 Ok(()) => {
- 14920 |                                     // **ADR-0170 M1 (`palw_anchor_window_v1`): an admitted attempt this block MERGES, blue or red, is
+ 14920 |                                     // **旧ADR-0170 M1 (`palw_anchor_window_v1`): an admitted attempt this block MERGES, blue or red, is
  14921 |                                     // a seed anchor as the block's own is.** Under the floor reserve those are the only attempts
  14922 |                                     // there are (a REAL attempt is merged, almost never a chain block). Own work first (step 4),
  14923 |                                     // then the mergeset in consensus order: the last admitted one wins, as the last chain block of
@@ -714,7 +714,7 @@
    103 | * **I-S2(独立記録):** 各claimは自分のbond・class・carrying blockで記録される(`attempt_id_v2`、`execution_key`、`accepted_block`)。Panelは`claim_id`で鍵付けされ、seedはclaim idを含む(`palw_panel_draw_seed_v1`)。siblingのPanel・escrow・報酬を混同しない(MUST)。
    104 | * **I-S3(順序非依存):** 一つのaccepting blockが採用するmerged attemptの集合は、mergesetの**集合**の関数でなければならない(MUST)。色・blue work・merge順・到着順に依存しない。
    105 | * **I-S4(モデル間公平):** 共有上限で競合したとき、各モデルのsiblingが1件ずつ採用されてから、どのモデルの2件目も採用される(round robin)。
-   106 | * **I-S5(seed anchor):** ADR-0170のseed anchorは、同じspanで採用されたattempt(自身・merged、BLUE/RED)のうち`H(domain ‖ execution key)`が最小のもの。last-write-winsではない(`record_round_seed_anchor_of`、`transition_builder.rs`)。
+   106 | * **I-S5(seed anchor):** 旧ADR-0170のseed anchorは、同じspanで採用されたattempt(自身・merged、BLUE/RED)のうち`H(domain ‖ execution key)`が最小のもの。last-write-winsではない(`record_round_seed_anchor_of`、`transition_builder.rs`)。
    107 | * **I-S6(selected parentのsibling):** siblingのうちGHOSTDAGがselected parentに選んだものは、自分のblockの遷移で先に採用される(merger のmergesetに入らない)。どれが選ばれるかはGHOSTDAGの決定的な規則(blue work、次にblock hash)で決まり、到着順にもmerge順にも依存しない。block hashを動かすには勝ちticket(推論1回)がもう一度要る。共有上限で負けるのは、このselected parentを除いたmergeset内のsiblingで、それはcanonical順で決まる。
    108 | 
    109 | ### 4.2 規則(fence以後、accepting blockのDAAで判定)
@@ -757,11 +757,11 @@
  10481 |         let Some(anchor) = self.palw_v2_anchor_fact_for_claim_v1(block, claim, state_params, panel_params) else {
  10482 |             return Err(None);
  10483 |         };
- 10484 |         // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
+ 10484 |         // C-02 (deep fence) and 旧ADR-0124 (the panel economy): the whole draw policy, from the
  10485 |         // same anchor as the acceptance layer's sibling call — so this assembler builds the
  10486 |         // exact panel that layer recomputes.
  10487 |         let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
- 10488 |         // **ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block**
+ 10488 |         // **旧ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block**
  10489 |         // (`validate_panel_bound_v2_with_policy` refuses any other), so no later block draws it again.
  10490 |         if policy.stake.is_some() && anchor.anchor_block != block {
  10491 |             return Err(None);
@@ -779,15 +779,15 @@
  10503 |         }
  10504 |         // A registry too small to seat a panel yields nothing rather than a short one: a
  10505 |         // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
- 10506 |         // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
+ 10506 |         // 旧ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
  10507 |         // uses, through the same one-place subtraction.
  10508 |         let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
  10509 |             anchor.anchor_daa,
  10510 |             self.palw_bond_maturity_window_at(state, anchor.anchor_daa),
  10511 |         );
- 10512 |         // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
+ 10512 |         // 旧ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
  10513 |         let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
- 10514 |         // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
+ 10514 |         // 旧ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
  10515 |         // panel of a sharded class would ask shard seats to judge a whole model.
  10516 |         // Lane F1, the panel seed: for a claim anchored past `Params::palw_panel_seed_execution`
  10517 |         // `H(anchor attempt's execution ‖ claim)`, below it the anchor block — the one value the gate
@@ -832,7 +832,7 @@
  10556 |             ),
  10557 |         };
  10558 |         let seats = drawn.map_err(|why| policy.stake.map(|_| why.to_string()))?;
- 10559 |         // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
+ 10559 |         // 旧ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
  10560 |         // carries the fence — and the acceptance layer demands that panel exactly, so a node
  10561 |         // proposes only what its own fold will take. The identity test that stood here
  10562 |         // compared fields a registrant writes for itself, and is gone with the rule it served.
@@ -849,12 +849,12 @@
 
 ```text
    196 |         palw_unentitled_blues: &BlockHashSet,
-   197 |         // **ADR-0058: on a `ConsensusV2` network an entitled, in-DAA-window red is paid its
+   197 |         // **旧ADR-0058: on a `ConsensusV2` network an entitled, in-DAA-window red is paid its
    198 |         // worker share to ITS OWN miner script, exactly as a blue is** — not lumped into the
    199 |         // merging miner's red reward. At the frozen 120 s cadence `ghostdag_k = 1`, so any block
    200 |         // whose anticone holds two or more blocks is a red BY CONSTRUCTION — which is every
    201 |         // block of every class slower than the floor. Its claim (created by the accepting
-   202 |         // block's transition, ADR-0058) carries the slash exposure; paying the includer instead
+   202 |         // block's transition, 旧ADR-0058) carries the slash exposure; paying the includer instead
    203 |         // would put the stake on one key and the reward on another. `false` outside V2 keeps the
    204 |         // legacy lump byte-identical.
    205 |         palw_pay_entitled_reds_to_their_miner: bool,
@@ -869,9 +869,9 @@
    214 |         // number. Withholding a superset of what the fold escrows is safe (the excess is simply not
    215 |         // minted); a shortfall would release an unfunded escrow, which the superset construction
    216 |         // rules out. **Empty below the deep fence and on every network without a V2 bundle**, where
-   217 |         // every merged carve is paid in full at acceptance (ADR-0058 Decision 5), byte-identical.
+   217 |         // every merged carve is paid in full at acceptance (旧ADR-0058 Decision 5), byte-identical.
    218 |         palw_merged_escrow_withheld: &BlockHashMap<u64>,
-   219 |         // **ADR-0125: the merged round blocks.** A round block is a red outside the DAA set, so the
+   219 |         // **旧ADR-0125: the merged round blocks.** A round block is a red outside the DAA set, so the
 ```
 
 ### `consensus/src/processes/coinbase.rs:313–354`
@@ -894,7 +894,7 @@
    327 |             } else {
    328 |                 (reward_data.subsidy, reward_data.total_fees)
    329 |             };
-   330 |             // ADR-0058: see the parameter — an entitled in-window red's share goes to the red's
+   330 |             // 旧ADR-0058: see the parameter — an entitled in-window red's share goes to the red's
    331 |             // own script, through the same carve arithmetic as the lump below, so moving a block
    332 |             // between the two pay paths never changes the amount, only the payee.
    333 |             if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) {
@@ -1156,7 +1156,7 @@
  15066 |         && claim.accepted_blue_score > old_frontier.0
  15067 |     {
  15068 |         builder.state.safe_frontier_blue_score = claim.accepted_blue_score;
- 15069 |         // **This hash is the claim's CARRYING block, which since ADR-0058 need not be on the
+ 15069 |         // **This hash is the claim's CARRYING block, which since 旧ADR-0058 need not be on the
  15070 |         // selected chain** (audit M2-27). For a merged work it is the merged block — at
  15071 |         // `ghostdag_k = 1` typically a RED. The pair is still coherent (both halves describe that
  15072 |         // same block), and every consumer today reads only the blue score, which is what fork
@@ -1219,7 +1219,7 @@
 ### `consensus/core/src/palw_state_v2.rs:21682–21745`
 
 ```text
- 21682 |     // **ADR-0160 stage 2 (F-Q §5.9 (f)): a credited claim waits for room in the audit backlog** — a
+ 21682 |     // **旧ADR-0160 stage 2 (F-Q §5.9 (f)): a credited claim waits for room in the audit backlog** — a
  21683 |     // queue bound, never the safety (an unaudited claim is never paid). Before any write, so step 4
  21684 |     // skips a refused own attempt (`AuditBacklogFull` joins the finding-17 arm).
  21685 |     if crate::palw_audit_door_v1::palw_capacity_claim_credited_v1(builder.params, &claim) {
@@ -1229,7 +1229,7 @@
  21689 |             return Err(PalwStateV2Error::AuditBacklogFull { class: claim.class_id, backlog, max });
  21690 |         }
  21691 |     }
- 21692 |     // **ADR-0160 stage 2 (F-S): the issuance slot and the bucket** — `outstanding < N_out` and a whole
+ 21692 |     // **旧ADR-0160 stage 2 (F-S): the issuance slot and the bucket** — `outstanding < N_out` and a whole
  21693 |     // token, read by the one function admission and the producer's facts read (S.4). Before any write.
  21694 |     let issuance_bond = claim.bond;
  21695 |     let issuance = match builder.state.bonds.get(&issuance_bond) {
@@ -1246,7 +1246,7 @@
  21706 |         read.admits_v1()
  21707 |             .map_err(|refusal| PalwStateV2Error::IssuanceCapped { bond: issuance_bond, refusal: format!("{refusal:?}") })?;
  21708 |     }
- 21709 |     // **ADR-0164 F-EM: the DAA's PALW reward budget** — a claim-bearing block's whole carve is charged to the accepting block's DAA,
+ 21709 |     // **旧ADR-0164 F-EM: the DAA's PALW reward budget** — a claim-bearing block's whole carve is charged to the accepting block's DAA,
  21710 |     // 16 carves at most; a rider (paid out of its lead's carve) charges nothing. Before any write, like the slots: step 4 skips a
  21711 |     // refused own attempt (its carve burned) and 4b a merged one. `None` below the fence.
  21712 |     let emission_after = if builder.params.capacity_emission_active_at(ctx.daa_score)
@@ -1261,11 +1261,11 @@
  21721 |     } else {
  21722 |         None
  21723 |     };
- 21724 |     // **ADR-0160 stage 4 (F-N): the network level and the work-conserving share** — the last check, so
+ 21724 |     // **旧ADR-0160 stage 4 (F-N): the network level and the work-conserving share** — the last check, so
  21725 |     // only an attempt every other rule admits is refused for want of a network unit (and registers its
  21726 |     // bond's demand: step 4 skips a refused own attempt, 4b a merged one); before any write.
  21727 |     builder.check_network_room_v1(&claim.bond, &claim, ctx.daa_score)?;
- 21728 |     // **Lane BUDGET (ADR-0176 D1/D3): the producer bond's budget** — the claim's reservation (Q 1, B its block or its rider share, R its
+ 21728 |     // **Lane BUDGET (旧ADR-0176 D1/D3): the producer bond's budget** — the claim's reservation (Q 1, B its block or its rider share, R its
  21729 |     // escrow, F its Final contribution) against the bond's window: the LAST check before any write, so step 4 skips a refused own attempt
  21730 |     // (its carve withheld as a skipped attempt's, never minted) and 4b a merged one; the claim's immature weight is held within the F it
  21731 |     // reserves. `None` below `palw_bond_budget_v1`: nothing read, nothing written.
@@ -1279,7 +1279,7 @@
  21739 |     }
  21740 |     let consumer_plan = builder.plan_paid_consumer_v1(claim_id, &claim)?;
  21741 |     // **RFC-0017 (`palw_model_eligibility_v1`, REQ-ELIG-2): a `Probation` model's attempt** is admitted whole inside the model's stage
- 21742 |     // cap and the network's fixed probation budget (the bond's own ADR-0176 `B` cap is the plan below), or refused — before any write.
+ 21742 |     // cap and the network's fixed probation budget (the bond's own 旧ADR-0176 `B` cap is the plan below), or refused — before any write.
  21743 |     // Admitted, it is planned with no Final weight (F = 0) and pinned after the claim is written. `None` below the fence.
  21744 |     let probation_ticket = palw_model_eligibility_fold_v1::eligibility_probation_preview_v1(
  21745 |         builder,
@@ -1558,7 +1558,7 @@
    420 | ///
    421 | /// **Grinding bound (RFC-0018 §5.3):** an adversary controlling `b` of the contributing bonds can choose, per bond, among withholding
    422 | /// and its own admitted attempts in the window; the honest contributions (unpredictable execution commitments) are inside the hash, so
-   423 | /// its choice set is at most `Π_{its bonds}(1 + q_b)` where `q_b` is the bond's admitted attempts in the window — bounded by ADR-0176's
+   423 | /// its choice set is at most `Π_{its bonds}(1 + q_b)` where `q_b` is the bond's admitted attempts in the window — bounded by 旧ADR-0176's
    424 | /// per-bond claim budget, each costing a winning inference. The panel-capture probability is multiplied by at most that factor.
    425 | pub fn palw_permissionless_anchor_seed_v1(
    426 |     contributions: &[PalwAnchorContributionV1],
@@ -1701,7 +1701,7 @@
 ### `consensus/src/pipeline/virtual_processor/palw_rule_e.rs:202–230`
 
 ```text
-   202 |     /// **Rule E's deep-reorg gate** (ADR-0178): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
+   202 |     /// **Rule E's deep-reorg gate** (旧ADR-0178): may `candidate` replace the incumbent `prev_sink`? Unweighable refuses.
    203 |     pub(crate) fn palw_rule_e_gate_v1(
    204 |         &self,
    205 |         candidate: BlockHash,
@@ -1735,7 +1735,7 @@
 ### `consensus/src/pipeline/virtual_processor/processor/dns.rs:148–164`
 
 ```text
-   148 |         // **ADR-0128 Decision 5: the stake reorg gate follows the BFT vote, and it is asked FIRST.**
+   148 |         // **旧ADR-0128 Decision 5: the stake reorg gate follows the BFT vote, and it is asked FIRST.**
    149 |         //
    150 |         // Past the fence at the incumbent sink, a candidate that abandons the DNS-final anchor is
    151 |         // refused before the PALW comparator below is consulted — a reorg and an extension alike,
@@ -1972,7 +1972,7 @@
    256 | }
    257 | 
    258 | /// The same blocks, delivered to fresh nodes in EVERY permutation of the three siblings' arrival (3! = 6), give the same sink,
-   259 | /// colouring, PALW state root (adopted claims, caps consumed, escrows), safe frontier and ADR-0170 seed anchor (RFC-0018 §4.2: under
+   259 | /// colouring, PALW state root (adopted claims, caps consumed, escrows), safe frontier and 旧ADR-0170 seed anchor (RFC-0018 §4.2: under
    260 | /// the fence the anchor is the least-priority admitted attempt of the span, never the last write).
    261 | async fn run_arrival_order(sibling_fence: bool) {
    262 |     let tag = if sibling_fence { "sibling fence" } else { "launched" };
@@ -1997,7 +1997,7 @@
    281 |         let sb = b.c.tip_state().1;
    282 |         assert_eq!(sa.state_root(), sb.state_root(), "{tag}: the adopted claims, caps and escrows are one");
    283 |         assert_eq!(sa.safe_frontier(), sb.safe_frontier(), "{tag}: one fork-choice standing");
-   284 |         assert_eq!(sa.round_seed_anchor(), sb.round_seed_anchor(), "{tag}: one ADR-0170 seed anchor");
+   284 |         assert_eq!(sa.round_seed_anchor(), sb.round_seed_anchor(), "{tag}: one 旧ADR-0170 seed anchor");
    285 |         assert_retained_and_attributed(&tag, &b, &siblings, merger.header.hash);
    286 |     }
    287 | }
@@ -2220,7 +2220,7 @@
   3007 | /// WHICH work gets the scarce slots, because court moves are built and submitted before receipt
   3008 | /// quorums: a rung has a deadline and a quorum does not.
   3009 | ///
-  3010 | /// **One, since ADR-0135's devnet drill (2026-09-17).** At eight, a chain of receipts took fifteen to
+  3010 | /// **One, since 旧ADR-0135's devnet drill (2026-09-17).** At eight, a chain of receipts took fifteen to
   3011 | /// twenty-five minutes to clear on an eight-node devnet — a child of an unconfirmed parent is dropped
   3012 | /// in relay, so only the origin's own blocks (one in eight) could mine the tail — and every
   3013 | /// possession proof queued at that tail; six of eight seats never got one out. A carrier that
@@ -2262,7 +2262,7 @@
 ### `consensus/core/src/palw_fp_admission_v3.rs:171–198`
 
 ```text
-   171 | /// Items 1-5 of ADR-0044 Decision 6: the claim, the quantum, the beacon, the use window and the lottery. Returns the claim.
+   171 | /// Items 1-5 of 旧ADR-0044 Decision 6: the claim, the quantum, the beacon, the use window and the lottery. Returns the claim.
    172 | pub(crate) fn receipt_items_1_to_5<'a>(
    173 |     state: &'a PalwChainStateV2,
    174 |     ctx: &PalwBlockContextV2,

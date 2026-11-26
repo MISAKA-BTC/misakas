@@ -67,7 +67,7 @@ DAA 14,000 のリリース計画([t12-daa14000-release-plan-2026-10-15.md](../..
 | `palw_legacy_public_filer_v1`(LG14-A) | legacy route の共通 filer・予約・Final 保留・直接証明 | `None` | **不可**(`palw_legacy_public_filer_v1.rs:287-315`) |
 | `palw_legacy_held_da_v2`(LG14-B) | legacy route の公開 descent と held DA | `None` | **不可**(`palw_legacy_held_da_v2.rs:101-110`) |
 | `palw_public_evidence_reward_v1`(N4)、`palw_claim_hard_deadline_v1`(X3)、`palw_court_model_scope_v1`(D2) | 2026-10-12 の裁定 | `None` | **不可**(`validation.rs:10-28`。規則の source は `palw_ruling_fences_v1.rs` にある) |
-| `palw_fork_choice_rule_e_v1` | rule E(ADR-0178) | `None` | **不可**(`palw_fork_choice_rule_e_v1.rs:102`) |
+| `palw_fork_choice_rule_e_v1` | rule E(旧ADR-0178) | `None` | **不可**(`palw_fork_choice_rule_e_v1.rs:102`) |
 | `palw_staged_public_court_v1` | staged public court | `None` | 可(ConsensusV2 だけを要求、`validation.rs:2879-2886`) |
 | `palw_staged_tir_route_v1` / `palw_staged_float_constraint_v1` | staged route の拡張 | `None` | 可(staged court が同じ高さ以下、`validation.rs:2861-2877`) |
 | `palw_tir_public_conviction_v1` | TIR 公開 frame(tag 170/171) | `None` | 可(前提 fence が揃えば有効、拒否規則なし、`params.rs:4988-5016`) |
@@ -122,7 +122,7 @@ RFC06〜08 の 7 fence も測定記録が空のため休眠のまま載せるこ
 **この論証が保証しないこと(前提として明記する):**
 
 - **検出確率。** 誰も検査しない claim は通る。G14 は、不一致が見つかった後の追及が Panel の多数決に戻らないことを保証する。検出の確率は保証しない(PRINCIPLES §0-4)。
-- **model の入手。** 検証者は登録 model を自分で入手していることが前提である(ADR-0177)。誰にも共有されない model の不正は、bond 単位の上限で有界化する残余リスクである(PRINCIPLES §0-3)。
+- **model の入手。** 検証者は登録 model を自分で入手していることが前提である(旧ADR-0177)。誰にも共有されない model の不正は、bond 単位の上限で有界化する残余リスクである(PRINCIPLES §0-3)。
 - **「計算しなかった」こと自体。** 計算を省いても、公開された全ての値が正しければ、この経路では違反として立証できない。ユーザーの例が言うとおり、対象は「計算と一致しないことを確認できた」場合である。
 - **Gate C の認証の前提。** `SecurityCertified` は抽選検証者の正直な割合(`k/m`)を前提とする認証であり(RFC-0018 §7.2)、G14 とは別の層である。
   G14 の conviction は、認証済みの claim でも void して credit を取り消す(I6、RFC-0018 I-C3)。
@@ -420,7 +420,7 @@ v39 mining receipt からしか来ない(§1.3)。
   選択規則 `PalwTirSelectionRuleV1`(`palw_tir_court_v1.rs:2322-2340`)と `check_tir_decode_token_tiled_rule_v1`(`:2362`)。述語が成り立たないか error なら filing を拒否し、state は変わらない。
 - (e) 全責任 bond の exit hold を終局時に assert(`palw_tir_public_fold_v1.rs:908-914`)、credit 済みの Valid custodian 全員に S4(`charge_covering_signers_v1`
   `transition_builder.rs:3112-3141`、呼び出し `:916-920`)、producer は `convict_by_court_verdict_v1`(`transition_builder.rs:3565`、呼び出し `:922`)で void・CourtConviction・filer への報奨・
-  ADR-0160 の intent-class 没収と凍結。execution-proving の違反は root で没収(`:924-926`)。DA は `staged_selected_default_charge_v1`(`transition_builder.rs:2998`、fold `:664-691`)。
+  旧ADR-0160 の intent-class 没収と凍結。execution-proving の違反は root で没収(`:924-926`)。DA は `staged_selected_default_charge_v1`(`transition_builder.rs:2998`、fold `:664-691`)。
   exit hold の索引 `palw_staged_court_fold_v1.rs:3094-3100`、退出時の強制 `palw_state_v2.rs:3347`。
 - (f) Final floor を frame の `collect_until` まで上げる(`palw_claim_final_floor_v1`、`palw_state_v2.rs:3626-3650`、frame 分 `:3645-3648`)。Gate C は door が開いている間待つ
   (`palw_tir_public_prosecution_open_v1` `palw_staged_court_fold_v1.rs:244`、読み `palw_security_certification_fold_v1.rs:431-434`)。void の claim は receipt spend が Final を要するので
@@ -530,7 +530,7 @@ producer と Panel 全員が共謀する側に立ち、「不正な claim が、
 | G-08 | HIGH | **legacy FP の報酬は conviction の窓が閉じる前に払われる。** coinbase は licence + 1,200 から払われ、Final の反転は 3,000 まで可能で、払った coinbase は戻らない。 | R10、`dos_repro_1_fp_final_receipt_rights_unpriced_unforfeitable` | TIR frame と同じく Final floor を責任の期限まで上げる(`palw_claim_final_floor_v1` の frame 分と同じ形)、または receipt の carve を vesting にする。 |
 | G-09 | HIGH | **X3 の絶対期限が無い。** live では held decoy の敗北後に窓が再付与される。staged court は期限を後ろへ動かす。期限が動くので、追及の開始予算を固定できない。 | `palw_ruling_fences_v1.rs:6-15`、`validation.rs:22`、[spec register](../../../design/palw/integration/mainnet-spec-register-2026-10-12.md) X3 | `palw_claim_hard_deadline_v1` の値を決めて検証し、武装する。 |
 | G-10 | HIGH | **武装できる G14 fence に、武装拒否も測定記録 gate も無い。** staged court・TIR route・Float32・TIR conviction は、前提が揃えば validation を通る。未実行の code が武装され得る。 | `validation.rs:2861-2886`、`params.rs:4988-5016` | V1〜V7 の記録が pin されるまで `cannot be armed` を返す。他 lane と同じ measured-value gate を付ける。 |
-| G-11 | HIGH | **rule E を武装できず、V6(担保の無い private heartbeat 枝)が残る。** G14 の conviction 自体は journal で再編に一貫するが、取り込まれた private branch の Final の credit を止めるのは fork choice である。 | `palw_fork_choice_rule_e_v1.rs:102`、[finality-palw-consistency](../../../design/palw/consensus/finality-palw-consistency.md) V6 | ADR-0178 の rule E(と Gate C の rule E v2)を検証して武装する。 |
+| G-11 | HIGH | **rule E を武装できず、V6(担保の無い private heartbeat 枝)が残る。** G14 の conviction 自体は journal で再編に一貫するが、取り込まれた private branch の Final の credit を止めるのは fork choice である。 | `palw_fork_choice_rule_e_v1.rs:102`、[finality-palw-consistency](../../../design/palw/consensus/finality-palw-consistency.md) V6 | 旧ADR-0178 の rule E(と Gate C の rule E v2)を検証して武装する。 |
 | G-12 | MEDIUM | **live の bond 式 v1 は、licence 時に escrow 予約と issuance slot を解放する。** SR-1 は全 seat が Valid を出したときに producer の escrow 項を解放する。共謀する Valid は同じ slot を回せるので、同時の責任が徴収できる額を超え得る。v2 は武装できない。 | `palw_bond_formula_v2.rs:5-14`・`:541`、R18 | bond 式 v2 の値を決めて武装する。 |
 | G-13 | MEDIUM | **Valid 署名者の課金は lock がある間だけ。** covering seat の slashable lock が無ければ黙って飛ばす。lock の期限(Final + 1,000)の後、反転の期限(3,000)の前の conviction は署名者に届かない。slash は現担保で clamp し、seat の 1 claim あたりの露出は `min_collateral_sompi` が上限。 | `transition_builder.rs:3125`・`:8996-9015`、R8 | conviction 時に「各 Valid seat の lock が残っていること」を assert し(TIR の DA 側 `palw_tir_public_fold_v1.rs:677-683` と同じ)、lock の期限を claim の責任期限まで延ばす。 |
 | G-14 | MEDIUM | **担保が不足すると裁定そのものを拒否する lane がある。** native lane は producer の担保が reserve 未満だと裁定を拒否し、不正な claim は Final に進み得る。他 lane の slash で担保を減らせば起こせる。 | `palw_flat_execution_court_fold_v11.rs:282`、`palw_native_job_fold_v39.rs:830`、`palw_native_text_fold_v29.rs:1305-1306` | 担保の多寡に関係なく claim を void して依頼者に返金し、残る担保を slash する。 |
@@ -785,7 +785,7 @@ kernel route の FinalReward(kernel lane)、LG14-A / LG14-B 自体の武装可�
 | G-03 | **閉(fold)** | fence 以後、登録 TIR class の FP commitment は transaction で対になった `TFP1` が無ければ受理時に拒否(`G03_FRAMELESS_TIR_ORIGINAL`)。frame が受理しない形(job tail、flat scheme、`PanelDa`、制約 job で semantic 契約なし、開けない semantic stage)は frame を作れないので、受理されない。判定は fence 自体(`tir_public_conviction_active`、params から)で、rules が解決したかではない。`palw_tir_public_fold_v1::require_original_frame_v1`、呼び出し `objects.rs`(N4 の直後、価格付けと書き込みの前)。 |
 | G-T1 | **一部閉(fold)** | K_owner = 8 は維持。slot を持つ owner が native の grace(`reorg_retention_daa`、最低 inclusion margin)の間 progress(Open・Demand・回答の Finish・Collect、`spent.last_progress_daa`)が無ければ idle とし、上限時の Open が最も長く idle な slot を回収する(その row は退役: 未払い demand を閉じ turn を使い切る。deposit は `slash_bond` で焼却、誰にも払わない)。未払いの demand を応答時計内に持つ owner と、遅い回答を受けた直後の owner は回収されない。**残る穴:** 能動的に demand を続ける共謀 owner(turn 予算内)は slot を保持できる(経済的な上限のみ)。grace 値の妥当性は未測定。 |
 | G-T2 | **閉(fold + node 実装、node は unit のみ)** | node の owner は trace か step が食い違うと、まず完全な committed IDs を取得して replay の IDs と比較する。最初の不一致位置の trace tile を demand し、consensus-core `palw_tir_public_selection_probe_v1` が job 自身の規則(greedy / seeded / V4)で pin を組む。反証できればそのまま filer へ、反証できなければ(committed row が replay と違う)算術の降下へ戻る。根が全て一致しても replay の答えが停止規則に反すれば Output。 |
-| G-T3 | **閉(fold)** | frame の設置時に claim の公開 prompt ids を ADR-0145 の prompt row に書き、material horizon(epoch 境界に切り上げ)まで保持する。derived work が書いた row は延長だけ。job の ids でないもの(`PanelDa` の空列を含む)は frame を拒否。canonical job は ids を持たず job から導出できるので row を書かない(node は `job_for_anchor` で導出)。 |
+| G-T3 | **閉(fold)** | frame の設置時に claim の公開 prompt ids を 旧ADR-0145 の prompt row に書き、material horizon(epoch 境界に切り上げ)まで保持する。derived work が書いた row は延長だけ。job の ids でないもの(`PanelDa` の空列を含む)は frame を拒否。canonical job は ids を持たず job から導出できるので row を書かない(node は `job_for_anchor` で導出)。 |
 | G-T4 | **閉(fold + node unit)** | Valid credit / grant を持たない抽選 seat は outsider と同じ owner になれる(`independent`、`palw_tir_public_source_for_row_v1`)。owner になった seat はその claim で grant できない。node の owner は抽選 seat を skip しなくなり、seat が見つけた不正(`seat_faults`)の claim を先に追う。finding は同じ filer book に入る。 |
 | G-T5 | **一部(node のみ)** | responder の同時 demand を 4 → K_owner(8)、受理済みの次の move は即送る(同じ move の再送だけ `COURT_MOVE_REPLAN_DAA` を待つ)。consensus の応答窓は同時性で伸ばしていない(行に閉じた不変条件を壊すため)。最大 profile での間に合いは未測定。 |
 | G-T6 | **一部** | T-N2〜T-N7 と genesis 試験を fold で追加・実行。既存 fold 試験 4 本の壊れた fixture を直した。T-N1 は未作成。 |
@@ -847,12 +847,12 @@ DAA 14,000 の P14-min / P14-g14 列(3 lane とも OUT-OF-SCOPE)は変わらな�
 
 | lane | F | 旧(武装時) | 新(武装時) | 変更 | 試験(水準・結果) |
 |---|---|---|---|---|---|
-| Kernel / OPV | F16 | PARTIAL(seat は無傷、G-K1) | **COVERED** | 数えられた passing receipt ごとに署名者責任 lock(kernel aux 143 `0x01`、ADR-0151 の seat lock 関係)。committed に入り責任期限まで退出不可、有罪で 1 回 slash、期限・timeout で解放(`palw_g14_lane_closure_fold_v1.rs`、`palw_kernel_route_fold_v1.rs:1237`・`:2085`・`:2148`) | T-N11 `kernel_route_valid_signers_are_charged_on_conviction`(node、本番 onboarding 経路で attestation hook なし、Final 前・Final 後・正直 claim の解放、replay)PASS |
+| Kernel / OPV | F16 | PARTIAL(seat は無傷、G-K1) | **COVERED** | 数えられた passing receipt ごとに署名者責任 lock(kernel aux 143 `0x01`、旧ADR-0151 の seat lock 関係)。committed に入り責任期限まで退出不可、有罪で 1 回 slash、期限・timeout で解放(`palw_g14_lane_closure_fold_v1.rs`、`palw_kernel_route_fold_v1.rs:1237`・`:2085`・`:2148`) | T-N11 `kernel_route_valid_signers_are_charged_on_conviction`(node、本番 onboarding 経路で attestation hook なし、Final 前・Final 後・正直 claim の解放、replay)PASS |
 | Kernel / OPV | F19 | COVERED | COVERED(seat にも退出保留) | 署名者 lock が V2 committed に入る(`palw_kernel_route_v1.rs:605`) | 同上 |
 | Kernel / OPV | F08(v4) | PARTIAL(v4 の material は block body のみ、pruning 規則なし、G-K4) | PARTIAL(pruning 規則あり、v4 は報酬対象外のまま) | segmented claim に最初に応答した block を記録(aux 143 `0x02`)し、claim が有罪にできる間は pruning point がそれを越えない(`processor/palw.rs:815`) | node 回帰のみ(下記)。専用試験は未作成 |
 | EXEC slice | F16 | GAP(REAL root の V2 署名者を課金しない、G-X1) | **COVERED** | REAL claim 自身の piece(prefix claim)が反証されたら V2 Valid 署名者を S4(covering-signer funnel、1 回)。後続 executor の slice は V2 seat が署名していないので課金せず、その kernel claim と receipt 署名者(G-K1)が負う(`palw_exec_v2_fold.rs:1675`) | T-N12 `exec_real_root_v2_signers_are_charged_when_a_slice_is_proven_false`(fold、EXEC fence 0)PASS。`a_pending_prefix_holds…`(fold)を新規則に更新 PASS |
 | native funded | F22 | GAP(担保不足で裁定拒否、G-14) | PARTIAL | v11 / v16 source / v29 / v39 の裁定・default は担保不足で拒否しない:void・依頼者へ escrow 返金・残る担保だけ徴収、finder は徴収額に比例(`palw_g14_lane_closure_v1.rs` の `palw_native_*`、各 fold の G-14 注記) | T-N13 `native_conviction_is_not_refused_for_short_collateral_v29` / `_v39`(book 水準)PASS。fold / node 水準は native の harness が repository に無く未作成 |
-| native funded | F18 | PARTIAL(finder ≤ 1000‰) | PARTIAL(finder ≤ 490‰) | native policy の finder 取り分を ADR-0032 の 49 % 以下に制限(`palw_flat_execution_v11.rs:1015`)。正直な finder の誘因は G-K3 と同じく未解決 | unit `g14_lane_closure_values_come_from_documented_relations` PASS |
+| native funded | F18 | PARTIAL(finder ≤ 1000‰) | PARTIAL(finder ≤ 490‰) | native policy の finder 取り分を 旧ADR-0032 の 49 % 以下に制限(`palw_flat_execution_v11.rs:1015`)。正直な finder の誘因は G-K3 と同じく未解決 | unit `g14_lane_closure_values_come_from_documented_relations` PASS |
 | native funded | F13 | GAP(4 枠の先取り、G-N1) | PARTIAL | v39:期限切れ owner が枠を返す(`palw_native_protected_fold_v39.rs:250`・`:601`)。v11 / v29 は未解決(下記) | 試験なし(native harness 無し) |
 
 集計(§3.9 の C 行、武装時の参考):Kernel / OPV 11/8/2/2/1 → 12/7/2/2/1、native funded 0/17/4/2/1 → 0/19/2/2/1、EXEC slice 13/5/3/2/1 → 14/5/2/2/1。
@@ -889,7 +889,7 @@ P14 の `2 / 15 / 5 / 0 / 2` → `10 / 11 / 1 / 0 / 2`(C / P / G / O / n/a)。
 - GAP → PARTIAL: F01、F13、F16(残りは fused leaf の嘘が依る court 上限 = C.3。非 fused の全 seat 共謀は node E2E で conviction・slash まで届く)。
 - PARTIAL → COVERED: F02・F03・F04・F07・F10(binding と局所化を予約の自前予算で得られる)、F08(held unit の沈黙は DA default、node E2E)、F19(G-13 で lock が責任期限まで残る)。
 - 変わらない: F05(2M held class は回答不能のまま)、F14(GAP-B12)、F15(rule E、G-11)、F17(lazy verifier の誘因、trap は経済値を要する)、
-  F18(報奨の先取り、ADR-0032 の残余)、F20(producer の model 保有を chain で審査しない — PRINCIPLES §9 の凍結前提)、F21(証拠が N\* 試験のみ)、
+  F18(報奨の先取り、旧ADR-0032 の残余)、F20(producer の model 保有を chain で審査しない — PRINCIPLES §9 の凍結前提)、F21(証拠が N\* 試験のみ)、
   F22(bond 式 v2 = G-12、測定値を要する)、F23(gen v1 画像 class の attempt)。
 
 Free Prompt(§3.3)は option (b) により DAA 14,000 以後の新規 claim では OUT-OF-SCOPE のまま(付録 B.3)。frame 付き FP の route に LG14-A 由来の欠けは残らない。
@@ -1436,7 +1436,7 @@ block 間隔は約 1 分、DAA の進みは 0.2〜0.4 / 分(PALW 1 slot = 1 DAA)
 
 | 注入 | 結果 | 指標の連鎖 |
 |---|---|---|
-| `sparse:7`(card 5) | PASS 相当(phase の行は driver の bug で出ず、chain を直接読んで判定した。bug は直した) | draw ごとに 5,560 候補から 1 leaf を選んだ(実測で 4,583 種類の leaf、一様)。外部 bond は job を全部 replay して root の不一致を検出する。k-ary descent で各 claim の leaf まで局所化した(例: leaf 4123・3927・3184、Terminal)。DAA 4 の claim で `court_fraud`、担保の全額を slash。同じ bond の残り 62 件は ADR-0160 の aggregate forfeit で void(報酬 0)。**LG14-A の追及は区間の抜き取りではなく全 replay と二分探索なので、D = 1 の疎な不正でも見逃しは構造的に 0。** 費用は claim ごとの全 replay(監査 §5.1 の k = 4 の表は、この経路には当てはまらない) |
+| `sparse:7`(card 5) | PASS 相当(phase の行は driver の bug で出ず、chain を直接読んで判定した。bug は直した) | draw ごとに 5,560 候補から 1 leaf を選んだ(実測で 4,583 種類の leaf、一様)。外部 bond は job を全部 replay して root の不一致を検出する。k-ary descent で各 claim の leaf まで局所化した(例: leaf 4123・3927・3184、Terminal)。DAA 4 の claim で `court_fraud`、担保の全額を slash。同じ bond の残り 62 件は 旧ADR-0160 の aggregate forfeit で void(報酬 0)。**LG14-A の追及は区間の抜き取りではなく全 replay と二分探索なので、D = 1 の疎な不正でも見逃しは構造的に 0。** 費用は claim ごとの全 replay(監査 §5.1 の k = 4 の表は、この経路には当てはまらない) |
 | `skip-all`(card 5、`UnboundExecutionRoot`) | OBSERVED(未完了) | 検出(replay の不一致)→ 予約 → binding demand の session が開いた(DAA 50。告発者 2 者)。producer はどの root にも対応する material を持たないため、答えられない。claim は licensed のまま保留され、報酬 0。session の期限は DAA 1,250 で、今の block 速度(0.3 DAA/分)では約 57 時間かかるため、DA default までは観測していない。結末は in-process の `legacy_v2_attempt_held_da_withholding_ends_in_da_default` と同じ経路の予定 |
 | その他(`output`、`selection`、`tokenizer`、`prompt-relabel`、`withhold-all`、FP の `kv` / `attn`) | NOT-RUN | 注入手段はある(`palw_drill_g17_tests`)。1 phase に 3〜4 時間かかるため、この回は実行していない |
 
@@ -1811,7 +1811,7 @@ drill の記録(run 3〜7 の JSON と、O の filer の log 抜粋)は、作業
   - λ_seat = 0.6 × 5/9。e = 640.17 MSK、ℓ = 160.09 MSK、T_active = 122 DAA、life = window_court。
   - 健全時の最小 238,119 MSK を切り上げて 240,000 MSK とした。
 - **既存の floor の型に従った。** `palw_panel_collateral_floor_at_v1(min_collateral, g13_in_force)` が `10 × min_collateral` と 240,000 MSK の大きい方を返す。draw、bind、floor room、activation の席、class seating、processor の draw policy、`Params::palw_seat_economy_at` はすべてこの 1 つの関数を読む。
-  - floor 未満の既存 bond は Active のまま(保有物は何も変わらない)。fence 以後は `palw_bond_may_take_work_v2` に落ち、Panel 席に選ばれない(ADR-0124 D4 と同じ型)。
+  - floor 未満の既存 bond は Active のまま(保有物は何も変わらない)。fence 以後は `palw_bond_may_take_work_v2` に落ち、Panel 席に選ばれない(旧ADR-0124 D4 と同じ型)。
 - **再測定(fold、t12 launch ruleset、新規則 + 分割)。**
 
   | 席の担保 | 1 席が支える claim 率 | 健全時 0.333/DAA に対して | 10-01 のピーク 2.944/DAA に対して | stream(3 DAA ごと、6,000 DAA) |
@@ -1892,7 +1892,7 @@ against this terminal failure has not been demonstrated.
 外部監査(`docs/design/palw/rfc-completion-audit-2026-10-17/report_ja.md` の RFC14 14-C・14-F)と本書 §4.2 の G-N1・G-N2・G-14 への対応。本文と §11 までは書き換えない。
 
 - 新しい規則は、それぞれの native lane の既存 fence の下にある(v11 と text29 は `palw_funded_execution_v11`(text29 は加えて Final27)、v39 mining は `palw_native_mining_v39`)。いずれも全 preset で `None`、validation が武装を拒否する。G14 lane closure(`palw_g14_lane_closure_v1`)と同じ扱いで、`Params` の新 field は無く、testnet-12 の identity は動かない。
-- 状態は「実装済み・下記の試験が通った」。武装は拒否のまま。設計上の値の扱いは [ADR-0187](../../../adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md) に記録した。
+- 状態は「実装済み・下記の試験が通った」。武装は拒否のまま。設計上の値の扱いは [旧ADR-0187](../../../rfc/0009-court-and-claim-final.md) に記録した。
 
 ### 13.1 G-N1(告発枠の先取り)
 
@@ -1917,11 +1917,11 @@ against this terminal failure has not been demonstrated.
 - **Gate C pending。** demand が開いている間、certification sweep の `accusation_pending` が true になり、決定は待つ。receipt の quantum も使えない(fold と validator の gate の両方)。
 - **有罪の効果。**
   - producer の reserved exposure を、bond に残っている分だけ徴収する(G-14)。finder には 490‰、残りは burn。
-  - claim は報酬なしで close し、ADR-0176 の予約も close する。
+  - claim は報酬なしで close し、旧ADR-0176 の予約も close する。
   - receipt を消し、spend で与えた safe weight を全部戻す(spend ごとに累計行を記録)。
   - certification 行を `Withdrawn` にする(決定済みでも Gate C credit を失う)。
   - Reproduced と署名した attestor の lock を charge する。
-- **attestor の責任。** native mining claim に Reproduced と attest した bond は、claim の reserved exposure と quorum k に seat-lock 関係(ADR-0151 D1/D4)を当てた額を、自由担保に lock する(aux 143 の `0x03`、committed ledger に数える)。担保が足りなければ attestation は数えられない。collection で解放、有罪で charge する。
+- **attestor の責任。** native mining claim に Reproduced と attest した bond は、claim の reserved exposure と quorum k に seat-lock 関係(旧ADR-0151 D1/D4)を当てた額を、自由担保に lock する(aux 143 の `0x03`、committed ledger に数える)。担保が足りなければ attestation は数えられない。collection で解放、有罪で charge する。
 - **veto。** RFC-0018 U-6 は採用しない。`veto` は設計値 `PALW_CERT_VETO_DESIGN_V1 = 0` のまま、parameter として残る。有罪は検証済みの filing か default だけで決まり、否定 attestation の数では決まらない。
 - **試験(fold、TransitionBuilder 上の実際の行)。** 4 件 pass。
   - `g14n2_a_post_final_conviction_slashes_revokes_the_receipt_weight_and_certification_and_charges_attestors`:collected 4,000、finder 1,960、safe weight 1,000 → 700、attestor 2 本 × 600。
@@ -1953,7 +1953,7 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
 1. **text29 の全 action が block に入らなかった(修正済み)。**
    - `paid_restore` の料金式は `bytes² · 64 + bytes · 1024` で、32 KiB の下限があるため最小でも約 6.9e10 work になる。kernel route の block あたりの court work 上限(2^30)を常に超える。
    - そのため登録・court・告発を含め、text29 の action は 1 件も運ばれなかった。
-   - 料金を同じ byte 単価の線形(`bytes · (64 + 1024)`)に直した。lane は休眠中で、ADR-0187 に記録した。
+   - 料金を同じ byte 単価の線形(`bytes · (64 + 1024)`)に直した。lane は休眠中で、旧ADR-0187 に記録した。
    - これで登録・prepare・producer の consent までは node 上で通った。
 2. **Fund が成立しない(未解決、値の判断が要る)。**
    - paged29 の同時義務は、試験 class で約 72 packet(period 2 DAA)になる。一方、締切は proof window − maturity = 97 DAA で、`seal_ttl = 100` に固定されている(horizon の check が固定値を要求する)。
@@ -1965,7 +1965,7 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
 ### 13.6 追補(2026-10-18):text29 と v39 の実 job
 
 - **text29(ユーザー決定 2026-10-18)。**
-  - Final27 の予約 scheduler の carriage period を 2 DAA から 1 DAA にした(休眠。`seal_ttl`・締切・責任は不変、ADR-0187)。
+  - Final27 の予約 scheduler の carriage period を 2 DAA から 1 DAA にした(休眠。`seal_ttl`・締切・責任は不変、旧ADR-0187)。
   - これで Fund が通り、node 試験 2 件 pass。
     - `text29_harness_registers_prepares_consents_and_funds_a_real_job`
     - `text29_a_public_filing_convicts_a_lying_text_job_without_a_paid_owner`
@@ -2023,7 +2023,7 @@ text29 の実 job を node 上で作る harness(`funded11/text29.rs`)を書い�
 
 ### 13.9 追補(2026-10-18):RFC-0018 (ii)(iii)(iv)
 
-- **(ii) 長期の公平性。** 16 carve の emission 予算(ADR-0164 F-EM)と mergeset の round robin の組合せで、model が飢えることを確かめた。
+- **(ii) 長期の公平性。** 16 carve の emission 予算(旧ADR-0164 F-EM)と mergeset の round robin の組合せで、model が飢えることを確かめた。
   - 旧規則は class を最初の member の priority で並べた。attempt の多い class ほど最小値が小さく、毎回先頭に来る。
   - 20 model、model 0 は 1 attempt、他の 19 model は各 32 attempt、2,000 block。model 0 が入ったのは 121 block(6 %、公平なら 80 %)。
   - **修正(休眠の sibling fence の中だけ)。** class の順を `H(domain ‖ set seed ‖ class)` にした。set seed は mergeset の attempt priority を並べた hash で、SET の関数のままである。model 0 は 1,618 block、全 model が 1,570〜1,634(期待 1,600)。round robin、class 内の順、16 carve、経済値は変えていない。
@@ -2769,7 +2769,7 @@ The first node-level native mining accusation run (PID 42654, log
 test execution: the seed attempt was repeatedly skipped because card 5's
 unsettled pre-Final weight exceeded its Final-weight cap, so the forged claim
 was not drawn. The test fixture now rotates the seed attempt across genesis
-bonds 5–7 while keeping ADR-0176 and Gate C values unchanged. This is a
+bonds 5–7 while keeping 旧ADR-0176 and Gate C values unchanged. This is a
 fixture-only correction; the rerun is compiling under an isolated target at
 `/tmp/codex-g14-native-retry.log`, so no pass is claimed yet.
 

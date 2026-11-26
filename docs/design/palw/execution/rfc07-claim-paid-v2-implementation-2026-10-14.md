@@ -1,6 +1,6 @@
 # RFC07 implementation checkpoint: direct detection and objective court
 
-Updated 2026-10-15 after the permanent user decision in [PRINCIPLES §8](../../../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定). This file records source implementation and remaining consumer work. These changes have **not been compiled or executed**. Existing test/node artifacts do not validate this source revision. All implementation precedes the consolidated validation phase.
+Updated 2026-10-15 after the permanent user decision in [PRINCIPLES §8](../../../PRINCIPLES.md). This file records source implementation and remaining consumer work. These changes have **not been compiled or executed**. Existing test/node artifacts do not validate this source revision. All implementation precedes the consolidated validation phase.
 
 ## Permanent boundary
 

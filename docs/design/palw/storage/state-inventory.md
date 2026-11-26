@@ -1,6 +1,6 @@
 # PALW state と node store の在庫 — 30 GB pruned node のための分類 (lane storage/state, 2026-10-22)
 
-Status: **設計メモ（採用・有効化ではない）**。基準 commit b1eb33960。consensus に影響する部分は [RFC-0036](../../../rfc/0036-authenticated-palw-state-map-and-row-access.md) / [ADR-0203](../../../adr/0203-authenticated-palw-state-map-and-row-access.md)（いずれも Proposed / Review Required）に分離した。実装は dormant な純ライブラリだけで、どの network の state root・判定も変えない。
+Status: **設計メモ（採用・有効化ではない）**。基準 commit b1eb33960。consensus に影響する部分は [RFC-0036](../../../rfc/0018-storage-pruning-and-ibd.md) / [旧ADR-0203](../../../rfc/0018-storage-pruning-and-ibd.md)（いずれも Proposed / Review Required）に分離した。実装は dormant な純ライブラリだけで、どの network の state root・判定も変えない。
 
 目的: pruned node が合計 30,000,000,000 bytes 以内で IBD・追従・再起動・reorg を完了するために、(a) 再生成可能な履歴と (b) 現在必要な state を分け、(b) を「検証済み row を必要時に取得」へ移すための前提を固定する。数値は実測（live t12 node1、DAA ≈13.7k、合計 8.5 GB: consensus 7.5 GB、palw-retention 920 MB）以外は推定駆動要因だけを書く。
 

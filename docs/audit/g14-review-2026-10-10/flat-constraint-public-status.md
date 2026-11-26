@@ -1,6 +1,6 @@
 # Public flat constrained-token prosecution checkpoint — 2026-10-11
 
-Full G14 remains unfinished. ADR-0177 D7 retains the correct registered model/tokenizer/config assumption. No production activation is armed.
+Full G14 remains unfinished. 旧ADR-0177 D7 retains the correct registered model/tokenizer/config assumption. No production activation is armed.
 
 ## Implemented
 

@@ -9,7 +9,7 @@ registered models. At the G14 fence, payment requires both `Final` and claim-lev
 from selected validators under the stated honest-fraction assumption; local replay alone does not authorize credit. It is an independent
 network with its own genesis and is not compatible with Kaspa or any prior kaspa-pq chain state.
 
-The native token is **Misaka**, ticker **BILI** ([ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)).
+The native token is **Misaka**, ticker **BILI** ([ADR-0001](docs/adr/0001-principles-and-authority.md)).
 Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet, `misakadev…` devnet). The node binary is still named
 `kaspad` and upstream crates keep their `kaspa-*` names.
 
@@ -29,17 +29,17 @@ Full activation remains dormant.
 
 The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a)
 is an earlier artifact. This source update includes parent-order fixes for initial sync. It does not establish live fleet deployment
-or claim-level settlement. See [RFC-0042 (AllModelG14PanelOne)](docs/rfc/0042-all-model-g14-panel-one.md)
-and [RFC-0042 (CourtSupplierConsent)](docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md)
+or claim-level settlement. See [RFC-0008 (G14 Panel)](docs/rfc/0008-g14-panel-and-verification.md)
+and [RFC-0010 (Court supplier consent)](docs/rfc/0010-materials-and-funded-delivery.md)
 for the separate designs. The [parallel-allocation record of 2026-11-02](docs/maintenance/numbering.md)
 explains their shared historical numbering.
 
-Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
+Read the [launch note](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
 **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor. Claim-level credit authorization remains a separate requirement.
 
-The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md); its final same-candidate validation is part of the implementation goal.
+The adopted zero-genesis-bond startup path is described in [RFC-0012](docs/rfc/0012-bonds-budgets-and-slashing.md#3-資本上限と回復); its final same-candidate validation is part of the implementation goal.
 
-New mining has two adopted specifications pending public activation. MAS1 defines mining admission and safety stops, and QF1 defines the Qwen3-8B A16 execution and readout. Model registration and market creation retain their existing rules. [RFC-0065](docs/rfc/0065-model-admission-screening-and-bft-stop.md) · [RFC-0066](docs/rfc/0066-qwen3-fow1-execution-and-readout.md)
+The latest adopted design uses BFT approval for model admission and applies BFT management and MOE3 to every model. QF1 specifies Qwen3-8B A16 execution and readout. These designs have separate public activation gates. [Model admission](docs/rfc/0007-bft-model-admission.md) · [MOE3](docs/rfc/0016-position-market-and-rewards.md) · [QF1](docs/rfc/0005-qf1-qwen3-execution-profile.md)
 
 ## Quick start
 
@@ -56,7 +56,7 @@ New mining has two adopted specifications pending public activation. MAS1 define
 Start at the [documentation map](docs/README.md): architecture ([overview](docs/architecture/overview.md), [what is different from
 Kaspa](docs/architecture/differences-from-kaspa.md)), the [ADRs](docs/adr/README.md), [RFCs](docs/rfc/README.md), specs, design
 records, operations and retained history. The previous, much longer README (testnet-11 era) is kept in
-[docs/history/README-2026-10-12.md](docs/history/README-2026-10-12.md).
+[docs/history/README-2026-10-12.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/README-2026-10-12.md).
 
 ## Repository layout
 

@@ -1,4 +1,4 @@
-# Lane F03b report: claim-common localisation frontier (ADR-0192 A/A), 2026-10-26
+# Lane F03b report: claim-common localisation frontier (旧ADR-0192 A/A), 2026-10-26
 
 Branch `claude/g14-f03b` (base `2d7f6023f`). **G14 is still incomplete. Nothing is armed.** No wire tag, ID or DB schema changed.
 
@@ -31,5 +31,5 @@ Branch `claude/g14-f03b` (base `2d7f6023f`). **G14 is still incomplete. Nothing 
 ## Remaining work and decisions needed
 1. The positive leg and the frontier leg run in separate fixtures. There is no single run that goes all-owner capture, then outsider bottom, then slash, and there is none on a real node.
 2. The tag-178 dispatcher path (`Convicted`) has not been driven end to end through `apply_object`.
-3. Decision needed: the per-request byte/work admission budget, and the scheduling of different legal choices when branches overlap (ADR-0192 lists these as open). They are not implemented. Requests are bounded only by the closed universe `queries`.
+3. Decision needed: the per-request byte/work admission budget, and the scheduling of different legal choices when branches overlap (旧ADR-0192 lists these as open). They are not implemented. Requests are bounded only by the closed universe `queries`.
 4. The service binding is still dormant in production (`PALW_COURT_SERVICE_PROFILE_V1` = None, funded schedule typed-missing), so the context is not installed on any network yet.

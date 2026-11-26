@@ -1,8 +1,8 @@
 # Court family supplier 契約の具体案 — 2026-10-30
 
 2026-10-30 採択追記: ユーザーは「新契約を採択して接続まで進める」と回答した。
-正式仕様は [RFC-0042](../../../../rfc/0042-court-family-supplier-consent-and-native-reservation.md) と
-[ADR-0210](../../../../adr/0210-court-family-supplier-consent-and-native-reservation.md)。
+正式仕様は [RFC-0042](../../../../rfc/0010-materials-and-funded-delivery.md) と
+[旧ADR-0210](../../../../rfc/0010-materials-and-funded-delivery.md)。
 以下は採択前の具体案と不足の記録であり、現在の統合検証結果ではない。公開有効化は別である。
 
 提案時の状態: **Draft / 未採択・未有効化**。実装案は
@@ -10,7 +10,7 @@
 wire tag、consensus object、rooted installer、本番受付、金融効果は登録していない。
 署名・builderの実装と試験コードが存在することを、統合試験合格や全Court分岐の完了とは扱わない。
 
-[RFC-0035 §3–4](../../../../rfc/0035-court-original-funded-contract-and-role-consent.md)
+[RFC-0035 §3–4](../../../../rfc/0010-materials-and-funded-delivery.md)
 は、新しい役割に本人の署名済みconsent、現在authority、受付・応答・保持期間、資本・報酬条件を要求する。
 旧custody pledgeを新しい全分岐・将来の役割へ流用しない。同RFCの2026-10-22追記は、
 7-family SourceMaterialOnly graphにsemantic・parameter等の全閉包が含まれないことを明記している。

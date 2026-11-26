@@ -15,7 +15,7 @@ lane INTEG（branch `claude/g14-integ`）が基点で再実行し、同じ panic
 | `…exec_slices::x8_g14_honest_slices_verify_through_kernel_finals…` | — | 基点と同一の panic |
 | `…owning39::master::g14n2_node_a_forged_mining_claim_is_convicted…` | `master.rs:589` | `certified by the colluding draws: None` |
 | `…master::node_e2e::rfc02_native39_node_e2e_job_credit_delivery_witness…` | `node_e2e.rs:423` | `native39 delivery witness is not the bracketing state of the same immutable credit` |
-| `…master::node_e2e::rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9…` | `node_e2e.rs:501` | `native39 receipt's budget reservation cannot pay this block (ADR-0176, 0.51 export)` |
+| `…master::node_e2e::rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9…` | `node_e2e.rs:501` | `native39 receipt's budget reservation cannot pay this block (旧ADR-0176, 0.51 export)` |
 
 exec_slices の 5 MSK のずれは paid/kernel escrow の裁定が要る。native39 の 2 件の文言は `palw_native_receipt_v39.rs` / `palw_native_redemption_v33.rs` から出ている。
 

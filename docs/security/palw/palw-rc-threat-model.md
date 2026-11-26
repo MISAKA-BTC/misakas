@@ -1,6 +1,6 @@
 # PALW-RC threat model and red-test register
 
-Companion to **ADR-0042**. This is the authoritative list of the attacks the PALW mainnet-candidate
+Companion to **旧ADR-0042**. This is the authoritative list of the attacks the PALW mainnet-candidate
 ruleset must defeat, and the tests that prove each is defeated. It exists so that PR-00's completion
 condition — *"the attack tests are red on the current implementation"* — is a concrete, reviewable
 artifact rather than a claim.
@@ -28,7 +28,7 @@ honest "red (integration), lands in PR-N."
 ## The register
 
 ### P0-1 — commitment not bound to the PoW ticket
-- **Invariant:** ADR-0038 W2 (one ticket = one inference, bound to network/header/nonce).
+- **Invariant:** 旧ADR-0038 W2 (one ticket = one inference, bound to network/header/nonce).
 - **Evidence:** `hashing/header.rs:26-29,90-130,372-385`; `pow_layer0.rs:412-452`;
   `pow/src/palw_admission.rs:113-141`; `pow/src/lib.rs:223-225,260-325`;
   `palw_block_commitment.rs:341-360`. Live path uses `calculate_pow_layer0` over
@@ -78,10 +78,10 @@ honest "red (integration), lands in PR-N."
     only the bond holder can mint valid-signature siblings of their own block (ML-DSA-87 signing
     is hedged), each sharing one PoW but deduplicated at the claim (`claim_id = attempt_id`).
     3c needs its own design pass (a mutated-witness path that rejects without caching id
-    invalidity) before it can land safely. **ADR-0042:** Decision 3a; 3c deferred with cause.
+    invalidity) before it can land safely. **旧ADR-0042:** Decision 3a; 3c deferred with cause.
 
 ### P0-2 — block-commitment ML-DSA-87 signature never verified at admission
-- **Invariant:** ADR-0038 W8 (no bond, no block — the *holder's* authorization).
+- **Invariant:** 旧ADR-0038 W8 (no bond, no block — the *holder's* authorization).
 - **Evidence:** `palw_block_commitment.rs:241-265,281-306`; `pow/src/palw_admission.rs:113-141`;
   `virtual_processor/utxo_validation.rs:699-720`; `pow/tests/palw_admission_fixture.rs:50-60,88-106`
   (fixture admits a `0x5A`-filled signature). `validate_shape` checks only length;
@@ -95,7 +95,7 @@ honest "red (integration), lands in PR-N."
   own context). The V2 lane (PR-04): `palw_v2_foreign_bond_garbage_signature_rejected` pins both
   faces — a foreign key on a victim's bond is `BondKeyMismatch` (stateful item 2) even when the
   signature verifies under the carried key, and a garbage signature is refused statelessly over
-  the attempt id in `PALW_ATTEMPT_V2_MLDSA87_CONTEXT`. **ADR-0042:** Decision 6.
+  the attempt id in `PALW_ATTEMPT_V2_MLDSA87_CONTEXT`. **旧ADR-0042:** Decision 6.
 
 ### P0-3 — a fresh PALW tip is always "unresolved," so fork choice never engages
 - **Invariant:** W3 fork choice actually uses PALW weight.
@@ -108,7 +108,7 @@ honest "red (integration), lands in PR-N."
 - **Status:** **substrate green** (PR-03/PR-06): the named test passes — a descendant-less claim is
   `Provisional` with `β·pwu` live weight the moment it applies, no panel required; the panel gates
   only `PanelBound → ReceiptLicensed → Final` (`palw_panel_v2`). The V1 weigher's anchor demand
-  stands until PR-08 retires that substrate. **ADR-0042:** Decision 2.
+  stands until PR-08 retires that substrate. **旧ADR-0042:** Decision 2.
 
 ### P0-4 — same DAG, different node sink ⇒ different candidate weight
 - **Invariant:** W3 (equal DAGs ⇒ equal weights everywhere).
@@ -124,7 +124,7 @@ honest "red (integration), lands in PR-N."
   `state_root` and candidate order for the same chain, and the restart / IBD-start / reorg
   differentials pass beside it. The V1 weigher's sink reads remain in the tree until PR-08
   retires that substrate; nothing routes weight through them on any V2 network before then.
-  **ADR-0042:** Decision 5, ADR-0043.
+  **旧ADR-0042:** Decision 5, 旧ADR-0043.
 
 ### P0-5 — header-selected tip / IBD / pruning use blue work, virtual uses PALW
 - **Invariant:** one canonical-chain authority.
@@ -139,7 +139,7 @@ honest "red (integration), lands in PR-N."
   comparator, identically for opposite application orders, and all prefer the matured chain over
   the heavier immature pile. The store rename landed with P0-5. Pipeline sites consume these
   functions when `PalwConsensusMode::ConsensusV2` exists to demand them (PR-10) — a dead handle
-  in today's blue-work pipeline would be surface without semantics. **ADR-0042:** Decision 9.
+  in today's blue-work pipeline would be surface without semantics. **旧ADR-0042:** Decision 9.
 
 ### P0-6 — conviction / equivocation verified under the wrong signature context
 - **Invariant:** W5 (conviction voids the convicted block's weight) — slashing state and work state
@@ -156,7 +156,7 @@ honest "red (integration), lands in PR-N."
   verifier closure is constructed for more than one object family (receipt / commitment / attestation
   / court each get a typed verifier).
 - **Status:** red (integration) + guard. **Greens in:** PR-01 (typed contexts) → asserted PR-07.
-  **ADR-0042:** Decisions 3, 6.
+  **旧ADR-0042:** Decisions 3, 6.
 
 ### P0-7 — panel cannot exclude the executor; no-show unpunished
 - **Invariant:** W8 (independent verification; bonded accountability).
@@ -187,7 +187,7 @@ honest "red (integration), lands in PR-N."
   (`palw_v2_a_claim_that_never_bound_a_panel_slashes_no_seats`). Verified non-vacuous by making
   the charge a no-op. It also caught a fixture habit — twelve tests licensed a claim with
   `receipts: Vec::new()`, a panel concluding without a word from the seat it had bound.
-  **ADR-0042:** Decision 7.
+  **旧ADR-0042:** Decision 7.
 
 ### P0-11 — the lifecycle objects had no way onto a chain (found and closed 2026-08-20)
 
@@ -226,7 +226,7 @@ honest "red (integration), lands in PR-N."
     gate, not this seam. **Consequence for the RC: the genesis artifact must register the initial
     bond set**, and at least three of them — `derive_panel_v2` excludes the executor's own bond,
     so a one-bond registry can never form a panel.
-  - `ClassRegistered` — a class entering a live chain moves the share table (ADR-0045 Decision 3
+  - `ClassRegistered` — a class entering a live chain moves the share table (旧ADR-0045 Decision 3
     funds an entrant by donation from every incumbent) and brings its own `pwu_rule`.
     `verify_palw_genesis_v2` refuses `MaxPerAttempt` at genesis precisely because a ceiling makes
     weight a measure of collateral rather than of work, and letting a class in through a
@@ -237,7 +237,7 @@ honest "red (integration), lands in PR-N."
   currency. Under `DerivedV1` an attempt's pwu is a function of the class TARGET, so the same
   budget buys fewer and fewer blocks as a class gets harder — a class that got popular would hard
   stop its own chain for the rest of every epoch, for getting popular. The share also cancels out
-  of a pwu inequality entirely (ADR-0045's amendment defect (e)), so the cap could not express
+  of a pwu inequality entirely (旧ADR-0045's amendment defect (e)), so the cap could not express
   "this class's share of cadence", which is the only thing it was for. `PalwEpochBudgetsV2`
   already had the right shape — budgets in BLOCKS, per epoch — and nothing wrote or read it.
   `derive_epoch_budgets_v2` now builds it from the share table, the epoch's DAA span and the
@@ -252,7 +252,7 @@ honest "red (integration), lands in PR-N."
 - **The C5 tail is now a real question rather than a hypothetical one.** "Nobody has an incentive
   to bind someone else's claim" was unanswerable while nobody *could*; with the carriage in place
   it is a fee/reward question about who publishes a `PanelBound`, and it is still open.
-- **ADR-0042:** Decisions 7 and 8.
+- **旧ADR-0042:** Decisions 7 and 8.
 
 ### P0-8 — the arithmetic court is unadjudicable on a normal full node
 - **Invariant:** W1 (full node adjudicates every dispute with no LLM).
@@ -297,7 +297,7 @@ honest "red (integration), lands in PR-N."
   until the ladder itself is chain-carried — a forged default would void honest claims on
   demand; the system stays closed meanwhile (arithmetic conviction when data is held, the
   panel's `Unavailable` quorum when it is withheld, the `window_court` backstop when a challenge
-  is abandoned). **ADR-0042:** Decision 8. *(Runtime-removal half is Decision 4 / P0-W1 below —
+  is abandoned). **旧ADR-0042:** Decision 8. *(Runtime-removal half is Decision 4 / P0-W1 below —
   closed in PR-02.)*
 
 ### P0-8b — nothing recomputes `execution_root` from a real execution (found 2026-08-20)
@@ -365,7 +365,7 @@ honest "red (integration), lands in PR-N."
   catalog problem this class exists to escape." The RC's permanently-Active liveness floor is
   BASE-0, so **the profile the RC genesis needs is BASE-0's, not the pinned float model's** — and
   BASE-0's is authorable today, because every op in it already has an adjudicator.
-- **BASE-0's profile landed 2026-08-20** (`palw_base0_profile`): ADR-0040 Decision D's plain
+- **BASE-0's profile landed 2026-08-20** (`palw_base0_profile`): 旧ADR-0040 Decision D's plain
   decoder-only transformer as the four node tables — 18 nodes per layer plus an embedding gather
   and a norm-then-logits tail — derived from a `PalwBase0GeometryV1` the registering network
   chooses. Geometry is an ARGUMENT here rather than a measurement, because BASE-0 has no file: it
@@ -427,7 +427,7 @@ honest "red (integration), lands in PR-N."
   abandon fails the responder default, and dropping the midpoint comparison fails the midpoint
   test. What remains for PR-07 is the terminal OPENING's consumer (the court reading a located
   index into a verdict), which is `adjudicate_court_close_v2`'s side, not the ladder's.
-  **ADR-0042:** Decision 8.
+  **旧ADR-0042:** Decision 8.
 
 ### P0-10 — one bond backs unbounded immature work
 - **Invariant:** collateral bounds work at risk.
@@ -441,7 +441,7 @@ honest "red (integration), lands in PR-N."
 - **Status:** **substrate green** (PR-04): the named test passes — reservation at claim creation
   (PR-03's accounting), the inclusive ceiling refusal at admission item 8, and release-on-resolve
   re-opening exactly the held headroom. The V1 weigher carries no ceiling until PR-08 retires it;
-  no V2 network exists before the bundle. **ADR-0042:** Decision 6.
+  no V2 network exists before the bundle. **旧ADR-0042:** Decision 6.
 
 ---
 
@@ -476,7 +476,7 @@ honest "red (integration), lands in PR-N."
   invariance all exercise it. Redistribution ON freeze (the named red test's live-share shift)
   is a params-table question the atomic bundle answers at PR-10's startup gate: shares are
   params, exactly-1000 enforced, and a frozen class's share is a bundle change — never a silent
-  runtime shift. **ADR-0042:** Decisions 1, 5.
+  runtime shift. **旧ADR-0042:** Decisions 1, 5.
 
 ---
 
@@ -492,7 +492,7 @@ archival vs pruned                                    · genesis IBD vs pruning-
 x86-64 vs arm64                                        · DB insertion order
 ```
 
-These land as the differential harness in PR-03 and grow through PR-08. ADR-0039's
+These land as the differential harness in PR-03 and grow through PR-08. 旧ADR-0039's
 `once_decided_a_block_stays_decided` and `carriage_accepted_after_the_window_changes_nothing` are the
 seed; the missing axes it names as "not provable at this level" (pruning point, IBD start height) are
 exactly what PR-03's candidate-scoped state makes testable.
@@ -527,9 +527,9 @@ rest are recorded here. Fixes landed on `palw-rc-audit-fixes`.
 | **C2** | `consensus/core/src/palw_state_v2.rs:1153` | The frontier advanced only when the GLOBAL unresolved set was empty — and step 4 of every apply inserts the block's own claim, so on a chain producing work it never moved. `pruning_ceiling_v2` froze with it. Worse than inert: a fork carrying no attempts at all had an empty unresolved set at every block, so it advanced its frontier for free and **outranked a chain that had matured real work** (reproduced: 60 empty blocks reach frontier 60 against an honest chain stuck at 1; `decide_deep_reorg_v2` said `Allow`). | **fixed** — the frontier is the deepest block whose PALW work is `Final` with nothing unresolved below it, which is the definition `palw_fork_choice` already stated. A chain that matured nothing has no frontier however long it grows. 2 regression tests, mutation-checked. |
 | **C3** | `consensus/core/src/palw_court_v2.rs:201` | See the corrected P0-8 row: an accuser-authored binding could harvest a shape-family conviction against an honest executor. | **fixed** — `check_execution_root_binding` pins the binding to the claim's own `execution_root` before any fault is read. |
 | **C4** | `consensus/core/src/palw_attempt_v2.rs:139` | See the corrected P0-1 row: six of fourteen fields priced, three of the rest unconstrained. A PR-01 closure re-opened by PR-06. | **fixed** — `commitment_root_v2 = H(attempt_id_v2)`; the exhaustive test cannot fall behind the struct. |
-| **C5** | `consensus/core/src/palw_panel_v2.rs:84` | One `quorum` licensed BOTH opposite transitions — `Valid` → `ReceiptLicensed` and `Unavailable` → `ProducerDefaulted` — with only `1 ≤ quorum ≤ seat_count` enforced. At `seat_count = 4, quorum = 2` both reach quorum simultaneously and the check ORDER decides. `vlt.rs` has carried `quorum_is_strictly_above_two_thirds` since its own audit; the panel had no analogue. | **fixed** — `2·quorum > seat_count` at construction makes the two quorums provably disjoint; `Unavailable` names `{chunk_index, requested_daa}` and is checked against the attempt's committed chunk count, the panel's existence, the signing time and the producer's retention window; every receipt carries a `signed_daa` checked against `[bound_daa, bound_daa + window_receipt]` and against the block carrying it, with every field inside the signed message; `operator_id` is derived from an operator KEY and each identity must carry its own `min_collateral_sompi` (which the bundle held and nobody read); and `slash_bond` exists, debiting collateral and recording the loss, applied to `CourtFraud`, `ProducerWithholding` and to whichever side of a receipt set the quorum refutes — the amount being `claim.reserved`, the stake the claim itself named. **The two former "still open" tails closed** (`a7be964e`, ADR-0042 Amendments §A3): the "free" re-roll was a finding that overstated itself — a claim is one block, so a re-roll is another solved PoW; the abandoned block's pwu leaves both weights permanently and every void forfeits the reward escrow; the class epoch budget is counted at acceptance and never refunded; and a claim cannot be re-bound, with `anchor_delay > 0` making mining-time panel shopping structurally impossible (`abandoning_a_panel_costs_a_block_its_reward_and_its_epoch_budget` measures all three costs). Sybil is now STATED as the bound it is — at most ⌊X / min_collateral⌋ identities — in Decision 7's amended wording. **Corrected at the 2026-08-20 integration:** all three of those costs rest on "a claim is a BLOCK", and an ADR-0044 free-prompt commitment rides a TRANSACTION — measured on the merged tree, a `BindTimeout` there released the reservation in full, moved no counter, debited no bond, and the next commitment was accepted in the very next block, so the re-roll was priced at one transaction fee. That lane now holds the abandoned claim's collateral for `fp_abandon_hold_daa` after the void (ADR-0042 §A4): a delay, never a confiscation, whose effect is that N concurrent redraws need N × the reservation — the same currency the Sybil bound speaks, so the two compose (`an_abandoned_free_prompt_claim_holds_its_collateral`). **Narrower open remains:** binding is permissionless but nobody is PAID to bind someone else's claim, so in practice the producer decides whether its own claim proceeds. |
+| **C5** | `consensus/core/src/palw_panel_v2.rs:84` | One `quorum` licensed BOTH opposite transitions — `Valid` → `ReceiptLicensed` and `Unavailable` → `ProducerDefaulted` — with only `1 ≤ quorum ≤ seat_count` enforced. At `seat_count = 4, quorum = 2` both reach quorum simultaneously and the check ORDER decides. `vlt.rs` has carried `quorum_is_strictly_above_two_thirds` since its own audit; the panel had no analogue. | **fixed** — `2·quorum > seat_count` at construction makes the two quorums provably disjoint; `Unavailable` names `{chunk_index, requested_daa}` and is checked against the attempt's committed chunk count, the panel's existence, the signing time and the producer's retention window; every receipt carries a `signed_daa` checked against `[bound_daa, bound_daa + window_receipt]` and against the block carrying it, with every field inside the signed message; `operator_id` is derived from an operator KEY and each identity must carry its own `min_collateral_sompi` (which the bundle held and nobody read); and `slash_bond` exists, debiting collateral and recording the loss, applied to `CourtFraud`, `ProducerWithholding` and to whichever side of a receipt set the quorum refutes — the amount being `claim.reserved`, the stake the claim itself named. **The two former "still open" tails closed** (`a7be964e`, 旧ADR-0042 Amendments §A3): the "free" re-roll was a finding that overstated itself — a claim is one block, so a re-roll is another solved PoW; the abandoned block's pwu leaves both weights permanently and every void forfeits the reward escrow; the class epoch budget is counted at acceptance and never refunded; and a claim cannot be re-bound, with `anchor_delay > 0` making mining-time panel shopping structurally impossible (`abandoning_a_panel_costs_a_block_its_reward_and_its_epoch_budget` measures all three costs). Sybil is now STATED as the bound it is — at most ⌊X / min_collateral⌋ identities — in Decision 7's amended wording. **Corrected at the 2026-08-20 integration:** all three of those costs rest on "a claim is a BLOCK", and an 旧ADR-0044 free-prompt commitment rides a TRANSACTION — measured on the merged tree, a `BindTimeout` there released the reservation in full, moved no counter, debited no bond, and the next commitment was accepted in the very next block, so the re-roll was priced at one transaction fee. That lane now holds the abandoned claim's collateral for `fp_abandon_hold_daa` after the void (旧ADR-0042 §A4): a delay, never a confiscation, whose effect is that N concurrent redraws need N × the reservation — the same currency the Sybil bound speaks, so the two compose (`an_abandoned_free_prompt_claim_holds_its_collateral`). **Narrower open remains:** binding is permissionless but nobody is PAID to bind someone else's claim, so in practice the producer decides whether its own claim proceeds. |
 | **H1** | `consensus/core/src/palw_state_v2.rs` retarget | See the corrected per-class DAA row. | **fixed**, both halves. The second half closed in `a7be964e`: admission item 6b draws `class_ticket_v2` from the attempt's commitment root — a function of the whole attempt, ungrindable without a new nonce (= new PoW) — and compares it INCLUSIVELY against the candidate chain's class target; a weight-bearing class with no target is refused as `ClassTargetMissing` (`the_class_target_is_what_admits_a_block_of_that_class`). The ticket is domain-separated from the L1 tag and asserted to be, so the lottery is a second difficulty, not the PoW tag renamed. |
-| **H2** | `consensus/core/src/palw_mode_v2.rs:211` | `palw_ruleset_id_v2` hashes only `PalwConsensusParamsV2`, which has no cadence field, no fork-choice version, no trace-format version and no signature-context version — all named in Decision 11's preimage. Every window in the bundle is DAA-denominated, so the cadence is what gives them wall-clock meaning: two networks could share a ruleset id and run different rules. | **fixed** — the bundle now carries `cadence_target_time_per_block_ms`, `fork_choice_version`, `trace_format_version` and `signature_contexts_root`, each pinned to what the binary implements, so they are simultaneously inside the id and incapable of varying; the contexts are committed as their own BYTES rather than a version number, so editing a context string without re-minting the id is a startup failure; the network's own cadence is required to equal the bundle's; and `worst_case_court_duration_daa` is replaced by `PalwCourtParamsV2 {max_step_leaf_count, turn_deadline_daa, terminal_rounds}` with ADR-0042 Decision 8's formula `(ceil(log2(leaves)) + terminal) × turn_deadline`, overflow being a refusal. **The "asserted, not read" tail closed** (`a7be964e`): `PalwClassCatalogV2` is the catalog artifact's shape and `verify_against_catalog` the gate — root recomputes, BASE-0 and every share-bearing class present, court coverage checked against THIS BUILD's adjudication table (`verify_catalog_coverage_v1`), and `court.max_step_leaf_count ≥ catalog.max_step_leaf_count()`, so understating the ladder to shrink `window_court` contradicts the catalog the same bundle commits to. **What remains is the CALLER:** the RC genesis loader (PR-10) is the place that holds the artifact and must invoke this gate at boot. |
+| **H2** | `consensus/core/src/palw_mode_v2.rs:211` | `palw_ruleset_id_v2` hashes only `PalwConsensusParamsV2`, which has no cadence field, no fork-choice version, no trace-format version and no signature-context version — all named in Decision 11's preimage. Every window in the bundle is DAA-denominated, so the cadence is what gives them wall-clock meaning: two networks could share a ruleset id and run different rules. | **fixed** — the bundle now carries `cadence_target_time_per_block_ms`, `fork_choice_version`, `trace_format_version` and `signature_contexts_root`, each pinned to what the binary implements, so they are simultaneously inside the id and incapable of varying; the contexts are committed as their own BYTES rather than a version number, so editing a context string without re-minting the id is a startup failure; the network's own cadence is required to equal the bundle's; and `worst_case_court_duration_daa` is replaced by `PalwCourtParamsV2 {max_step_leaf_count, turn_deadline_daa, terminal_rounds}` with 旧ADR-0042 Decision 8's formula `(ceil(log2(leaves)) + terminal) × turn_deadline`, overflow being a refusal. **The "asserted, not read" tail closed** (`a7be964e`): `PalwClassCatalogV2` is the catalog artifact's shape and `verify_against_catalog` the gate — root recomputes, BASE-0 and every share-bearing class present, court coverage checked against THIS BUILD's adjudication table (`verify_catalog_coverage_v1`), and `court.max_step_leaf_count ≥ catalog.max_step_leaf_count()`, so understating the ladder to shrink `window_court` contradicts the catalog the same bundle commits to. **What remains is the CALLER:** the RC genesis loader (PR-10) is the place that holds the artifact and must invoke this gate at boot. |
 | **H3** | `consensus/core/src/palw_state_v2.rs` `ClassRegistered` | `slash_value_per_pwu == 0` was refused nowhere. `reserved = pwu × slash_value_per_pwu`, so at zero every claim reserves zero and any number of immature claims fits under any ceiling — P0-10's remedy silently evaluates to no cap. | **fixed** — `ZeroSlashValue` at registration. **Still open:** `pwu_rule` is a `MaxPerAttempt` ceiling rather than a derivation, so Decision 6 item 6 bounds rather than checks — which makes PALW weight a collateral measure rather than a work measure; and the class epoch budget is a permanent hard halt with no startup invariant sizing it. |
 
 ### A correction the audit made to itself
@@ -540,7 +540,7 @@ and an earlier one to `899fefda` (`tkn: TokenParams` entering the hashed `DnsPar
 and both follow-ups moved it zero times. Merging this branch is a mainnet flag day for reasons that
 predate the RC, and reverting the PALW lines alone would not restore neutrality.
 
-### ADR-0042 clauses that should be amended rather than implemented
+### 旧ADR-0042 clauses that should be amended rather than implemented
 
 * **Decision 1, "challenge window > worst-case court duration."** Not implemented, deliberately.
   The ADR's clause assumes a design where a court must finish inside the window that decides

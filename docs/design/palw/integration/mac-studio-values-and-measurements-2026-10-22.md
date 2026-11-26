@@ -40,18 +40,18 @@ testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence �
 
 | # | 値 | コード上の置き場（現在 `None`） | 主な入力 |
 |---|---|---|---|
-| V1 | court service profile（DAA あたりの予約予算、packet 単価、署名者あたりの packet 数、span） | `PALW_COURT_SERVICE_PROFILE_V1` | court 操作ごとの実測（§3 M-C）、block の容量（tx bytes・mass）、ADR-0192 |
+| V1 | court service profile（DAA あたりの予約予算、packet 単価、署名者あたりの packet 数、span） | `PALW_COURT_SERVICE_PROFILE_V1` | court 操作ごとの実測（§3 M-C）、block の容量（tx bytes・mass）、旧ADR-0192 |
 | V2 | funded original の受付表（fee、capital の下限、分岐ごとの capital、heap・保持 bytes） | `PalwFundedOriginalScheduleV1` / `FundedAdmissionScheduleV1` | 分岐数の導出（`palw_funded_original_admission_v1.rs`）、M-C、RFC-0035 §7.1 |
 | V3 | escrow の精算表（作業料・court 料・relay 料・burn の dues と取り分） | `palw_escrow_fee_schedule_v1` | V1・V2、RFC-0035 §7 |
 | V4 | 外部者の court 受付料、内部者も払うか、予約枠 R=⌊cap/2⌋ の妥当性 | `PalwCourtIngressScheduleV1` | M-C、court cap 42、L-COURT 実測 |
 | V5 | material 受付の保管料（sompi/byte）、draft の TTL、payer | `MaterialIntakeScheduleV1` | 保持 bytes の実測、RFC-0032 |
-| V6 | Final 後 default の slash 額 | `PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1` | ADR-0184、既存 default の slash 規則との整合 |
-| V7 | D2 readiness の draw cap、disclosure の料金、slash 額 | `PALW_D2_READINESS_DRAW_CAP_V1`、`PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1` | ADR-0188 B / ADR-0200、seat 数 |
+| V6 | Final 後 default の slash 額 | `PALW_NATIVE_POST_FINAL_DEFAULT_SLASH_V1` | 旧ADR-0184、既存 default の slash 規則との整合 |
+| V7 | D2 readiness の draw cap、disclosure の料金、slash 額 | `PALW_D2_READINESS_DRAW_CAP_V1`、`PALW_D2_DISCLOSURE_FEE_SCHEDULE_V1` | 旧ADR-0188 B / 旧ADR-0200、seat 数 |
 | V8 | 1 位置 terminal の witness 予算、lookahead の frontier 上限 | `PALW_TIR_POSITION_WITNESS_BUDGET_V2`、`PALW_TIR_LOOKAHEAD_MAX_FRONTIER_VALUES_V2` | RFC-0024 §4.4 / §5.5（「profile から導出」）、`r5-p2-terminal.md` の byte 計算（署名 2 本だけで 9,262 B） |
 | V9 | staged court config の保持期間（a+10,000 + reorg 保持を覆うか） | staged court config（`network_v1` では不足） | `r5-clock-deps-relay.md`、clock v2、X3 |
 | V10 | X3 の `B_cold_fetch`・`B_check`・`B_localize`・`B_carrier`・`B_reorg_slack`、および `c_retain` | X3 arming record（`palw_claim_hard_deadline_v1`） | §3 M-X3（実測）。どの項も 0 にしない |
 | V11 | court capacity の `rho_court`（sompi / 占有 DAA / weight 単位）と session weight | G14 arming record（`palw_court_capacity_v1`、G-07） | §3 M-C、占有の経済性 |
-| V12 | 前提 fence の policy: `palw_bond_budget_v1`、`palw_model_bond_allocation_v1`、`palw_material_income_v3` | 各 fence の policy | ADR-0176/0177、配分の平均期間は **7 日**（ユーザー決定済み） |
+| V12 | 前提 fence の policy: `palw_bond_budget_v1`、`palw_model_bond_allocation_v1`、`palw_material_income_v3` | 各 fence の policy | 旧ADR-0176/0177、配分の平均期間は **7 日**（ユーザー決定済み） |
 | R1 | RFC-0006: draw と価格の値、配分曲線、cell closure を武装するか | `palw_rfc0006_*`、cell coverage | `rfcgap-a` の報告 |
 | R2 | RFC-0007: claim-challenge policy の値、source の deposit と cap、安全余裕・retry 予算、attempt あたりの deposit 上限、bootstrap profile | 各 policy | trap の実測 |
 | R3 | RFC-0010: 本番 beacon policy | `palw_panel_beacon_v1` の承認済み list（空） | 選出・交代の実測 |
@@ -60,7 +60,7 @@ testnet-12 で DAA 16,000 の fence に全機能を載せるには、各 fence �
 | R6 | TIR frame の費用 record | `PALW_TIR_FRAME_COST_RECORDS_V1` | `frame_measure.rs` |
 | R7 | RFC-0002: PALWQ361 の logit scale と f32 参照窓 | `--palwq36-logit-scale`、reference-windows file | §3 M-Q36 |
 | R8 | RFC-0016 の本番値（各 §14 条件）とクラス別の負荷、arming record | `PALW_RFC0016_ARMING_RECORDS_V1`（空） | M-C、M-DA、`docs/evidence/palw/rfc-gaps-2026-10-22/b.md` |
-| R9 | モデル tier: κ（設計値 300‰）、c の実測 record、最新 catalog edition。RFC-0019 U-3・U-4・U-6 | tier fence の arming record（record は fence 自身の c・κ・edition を名指す） | RFC-0017 / ADR-0179 / RFC-0019 §16 |
+| R9 | モデル tier: κ（設計値 300‰）、c の実測 record、最新 catalog edition。RFC-0019 U-3・U-4・U-6 | tier fence の arming record（record は fence 自身の c・κ・edition を名指す） | RFC-0017 / 旧ADR-0179 / RFC-0019 §16 |
 | R10 | RFC-0018 U-1〜U-8（とくに U-2・U-3: 認証前の free-prompt coinbase の取り分、U-5） | RFC-0018 の record gate | RFC-0018 §12 |
 | R11 | RFC-0008・RFC-0012 の名前付き parameter | 各 policy | `rfc-gaps-2026-10-22/b.md` |
 

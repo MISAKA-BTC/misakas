@@ -1,0 +1,37 @@
+{
+  "beacon": "b298650deca84f9c67ed865d4f6d851b9daceac23e1deaf703a3d75c1a5d4eb5cf2c017b17c8e319acb1a4a915549b98909b1e8556fe0a604ae40499b182f6a9",
+  "budgetFits": false,
+  "candidateDaa": 3741,
+  "claim": "48f1263eb00445396c67474f591d254975595fc804b4db7f23b57f05bcc29c44fa746799fdaac309b081465b75dea7a1c7e09c09887c81d7bcac5708cd77e7ce",
+  "losses": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    6,
+    7,
+    9,
+    10,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    20
+  ],
+  "mode": "detached signed admission fixture",
+  "parent": "b298650deca84f9c67ed865d4f6d851b9daceac23e1deaf703a3d75c1a5d4eb5cf2c017b17c8e319acb1a4a915549b98909b1e8556fe0a604ae40499b182f6a9",
+  "receiptClock": 3675,
+  "stateRoot": "d3ad9a400fa6f6b8a352eec46a49bd5542ad10d9ba9f3d8f2a57ee9f5c3441cbbe294691ed02f29b0f02303d1f373562dfc40e9b6abcc72c25665618a49795bc",
+  "wins": [
+    5,
+    8,
+    11,
+    19
+  ],
+  "workerCarve": 320084650080,
+  "exitCode": 0
+}

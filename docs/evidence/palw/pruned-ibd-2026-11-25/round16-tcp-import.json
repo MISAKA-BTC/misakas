@@ -1,0 +1,40 @@
+{
+  "test": "round16_archival_to_genesis_node_over_tcp",
+  "source": "private Round 16 archival checkpoint",
+  "receiver": "separate genesis-only Pruned Node over loopback TCP",
+  "sourceManifestSha256": "17697d9bf0ce11702519dcd2ed2b0fe0a7a27674dae075a34a6d4c5dd3fc621a",
+  "sourceFilesMatchingBeforeAndAfter": 118,
+  "privateFixtureClock": true,
+  "privateFixtureSkipsPow": true,
+  "observationSeconds": 300,
+  "sourceTipDaa": 51258,
+  "pruningPointDaa": 13798,
+  "before": {
+    "verifiedHeaders": 74920,
+    "utxosReceived": 73,
+    "stagingCommitted": true,
+    "completionError": "EVM execution or latest head does not match the import target",
+    "quarantined": true
+  },
+  "after": {
+    "verifiedHeaders": 74920,
+    "verifiedClassMaterial": true,
+    "overlayImported": true,
+    "evmImported": true,
+    "stableImportedPoint": "0e210616d5fec9c179d51c0630e3f2e7306617add03fb83c3782f3cfd63445cef884c1560595fc9d475d8268c292ac8e3334733335d17561f696e0c2360a2d37",
+    "matchingPalwRoot": "e818ba7fd0ec19e48dbedc6de7d34d1b2486cd81668482513da8f5fbe280156902b8443403f01e89dde4122d08fadf9d7e59bf89d61fcf1b41cc96f6480e7a68",
+    "matchingPruningUtxoRows": 73,
+    "lastLoggedBodiesBeforeTimeout": 27027,
+    "stagingCreations": 1,
+    "resetCalls": 2,
+    "tipParityObserved": false,
+    "testOutcome": "FAILED: selected-tip parity timed out",
+    "monitor": {
+      "exit": 101,
+      "reason": null,
+      "elapsedSeconds": 304.68,
+      "minimumSampledFreeBytes": 15189344256
+    }
+  },
+  "regressionTestsPassed": 9
+}

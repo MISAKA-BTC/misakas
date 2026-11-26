@@ -1,6 +1,6 @@
 # Audit — is PALW a practical reward foundation for LLM mining? (2026-09-19)
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Four agents: a protocol/consensus auditor, an ML-systems economist, an adversarial economist, and a
 red-team verifier whose job was to refute the other three. Every number below is reproduced by a
@@ -50,7 +50,7 @@ counted — and never binds the graph to arithmetic. Two levers move leaves per 
 * the **decode declaration**, which is the larger one now that `palw_prefill_draw` has been armed
   since DAA 4,000. Past that fence an attempt executes `exact_decode_tokens = 1`
   (`palw_attempt_v2.rs:227`) while the price still counts every declared decode call;
-* **`tile_len`**, free in `[4, 65_536]` and never read by the ADR-0131 cost model
+* **`tile_len`**, free in `[4, 65_536]` and never read by the 旧ADR-0131 cost model
   (`palw_economic_compute_v1.rs:427`).
 
 **Reproduction** (`agent4-redteam/src/bin/table.rs`, `counterexample-table.txt`, family (b)/(d)) —
@@ -76,7 +76,7 @@ already derived by the graph walk the chain performs — or state plainly that w
 and not a work measure. `palw_pwu.rs:53-62` already says "a pwu magnitude must never be read as a
 cross-class price"; the code does not obey its own comment.
 
-### F2 — The free-prompt lane's work is a self-report (CRITICAL for the lane ADR-0144 makes primary)
+### F2 — The free-prompt lane's work is a self-report (CRITICAL for the lane 旧ADR-0144 makes primary)
 
 **Mechanism.** `work_leaves` is the executor's own field and the acceptance walk never recomputes
 it. The repo's own test proves this: `palw_fp_objects_v3.rs:885` multiplies `work_leaves` by ten and
@@ -92,7 +92,7 @@ canonical pwu, so it lets a small job reach the cap rather than pumping without 
 **The asymmetry that survives the cap.** Each of the five panel seats replays in full and may not
 cache, so the network spends ~5 × 669 G verifying a claim whose producer spent 3.09 G.
 
-**Impact.** ADR-0144 makes this lane the product. Until `work_leaves` is recomputed on the
+**Impact.** 旧ADR-0144 makes this lane the product. Until `work_leaves` is recomputed on the
 acceptance path, the lane's weight is a number the miner types.
 
 **Mitigation.** Recompute it. The chain holds the class's shape profile and
@@ -123,10 +123,10 @@ unprosecutable. Not live on the shipped @512 row; one registration away.
 
 Leaves count activations; cost counts weights. Leaves per G-MAC-eq across the live classes:
 355,901 / 148,731 / 79,788 / 52,052 — a **6.8× spread, monotone in model width**. The largest model
-is paid least per unit of arithmetic it runs. This reproduces ADR-0131's own pinned +86.4 % between
+is paid least per unit of arithmetic it runs. This reproduces 旧ADR-0131's own pinned +86.4 % between
 the two live model classes exactly.
 
-**This is the finding that matters for ADR-0144's P5**: the basis in force pays a strictly better
+**This is the finding that matters for 旧ADR-0144's P5**: the basis in force pays a strictly better
 model strictly less, and both proposed replacements price efficiency at exactly zero.
 
 ---
@@ -135,7 +135,7 @@ model strictly less, and both proposed replacements price efficiency at exactly 
 
 | filed as | verdict | why |
 |---|---|---|
-| One registration cuts every class's pay to 13.4 %, never minted (CRITICAL/CONFIRMED) | **REFUTED** | Filed from the base preset constants. The builder overrides them at `params.rs:12839`; ADR-0132's snapshot arms at the same height and takes precedence (`palw_state_v2.rs:10019`), so the victim rows are never computed on any block past the fence. |
+| One registration cuts every class's pay to 13.4 %, never minted (CRITICAL/CONFIRMED) | **REFUTED** | Filed from the base preset constants. The builder overrides them at `params.rs:12839`; 旧ADR-0132's snapshot arms at the same height and takes precedence (`palw_state_v2.rs:10019`), so the victim rows are never computed on any block past the fence. |
 | MAC basis is 13.7× apart on fleet replay times (HIGH) | **REFUTED** | The numbers are `#[cfg(test)] mod tests` fixtures in `palw_verification_profile_v1.rs`, not measurements, and the production path overrides a measured p99 with a reference-rate estimate. The qualitative point — MAC-eq carries no memory-traffic term — survives; the quantity does not. |
 | A padding class reaches 1.00 MAC-eq per leaf (22,077×) | **WEAKENED** | Not rebuilt, so neither confirmed nor refuted; two supports fail. F1's 24,572× is the defensible version and comes from the shipped graph. |
 
@@ -216,7 +216,7 @@ beacon ordering and the execute-now-settle-later flow are sound and are what mak
 hold. What must go is *paying by a number the registrant writes*.
 
 1. **Weight and pay read a derived quantity, never a declared one.** The derivation exists.
-2. **Canonical work is a vector, not a scalar** (ADR-0144 §5), because one number cannot price dense
+2. **Canonical work is a vector, not a scalar** (旧ADR-0144 §5), because one number cannot price dense
    GEMM, routed experts, attention and KV traffic at once. Coefficients are protocol-set, versioned,
    and calibrated by an experiment nobody has run yet — run it before arming anything.
 3. **Recompute `work_leaves` on the acceptance path**, or the primary lane's work is a self-report.

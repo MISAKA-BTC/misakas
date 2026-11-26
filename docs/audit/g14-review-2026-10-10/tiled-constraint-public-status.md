@@ -1,6 +1,6 @@
 # Public constrained selection follow-up
 
-2026-10-11。基点 `4f1120d9e80d289702af67acd7177ce311674164`。G14 全域の objective と ADR-0177 D7 の「正しい登録モデルを保有する verifier」という前提を維持する。
+2026-10-11。基点 `4f1120d9e80d289702af67acd7177ce311674164`。G14 全域の objective と 旧ADR-0177 D7 の「正しい登録モデルを保有する verifier」という前提を維持する。
 
 ## 実装
 

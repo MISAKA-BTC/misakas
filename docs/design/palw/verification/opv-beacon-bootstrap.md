@@ -1,19 +1,9 @@
 # OPV ↔ PALW Work Beacon: the startup cycle, a non-circular bootstrap, derived eligibility, grinding
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Agents OPV-BOOT, then OPVB (§6.3, §6.4, §12), branch `opv/bootstrap-beacon` (from the Lead's `9f777c3ca`). Everything here is **dormant** behind the existing fences
 `palw_probabilistic_constraints_v1`, `palw_panel_free_v1` and `palw_signed_registration_v1`, which `validate_palw_v2` refuses at every
 real height; no testnet-12 params or schedule id moves (every fence is `None` on every preset and hashed Some-only). Amounts are BILI
-(ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI = 10^8 sompi).
+(旧ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI = 10^8 sompi).
 
 ## 1. Verdict: is there a startup cycle?
 
@@ -164,7 +154,7 @@ to `X` or to `X`'s legacy (Panel-licensed) sibling `L` (the same descriptor, pro
 | E1 | the kernel descriptor of `X` is Active at `t` | `KernelNotActive` |
 | E2 | `V`'s conformance record is `G14_ELIGIBLE` or `ACTIVE_REWARDABLE` and its commitment names `V`'s artifact root, `X`'s program root and `X`'s plan root | `ConformanceNotPassed` / `ConformanceOfAnotherStatement` |
 | E3 | the bound kernel class stands in the route (registered only after `PUBLIC_PROSECUTION_COMPLETE`) | `NotG14Complete` |
-| E4 | `V`'s artifact binding to `X`'s commitments root stands: Matured or Final and not refuted at `t`. An identity fact (ADR-0175/0177): maturity means the refutation window passed, NOT that anyone could fetch the bytes (§14.1) | `BindingNotStanding` |
+| E4 | `V`'s artifact binding to `X`'s commitments root stands: Matured or Final and not refuted at `t`. An identity fact (旧ADR-0175/0177): maturity means the refutation window passed, NOT that anyone could fetch the bytes (§14.1) | `BindingNotStanding` |
 | E5 | the class's prosecution bounds fit the OPV carriers, the block court budget, and saturating the court for the claim's exposure costs more than its maximum gain | `ResourceUnbounded` |
 | E6 | the attempt's challenge policy is one of the network's, structurally valid, **the complete check** (GAP-70: in the release a sampled conformance, v2 or v3, gates no reward until a digest court exists), and its effective bits (§7) — `Complete` for a complete check — reach the fence's `min_effective_bits` | `PolicyNotVerified` |
 | E7 | `X` is not on the fence's `denied_classes` | `Denied` |
@@ -255,8 +245,8 @@ collector; it is a **DESIGN blocker for any sampled approval and for Panel=0 act
 DAA, a 1 BILI complete-check fee). A post-lock veto costs a default penalty (100 BILI) or a reservation. The kernel splits a default
 penalty like a slash (C4 F-C4R3-02): the demanders take the accuser's share (`accuser_reward_permille`, 500 ‰ today) and the rest is
 burned, at least `default_burn_permille`. So an attacker who demands its own source recovers 50 BILI and loses 50 today. Under the
-future ruleset's 49 % reporter share (ADR-0032, 2026-10-10), it recovers at most 49 BILI and loses at least 51 BILI per veto. Each source is also a claim
-of its producer bond and draws that bond's ADR-0176 claim ceiling `Q` over the window `W` (§14.3). None of this prices the last
+future ruleset's 49 % reporter share (旧ADR-0032, 2026-10-10), it recovers at most 49 BILI and loses at least 51 BILI per veto. Each source is also a claim
+of its producer bond and draws that bond's 旧ADR-0176 claim ceiling `Q` over the window `W` (§14.3). None of this prices the last
 contributor, which needs `j = 1`.
 
 ### 6.3 The sealed-source beacon v3 (SOUND SG-01, SG-01a)
@@ -316,7 +306,7 @@ The bound holds under three assumptions (A-B2): an honest producer seals an elig
 blocks are not filled by fee-paying spam, and `2W ≤` the ledger's seal TTL, so every in-window reveal is legal. An honest producer
 reveals exactly `W` after sealing, which makes its seal a source of every subject whose seal window contains it.
 
-**Participation needs the source class's model (ADR-0177).** Only a party that holds a source class's registered model can produce a
+**Participation needs the source class's model (旧ADR-0177).** Only a party that holds a source class's registered model can produce a
 claim of it, and the chain guarantees no one can acquire a model. So "an honest producer seals" is conditional on an honest party
 having acquired an eligible source class's model (A-ACQ, §14.2). A complete-check source carried its whole artifact in its `PostComplete`
 (≤ 64 KiB, §8), so any node that keeps that block holds the model; that is a property of the bootstrap, not a requirement on anyone.
@@ -376,7 +366,7 @@ one non-Panel bonded verifier convicting from public authenticated material). A 
 commitment `E_c` (trace roots, generated tokens, evidence root) is fixed in the block that admits it. Let `O` be an outsider that is not
 `c`'s producer and holds no Panel seat. Assume:
 
-* **A-ACQ** — `O` holds the class's registered model, authenticated against the registered root (ADR-0177: the chain does not
+* **A-ACQ** — `O` holds the class's registered model, authenticated against the registered root (旧ADR-0177: the chain does not
   guarantee this; for a closed model it may never hold);
 * **A-SALT** — `O` draws a salt `s` from its own CSPRNG after `t_c`, and no other party learns `s` before `O`'s filing is included;
 * **A-WATCH** — `O` runs the salted check (`FreshVerifierV1::check_salted`) inside the claim's window, and its filing is included before
@@ -522,14 +512,14 @@ drill floor (§12).
 * **GAP-B14 (G14-for-rewards): the REAL attempt's Final.** §12 opens admission; an admitted attempt of a G14 class still reaches
   Final (and pays) only through its verification route: a Panel licence, or the RFC-0008 slice to the kernel route (X8R). A class
   with no seats has no Panel licence.
-* **GAP-B18 (ADR-0177, CODE, DA16b): DA16's artifact half.** Where `palw_provider_court_v1` is armed, availability is still a
+* **GAP-B18 (旧ADR-0177, CODE, DA16b): DA16's artifact half.** Where `palw_provider_court_v1` is armed, availability is still a
   condition of tag 104, of the attested roots and of `onboarding_gate_v1` (§14.1). The reward gate and its activation no longer read it.
 * **GAP-B19 (DESIGN/POLICY): a conformance refutation earns no bounty, and evidence carries no stake** (§14.4). A forged sampled post
   costs only a counted retry. A refuter that proves the forgery gains nothing, and pays `dismissed_proof_fee` when it is wrong. Proposed:
   an evidence bond with the 49 % refuter share. Its size is ECON's.
-* **GAP-B20 (ADR-0176, CODE: BUDGET): rewards not budgeted.** The channels name their legs and the hook exists (§14.3). No engine
+* **GAP-B20 (旧ADR-0176, CODE: BUDGET): rewards not budgeted.** The channels name their legs and the hook exists (§14.3). No engine
   implements the hook, so no door draws from a budget.
-* **GAP-B21 (ADR-0177, DESIGN): sampled eligibility of a closed model.** Its refutation rests entirely on A-ACQ, which the chain may not
+* **GAP-B21 (旧ADR-0177, DESIGN): sampled eligibility of a closed model.** Its refutation rests entirely on A-ACQ, which the chain may not
   test (§14.2). For the release it is moot: GAP-70 lets no sampled conformance gate a reward. Any digest court must state it.
 * **GAP-B15 (G14-for-rewards): what is not gated.** The market (seed / buy) and the work price unit read the registry lifecycle, not
   the reward gate. A non-G14 class past the fence is Registered with no share, so it bears no weight and holds no budget. A pre-fence
@@ -601,7 +591,7 @@ seat proves readiness. The helper `Cw::onboarded_v2_claims_on_the_legacy_channel
   stays in force in full. The gate exempts it, and no G14 bypass applies to it.
 * **New rewards need the new route.** Only kernel-route claims earn them, each through `opv_gate_v1` (E1–E7), whoever registered the
   class.
-* **One budget for both channels** (ADR-0176, §14.3). The channels differ in eligibility, never in budget: both draw the producer
+* **One budget for both channels** (旧ADR-0176, §14.3). The channels differ in eligibility, never in budget: both draw the producer
   bond's single `Q`/`B`/`R`/`F` budget over `W` (`PalwRewardChannelV1::draws`).
 * **Tested both ways** (`g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate`):
   * a legacy class is not refused by the gate, its program under OPV is `NOT_ONBOARDED`, and its OPV registration is refused;
@@ -703,11 +693,11 @@ Sybil posters own every v2 source position and grind all of them offline (`misak
   source price or shared-attempt cap, and a distinct payer bond is not evidence of independent participation or entropy.
 - **GAP-B16:** a typed `Spec` claim (R4X) passes `opv_gate_v1`. Its class's eligibility path is RFC-0004 Part II's.
 
-## 14. The user's design changes of 2026-10-10 (ADR-0175, ADR-0176, ADR-0177, ADR-0032 49 %)
+## 14. The user's design changes of 2026-10-10 (旧ADR-0175, 旧ADR-0176, 旧ADR-0177, 旧ADR-0032 49 %)
 
 OPVB's successor applies them here after merging the integration head `b8ae9412b`.
 
-### 14.1 ADR-0177: no condition here depends on acquiring a model
+### 14.1 旧ADR-0177: no condition here depends on acquiring a model
 
 Every condition of OPV eligibility, of the beacon and of the reward gate, and what it reads:
 
@@ -720,7 +710,7 @@ Every condition of OPV eligibility, of the beacon and of the reward gate, and wh
 | E5 bounded resources | the class's bounds and the OPV terms | no |
 | E6 effective bits | the attempt's policy and scope | no |
 | E7 not denied | the fence | no |
-| beacon sources (v2 and v3) | OPV Finals of classes eligible at the commitment (`finals_read_v1`), seal rows | no. A source's own claim material is claim-specific DA, which ADR-0177 keeps |
+| beacon sources (v2 and v3) | OPV Finals of classes eligible at the commitment (`finals_read_v1`), seal rows | no. A source's own claim material is claim-specific DA, which 旧ADR-0177 keeps |
 | v3 veto | a mixed seal unrevealed, or a mixed source that ends without a standing Final | no: both are the sealer's own acts |
 | the reward gate (§12) | `onboarding_identity_gate_v1`, then E1–E7 and the task/context check | no. It no longer reads DA16's lapse hold (this branch) |
 | V2 activation (`activate_due_classes`) | the old onboarding gate, then the reward gate's refusal | no new condition. Since GAP-81 this door belongs to the legacy channel's old rules, which still include DA16's lapse hold where `palw_provider_court_v1` is armed (the residual below) |
@@ -733,7 +723,7 @@ still a condition in four places:
 * `onboarding_gate_v1` holds a lapsed binding with `AVAILABILITY_REQUIRED`, for V2 activation where the reward gate is unarmed or exempt;
 * a lapse lets the binder replace the binding, which turns E4 back to Pending.
 
-ADR-0177 withdraws that half, and readiness §3c gives the re-scope to DA16b. This branch makes the reward gate lapse-blind, and leaves
+旧ADR-0177 withdraws that half, and readiness §3c gives the re-scope to DA16b. This branch makes the reward gate lapse-blind, and leaves
 DA16's own code to DA16b; the legacy channel's V2 activation keeps the hold until DA16b removes it.
 
 - **Arming blocker (CODE, DA16b):** remove `palw_provider_court_v1`'s artifact subject before any OPV or reward fence arms, or never
@@ -747,7 +737,7 @@ DA16's own code to DA16b; the legacy channel's V2 activation keeps the hold unti
 
 ### 14.2 G14 is conditional on the verifier holding the model (A-ACQ)
 
-ADR-0177 D7: G14 holds for a verifier that has acquired the registered model; the chain guarantees no such verifier. Nothing in this
+旧ADR-0177 D7: G14 holds for a verifier that has acquired the registered model; the chain guarantees no such verifier. Nothing in this
 design assumes watchers hold the model. Per path:
 
 | Path | What detection needs | A closed model |
@@ -763,17 +753,17 @@ Consequences:
 * **E6's 128 bits cover check math and challenge manipulation only** (§6.4, §7): grinding, retries, adaptive statements and
   `ε_src`. They never cover the existence of a refuter or watcher that holds the model.
 * **The OPV reservation assumes a detection probability.** The interim reservation divides the gain by `assumed_detection_permille =
-  500`, which is an assumption about A-ACQ and A-WATCH. It is false for a closed model. ADR-0177 D7's
+  500`, which is an assumption about A-ACQ and A-WATCH. It is false for a closed model. 旧ADR-0177 D7's
   `p · (R_risk + L_collectible_net) > C_saved` holds only at the effective `p` (POLICY / ECON; MEAS measures the acquisition-conditional
   `p`).
 * **Only a complete-check class is eligible in the release** (GAP-70, decided by the Lead on 2026-10-10, §12). That class's soundness
   needs no acquisition. A sampled conformance is a non-reward signal until a digest court exists. Even then, its refutation would rest
-  entirely on A-ACQ, which the chain may not test (ADR-0177 D1). So a digest court alone does not make a closed model's sampled
+  entirely on A-ACQ, which the chain may not test (旧ADR-0177 D1). So a digest court alone does not make a closed model's sampled
   conformance sound (GAP-B21).
 
-### 14.3 ADR-0176: the two reward channels and the per-bond budget they draw from
+### 14.3 旧ADR-0176: the two reward channels and the per-bond budget they draw from
 
-Every reward this lane opens or keeps draws from ONE per-bond budget, the four ADR-0176 ceilings over the common window `W`: `Q`
+Every reward this lane opens or keeps draws from ONE per-bond budget, the four 旧ADR-0176 ceilings over the common window `W`: `Q`
 (claims), `B` (reward blocks), `R` (attributed rewards) and `F` (Final weight). The channels never mix for ELIGIBILITY (§12), but they
 share the bond's budget, so earning in both channels never doubles a ceiling.
 
@@ -790,7 +780,7 @@ Notes on the new channel:
 - An OPV Final carries no consensus weight today: `work_credit_per_claim` is only a gain bound. Any future weight must be reserved at
   admission.
 
-Rules (ADR-0176 D1–D4):
+Rules (旧ADR-0176 D1–D4):
 * Reserve the maximum at acceptance. Re-check at every payout, reward block, maturity and Final.
 * `reuse_not_before = d + W`. There is no early recovery on Final, void, default, conviction, `BEACON_VETOED` or a retry.
 * Raising `rho` never raises `B`, `R` or `F`.
@@ -809,7 +799,7 @@ BUDGET's engine (`palw_bond_budget_v1`, dormant) implements the trait. This bran
 - **Arming blocker, "rewards not budgeted":** CODE (BUDGET) and POLICY (`W`, the `rho` mapping, the cap values). The refusal of
   `validate_palw_panel_free_v1` names it.
 
-### 14.4 ADR-0032: 49 %, net of self-return
+### 14.4 旧ADR-0032: 49 %, net of self-return
 
 | Bounty path in this lane | Code today | Under the future ruleset |
 | --- | --- | --- |
@@ -820,7 +810,7 @@ BUDGET's engine (`palw_bond_budget_v1`, dormant) implements the trait. This bran
 | the complete-check fee | burned | no bounty |
 | conformance refutation (tag 109 `Refute`) | **pays nothing, and forged evidence forfeits nothing** (the attempt ends REFUTED, a counted retry) | DESIGN blocker (readiness §6.6, verifier incentive). Proposal: an evidence bond `E`, reserved at `Post` and slashed on REFUTED, with 49 % to the refuter. A self-refuting registrant then loses at least 51 % of `E`. `E` is POLICY (ECON) |
 
-### 14.5 ADR-0175: nothing here moves a registration
+### 14.5 旧ADR-0175: nothing here moves a registration
 
 The bootstrap only READS registrations. Eligibility (derived), the deny-list and conformance attempts are facts about an immutable class
 id. Specifically:
@@ -835,9 +825,9 @@ Its refusal names the blockers below.
 
 | Blocker | Kind | Owner |
 | --- | --- | --- |
-| **Rewards not budgeted** (ADR-0176): no engine implements `PalwBondBudgetHookV1`, so no door reserves or re-checks `Q`/`B`/`R`/`F` | CODE | BUDGET (`palw_bond_budget_v1`) |
+| **Rewards not budgeted** (旧ADR-0176): no engine implements `PalwBondBudgetHookV1`, so no door reserves or re-checks `Q`/`B`/`R`/`F` | CODE | BUDGET (`palw_bond_budget_v1`) |
 | `W`, the `rho` ↔ `Q`/`B`/`R`/`F` mapping, the cap values | POLICY | Lead / ECON |
-| DA16's artifact half still makes availability a condition of tag 104, the attested roots and the legacy channel's V2 activation (ADR-0177, GAP-B18) | CODE | DA16b |
+| DA16's artifact half still makes availability a condition of tag 104, the attested roots and the legacy channel's V2 activation (旧ADR-0177, GAP-B18) | CODE | DA16b |
 | A digest court for sampled conformance (GAP-70: until it exists, only the complete check gates rewards) | DESIGN | Lead / G14C |
 | A conformance refutation earns no bounty, and evidence carries no stake (GAP-B19); an evidence bond with the 49 % refuter share | DESIGN + POLICY | Lead / ECON |
 | A fresh complete-check verifier (GAP-B10): the post is in no served row | CODE + allocation | G14C (GAP-71) |
@@ -850,7 +840,7 @@ Its refusal names the blockers below.
 | Pipelines (GAP-B4) and typed roots (GAP-B16) have no onboarding path; both are eligible only through the `cfg(test)` seam | CODE | G14C (GAP-21, GAP-50) |
 | Binding a V2 REAL claim 1:1 to a kernel claim (GAP-62); until then V2-root work never earns the new rewards (GAP-81) | CODE / DESIGN | X8R |
 | RFC-0010 V3 does not read the route's OPV Finals, and no Panel beacon scheme is approved (GAP-B3) | CODE + POLICY | Lead |
-| Rule E (ADR-0178) armed at or below, for reorg consistency of every Final the beacon reads | CODE | FINX |
+| Rule E (旧ADR-0178) armed at or below, for reorg consistency of every Final the beacon reads | CODE | FINX |
 
 ## 16. G14 condition 9 — post-commit challenge completeness, this lane's part
 

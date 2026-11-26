@@ -1,20 +1,10 @@
 # PALW spec — 17. The Model Improvement Protocol
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **適用時期の現行方針（2026-10-17 文書化）:** 本章の RFC-0003 画像・動画経路と RFC-0004 モデル改善は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
 
 ## 17.0 Immutable registrations — 2026-10-09 amendment
 
-[ADR-0175](../../adr/0175-registered-models-are-permanently-immutable.md) governs past the independent `palw_model_immutable_v1` fence. Training, datasets, bounded evaluation and settlement may continue. **No epoch decision or rollback may replace an existing registered model, its lineage head, its version/root or its Position/AMM binding.** Improved artifacts are independently registered models with their own admission and eligibility. Parent references record provenance only.
+[旧ADR-0175](../../rfc/0007-bft-model-admission.md) governs past the independent `palw_model_immutable_v1` fence. Training, datasets, bounded evaluation and settlement may continue. **No epoch decision or rollback may replace an existing registered model, its lineage head, its version/root or its Position/AMM binding.** Improved artifacts are independently registered models with their own admission and eligibility. Parent references record provenance only.
 
 The old promotion selector still computes the evaluation verdict. At a decision under the new fence, a winning `Promoted { class_id, wins, losses }` is recorded as `CandidateSelected { class_id, wins, losses }` (appended Borsh outcome tag 2); tags 0/1 remain unchanged for historical replay. This points to the candidate's independent registration and grants no eligibility inherited from the parent. Evaluation fees, candidate bond refunds/vesting and trainer/dataset grants keep their conservation rules. A pre-fence epoch finishing after activation settles under this selection rule without changing the parent. No new last-promotion/rollback authority or regression-parent switch is installed.
 
@@ -120,7 +110,7 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 87 | `GenTensorCommitted` | RFC-0003 §I.4: a tensor claim's commitment, the object the acceptance walk builds from an FP job version 10 payload (`palw_fp_gen_objects_from_accepted_txs_v1`), past `palw_fp_job_v5` over `palw_gen_v1` (approved for `rfc3/gen-claim`) | **never**: the transaction is the carrier and `palw_lifecycle_object_may_ride_v2` refuses it a carriage by name, as `FreePromptCommitted`. The number is a name, held so that no other object is ever declared at 87 |
 | 88 | `GenShardCourtAccused` | RFC-0003 §I.4.7: a pipeline claim accused in one move — the generative twin of tag 62 for a chain that plays no bisection (the held regime); the accusation carries a generative close and is adjudicated whole at acceptance (requested by `rfc3/gen-claim`, granted in its order) | yes |
 | 89 | `CourtEvalRootClaimed` | RFC-0004 §7.2 (A6): the evaluation court's history-dissection root claim (`PalwEvalRootClaimV1`'s carrier); the evaluation lane's | yes |
-| 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
+| 90 | `HeldLeafChallengeDeclared` | `PalwHeldLeafChallengeV1` (spec 04b §15.15.6, lane D): a challenge generic over IR and generative leaves, under the dormant fence `palw_held_close_chunks_v1`. **It carries the close declaration**: one step opens a `Terminal` session on the named leaf (旧ADR-0103 Decision 5) and writes the challenger-side close group the court already has, and the chunks ride as `CourtCloseChunk`, so a leaf whose close does not fit one carrier (~100 KB) is convictable on a held chain. Opening without declaring would put the executor on the clock at a fused terminal and refuse the accuser's own declaration there (`CourtCloseNotTerminal`), which is why the two are one object; while the declared close stands the session waits at `Terminal` (§17.0 review note below). It replaces a chunk-group table design; tag 62 is untouched (lane D's decision 22, 2026-10-01) | yes |
 | 91 | `TirShardPlanDeclared` | RFC-0006 (spec 18 §18.2): a class's layer-shard plan, declared once by its registrant, under the dormant fence `palw_tir_shard_v1` (lane S) | yes |
 | 92 | `TirShardReceiptLicensed` | RFC-0006 (spec 18 §18.6): one shard's licensing part, its class seats' and its outsider's cell-masked (`PalwSeatReceiptV4`) receipts (lane S) | yes |
 | 93 | `TirSeatReadinessProved` | RFC-0006 (spec 18 §18.9): a possession proof over one shard's inventory rows (lane S) | yes |
@@ -128,8 +118,8 @@ The integration's allocations beyond them (2026-10-01; each lane asked the core 
 | 101 | `VertexEquivocationV1` | RFC-0007 §I.6 (spec 18 §18.6): two vertices of one `(seat, round)` with different roots; slashed 100 ‰, locks forfeited, bond ejected; unsigned (two signatures are the proof) | yes |
 | 102 | `TrapCommittedV1` | RFC-0007 Part IV.1 (spec 18): a trap setter's commitment `H(claim ‖ fault leaf ‖ tiles ‖ salt)`, under the dormant fence `palw_audit_mesh_v1` | yes |
 | 103 | `TrapRevealedV1` | RFC-0007 Part IV.1 (spec 18): a trap's reveal; slashes the auditors who matched the planted tile, voids the trap claim | yes |
-| 94 | `AdapterClassListed` | RFC-0001 §2.10 (ADR-0163): an adapter class's listing in the registry of composite classes, signed by the lister's bond, under the dormant fence `palw_adapter_class_v1` (lane U) | yes |
-| 95 | `AttemptRidersV1` | ADR-0164 F-M1 (ADR-0167): up to `PALW_RIDERS_MAX_V1` further attempts of a lead claim's own bond, each its own claim, paid out of the lead's carve; under the dormant fence `palw_capacity_multi_claim` (lane CAP) | yes |
+| 94 | `AdapterClassListed` | RFC-0001 §2.10 (旧ADR-0163): an adapter class's listing in the registry of composite classes, signed by the lister's bond, under the dormant fence `palw_adapter_class_v1` (lane U) | yes |
+| 95 | `AttemptRidersV1` | 旧ADR-0164 F-M1 (旧ADR-0167): up to `PALW_RIDERS_MAX_V1` further attempts of a lead claim's own bond, each its own claim, paid out of the lead's carve; under the dormant fence `palw_capacity_multi_claim` (lane CAP) | yes |
 | 96–99 and 104–109 | free | the next tags are 96 (core) and 104 (RFC-0007's range) | |
 
 **Tag 90's executor clock** (the integration's review of 2026-10-01; spec 04b §15.15.6 is the authority). The session
@@ -217,7 +207,7 @@ or fault is added only if A6/A7 show one is needed, and takes the next number he
 (13–15, §17.8.6) and one object for the history dissection of a claim (`CourtEvalRootClaimed`, the evaluation
 analogue of `CourtGenRootClaimed`, §17.8.6.3), assigned tag 89 at the integration. The one-move accusation of an
 evaluation claim is **not** a new object: it is `TirShardCourtAccused` (62) carrying proof 13 or 14. Object tag 96
-and up (91–93 RFC-0006's, 94 RFC-0001's, 95 ADR-0167's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
+and up (91–93 RFC-0006's, 94 RFC-0001's, 95 旧ADR-0167's, 100–103 RFC-0007's, spec 18), court proof 17 and up and step fault 22 and up are free and shared (13–15 are the evaluation lane's;
 object tags 83–92 are allocated above): a lane asks the core lane before taking one.
 
 ### The fence
@@ -234,7 +224,7 @@ object tags 83–92 are allocated above): a lane asks the core lane before takin
 | Mirror | `PalwStateParamsV2::improve_from_daa`, `improve_ceilings` and `improve_lifecycle_base_daa` (borsh-skipped; the last is the DAA-independent part of the ruleset's claim path `Λ`, §17.4.3 rows 19–20), written by `Params::sync_palw_improvement_v1` only |
 | Drill | `--palw-drill-improve-at` (`palw_drill_improve_fence_at_v1`, list `PALW_DRILL_IMPROVE_FENCES_V1`, ceilings `PALW_DRILL_IMPROVE_CEILINGS_V1`); armed after `--palw-drill-tir-at`, `--palw-drill-tir2-at`, `--palw-drill-gen-at`, `--palw-drill-fence-at` and `--palw-drill-decode-rules-at`, its prerequisites |
 | Format caps | candidates ≤ 16, items ≤ 4,096 per epoch, positions ≤ 2^40 per epoch, budget ≤ 1,000 ‰, lines ≤ 1,024, policy ≤ 16,384 bytes, open epochs ≤ 64, **live results ≤ 2^17**, **seat share ≤ 1,000 ‰** (zero allowed: no seat share); the others none zero. `max_live_results` is the product bound every block's root rehash pays: an epoch reserves `(n + regression_items + safety_items) × (k_max + 2)` result rows when it opens (the policy check refuses a policy whose epoch could never fit), and frees them when its results retire; an epoch opens only if the reservation fits. The drill's ceilings are (8, 1,024, 2^32, 500, 64, 16,384, 8, 2^14, 500) |
-| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); and **`palw_fp_decode_rules`** in force at or below it too — the integration's decision of 2026-10-01, resolving **[decision A6-1]** (required, as `palw_fp_job_v5` requires it): an evaluation's generated text is a decode under the network's sampler rules (ADR-0082 D10/D11, §17.8.4), the header-context door refuses an evaluation claim below them, and an epoch must not open on rules that arm mid-epoch (without the requirement every such epoch would end `NoChange`). The decode rules carry their own dormant testnet-12 flag-day list (`PALW_T12_DECODE_RULES_FENCES_V1`, height `PALW_T12_DECODE_RULES_DAA`, `None` until the user sets it) and drill flag (`--palw-drill-decode-rules-at`, `palw_drill_decode_rules_at_v1`). |
+| Prerequisites | a `ConsensusV2` ruleset (checked first); `palw_audit_2026_09_11` declared; `palw_tir_v1`, **`palw_tir_fence2`**, `palw_gen_v1` and `palw_kary_court` in force at or below the activation (the second IR fence since 2026-09-29: every evaluation pipeline sized under H7, and no verdict may flip mid-epoch); and **`palw_fp_decode_rules`** in force at or below it too — the integration's decision of 2026-10-01, resolving **[decision A6-1]** (required, as `palw_fp_job_v5` requires it): an evaluation's generated text is a decode under the network's sampler rules (旧ADR-0082 D10/D11, §17.8.4), the header-context door refuses an evaluation claim below them, and an epoch must not open on rules that arm mid-epoch (without the requirement every such epoch would end `NoChange`). The decode rules carry their own dormant testnet-12 flag-day list (`PALW_T12_DECODE_RULES_FENCES_V1`, height `PALW_T12_DECODE_RULES_DAA`, `None` until the user sets it) and drill flag (`--palw-drill-decode-rules-at`, `palw_drill_decode_rules_at_v1`). |
 | Shipped | `None` on every preset but testnet-12, whose **int-11 flag day arms it at H (DAA 5,300, `PALW_T12_INT11_FLAG_DAY_DAA`)** with the generative fence, FP Job V5, the held leaf challenge, the decode rules, F-N's `L_ver` term and the capacity ramp's ρ = 25 (ρ = 100 at H + 95): `PALW_T12_INT11_FENCES_V1`, at the provisional ceilings `PALW_T12_IMPROVE_CEILINGS_V1` (the drill's, by value) |
 
 ### Domain keys (keyed BLAKE2b-512, 64-byte output)
@@ -525,7 +515,7 @@ block — an hour at the 120-second cadence: minutes of replay and a few blocks 
 floor of the registry's smallest classes (10 DAA) and a twentieth of the receipt window; a ruleset whose receipt window is
 shorter gives the window (nothing is licensed later). A constant keeps the policy format unchanged and the check a pure
 function of the ruleset; a field would let an owner shorten `Λ` below any honest claim's reach, and nothing in a policy can
-make a seat faster. A class whose registry deadline `D(c)` (ADR-0152 §4-quater) is longer than the allowance finalizes later
+make a seat faster. A class whose registry deadline `D(c)` (旧ADR-0152 §4-quater) is longer than the allowance finalizes later
 than `Λ`: its late claims are missing evaluations and its line's owner sets a longer `court_margin` — **the check holds only
 the minimum**.
 
@@ -788,7 +778,7 @@ it paid.
 
 **Why.** A composite candidate's class carries `artifact_root = H(parent_class ‖ parent_root ‖ adapter_root ‖
 le32(P))` (§17.7; RFC-0004 §6.3). That is no inventory root: no multiproof opens it. The model registry's
-possession proof (`SeatReadinessProvedV2`, tag 50, ADR-0133 §11.2) reconstructs the class's registered root, so
+possession proof (`SeatReadinessProvedV2`, tag 50, 旧ADR-0133 §11.2) reconstructs the class's registered root, so
 no seat could ever prove a composite, no composite ever left `Candidate`/`Prefetching` (`ready_seats` stayed
 0), and none of its evaluation claims (§17.8.4) was admitted.
 
@@ -1078,7 +1068,7 @@ its own life.
 **Capacity** (PALW-MIP-20; RFC-0004 §13, open question 7). Five bounds, all dormant below the fence:
 - *Reservation, and the swing lock* [decision, 2026-09-30]. The claim is an FP claim with no quanta, no `pwu`,
   no receipt rights, no weight and no reward escrow (PALW-MIP-17). It reserves what a claim of that work on
-  its class reserves — its step leaves at the class's `slash_value_per_pwu`, under ADR-0160's stage-1 rule
+  its class reserves — its step leaves at the class's `slash_value_per_pwu`, under 旧ADR-0160's stage-1 rule
   `⌈w / ρ⌉` — **and at least what it could swing**, and passes the free-prompt arm's exposure ceiling, so a
   false claim is slashed like any other (a conviction takes `claim.reserved`). *Fraud gain is not zero*: a
   forged evaluation can flip a sign test, and a promotion pays `R = ⌊balance · promotion_share / 1000⌋`
@@ -1113,7 +1103,7 @@ its own life.
   `C.max_eval_budget_permille` of its executor bond's exposure ceiling (the room the bond carries; the work's own
   lock, not the swing), so an evaluation claim cannot take the room an executor's attempts need.
 - *The class's replay room* **[decision A6-4, the coordinator's, 2026-09-30]**. An evaluation claim is **counted in
-  its class's replay room (ADR-0137)** as one whole claim of the class, from acceptance until its licence (or
+  its class's replay room (旧ADR-0137)** as one whole claim of the class, from acceptance until its licence (or
   `Final`, for a class held to Final), as an attempt is: a lane of the in-flight tally of its own
   (`eval_claims`, `licensed_eval_claims`; no quanta, so nothing to round into a canonical job), pooled with
   the class's attempts and free-prompt claims in the rate rule, in the registry's in-flight count, and in
@@ -1360,7 +1350,7 @@ disputed leaf with its path under its stage's root, `palw_eval_named_dissected_l
 `Terminal` on that leaf (`NeedsDissection`) and declares `ExecutorGuilty`. The session then plays F7:
 - `CourtEvalRootClaimed` — the responder's root claim (`PalwEvalRootClaimV1`: the elements the finalize demands, their
   totals over the history, and the finalize carried as an evaluation cone close), signed by the claim's bond under the
-  ADR-0082 responder context over `palw_eval_root_claim_message_v1`. The acceptance layer admits it only if the finalize
+  旧ADR-0082 responder context over `palw_eval_root_claim_message_v1`. The acceptance layer admits it only if the finalize
   reads the committed leaf exactly as claimed (`check_eval_root_claim_v1`, at the court's limits) and the declared arity
   is the ruleset's; the fold derives the site from the class's program and the job's trips
   (`palw_eval_root_claim_site_v1`, never the mover's word) and opens F7's phase;
@@ -1792,7 +1782,7 @@ These refine RFC-0004's *Proposed Spec text*. MIP-1…MIP-20 keep its numbers; 2
   `TeacherLicence` that covers the use. A governed line's base licence class MUST be declared.
 - **PALW-MIP-19 (privacy).** A hard case MAY use a job's prompt only under that job's `DataUseOptIn`, and
   its prompt MUST match the job's committed prompt hash.
-- **PALW-MIP-20 (capacity).** Evaluation claims MUST reserve capacity as claims do (ADR-0160), and lock at
+- **PALW-MIP-20 (capacity).** Evaluation claims MUST reserve capacity as claims do (旧ADR-0160), and lock at
   least what they could swing (§17.8.4). An epoch's evaluation positions MUST NOT exceed the policy's
   `max_eval_positions`, nor the network's ceiling as a share of claim capacity (§17.8.4: each job is held to an
   equal share of the budget). An evaluation claim MUST count in its class's replay room and MUST NOT take more

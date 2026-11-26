@@ -1,0 +1,10 @@
+{
+  "comparison": "Previous delivered RFC20 docs -> RFC20/ADR20 docs",
+  "baseline_issue_occurrences": 1288,
+  "current_issue_occurrences": 1236,
+  "new_issue_occurrences": 0,
+  "removed_issue_occurrences": 52,
+  "new_issues": [],
+  "passed": true,
+  "note": "Missing historical evidence remains absent. Full strict link validity is separate."
+}

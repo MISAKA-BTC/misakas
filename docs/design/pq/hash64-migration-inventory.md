@@ -1,7 +1,7 @@
 # PR-9.5 — Hash → Hash64 Consensus Identity Cascade — Migration Inventory
 
-Planning artifact for the multi-session [ADR-0008](../../adr/0008-hash64-consensus-identity.md)
-identity cascade. See [PR-9.1](../../adr/0008-hash64-consensus-identity.md)
+Planning artifact for the multi-session [旧ADR-0008](../../rfc/0001-principles-and-governance.md)
+identity cascade. See [PR-9.1](../../rfc/0001-principles-and-governance.md)
 for the design rationale and §"Public-claim discipline (binding)" for
 the security framing (`512-bit commitment domain`, `256-bit quantum
 preimage margin`, **not** `256-bit quantum collision`).
@@ -179,18 +179,18 @@ fork and needs its own ADR.
    validation (`64 → 128 hex chars`) and into the converter layer.
    Changing field types would cascade into every SDK consumer.
 
-5. **No DB migration.** kaspa-pq is a new network ([ADR-0001](../../adr/0001-network-isolation.md));
+5. **No DB migration.** kaspa-pq is a new network ([旧ADR-0001](../../rfc/0001-principles-and-governance.md));
    the new schema version starts fresh. Opening an old Kaspa DB
    rejects with a clear error message.
 
-## Coordination with the DNS overlay (ADR-0009/0010/0011/0012/0013/0014/0015)
+## Coordination with the DNS overlay (旧ADR-0009/0010/0011/0012/0013/0014/0015)
 
 The Phase 10 DNS overlay design relies on a stable consensus
 identity for the WorkScore side of its two-resource dominance rule
-(ADR-0009 §"Public-claim discipline (binding)" reorg framing). The
+(旧ADR-0009 §"Public-claim discipline (binding)" reorg framing). The
 overlay's stake-side data (`validator_set_commitment`,
 `SortitionCommitPayload`, etc.) is **already Hash64-native** per
-ADR-0010 §"Validator-set commitment derivation" / ADR-0012
+旧ADR-0010 §"Validator-set commitment derivation" / 旧ADR-0012
 §"Payload types" — those types ship in `consensus/core/src/dns_finality.rs`
 already and do not need any of the PR-9.5 cascade.
 
@@ -201,9 +201,9 @@ against the now-actually-64-B block hash without further code change.
 
 ## References
 
-- [ADR-0008 — Full Hash64 consensus identity](../../adr/0008-hash64-consensus-identity.md)
+- [旧ADR-0008 — Full Hash64 consensus identity](../../rfc/0001-principles-and-governance.md)
   (the design this cascade implements).
-- [ADR-0007 — Layered PoW](../../adr/0007-layered-pow.md)
+- [旧ADR-0007 — Layered PoW](../../rfc/0014-exec-schedule-and-capacity.md)
   (`pow_algo_id` is part of the Layer 0/Layer 1 split this ADR
   defined; PR-8.4 was its standalone placeholder, now folded into
   PR-9.5d).

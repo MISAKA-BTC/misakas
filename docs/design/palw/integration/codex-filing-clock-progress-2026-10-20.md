@@ -1,6 +1,6 @@
 # RFC14/G14 — sequential witness filing clock candidate
 
-Status: Proposed / Review Required, branch `codex/rfc14-x3-reorg-clock`, based on `4f41081ee`. [ADR-0193](../../../adr/0193-sequential-witness-filing-clock.md) separates this unadopted clock choice from the approved ADR-0192 A/A detailed-spec work. No arming, integration or deployment.
+Status: Proposed / Review Required, branch `codex/rfc14-x3-reorg-clock`, based on `4f41081ee`. [旧ADR-0193](../../../rfc/0009-court-and-claim-final.md) separates this unadopted clock choice from the approved 旧ADR-0192 A/A detailed-spec work. No arming, integration or deployment.
 
 ## Scope from the real pipeline
 

@@ -1,18 +1,8 @@
 # PALW spec — 18. Verification certificates: vertices, licence by tally, equivocation, `Held` leaves, security parameters, the witness manifest, the audit mesh, capped onboarding
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
-
-> **Normative.** This chapter specifies RFC-0007 Parts I and III (`docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md`,
+> **Normative.** This chapter specifies RFC-0007 Parts I and III (`docs/rfc/0008-g14-panel-and-verification.md`,
 > branch `rfc7/vertex`):
 > - the **verification vertex**: one signed statement per seat per round of every verdict the seat reached;
 > - **licence by tally**: the fold counts a vertex's verdict leaves and licenses a claim when its panel's `Valid` leaves reach quorum;
@@ -67,7 +57,7 @@ Contents:
 | --- | --- |
 | `round_daa` = 1 DAA; one vertex per seat per round; a per-vertex leaf cap; no mid-round signing in v1 | `PALW_VERTEX_ROUND_DAA_V1` = 1; `PALW_VERTEX_MAX_LEAVES_V1` = 1,024; `PALW_VERTEX_MAX_LEAF_BYTES_V1` = 80,000 (§18.1, §18.3) |
 | `Compact` references ship in v1 under the same fence; `Full` is also accepted | `PalwClaimRefV1` (§18.1) |
-| Equivocation: a new act in the ADR-0152 per-act slash table, 100 ‰ of the bond, plus locks, plus ejection | §18.6 |
+| Equivocation: a new act in the 旧ADR-0152 per-act slash table, 100 ‰ of the bond, plus locks, plus ejection | §18.6 |
 | Migration: receipts are accepted past the fence until every claim bound before it is licensed or void | §18.5 |
 
 | Space | Allocation |
@@ -181,7 +171,7 @@ For each `Verdict` leaf of an accepted vertex, in order, the fold resolves the c
 - the claim is `PanelBound` and this is the seat's **first counted verdict** for it (PALW-VC-4: a verdict stands — a later leaf of the same
   seat is ignored, whatever it says); **or** the claim is `ReceiptLicensed` past `palw_rcore_plus`, the leaf is a `Valid` or `Sampled`, the
   seat is on the claim's duty row uncredited and holds no lock on it, and the receipt window is open (the leaf is a supplementary receipt,
-  ADR-0124's door).
+  旧ADR-0124's door).
 
 A counted leaf on a `PanelBound` claim joins the claim's **tally** (`vertex_tallies`: the seat, the verdict, the vertex's `signed_daa`, in
 counting order). When the tally holds the colluding quorum (`PALW_PANEL_COLLUDING_QUORUM_V1`, three) of `Valid`s, the fold applies the
@@ -237,11 +227,11 @@ are the whole proof, and no court is needed. The fold then, in this order:
    (each lock removed and its amount added to the debit);
 3. slashes the total from the bond (`slash_bond`: clamped at the collateral, burned, recorded in `slashed`);
 4. **ejects** the bond: an `Active` bond becomes `Retiring { since_daa, settled_at_since }` — it backs its existing claims to resolution
-   and takes no new work (the retirement path of ADR-0042 Decision 6 item 9); and
+   and takes no new work (the retirement path of 旧ADR-0042 Decision 6 item 9); and
 5. writes the `(round, seat)` row with `convicted = true` (keeping the first accepted vertex's root and DAA if a row exists).
 
 A convicted `(round, seat)` is convicted once, and no vertex of that round lands afterwards (rule 4 of §18.3). Counted leaves of the
-equivocator stand (PALW-VC-4). The penalty is a new act in the ADR-0152 per-act table beside `Eq` (the executor's equivocation, `min(C₀,
+equivocator stand (PALW-VC-4). The penalty is a new act in the 旧ADR-0152 per-act table beside `Eq` (the executor's equivocation, `min(C₀,
 3·G_eq)`): this one is a flat 100 ‰ because a vertex's damage is not a claim's gain.
 
 Rows are kept `PALW_VERTEX_EVIDENCE_WINDOW_DAA_V1` past their round and swept oldest-first, at most `PALW_VERTEX_SWEEP_PER_BLOCK_V1` = 256 a block
@@ -280,7 +270,7 @@ A `Held { claim, object, first, last, digest }` leaf attests "I hold chunks `fir
   unresolved is ignored.
 - **A DA certificate** (`palw_vertex_da_certificate_v1`) is `PALW_VERTEX_DA_QUORUM_V1` = 3 distinct seats' equal `Held` leaves (same object, range
   and digest). It is what a capped-onboarding producer must show (Part IV.2), what an audit may fetch from (Part IV.1) and what an
-  ADR-0111 request may name an attester by.
+  旧ADR-0111 request may name an attester by.
 - **The `Held` exposure.** When the data-availability court concludes a claim's data was **not** served (`da_default_v1`), the producer is
   charged as ever and then **every attester of the claim not yet charged** loses `PALW_VERTEX_HELD_EXPOSURE_PERMILLE_V1` = 5 ‰ of its collateral
   (once; the rows are marked `charged`). The attesters are read before the charge, because the charge's void drops the rows.
@@ -373,7 +363,7 @@ Nothing in this section is a rule: the fold judges whatever arrives, and below t
 
 **Sizes** (borsh, consensus-core `palw_vertex_v1`): a vertex header with its signature is 4,808 bytes; a `Verdict` leaf 67 bytes with a `Full`
 reference and 23 with a `Compact` one (`Unavailable` adds 12); the lifecycle payload adds 3 bytes. A five-receipt coverage licence is 125,768
-transient mass (≈ 24 KB of payload; ADR-0160 V-T2).
+transient mass (≈ 24 KB of payload; 旧ADR-0160 V-T2).
 
 **On a real testnet-12 chain through real blocks** (`t12_capacity_verify::rfc7_vertex_carriage_per_licence`, debug build, testnet-12's params,
 real ML-DSA-87 by the registered keys, 100 DAA, one planted 1M bond beside the eight cards, the capacity fences armed; every round the eight seats
@@ -452,9 +442,9 @@ and an attempt of a class **without** one is unchanged (count 1, the v1 root). C
 half (`palw_witness_manifest_shape_ok_v1`, asked at the header stage and by the composed admission) takes a count of 1 under the v1 root or
 `2..=1 + 4,096` under the v2 root; the stateful half (`check_palw_attempt_witness_pin_v1`) demands the count the class's profile owes. **The
 manifest root is a function of the trace root and the count alone: it carries no witness root.** A witness root the chain cannot recompute would
-be a free field in the priced bytes — a free draw on both lotteries (ADR-0072 Decision 8); the chunk digests are the producer's served manifest,
+be a free field in the priced bytes — a free draw on both lotteries (旧ADR-0072 Decision 8); the chunk digests are the producer's served manifest,
 and what a seat trusts is the algebra, not them. `Unavailable { chunk_index, requested_daa }` already requires `chunk_index < trace_chunk_count`
-(PALW-FS-13), so under the fence it may name a witness chunk; its meaning is ADR-0065 Decision 4's, unchanged (it abstains: the claim redraws and
+(PALW-FS-13), so under the fence it may name a witness chunk; its meaning is 旧ADR-0065 Decision 4's, unchanged (it abstains: the claim redraws and
 voids at `ReceiptTimeout`, nobody is slashed for silence).
 
 **18.15.4 The window, not the pay** (open question 5, settled). A class's verification window is derived from `verification_ccu`; past the fence it
@@ -482,7 +472,7 @@ the fold reads how a seat checked.
   publish the block. `palw_witness_chunk_v1` serves a chunk only while it matches its digest. The transport that carries a chunk to a seat is the
   interval lane's off-chain path (RFC-0007 §II.7); this chapter pins the count and the naming, not the wire.
 - **A failed check is not a verdict** (PALW-AV-4): the seat files no `Valid` and escalates through the exact court, unchanged (§II.8).
-- **Row-block sketches** (§II.8, node-local, not consensus): each weight is sketched in `B = ceil(|W| / F)` free-axis blocks, `F` = 2 MiB (`TIR_BLOCK_FETCH_CAP_BYTES_V1`); the blocks sum entrywise to the whole-site sketch the routine check uses (`tests/soundness.rs`). After a failed check each block is checked with the vector masked to it, and the failure names the failing blocks (`TirCheckFailureV1::blocks`), so the seat fetches at most `F` bytes of weight per failing block (inventory openings from the producer or a holder, then ADR-0111's bounded on-chain request) or hands the interval to a holder, and the unchanged court tries the named leaf. A weight within `F` has one block and stores nothing extra.
+- **Row-block sketches** (§II.8, node-local, not consensus): each weight is sketched in `B = ceil(|W| / F)` free-axis blocks, `F` = 2 MiB (`TIR_BLOCK_FETCH_CAP_BYTES_V1`); the blocks sum entrywise to the whole-site sketch the routine check uses (`tests/soundness.rs`). After a failed check each block is checked with the vector masked to it, and the failure names the failing blocks (`TirCheckFailureV1::blocks`), so the seat fetches at most `F` bytes of weight per failing block (inventory openings from the producer or a holder, then 旧ADR-0111's bounded on-chain request) or hands the interval to a holder, and the unchanged court tries the named leaf. A weight within `F` has one block and stores nothing extra.
 
 ---
 

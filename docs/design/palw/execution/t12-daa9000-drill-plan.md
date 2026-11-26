@@ -1,15 +1,5 @@
 # testnet-12 DAA 9,000 (int-13) — drill plan, rollout and rollback
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 **CANCELLED 2026-10-08 (user): no DAA-9,000 flag day; the list waits for the full-activation release; kept as the template for that release's drill.**
 
 Status: **plan, 2026-10-08** (`release/t12-daa9000`, agent R9). **Nothing in this file has been run.** It describes a drill on a Mac, not a
@@ -32,7 +22,7 @@ testnet-12 already (the range twin stands on the int-11 list's `palw_gen_v1` at 
 
 | # | Fence | What changes from the fence | Evidence before this drill |
 | --- | --- | --- | --- |
-| 1 | `palw_audit_1004_v1` | the 2026-10-04 audit's consensus fixes (P-F1, P-F4, B-F3, B-F4, C-F1/B-F6, S-1/B-F5, RF-1, RF-3/P-F5, RF-4, G-3, G-2, C-F4 — `consensus/core/src/palw_audit_1004_v1.rs`), plus the node-side duty that rides it: a seat proves **every root** a class has in force (ADR-0173; `kaspad/src/palw_panel.rs` `root_keyed`) | unit and processor tests per rule; **no full-chain drill** |
+| 1 | `palw_audit_1004_v1` | the 2026-10-04 audit's consensus fixes (P-F1, P-F4, B-F3, B-F4, C-F1/B-F6, S-1/B-F5, RF-1, RF-3/P-F5, RF-4, G-3, G-2, C-F4 — `consensus/core/src/palw_audit_1004_v1.rs`), plus the node-side duty that rides it: a seat proves **every root** a class has in force (旧ADR-0173; `kaspad/src/palw_panel.rs` `root_keyed`) | unit and processor tests per rule; **no full-chain drill** |
 | 2 | `palw_gen_range_twin_v1` | a generative class's closes are sized with the range twin instead of the element twin (same read sets, same bounds, fewer steps of the same 2^26 cap) | unit tests (`palw_gen_close_price.rs`: the range twin sizes every close exactly as the element twin); **no full-chain drill** |
 | 3 | `palw_model_court_window` | a class registered from the fence stores its own court window (delta entry 100, `ClassCourtWindow`); on the held clock it equals the network window for every admissible class | `palw_t12_court_window_changes_no_admission.rs` (no verdict moves); the delta position is the same on every node of the int-12 line; **never armed anywhere before** |
 | 4 | `palw_receipt_spend_v4` | RFC-0009 stage C: a winning quantum of a `Final` free-prompt claim may be spent by any bonded builder on the executor's signed `RDA4` authorization; the `PFS4` header carriage cap (14.9 KB) opens for `PFS4` payloads only; the coinbase splits the worker reward miner leg / builder fee | processor tests (`rfc9_redemption_v4.rs`) and the coinbase expression; RFC-0009 spec §8: "dormant; **no full-chain drill**" |

@@ -40,7 +40,7 @@
   上限 4096 付近で受理が割れ、正直な root claim が上限を超えうる。corpus と Qwen 形では一致。
 - 他は editorial: H3 O-3 は §2.2(形に `H` は 1 つまで)から常に成立、H4 `h_tile` の 2 冪・タイル 4 lane 以上は
   Phase F の layout 規則で 04b にない、H5 supplied の不正に class 記述なし(両者 `Malformed`)、
-  H6 O-5 の court window 条件は ADR-0082 Z4 参照で 04b だけでは実装不能。
+  H6 O-5 の court window 条件は 旧ADR-0082 Z4 参照で 04b だけでは実装不能。
 - §9.4 の D1〜D5 は c0d826a1b で本文が決定(`state_after` の `[lo, hi]`、未保持 instance は `Malformed`、
   carried walk の terms、source の拒否は常に `Missing`)。ref2 を追従、**demand vector 697/697**、差分 0
   (第 1 実装の D4 も修正済み)。
@@ -150,7 +150,7 @@ along the last — times `x.shape[ax]`.
 | H3 | 9.5.6 O-3 | editorial | never reports it | never reports it | O-3 cannot fail: one `H` per shape (§2.2) makes every reduction's output `H`-free |
 | H4 | 9.5.1, 10.3 | editorial | a layout needs `h_tile` a power of two in `[1, 4096]` and tiles of `[4, 2^16]` lanes | any `h_tile ≥ 1`, `tile_len ≥ 1` | 04b states `h_tile ≥ 1`; the layout rules are Phase F's |
 | H5 | 9.5.2 | editorial | `Malformed` | `Malformed` | no class for a supplied set holding the target or a non-node |
-| H6 | 9.5.6 O-5 | not implementable from 04b | — | not modelled | "fits the court window … ADR-0082 Z4" |
+| H6 | 9.5.6 O-5 | not implementable from 04b | — | not modelled | "fits the court window … 旧ADR-0082 Z4" |
 
 #### H1 — an empty element list (§9.5.3) — the first implementation departs; an honest executor loses
 
@@ -210,7 +210,7 @@ precondition without a class; both refuse the target supplied, or an index that 
 #### H6 — the court window (§9.5.6 O-5) — not implementable from 04b
 
 "the whole exchange over `⌈max_context / h_tile⌉` tiles at arity `k` fits the court window, by the
-rule that sizes the network's arity (ADR-0082 Z4 …)" refers outside 04b; the rest of O-5 (`V ≤ 4096`,
+rule that sizes the network's arity (旧ADR-0082 Z4 …)" refers outside 04b; the rest of O-5 (`V ≤ 4096`,
 the round and root-claim bytes) is implemented here, and `V` and the round bytes are compared.
 
 #### Observation outside §9.5 — the binding's job context (Phase F API)

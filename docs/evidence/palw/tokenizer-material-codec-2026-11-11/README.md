@@ -1,6 +1,6 @@
 # Tokenizer資料codecと署名付き断片 — 2026-11-11
 
-コードcommit `207a1f303`。[前段の予約計算](../plain-tokenizer-batch-reservation-2026-11-11/README.md)から、実際のcanonical資料bytes・署名付き内側envelope・断片の復元と意味検査までを接続した。公開T12のnative受理や成功Finalの記録ではない。[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)で維持したclaim資料と同一性確認を実装し、HF取得不能の証明・再試行裁定は追加しない。
+コードcommit `207a1f303`。[前段の予約計算](../plain-tokenizer-batch-reservation-2026-11-11/README.md)から、実際のcanonical資料bytes・署名付き内側envelope・断片の復元と意味検査までを接続した。公開T12のnative受理や成功Finalの記録ではない。[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)で維持したclaim資料と同一性確認を実装し、HF取得不能の証明・再試行裁定は追加しない。
 
 ## 実装した範囲
 

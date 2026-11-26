@@ -553,7 +553,7 @@ Every `>>` below is floor division by a power of two; every `/` is floor divisio
 integers. Intermediates are mathematical integers (they fit 64 bits for every input; 128 bits is
 always enough).
 
-**`IntExp` (17)** — `exp(x / 2^24) · 2^24` for `x ≤ 0` (ADR-0040 F1):
+**`IntExp` (17)** — `exp(x / 2^24) · 2^24` for `x ≤ 0` (旧ADR-0040 F1):
 
 ```
 x' = min(x, 0)
@@ -568,7 +568,7 @@ return Div_HalfAwayFromZero(poly, 2^z)
 `IntExp(0) = 16,781,800` is its maximum over all inputs; it is non-decreasing inside a
 range-reduction bucket but NOT across bucket edges (`IntExp(−LN2_Q + 1) < IntExp(−LN2_Q)`).
 
-**`IntRsqrt` (18)** — `2^24 / √(v / 2^24)` (ADR-0040 F2); `v ≤ 0` gives 0:
+**`IntRsqrt` (18)** — `2^24 / √(v / 2^24)` (旧ADR-0040 F2); `v ≤ 0` gives 0:
 
 ```
 if v ≤ 0: return 0
@@ -586,7 +586,7 @@ return y >> e  if e ≥ 0,  y · 2^(−e) if e < 0
 
 The output lies in `[0, 68,719,472,640]`; the maximum is `IntRsqrt(1) = 2^36 − 2^12`.
 
-**`IntLn` (19)** — `ln(x / 2^24) · 2^24` (ADR-0052 D); `x ≤ 0` gives 0:
+**`IntLn` (19)** — `ln(x / 2^24) · 2^24` (旧ADR-0052 D); `x ≤ 0` gives 0:
 
 ```
 if x ≤ 0: return 0
@@ -622,7 +622,7 @@ dtypes. *Value:* `a[i]` if `c[i] ≠ 0` else `b[i]` (exact-result rule on the ch
 `1 ≤ k ≤ n`; `out.shape` is `x.shape` with `shape[axis] = Fixed(k)`; `out.dtype = idx`. *Value:* for
 every row along `axis`, order the indices `0..n` by (value descending, index ascending), keep the
 first `k`, and emit the kept indices **in ascending index order**. Ties therefore go to the lowest
-index, and the committed set does not depend on how equal values were ordered (ADR-0052 B). Every
+index, and the committed set does not depend on how equal values were ordered (旧ADR-0052 B). Every
 `TopK` is a commit point (NF-18).
 
 ### 6.7 State (PALW-TIR-10)
@@ -1065,7 +1065,7 @@ range" means, how partials fold, what the bottom compares — so that two implem
 same verdict on every move. It extends §9.4: everything not stated here is §9.4's.
 
 The protocol that carries the exchange on the chain — its objects, messages, clocks and charges — is
-ADR-0082's with the attention triple replaced by "every reduction over `H`"; §9.5.9 states the parts an
+旧ADR-0082's with the attention triple replaced by "every reduction over `H`"; §9.5.9 states the parts an
 independent implementation must reproduce byte for byte, and the rest is Phase F's.
 
 #### 9.5.1 Reductions over `H` and dissected leaves
@@ -1283,7 +1283,7 @@ the commit point, unless every dissected cone meets:
   dispute opens at the named leaf), `t` the court's terminal rounds, `D` its rung window (each round
   is two clocked moves, the root claim one), and the last term the DAA reserved for assembling
   closes of `max_close_chunks` chunks (`palw_close_assembly_daa_v1`: 2 · 4 per chunk) — the rule that
-  sizes the network's arity (ADR-0082 Z4).
+  sizes the network's arity (旧ADR-0082 Z4).
 
 #### 9.5.7 Why a lie is always convictable (informative)
 
@@ -1326,7 +1326,7 @@ is a change of the semantics and is reviewed as one.
 
 #### 9.5.9 The carriage on the chain (Phase F)
 
-The exchange rides as ADR-0082's does, as three lifecycle objects and one close proof, appended after
+The exchange rides as 旧ADR-0082's does, as three lifecycle objects and one close proof, appended after
 Phase F's IR objects (each refused below `palw_tir_v1` and, for the moves, where the k-ary court is
 not armed):
 
@@ -1344,17 +1344,17 @@ not armed):
   `ComputationMismatch` is `ExecutorGuilty`, no fault `ChallengerDefeated`.
 
 The executor signs the root claim and every round, the challenger every choice, with ML-DSA-87 under
-ADR-0082's responder and challenger contexts, over messages that open with their own domains (so no
+旧ADR-0082's responder and challenger contexts, over messages that open with their own domains (so no
 signature over another court's move is one over these):
 
 - root claim: `"misaka-palw/tir/dissect/root/v1" ‖ session_id ‖ borsh(version, elements, totals)`;
 - round: `"misaka-palw/tir/dissect/round/v1" ‖ session_id ‖ le32(the dispute's round) ‖ borsh(round)`;
 - choice: `"misaka-palw/tir/dissect/choice/v1" ‖ borsh(choice)`.
 
-The clock is ADR-0082's. At the dissected leaf the executor owes the root claim (or a close that
+The clock is 旧ADR-0082's. At the dissected leaf the executor owes the root claim (or a close that
 acquits it); within the dispute it owes each round, and the challenger each choice, within one rung
 window of the previous move; silence past its window loses the dispute for the silent party (the
-executor's at the root claim under ADR-0082's mercies for an opening nobody could have answered,
+executor's at the root claim under 旧ADR-0082's mercies for an opening nobody could have answered,
 unchanged). At the bottom nobody is clocked: the challenger files the bottom (or the executor an
 acquitting one), and a dispute nobody closes ends at the session's backstop on the challenger's side.
 Under the held regime, where no bisection is played, a one-move accusation whose cone close names a
@@ -1368,7 +1368,7 @@ its first move.
 Required commit points, enforced by normal form:
 
 - every block's carry-out nodes (NF-21) and the logits (NF-6);
-- every `TopK` (NF-18) — a selection is an opened value, never a bisection target (ADR-0052 B);
+- every `TopK` (NF-18) — a selection is an opened value, never a bisection target (旧ADR-0052 B);
 - the input row of every `HistAppend` (NF-20), so later positions' cones can open it.
 
 **State — one step tree (Phase F D7).** An IR class has ONE step tree and no separate checkpoint
@@ -1483,7 +1483,7 @@ tile at `H = min(h_chunk, W)`; a cone with no such reduction has the terminal co
 claimed, how they fold, what the bottom evaluates — and the obligations admission checks for it.
 
 **Every terminal close is carriable (PALW-TIR-38).** A class with a dissected tile clocks its
-executor at every terminal leaf (ADR-0082 C-5: the clock cannot tell a dissected leaf from another),
+executor at every terminal leaf (旧ADR-0082 C-5: the clock cannot tell a dissected leaf from another),
 so the acquitting close of every tile — the whole tile's for a cone that is not dissected, the
 bottom's for one that is — MUST be one the chain can carry: its bytes AS CARRIED at most
 `min(max_close_chunks, 32) × 100,000` — the chunks the fold assembles (its bitmap addresses 32) of
@@ -1658,7 +1658,7 @@ every reduction over `H` (`ReduceSum`/`ReduceMax` along `H`, `MatMul` contractin
 H-local tensor: exact (order-free) sums and maxima of per-position terms, which the court dissects
 by chunk given the claimed values of the `H`-free operands (the multi-pass softmax is exactly this:
 the maximum, then the exponent sum against the claimed maximum, then the value sum against both —
-ADR-0082). A program that rounds a running sum over `H` cannot be written in v1.
+旧ADR-0082). A program that rounds a running sum over `H` cannot be written in v1.
 
 ### 10.4 The court (PALW-TIR-15)
 
@@ -1701,7 +1701,7 @@ on the template's own operand set.
 | `Rescale(acc, m, s)` (BASE-0 op 9) | `Clamp_i32(Div_HAFZ(Mul(acc, m), 2^min(s,62)))` | KAT digest |
 | `IntRecip(v)` | `Div_Floor(Mul_i128(IntRsqrt(v), IntRsqrt(v)), 2^24)` | KAT digest |
 | A16 narrowing `a16_scale_round(x,m,s).saturating_add(z).clamp(lo,hi)` | `Clamp[lo,hi](Add_i128(Clamp_i64(Div_HAFZ(Mul_i128(x, m), 2^min(s,62))), z))` | conformance crate |
-| a variable shift `s` (per channel, per token — the lift of ADR-0102) | `2^s = Gather([2^0 … 2^62], Clamp_idx(s, 0, 62))`, then `Div` or `Mul` | conformance crate |
+| a variable shift `s` (per channel, per token — the lift of 旧ADR-0102) | `2^s = Gather([2^0 … 2^62], Clamp_idx(s, 0, 62))`, then `Div` or `Mul` | conformance crate |
 
 The intermediate `i64` saturations of the A16 kernels are `Clamp` nodes on `i128` values; they are
 part of the function on adversarial parameters, and the segments reproduce them.
@@ -1719,7 +1719,7 @@ part of the function on adversarial parameters, and the segments reproduce them.
 | LayerNorm | **exact centring**: `c = n·x − Σx` (no division), then the RMSNorm of `c` with `eps' = n²·eps` (at the input scale²) | — (new; §14) |
 | RoPE, adjacent pairs | `Div_Floor(a·cos − b·sin, 2^24)`, `Div_Floor(a·sin + b·cos, 2^24)`, clamp | `a16_rope`, `rope_table` |
 | RoPE angles at long context | two pinned tables of `2^b` rows: `pos = hi·2^b + lo`, angle addition in Q24 (§11.3) | — (new) |
-| softplus, refined exp, decay | the `IntExp`/`IntLn` compositions of ADR-0052 | `q36_softplus`, `q36_exp_refined`, `q36_decay` |
+| softplus, refined exp, decay | the `IntExp`/`IntLn` compositions of 旧ADR-0052 | `q36_softplus`, `q36_exp_refined`, `q36_decay` |
 | gated delta rule step | decay (`Div_HAFZ(S·decay, 2^24)`, clamp ±(2^31−1)), `S·k` (MatMul), read narrowing, `sat64(v − w)`, `sat64(delta·β)`, delta narrowing clamped ±(2^24−1), rank-one write (`Mul` by `2^ws` or `Div_HAFZ` by `2^−ws`), `StateWrite`, `S·q`, out narrowing | `q36_gdn_step` |
 | router top-k | softmax (wide), `TopK` (committed), gather, exact sum, `IntRecip`, renormalise | `q36_router_topk` |
 | MoE combine | `MatMul(w[1,k], Y[k,width])` — ONE exact accumulator — then the A16 narrowing | `q36_moe_combine` |
@@ -1813,7 +1813,7 @@ tensors are `{"dtype": "i32", "shape": [2, 3], "data": ["1", "-2", …]}` in row
 - **PALW-TIR-1 (the primitive set).** An IR class's execution MUST be the evaluation of its
   `TirProgramV1` over the twenty-five primitives of §6. No other operation has consensus meaning.
 - **PALW-TIR-2 (integers only).** Every value on the consensus path MUST be an integer of a declared
-  dtype. No float, no libm, in the evaluator or in any backend (ADR-0040 A).
+  dtype. No float, no libm, in the evaluator or in any backend (旧ADR-0040 A).
 - **PALW-TIR-3 (named loss).** Only `Div` (by its rule), `Clamp` and `StateWrite` (Saturate),
   `Log2Floor`, the three transcendentals, and `Select`/`Compare`/`TopK` (which discard by choosing)
   MAY lose information. Every other primitive MUST be exact.
@@ -1915,7 +1915,7 @@ Deviations (each argued in `docs/design/palw/tir/corpus-v1.md`):
 6. **Committed operands are checked against proven intervals** (PALW-TIR-33), so the range analysis
    is sound for cones evaluated from commitments; CarryIn takes the full dtype range.
 7. **The dissection is over every reduction over `H`, not the attention triple.** RFC-0002 and
-   ADR-0082 dissect the fused attention's three quantities; §9.5 dissects whatever reductions the
+   旧ADR-0082 dissect the fused attention's three quantities; §9.5 dissects whatever reductions the
    program's cone has (at most sixteen), each folding exactly, with the attention as one instance
    (PALW-TIR-37).
 8. **The 2^28-element cap is for computed tensors only.** Applied to params (RFC §5.4 lists it for
@@ -2556,7 +2556,7 @@ refusal has a name (`PalwGenJobErrorV1`). Where the RFC is silent, the conservat
 >    parameters, seed, index) is the same image in any job.
 > 3. **`prompt_mode` is the user's (0) only.** A generative class has no canonical prompt in v1; the
 >    canonical seed (`gen_canonical_seed_v1(anchor) = H64(key
->    "misaka-palw/gen-v1/canonical-seed/v1", anchor)[..32]`, ADR-0074 D1 carried over) is fixed now so a
+>    "misaka-palw/gen-v1/canonical-seed/v1", anchor)[..32]`, 旧ADR-0074 D1 carried over) is fixed now so a
 >    later canonical job cannot differ.
 > 4. **The job's scalars are the class's, in its declared order.** An image class's `guidance_q` is the
 >    scalar its guidance offer names, and the step count's POSITION among the class's offered counts is
@@ -2818,7 +2818,7 @@ in the block's object list.
    (`RetiringBond`), not below the producer floor (`ProducerBelowFloor`) and not frozen (`ProducerFrozen`);
 3. the class: it exists (`MissingClass`), its status is `Active` (`FrozenClass`; any other status is
    `GenClaimRefused`), it has a `gen_classes` row, and passes the verification-deadline admission
-   (ADR-0152 §4-quater V2). **The registry lifecycle is not asked** (its row for a pipeline is `Registered` and
+   (旧ADR-0152 §4-quater V2). **The registry lifecycle is not asked** (its row for a pipeline is `Registered` and
    never admits); **readiness is** (decision of 2026-10-01): at least `seat_count` (the registry fold's globals)
    DISTINCT operators — never the executor's bond or operator — hold the class with a fresh readiness V2
    possession proof (`model_registry_seat_is_ready`: active, above the floor, a fresh row, free collateral for the
@@ -2851,7 +2851,7 @@ in the block's object list.
     identity, phase `Provisional`; the reservation is taken and the bind deadline armed. The consistency
     check that guards every load accepts `quanta = 0` only for a claim that earns nothing at all.
 
-From here the claim is the lane's: panel at the bind (a bought class takes an outsider seat, ADR-0147), receipts,
+From here the claim is the lane's: panel at the bind (a bought class takes an outsider seat, 旧ADR-0147), receipts,
 licence, `Final`, retirement, the lane's slash on a conviction. Weight for a tensor claim is a later fence.
 
 **15.15.5 The court under the held regime: the generative one-move accusation (G23).** Object
@@ -2891,11 +2891,11 @@ specified here, dormant behind `palw_held_close_chunks_v1`, built after the node
 carrier (about 100,000 bytes, `PALW_OBJECT_CHUNK_MAX_BYTES`). The chunk path for larger objects is
 `palw_chunked_object_kind_admitted_v1` (`FamilyCertified` only), and a close's own chunks
 (`CourtCloseDeclared`/`CourtCloseChunk`, PALW-TIR-38's 32 × 100,000 B) are keyed to a **session**, which a chain
-that plays no bisection (the held regime) opens only by naming a dissected leaf (ADR-0103 Decision 5). So on a
+that plays no bisection (the held regime) opens only by naming a dissected leaf (旧ADR-0103 Decision 5). So on a
 held-regime chain a lie is convictable **only at a leaf whose close fits one carrier**. **Known limitation,
 recorded (it holds for the live IR classes of testnet-12 as for a pipeline class):** a lie at a leaf whose
 close exceeds one carrier is **refused its licence but not slashed** — the panel's seats replay the claim, find
-the difference and file no receipt (a difference files nothing, ADR-0077 W10), so the claim never licenses and
+the difference and file no receipt (a difference files nothing, 旧ADR-0077 W10), so the claim never licenses and
 never reaches `Final`, its reservation is released when its receipt window lapses, and the liar loses fees and
 time and no collateral. Tag 62's semantics below the fence are not changed to close it.
 
@@ -2903,7 +2903,7 @@ time and no collateral. Tag 62's semantics below the fence are not changed to cl
 **`palw_held_close_chunks_v1`** (a bare height; `None` on every preset but testnet-12, whose int-11 flag day arms it at DAA 5,300; Some-only in
 both fingerprints, collapsed from `never()`; requires `palw_tir_v1` and `palw_held_context` at or below it; the
 V2 bundle mirrors it, borsh-skipped, written by `sync_palw_gen_v1`; armed by the drill's gen list). It carries no
-new table: it opens a session at the named leaf as ADR-0103 Decision 5 does and writes **the challenger-side
+new table: it opens a session at the named leaf as 旧ADR-0103 Decision 5 does and writes **the challenger-side
 close group the existing `CourtCloseDeclared` would have written**, so the group rule, the chunks, the assembly
 and the verdict are the court's own. Object `HeldLeafChallengeDeclared { challenge: PalwHeldLeafChallengeV1 }`,
 tag 90 (approved):
@@ -2984,7 +2984,7 @@ dissected leaf — the sweep at `assembly_deadline_daa` (or the completing chunk
 slashed**, the accuser's deposit is forfeited and it is charged what a lost held dissection costs (`max(reserved,
 G)` capped at the floor where the class is held, `reserved` otherwise, plus the court-time charge), and the
 claim's licence anchor moves to the close so the seats keep a whole challenge window — a decoy cannot carry a lie
-to `Final` (`rearm_after_challenger_side_close`, ADR-0152 §4-ter C3). (3) **Concurrency is capped three ways:**
+to `Final` (`rearm_after_challenger_side_close`, 旧ADR-0152 §4-ter C3). (3) **Concurrency is capped three ways:**
 the claim admits one challenge, then one per panel seat (`1 + seat_count`); the network admits
 `palw_max_concurrent_court_sessions_v1(turn_deadline_daa)` sessions, each holding the accuser's reservation (a
 bond opens about one such session at a time); and the block grades at most one close completion
@@ -3093,7 +3093,7 @@ A genesis class has no registrant to exclude. The result carries every number a 
 preflight need (`PalwClassSeatingV1 { ready_operators, needed_operators, independent_operators, needed_independent,
 base_operators }`), its `verdict()` asks possession first, and `licensable_share_permille()` is `independent_operators × 1000 /
 base_operators` (0 for an empty base): the probability that a claim's outsider — drawn per claim over all of `Base`, not over its
-holders, which is ADR-0147's price kept on purpose — holds the class. It is read by no gate.
+holders, which is 旧ADR-0147's price kept on purpose — holds the class. It is read by no gate.
 
 **The doors.** One function, `check_class_seated_v1(class, executor, daa)`, past the fence and for every class that has a lifecycle
 row or a generative row (the floor and a legacy class without a row are never gated), asked

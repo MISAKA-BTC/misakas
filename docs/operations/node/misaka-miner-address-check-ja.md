@@ -1,6 +1,6 @@
 # misaka-miner-address-check 使い方メモ
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 `scripts/ops/misaka-miner-address-check.sh` は、**mining報酬アドレス**を指定して、そのアドレスにcoinbase報酬UTXOが来ているかを確認する読み取り専用ツールです。Discord bot からの `/miner address:<address>` 用にも使えます。
 

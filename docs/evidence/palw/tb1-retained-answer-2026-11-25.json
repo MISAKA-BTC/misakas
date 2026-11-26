@@ -1,0 +1,75 @@
+{
+  "replay": {
+    "acceptedDaa": 11,
+    "anchor": "fa227ee0ce933f3e5cefb88f85c9a40df8a8f95da36b5b356f7eee1127578d7adee886486c001a0d61861c9143b400ae8819ab43918249b24b799620905b8e59",
+    "block": "a3353b2f8ba46fea9c48ac32926297ba5e62be46855fd47e83a2845feb44d542c34dda3b4eb6587bafefed2a439d3fc6c1506b2096f03f93999da6f99a2ef026",
+    "chunks": 1,
+    "claim": "8abe70c93edb5ebe99e0025b9bacd6ae5c6f5a6e47d736cc308831d2680b76448feade0b5a6a05c7b887c66aa1f6c01e5c2daab9a94069baf38e8b279449e3fb",
+    "executionRoot": "b96d0fa82c739af21f8cddc42dcf5b2d9ac7743623a05af3fa5c0a554e573b388906613a724e96eb44b5840563a2f74d7cc80ee806ceae71f191335eb7c78c59",
+    "manifestRoot": "67ad6977914b6c24e45e337957ebce7d47368a8f7ae8b677c07ec8898968044f01382a2bda5984ce61c001f46e950bc3718ef8dda1d2badd1b3b43033b4bb134",
+    "matchedAnswerBytes": 112,
+    "matchedBytes": 1599245,
+    "outputRoot": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+    "traceRoot": "d30f1fa17d82fe976947dbb153fd432f438da9bd1dc42cbcc9c85aa45d68d56e0655f56cae6e9823d60a88874b4ca40fe0b2fa0cd01123d13f64dbf4146199ca"
+  },
+  "answerHex": "41544131fa227ee0ce933f3e5cefb88f85c9a40df8a8f95da36b5b356f7eee1127578d7adee886486c001a0d61861c9143b400ae8819ab43918249b24b799620905b8e59080000009e02000038030000370100009a030000a20000004d020000640000008e0100000100000088020000",
+  "negativeCases": {
+    "anchor": "Error: \"answer names another job\"",
+    "prompt": "Error: \"answer names another job\"",
+    "output": "Error: \"answer ids differ from signed output\"",
+    "magic": "Error: \"invalid answer envelope\""
+  },
+  "build": {
+    "compiler": "Rust 1.93.0",
+    "dependencies": "reused local build artifacts",
+    "features": [
+      "default",
+      "evm",
+      "private-integration-clock",
+      "private-integration-config"
+    ],
+    "kaspadHelpExited": 0
+  },
+  "testRuns": [
+    {
+      "tests": [
+        "palw_panel::attempt_answer::tests::compact_answer_precedes_capture_and_invalid_answers_fall_back ",
+        "palw_panel::seat_r_tests::past_seat_r_the_replay_step_refutes_a_claim_whose_answer_is_not_the_core_v1_root ",
+        "palw_retention::tests::a_capture_written_after_scan_start_is_new_for_age_pruning ",
+        "palw_retention::tests::abandoned_scan_cannot_remove_an_active_or_replaced_stage ",
+        "palw_retention::tests::active_lead_publication_keeps_material_through_pressure_reclaim ",
+        "palw_retention::tests::durable_attempt_pressure_grace_survives_rescan_but_never_extends_the_existing_age ",
+        "palw_retention::tests::foreign_retention_refusal_precedes_staging_and_keeps_existing_copy ",
+        "palw_retention::tests::incomplete_directory_scan_cannot_authorize_collection ",
+        "palw_retention::tests::invalid_or_unreadable_attempt_grace_does_not_pin_a_capture_and_orphans_are_reclaimed ",
+        "palw_retention::tests::licensed_replay_is_kept_separately_and_remains_subject_to_claim_gc ",
+        "palw_retention::tests::material_only_kernel_subject_pins_old_own_and_foreign_files_without_a_native_claim ",
+        "palw_retention::tests::p2_7_a_capture_the_da_court_can_still_ask_for_is_kept ",
+        "palw_retention::tests::pressure_plan_can_reclaim_other_material_while_a_lead_is_publishing ",
+        "palw_retention::tests::pressure_plan_cannot_delete_a_capture_replaced_after_the_scan ",
+        "palw_retention::tests::pressure_plan_reads_each_eligible_row_once_and_preserves_order ",
+        "palw_retention::tests::removing_a_retained_link_does_not_report_the_shared_inode_as_freed ",
+        "palw_retention::tests::replay_retry_rejects_symlinks_even_with_matching_bytes ",
+        "palw_retention::tests::replay_retry_reuses_exact_durable_bytes_without_reserving_space ",
+        "palw_retention::tests::retained_publishers_never_expose_partial_or_overwrite_a_write_once_copy ",
+        "palw_retention::tests::retention_read_failure_pins_files_during_planning_and_immediately_before_pruning ",
+        "palw_retention::tests::retention_reclaim_reports_only_files_it_removed ",
+        "palw_retention::tests::the_reserve_is_eight_gib_or_five_percent ",
+        "palw_retention::tests::the_scan_classifies_by_bytes_and_pairs_material_with_answer ",
+        "palw_retention::tests::under_its_floor_the_volume_gives_up_attempt_captures_oldest_first_and_never_a_free_prompt_one ",
+        "palw_retention::tests::unreadable_header_or_age_pins_the_capture_group_under_pressure "
+      ],
+      "result": "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 1139 filtered out; finished in 0.10s"
+    },
+    {
+      "tests": [
+        "palw_tb1_holder::ready_fees::tests::ready_fee_uses_only_the_named_input_and_payer_change_within_cap ",
+        "palw_tb1_holder::tests::configured_holder_reopens_both_enrollments_for_the_pinned_genesis ",
+        "palw_tb1_holder::tests::holder_loads_only_private_fixed_width_key_files ",
+        "palw_tb1_holder::tests::shipped_genesis_refuses_worker_before_opening_keys ",
+        "palw_tb1_holder::vss_exchange::tests::four_enrolled_workers_recover_all_dealer_pairs_and_cross_checks "
+      ],
+      "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1159 filtered out; finished in 5.91s"
+    }
+  ]
+}

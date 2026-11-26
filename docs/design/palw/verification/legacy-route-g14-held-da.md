@@ -14,7 +14,7 @@ This design needs tags 157–159 and the fence. It adds no state table, so delta
 ## 0. The bar, and what is actually missing
 
 The producer and every Panel seat collude. One public bonded verifier outside the Panel, registered after genesis, holding its
-own copy of the registered model (ADR-0177: G14 is conditional on that), and using only public authenticated material, must reach:
+own copy of the registered model (旧ADR-0177: G14 is conditional on that), and using only public authenticated material, must reach:
 
 - an objective conviction for a computation, job, input, output or state lie;
 - the correct DA default when the producer withholds claim material;
@@ -25,7 +25,7 @@ The adjudicators for the TERMINALS already exist on the V2 route and are armed o
 | Lie | Existing terminal |
 |---|---|
 | a non-fused step | one-move court (`ShardCourtAccused`), `ExecutorRefuted` `StepArithmetic` (5), after Final too |
-| a fused-attention step | the held dissection (`ShardCourtAccused` → `NeedsDissection` → ADR-0103 D5, ADR-0082 dissection) |
+| a fused-attention step | the held dissection (`ShardCourtAccused` → `NeedsDissection` → 旧ADR-0103 D5, 旧ADR-0082 dissection) |
 | a checkpoint's state | `CheckpointAccused` (a chunk against the rows it claims to hold) |
 | a logits row on an honest step tree | `ExecutorRefuted` `LogitsNotStepOutput` (12) |
 | a token not selected by its row | `ForgedOutput` (8) / `ForgedOutputTiled` (11) |
@@ -192,7 +192,7 @@ and compares:
 - **equal** → `FalseAccusation`: the accuser is charged the one-move court's charge (`reserved.min(floor)`).
 
 Why this terminal, and not CKW, at a non-fused leaf:
-- **ADR-0177 D2.** At an embedding gather (`ModelCopy`), the committed tile of an HONEST producer is a copy of registered weights.
+- **旧ADR-0177 D2.** At an embedding gather (`ModelCopy`), the committed tile of an HONEST producer is a copy of registered weights.
   The court must never compel it, at any count. With the recompute, the model operand is the verifier's own and the producer
   discloses only hashes.
 - **Garbage starts there.** A trace computed with the wrong weights first diverges at leaf 0, the position-0 embedding gather.
@@ -206,7 +206,7 @@ them (`void_claim`, RFC-0014 §7.4).
 own honest history), that the tile is not the attention of its history. Then it files `ShardCourtAccused`, with the CKW's
 committed half, its own artifact rows and the prompt tile, and the bound verdict defers to the held dissection.
 
-The dissection is ADR-0082's, unchanged:
+The dissection is 旧ADR-0082's, unchanged:
 - the producer's root claim must finalize to the committed tile;
 - the verifier names the first child that is not its own;
 - the bottom convicts `CourtHeldVerdict`.
@@ -239,7 +239,7 @@ A class whose largest terminal exceeds the ceiling is reported as not admissible
 | honest claim, malicious verifier | every frontier reproduces; tag 159 recomputes equal | the session is refuted (exposure held, burned at retirement); a tag-159 filer is charged |
 | verifier's own replay faulty | its frontier differs from an honest claim's, tag 159 recomputes equal, and the CKW check says the tile is the attention of the history | nothing is convicted; the verifier pays |
 
-## 7. Court scope (ADR-0177 D2)
+## 7. Court scope (旧ADR-0177 D2)
 
 - `StepNode` / `CheckpointNode`: `ClaimWitness` (hashes only).
 - `KernelWitness`: `ClaimTrace`, plus `ClaimInput` for a prompt tile.
@@ -365,7 +365,7 @@ legacy-held pursuit (sessions, units, answered, the answer bytes' block) belongs
   - `PalwDaUnitV1` classified as `CarriedAppended`, with guarded owner arms for tags 55, 67 and 83, plus a sample.
   - The `Int12Inner` row, and the wire pins for tags 157–159.
   - Pin 113 added: it was missing on integration.
-- **ADR-0177 D2 for the legacy units (DA16b §7.5).** Done for item 1: past the fence a held `StepLeaf` answer owes no artifact rows
+- **旧ADR-0177 D2 for the legacy units (DA16b §7.5).** Done for item 1: past the fence a held `StepLeaf` answer owes no artifact rows
   and is checked by membership only. Items 2 and 3 remain: dissection root-claim parameter openings, and readiness (the latter is a
   user decision).
 
@@ -395,7 +395,7 @@ For Merkle input, each chunk contains up to 2,048 contiguous ids (64 existing 32
 
 The filer starts a Pending input acquisition case under a host memory reservation, reserves the ordinary public pursuit, obtains the row-0 binding, then requests contiguous input chunks. Only authenticated public answers enter the accumulator. It compares the binding's job pin to the accepted FP job and admits the fully assembled input again before replay. No replay attempt is spent while waiting. The existing DA session applies on silence; an answer refutes the session and makes the input public. The verifier subsequently executes its own model, compares all three roots and uses the existing objective terminal. Historical missing copies use the numbered tag-156 reacquisition protocol. Reorg discards the acquired ids and public binding; a changed acceptance/job resets the case. Successful replay or settlement releases the bootstrap ticket.
 
-This is bounded by the existing 34-session pursuit budget: an 8k input needs four input units, plus binding and localization. It does not establish enough budget for every admitted context, arbitrary repeated restarts, or all non-base0 localization routes. Missing accepted FP commitment bytes, prefix-state acquisition, largest-population response/inclusion bounds, maximum-profile memory/time, cumulative court scope and full fresh-node inclusion remain separate gaps. The registration/model possession premise remains ADR-0177 D7; no model distribution obligation is introduced. Activation remains refused by the existing validator.
+This is bounded by the existing 34-session pursuit budget: an 8k input needs four input units, plus binding and localization. It does not establish enough budget for every admitted context, arbitrary repeated restarts, or all non-base0 localization routes. Missing accepted FP commitment bytes, prefix-state acquisition, largest-population response/inclusion bounds, maximum-profile memory/time, cumulative court scope and full fresh-node inclusion remain separate gaps. The registration/model possession premise remains 旧ADR-0177 D7; no model distribution obligation is introduced. Activation remains refused by the existing validator.
 
 
 ## FP job-preimage acquisition (Codex follow-up, 2026-10-11)
@@ -428,7 +428,7 @@ or signature. A small bounded job ticket covers descriptor acquisition; the inpu
 its own ticket before copying ids. The acquired job flows into the existing public input bootstrap,
 independent local replay and reservation release/prosecution. The producer responder can obtain
 its job from its verified retained FP envelope and disclose only that descriptor. The verifier uses
-its own registered model throughout (ADR-0177 D7).
+its own registered model throughout (旧ADR-0177 D7).
 
 This first descriptor court has a 64 KiB job bound. Demand/reacquisition gates require the maximum
 job answer plus the carried binding to fit the court and single carrier; answers are measured again.

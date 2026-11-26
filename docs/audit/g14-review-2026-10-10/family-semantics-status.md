@@ -1,6 +1,6 @@
 # G14 semantic court follow-up
 
-Full G14 scope and ADR-0177 D7 remain unchanged. This checkpoint does not prove full family coverage or permit shipping activation.
+Full G14 scope and 旧ADR-0177 D7 remain unchanged. This checkpoint does not prove full family coverage or permit shipping activation.
 
 ## Public FP out-of-vocabulary IDs
 

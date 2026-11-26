@@ -1,12 +1,12 @@
-# ADR-0176 — cap derivation and measurement plan (2026-10-15)
+# 旧ADR-0176 — cap derivation and measurement plan (2026-10-15)
 
 **Status:** plan + harness written; **nothing measured, nothing run, no value proposed.** The harness sources are on
 `integ/adr-0162-0178`; running them is the validation phase. Production values come from this procedure and the adversarial
 tests, never from current code values or past examples ("100 claims / 7 days", 350 BILI, `rho = 10,000`, `W = 400` are not
 official).
 
-Sources: [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md) (amendments of 2026-10-15),
-[RFC-0015 §8.3–8.5](../../../rfc/0015-panel-free-permissionless-verification.md), the user's guidance of 2026-10-15
+Sources: [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限) (amendments of 2026-10-15),
+[RFC-0015 §8.3–8.5](../../../rfc/0008-g14-panel-and-verification.md), the user's guidance of 2026-10-15
 (ユーザー方針 2026-10-15) and ruling (ユーザー判断 2026-10-15: bond式の再設計).
 
 ## 0. Primary condition
@@ -31,7 +31,7 @@ Model-allocation increases never raise a bond's absolute caps (`palw_bond_budget
 
 `concurrent reserved principal ≈ λ · a · H` (daily acceptances × per-claim liability × average ACTUAL hold) plus margin and the
 bond's other liabilities (seat locks, accusation reserves, outstanding liability). A longer hold needs more concurrent
-collateral, so per-claim right, reservation and reward are tuned together (ADR-0176 D5). No fictitious collateral and no double
+collateral, so per-claim right, reservation and reward are tuned together (旧ADR-0176 D5). No fictitious collateral and no double
 reservation: the harness counts each ledger once (`palw_bond_formula_concurrent_admits_v2`, the budget's open + liability views).
 
 ## 3. Stage 1 — the honest minimal configuration (measure)

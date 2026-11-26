@@ -6,9 +6,9 @@
 
 1. P2 — `scripts/drills/rfc_gate_inputs.py:83–86`：不正JSONを末尾以外でも無視し、重複scenario IDを後勝ちにする。FAIL→壊れた中間行→PASSからPASSになることを実関数で再現した。壊れた末尾だけを許し、重複は拒否または過去FAILを保持する。attemptを区別するならrun/attempt identityを正式に分ける。
 2. P2 — `scripts/drills/misaka-rfc-integration-campaign.py:70–79`：aggregate-rootの保存freeze/onceと現在plan・candidateの照合がない。別実行のledgerを現在candidate名義で再出力できる。全体UNKNOWNでも個別gateの証拠帰属が崩れるため、再集計前に同一実行を照合し、不一致は拒否する。
-3. P2 — `consensus/core/src/palw_row_stream_v1/resume.rs:159–163`：PermissionDenied/TimedOut等のlocal I/OをResumeSpillへ分類する。ADR-0204の容量・I/Oはlocalという境界と一致させる。現状のnode-local部品の問題であり、実P2Pでpeerが罰された証拠はない。
+3. P2 — `consensus/core/src/palw_row_stream_v1/resume.rs:159–163`：PermissionDenied/TimedOut等のlocal I/OをResumeSpillへ分類する。旧ADR-0204の容量・I/Oはlocalという境界と一致させる。現状のnode-local部品の問題であり、実P2Pでpeerが罰された証拠はない。
 
-報告も2点訂正する。Lane Eの「refused carrier is never mined」は不正確で、fold登録から落ちたcarrier TXがaccepted dataに残り得る。RFC34 S1の詳細仕様化・隔離実装はADR-0201とRFC34末尾で2026-10-21ユーザー選択済みであり、再承認待ちへ戻さない。本番採択・料金・有効化とは別である。
+報告も2点訂正する。Lane Eの「refused carrier is never mined」は不正確で、fold登録から落ちたcarrier TXがaccepted dataに残り得る。RFC34 S1の詳細仕様化・隔離実装は旧ADR-0201とRFC34末尾で2026-10-21ユーザー選択済みであり、再承認待ちへ戻さない。本番採択・料金・有効化とは別である。
 
 ## 試験と保存
 

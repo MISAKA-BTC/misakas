@@ -1,6 +1,6 @@
 # RFC-0051 TKR1 production wiring checklist
 
-2026-11-11。採択済みの [RFC-0051](../../../rfc/0051-funded-preclaim-tokenizer-registration.md) と [ADR-0219](../../../adr/0219-funded-preclaim-tokenizer-registration.md) の実装チェックリスト。
+2026-11-11。採択済みの [RFC-0051](../../../rfc/0003-jobs-tokenizers-and-generation.md) と [旧ADR-0219](../../../rfc/0003-jobs-tokenizers-and-generation.md) の実装チェックリスト。
 
 | 段階 | 状態 |
 | --- | --- |

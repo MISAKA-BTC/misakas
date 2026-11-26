@@ -1,6 +1,6 @@
 # 採択済みwide Q24とA0の統合境界
 
-2026-11-01。[RFC-0043](../../../rfc/0043-wide-q24-llm-output.md) / [ADR-0211](../../../adr/0211-wide-q24-llm-output.md)は、ユーザーが2026-10-31に両案を明示採択した既存の決定である。新しい設計採択や公開網有効化ではない。旧i32の値・class・scheme・wireを維持し、i64 Q24は別profileとして実装する。
+2026-11-01。[RFC-0043](../../../rfc/0002-tensor-ir-kernels-and-runtime.md) / [旧ADR-0211](../../../rfc/0002-tensor-ir-kernels-and-runtime.md)は、ユーザーが2026-10-31に両案を明示採択した既存の決定である。新しい設計採択や公開網有効化ではない。旧i32の値・class・scheme・wireを維持し、i64 Q24は別profileとして実装する。
 
 ## 今回取り込んだ資料
 

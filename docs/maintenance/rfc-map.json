@@ -1,0 +1,622 @@
+{
+  "kind": "documentation-reference-map-not-runtime-migration",
+  "date": "2026-11-26",
+  "old_file_count": 71,
+  "current_rfc_count": 20,
+  "old_bodies_archived": false,
+  "duplicate_old_0042_disambiguated_by_full_path": true,
+  "records": [
+    {
+      "old_path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "old_title": "RFC-0001: PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計",
+      "current_paths": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0002-palw-tensor-ir.md",
+      "old_title": "RFC-0002: PALW Canonical Tensor IR v1 (PALW-TIR) — a bounded, deterministic integer tensor program as the consensus meaning of a class, with a reference evaluator and optional fused kernels",
+      "current_paths": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "old_title": "RFC-0003: PALW Generative Model Classes — one job, determinism and output layer, and the class profiles on top of it",
+      "current_paths": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0004-palw-model-improvement.md",
+      "old_title": "RFC-0004: PALW Model Improvement Protocol — self-improvement and distillation over PALW-TIR",
+      "current_paths": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "deferred feature policy retained; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0005-palw-ml-vm.md",
+      "old_title": "RFC-0005: PALW VM（不採用）",
+      "current_paths": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "VM design rejected; prohibition retained; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "old_title": "RFC-0006: PALW layer-sharded panels — bounded cell verification from authenticated boundaries, with independent public-verifier localization and exact court on dispute",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "old_title": "RFC-0007: PALW probabilistic detection — direct checks, authenticated receipts, and deterministic court",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "old_title": "RFC-0008: PALW EXEC lane — claim-backed work slices and transaction execution",
+      "current_paths": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0009-palw-remote-miner.md",
+      "old_title": "RFC-0009: PALW Remote Client — node を持たないモデル登録・claim・非保管型の報酬回収",
+      "current_paths": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "old_title": "RFC-0010: Permissionless PALW Panel binding and claim completion",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "old_title": "RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute",
+      "current_paths": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "old_title": "RFC-0012 — PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto",
+      "current_paths": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "old_title": "RFC-0013: Reproducible layouts and resource-bounded model onboarding tools",
+      "current_paths": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "old_title": "RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "old_title": "RFC-0015 — Panel=0: 固定Panelからpermissionless verifierとobjective fraud proofへ移行する",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "old_title": "RFC-0016 — bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する",
+      "current_paths": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "old_title": "RFC-0017 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)",
+      "current_paths": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "superseded economics/classification replaced by common MOE3; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "old_title": "RFC-0018 — DAGを最大限に活用する設計変更: 多モデル並行生成、特権なきPanel anchor、SecurityCertified(Gate C)とDNS廃止後の収束",
+      "current_paths": [
+        "docs/rfc/0011-gate-c-and-consensus-credit.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0019-annual-model-upgrade.md",
+      "old_title": "RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変",
+      "current_paths": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "superseded economics/classification replaced by common MOE3; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "old_title": "RFC-0020 — 長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない",
+      "current_paths": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "old_title": "RFC-0021 — 設計凍結・例外変更手続きと文書の役割分離",
+      "current_paths": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "old_title": "RFC-0022 — 初期 mainnet から画像・動画・モデル改善を外す適用範囲",
+      "current_paths": [
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "old_title": "RFC-0023 — 未解決 claim の責任を保持し、それに依存しない claim を進める",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "old_title": "RFC-0024 — ctx 2M・大きいモデルでも door ≤ 3,200 DAA に収める court 設計(単一位置裁定・先読み開示・先行取得)",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "old_title": "RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0026-court-policy-master-contract.md",
+      "old_title": "RFC-0026 — court の主契約:時計・帰責・責任期間・置換関係の一本化",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "old_title": "RFC-0027 — Miner Account Bond と Panel 追及報酬: 10万の基礎担保、責任連動の追加拘束、REAL継続性",
+      "current_paths": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "old_title": "RFC-0028 — rooted court response eligibility history",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "old_title": "RFC-0029 — owner-independent shared TIR query data",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "old_title": "RFC-0030 — court終了効果と未解決責任の保存",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "old_title": "RFC-0031 — 共有courtのinitial notice境界",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "old_title": "RFC-0032 — 共有courtの終端materialと非独占提出",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "old_title": "RFC-0033 — D2 readiness rootのdigest opening取得",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "old_title": "RFC-0034 — archived closeの実受付と金融責任の適格解消",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "old_title": "RFC-0035 — shared court originalの実原資と役割別同意",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "old_title": "RFC-0036 — 認証付き PALW state map と行単位アクセス",
+      "current_paths": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "old_title": "RFC-0037 — IBD の有界 authenticated row stream と世代番号付き保存",
+      "current_paths": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "old_title": "RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)",
+      "current_paths": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "old_title": "RFC-0039 — 通常 verifier の fee consent と provider の有限支払・保持契約",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "old_title": "RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "old_title": "RFC-0041 — genesis bond を廃止し、公開の BASE 回復経路から立ち上げる",
+      "current_paths": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0042-all-model-g14-panel-one.md",
+      "old_title": "RFC-0042 (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md",
+      "old_title": "RFC-0042 (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0043-wide-q24-llm-output.md",
+      "old_title": "RFC-0043 — 学習済みLLMの広いQ24 logit表現",
+      "current_paths": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0044-positive-court-full-coverage.md",
+      "old_title": "RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0045-positive-court-canonical-assignment.md",
+      "old_title": "RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0046-positive-native-funded-relay.md",
+      "old_title": "RFC-0046 — Positive native原資の先行relay資料と有限custody",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0047-batch-court-time-contract.md",
+      "old_title": "RFC-0047 — Batch court time contract: one door, separate retention, public 6,880",
+      "current_paths": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "old_title": "RFC-0048 — EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約",
+      "current_paths": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "old_title": "RFC-0049 — PALW実行整合性と一人による反証の完結契約",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "old_title": "RFC-0050 — 公開資料とモデル未保有の一人検証",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0051-funded-preclaim-tokenizer-registration.md",
+      "old_title": "RFC-0051 — 受付前 tokenizer 資料の有料搬送と native 登録",
+      "current_paths": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0052-hugging-face-model-acquisition-and-claim-materials.md",
+      "old_title": "RFC-0052 — Hugging Face 固定モデル取得と claim 固有資料の分離",
+      "current_paths": [
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0053-additional-model-burn-pause.md",
+      "old_title": "RFC-0053 — 追加モデルのburnによる停止・登録者による解除",
+      "current_paths": [
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0054-public-t12-original-admission-profile.md",
+      "old_title": "RFC-0054 — 公開T12 original受付profileの具体案",
+      "current_paths": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "legacy profile test/migration boundary only; no new activation adopted"
+    },
+    {
+      "old_path": "docs/rfc/0055-global-admission-court-calendar-and-one-bps.md",
+      "old_title": "RFC-0055 — 全モデル共通の受付難易度・資源予約・総搬送1 BPS",
+      "current_paths": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "old_title": "RFC-0056 — 全claim共通の受付難易度とcourt負荷連動制御",
+      "current_paths": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "proposal-only portions preserved as proposals; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "old_title": "RFC-0057 — Court nonce・Panel固有チャレンジと提出の一回性",
+      "current_paths": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "proposal-only portions preserved as proposals; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "old_title": "RFC-0058 — 実行commit・段階別抽選・仕事の一回性と合意資格",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "proposal-only portions preserved as proposals; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "old_title": "RFC-0059 — PALW-AN1：実入力への試行束縛とPanel＋Court",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "superseded by FOW1; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "old_title": "RFC-0060 — モデル登録時の試行別出力束縛と暗号学的非重複性",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "superseded by FOW1; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0061-palw-internal-threshold-beacon.md",
+      "old_title": "RFC-0061 — PALW内部閾値beaconと用途別乱数契約",
+      "current_paths": [
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+      "old_title": "RFC-0062 — PALW-FOW1：推論関数の採掘出力と新規仕事の適格性",
+      "current_paths": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0063-additional-model-option-economics.md",
+      "old_title": "RFC-0063 — 追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転",
+      "current_paths": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "superseded economics/classification replaced by common MOE3; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "old_title": "RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn",
+      "current_paths": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "superseded economics/classification replaced by common MOE3; old body removed"
+    },
+    {
+      "old_path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "old_title": "RFC-0065 — MAS1：モデル追加時の構造検査・実用性条件とBFT停止",
+      "current_paths": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "automatic admission removed; optional analysis and separate stop retained"
+    },
+    {
+      "old_path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "old_title": "RFC-0066 — QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout",
+      "current_paths": [
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "old_title": "RFC-0067 — MAD2：kernel自動追加とBFT YES/NOによるモデル採用",
+      "current_paths": [
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "dual admission replaced by BFT only; technical compatibility retained"
+    },
+    {
+      "old_path": "docs/rfc/0068-fractional-position-miner-rewards.md",
+      "old_title": "RFC-0068 — MOE3：小数POSITION・全モデル統一・50/20/20/5/5配分",
+      "current_paths": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0069-bft-model-retirement-and-role-bonds.md",
+      "old_title": "RFC-0069 — BMR1：モデル恒久廃止・用途別bond・Court slash 49/51",
+      "current_paths": [
+        "docs/rfc/0017-model-stop-and-retirement.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "merged-and-removed-no-archive"
+    },
+    {
+      "old_path": "docs/rfc/0070-model-work-accounting-and-exec-credit.md",
+      "old_title": "RFC-0070 — MWA1：モデル別仕事量認定・FOW1報酬・EXEC credit",
+      "current_paths": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "MWA1 proposal preserved without promotion to adopted"
+    }
+  ]
+}

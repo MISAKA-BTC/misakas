@@ -1,6 +1,6 @@
 # RFC-0046 native relay namespace inventory — 2026-11-03
 
-Implementation inventory under accepted [RFC-0046](../../../rfc/0046-positive-native-funded-relay.md) / [ADR-0214](../../../adr/0214-positive-native-funded-relay.md). It does not activate a network, migrate old funds or establish native R custody. Fixed contract/native codec, field-inventory and logical-allocation tests pass; the actual fee/custody/binding owners are still missing.
+Implementation inventory under accepted [RFC-0046](../../../rfc/0010-materials-and-funded-delivery.md) / [旧ADR-0214](../../../rfc/0010-materials-and-funded-delivery.md#9-限定funding-relayとcustody契約). It does not activate a network, migrate old funds or establish native R custody. Fixed contract/native codec, field-inventory and logical-allocation tests pass; the actual fee/custody/binding owners are still missing.
 
 ## Wire and fixed rows
 

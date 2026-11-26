@@ -1,7 +1,7 @@
 # 公開裁定 P4 — 測定したプロファイル
 
 - 状態: 2026-11-07。P4 は未了である。debug の全フレームドアと、そのあと別の公開救済測定がある。どちらも測定クラスの行にはしていない。`PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1` は空のままである。出荷 preset は武装しない。公開 T12 は主張しない。
-- 関係: [公開裁定の方針 v0.1](public-adjudication-policy-v0.1.md)、[RFC-0047](../../../rfc/0047-batch-court-time-contract.md)
+- 関係: [公開裁定の方針 v0.1](public-adjudication-policy-v0.1.md)、[RFC-0047](../../../rfc/0009-court-and-claim-final.md)
 - 配置: この文書は記録である。`palw_batch_court_v1` も出荷 preset もここから武装しない。
 
 ## 探したハーネス

@@ -1,19 +1,9 @@
 # RFC-0008 implementation spec v1 — unified PALW EXEC lane (DRAFT, NOT IMPLEMENTED)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
@@ -21,11 +11,11 @@ Status: revised design, 2026-10-10. Baseline: `MISAKA-BTC/misakas` main `282355b
 No activation height, runtime change, deployment or fingerprint change is authorized by this document.
 The type and fence names below are proposed names, not declarations that exist in main.
 
-This document implements the direction of [revised RFC-0008](../../../rfc/0008-palw-claim-backed-consensus-blocks.md).
+This document implements the direction of [revised RFC-0008](../../../rfc/0014-exec-schedule-and-capacity.md).
 The former algo-11 design body has been deleted. Only its [v0 test results and unrun cases](../../../evidence/palw/implementation-records/rfc-0008-v0-test-record.md)
 are preserved; they are not v1 requirements or v1 validation evidence. Main's active heartbeat, BASE-0, clock, REAL admission and transaction-permit rules are the baseline.
 
-**2026-10-10後続改定 acceptance boundary:** [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)
+**2026-10-10後続改定 acceptance boundary:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)
 and RFC08 §6.1 withdraw mandatory Torrent, Seeder/PoR/Full Fetch/lease/TRDC/FPR and availability-driven qualification/weight gates.
 Model supply is optional off-chain activity; immutable model identity and finite claim-specific evidence/court obligations remain.
 Do not turn this court into model retrieval through whole-weight or iterated range demands. Define permitted units, cumulative scope
@@ -58,7 +48,7 @@ normal consensus k-anticone contribution = 0
 
 EXEC work settlement does not feed the fork-choice ledgers. A REAL root retains only the contribution its
 own admitted useful work earns under REAL's existing rules. It does not import its EXEC slices' work as additional weight.
-No round weight pool is carved from the root: ADR-0168 §10.3's positive `ρ` is outside this design.
+No round weight pool is carved from the root: 旧ADR-0168 §10.3's positive `ρ` is outside this design.
 
 Heartbeat/BASE-0 validity, work/weight, production policy, clock cursor, fallback timers, anchor duty and 120-second
 cadence remain as in baseline main. EXEC presence, backlog, class strings and node-local observations are not inputs
@@ -212,7 +202,7 @@ pruning-proof validation, template construction and RPC; a new display label alo
 The carrier anchor must be on the accepting chain and inside its versioned attachment window. The root anchor is
 separately checked. Define a header/body-committed execution-head/closure commitment and a bounded canonical order
 that includes subtype and respects predecessor dependencies. Pin encoding, root/count, max heads, walk/byte limits,
-window and legacy-v1 coexistence in the compatibility gate; ADR-0168's proposed trailer is a reference, not shipped code.
+window and legacy-v1 coexistence in the compatibility gate; 旧ADR-0168's proposed trailer is a reference, not shipped code.
 
 Build and validate the same covered set from parent state. Compute subtype verdicts without mixing ledgers. The
 template filters invalid/stale heads and resumes from the latest accepted lane checkpoint. Missing lane material
@@ -226,14 +216,14 @@ activate a partial v2 where slices still enter the consensus mergeset while TX b
 
 ## 6. Verification, failure and independent transaction acceptance
 
-Bind the class/root/slice `challenge_policy_id` and use [RFC07 Part VI](../../../rfc/0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)
+Bind the class/root/slice `challenge_policy_id` and use [RFC07 Part VI](../../../rfc/0008-g14-panel-and-verification.md)
 as the only source/seed/sampling/transcript protocol. A WORK_SLICE binds root/index/range, states and complete evidence
 before its own future source window; a seed exposed at root-open cannot test arbitrarily later-created slice statements.
 Whole-root checking follows the same scope/boundary composition. No alternative seed formula or per-slice independent
 Final credit is introduced. Missing qualifying sources remains pending/deadline-limited; EXEC_TX/heartbeat/BASE-0
 liveness and all EXEC zero-weight/zero-clock invariants remain unchanged.
 
-Apply ADR-0173 / RFC14 public-bond prosecution and RFC07 Part V / RFC11 §15's active kernel/constraint rules.
+Apply 旧ADR-0173 / RFC14 public-bond prosecution and RFC07 Part V / RFC11 §15's active kernel/constraint rules.
 Each slice and boundary has public authenticated material for complete bounded localization and exact court.
 Compose whole-root soundness over every required range/boundary; repeated carriers/receipts are not independent tests.
 Missing evidence, silent verifier and unresolved challenges cannot yield Final. Retention must cover reorg/pruning,
@@ -291,7 +281,7 @@ parameters only after independent review, measured evidence and a separate coord
 
 ## Bond予算・総影響保存の改定 — 2026-10-10
 
-[ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../../../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+[旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)と[RFC15 §8](../../../rfc/0008-g14-panel-and-verification.md)を適用する。
 
 新reward/REAL/root経路は受理時に同じproducerのclaim/block/reward/Final weight配分を予約し、全権利行使・Final/retired/reversalとRPC/EVMで同じ会計を読む。
 容量倍率の拡大で総creditを増やさず、共通DAA拘束・残存責任と旧新ruleset混在を検査する。EXECのweight/DAA=0、既存発行量、unique-work条件は維持する。実装・activationは未完了である。
@@ -300,7 +290,7 @@ parameters only after independent review, measured evidence and a separate coord
 
 ## MISAKA Torrent・Seeder報酬の廃止 — 2026-10-10後続改定
 
-[ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
+[旧ADR-0177](../../../rfc/0013-model-work-accounting.md)に従い、MISAKA Torrentの採用/統合、専用Bonded Seeder、
 Seeder報酬・固定15%配分の概念を廃止する。一般的な任意配布はoff-chain運用とし、
 モデル入手の合意gateやSeeder向けcoinbase legへ復活させない。過去の設計/試験は撤回前の記録として保持する。
 
@@ -432,7 +422,7 @@ lengthens the consensus closure walk for every anchoring block; republishing cos
 route, 10.1) and the declaration of `palw_audit_2026_09_11` (A-2's tolerance of undecodable lifecycle payloads, which keeps a tag-130
 carrier block-valid on a fleet that mixes builds — the X8R review, record section 10).
 
-### 10.9 X8R round 3 (2026-10-10): the user's revision applied, G14 completion (GAP-60 to GAP-63) and ADR-0176 D2
+### 10.9 X8R round 3 (2026-10-10): the user's revision applied, G14 completion (GAP-60 to GAP-63) and 旧ADR-0176 D2
 
 Like 10.1–10.8, this subsection records the implementation's choices and is **not normative**; sections 1–9 and the two 2026-10-10
 sections win. It maps the revision onto the code, closes the G14 completion matrix's EXEC-slice gaps, and names what lane BUDGET must
@@ -442,11 +432,11 @@ provide. Nothing here arms a fence or moves a shipped id.
 
 | Revision item | Where the code stands |
 | --- | --- |
-| EXEC weight / DAA / blue score / selected parent = 0, settlement included (§1, ADR-0176 D3) | unchanged: P1, P3, P9 pin it; no settlement path writes weight |
+| EXEC weight / DAA / blue score / selected parent = 0, settlement included (§1, 旧ADR-0176 D3) | unchanged: P1, P3, P9 pin it; no settlement path writes weight |
 | One root settlement, unique work (§4) | unchanged: `JobWorkUse`, the one `Settled` marker, `sum(paid) == allocation`; now net of the bound claims' route rewards (D2 below) |
-| ADR-0177 non-interference | the slice route demands only claim-specific material (one committed position of one kernel claim); no model bytes, no availability condition. The outsider computes with its own model copy; G14 for a slice is conditional on the verifier having acquired the registered model |
-| ADR-0176 D2: no double rights from root/slice splitting | the D2 rule and hooks below |
-| Rule E (ADR-0178) | EXEC carriers contribute no fork-choice term, so rule E reads nothing from this lane; the root REAL claim is an ordinary REAL claim to it |
+| 旧ADR-0177 non-interference | the slice route demands only claim-specific material (one committed position of one kernel claim); no model bytes, no availability condition. The outsider computes with its own model copy; G14 for a slice is conditional on the verifier having acquired the registered model |
+| 旧ADR-0176 D2: no double rights from root/slice splitting | the D2 rule and hooks below |
+| Rule E (旧ADR-0178) | EXEC carriers contribute no fork-choice term, so rule E reads nothing from this lane; the root REAL claim is an ordinary REAL claim to it |
 
 **GAP-62 — the initial boundary is linked to the REAL claim's output (the prefix binding).** Before this round the initial boundary was
 the root bond's unchecked declaration. Now, wherever the kernel route is in force, the declaration names a **prefix claim**: a
@@ -470,7 +460,7 @@ DA protocol. **Limit:** it binds the REAL claim's *output*; the REAL claim's V2 
 That is G14C's GAP-81, and this binding is the shape GAP-81's option "bind the V2 claim 1:1 to a kernel claim of the same job" would
 take.
 
-**ADR-0176 D2 — one work, one right, one budget.** The round-3 advance/netting design recorded here is superseded by §13.
+**旧ADR-0176 D2 — one work, one right, one budget.** The round-3 advance/netting design recorded here is superseded by §13.
 Bound kernel claims are verification vehicles: their computation Final cannot pay the producer or spend the poster's job escrow.
 At root Final, their actual fee payments replace native issuance inside the executor's share of the root's one allocation.
 Already-paid standalone work cannot attach later. EXEC weight remains 0 and carriers mint nothing.
@@ -504,7 +494,7 @@ gates passes today, and the unified EXEC stays unarmable (`PALW_EXEC_PAYLOAD_V2_
 
 | Gate | Owner | What this branch already shows (implemented; verified only where a run is named) | Open |
 | --- | --- | --- | --- |
-| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix nonce binds the root claim id (GAP-62); one budget per work, legs net of route reward (ADR-0176 D2, §10.9); node controls for two REAL roots, cross-index claim reuse and signed reveal replay after computation Final (§15.8, measured 2026-10-11); native Final/payment/recovery controls exist (§15.10; fresh execution pending) | a second composed write of the same Final claim row; fresh native root Final, all positive funds, material retention and restart/reorg acceptance; the controls' REAL trace seam and missing pruned/P2P evidence remain |
+| SLICE | X8R (the Lead) | a plan is a partition with no gap or overlap (`a_plan_is_a_partition_with_no_gap_and_no_overlap`); more slices pay no more (`splitting_a_range_into_more_slices_pays_no_more`); a used index, a skip, an overlap and a replay credit nothing (`a_used_index_a_skip_an_overlap_and_a_replay_credit_nothing`); the root settles once and the allocation is conserved (`the_root_settles_once_…`); one job work id per root (`JobWorkAlreadyUsed`); the prefix nonce binds the root claim id (GAP-62); one budget per work, legs net of route reward (旧ADR-0176 D2, §10.9); node controls for two REAL roots, cross-index claim reuse and signed reveal replay after computation Final (§15.8, measured 2026-10-11); native Final/payment/recovery controls exist (§15.10; fresh execution pending) | a second composed write of the same Final claim row; fresh native root Final, all positive funds, material retention and restart/reorg acceptance; the controls' REAL trace seam and missing pruned/P2P evidence remain |
 | RECOVERY (EXEC half) | X8R | restart / replay / IBD / reorg of the carriage and the ledgers (`t12_exec_v2_carriage`), the salted-seal and slice-verification reorg cases | the prefix stage across a reorg |
 | BUDGET, WORK, WINDOW, NEUTRALITY, SPLIT, RECOVERY (budget half) | BUDGET (`palw_bond_budget_v1`) | EXEC carriers mint nothing (`B` = 0 per carrier); standalone kernel Q/R reservation and recipient reclassification, capped candidate draw and atomic ticket reservation are connected to the native fold (§15.10); fresh compiled core budget selection: 64 passed | composed consumer/resource/economic acceptance of the shared pre-draw cap and explicit fee-only execution cap (POLICY), split invariance and role-swap neutrality; finite signed material service across actual delayed payment; leaf/fold PASS does not close these gates |
 | ECON | ECON | — | small/large model economics before/after the cap and window saturation, with criteria fixed before the run |

@@ -2,7 +2,7 @@
 
 状態: **IMPLEMENTATION_IN_PROGRESS / Rust build・test NOT_RUN / 公開有効化なし**。
 
-前のgoalターンは状況説明のみで、実装進捗はなかった。今回は[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)に従い、新ordinary profileのArtifact資料をモデル重み全量から固定HF参照descriptorへ分離するコードを追加した。Studioの同一claim受付・Final・当選時権利消費・対応blockは **NOT_PROVEN**。
+前のgoalターンは状況説明のみで、実装進捗はなかった。今回は[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)に従い、新ordinary profileのArtifact資料をモデル重み全量から固定HF参照descriptorへ分離するコードを追加した。Studioの同一claim受付・Final・当選時権利消費・対応blockは **NOT_PROVEN**。
 
 ## 接続したコード
 

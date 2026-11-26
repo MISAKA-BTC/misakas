@@ -1,8 +1,8 @@
 # HF必須profileとcold Panel — 2026-11-11 実装追補
 
-**後続指示を適用:** [RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../../../adr/0221-additional-model-burn-pause.md)により、HF取得可否の認定・登録検査・定期期限は廃止する。追加モデルだけを誰でもburnで停止、登録者burnで解除する。genesis・年次fork指定は対象外。以下の実取得・hash・再計算の成果はoff-chain機能として維持する。
+**後続指示を適用:** [RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)／[旧ADR-0221](../../../rfc/0017-model-stop-and-retirement.md)により、HF取得可否の認定・登録検査・定期期限は廃止する。追加モデルだけを誰でもburnで停止、登録者burnで解除する。genesis・年次fork指定は対象外。以下の実取得・hash・再計算の成果はoff-chain機能として維持する。
 
-採択: [RFC-0052](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../../../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+採択: [RFC-0052](../../../rfc/0010-materials-and-funded-delivery.md)／[旧ADR-0220](../../../rfc/0010-materials-and-funded-delivery.md)。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 [2026-11-10原文計画](public-one-honest-vertical-implementation-plan-2026-11-10.md)はユーザーの原文保持指示に従い変更しない。以下はそのI0/I1/I3/I5とcold検査への明示的な追補である。モデルの静的資料とclaim固有資料を分離し、モデル重み内部DAの全面完成をT12受付修復の前提にしない。
 

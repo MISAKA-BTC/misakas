@@ -3,11 +3,11 @@
 Status: Draft. Frozen values listed here are the contract every phase must
 respect. Any change must go through an ADR update under `docs/adr/`.
 
-> **md2 alignment (2026-06-01):** the signature scheme is now **ML-DSA-87** (sizes/version/context in the normative table below updated) per [ADR-0019 rev 1.2](../../adr/0019-mldsa87-migration.md) + [the design doc](../../design/pq/kaspa-pq-design-mldsa87.md). Tx/sighash contexts are `kaspa-pq-v2/{tx,sighash}/mldsa87`; the address payload is a **keyed** BLAKE2b-512 under `kaspa-pq-v2/address/mldsa87`; `MAX_SCRIPTS_SIZE` / `max_signature_script_len` are `16_384` and `MAX_SCRIPT_ELEMENT_SIZE` is `8192`. Any remaining `*65*` / `kaspa-pq-v1/{tx,sighash}` / `4096` mentions in the prose below are historical (ML-DSA-65 draft era).
+> **md2 alignment (2026-06-01):** the signature scheme is now **ML-DSA-87** (sizes/version/context in the normative table below updated) per [旧ADR-0019 rev 1.2](../../rfc/0001-principles-and-governance.md) + [the design doc](../../design/pq/kaspa-pq-design-mldsa87.md). Tx/sighash contexts are `kaspa-pq-v2/{tx,sighash}/mldsa87`; the address payload is a **keyed** BLAKE2b-512 under `kaspa-pq-v2/address/mldsa87`; `MAX_SCRIPTS_SIZE` / `max_signature_script_len` are `16_384` and `MAX_SCRIPT_ELEMENT_SIZE` is `8192`. Any remaining `*65*` / `kaspa-pq-v1/{tx,sighash}` / `4096` mentions in the prose below are historical (ML-DSA-65 draft era).
 
 > **Finality model (audit H-02 — precise wording).** kaspa-pq does **not** claim a "double Nakamoto confirmation". The DNS *confirmed anchor* is a **stake-confirmed canonical lagged anchor**: in `PRODUCTION_DNS_PARAMS`, `required_work_depth = 0`, so the confirmation predicate advances on `StakeScore` over the canonical (blue_score-coordinated, header-committed) anchor — it does **not** independently require a PoW depth. The two-dimensional `WorkScore × StakeScore` dominance is enforced separately, at the **reorg gate** (`TwoDimensionalDominance`) on candidate reorgs, **not** in the confirmation predicate. Deep-reorg safety therefore comes from PoW block production + GHOSTDAG + the reorg gate; DNS finality adds a stake-confirmed canonical anchor on top. (To make confirmation itself PoW-gated — option A — set `required_work_depth > 0` and define work depth as `blue_work(tip) − blue_work(confirmed_anchor)`; deferred. Where the prose below says DNS confirmation "binds … to both WorkScore and StakeScore", read it as the reorg-gate property.)
 
-ADR-0007 と ADR-0008 により PQ signature・UTXO accumulator に Layer 0 PoW と Hash64 identity を追加した。DNS validator の将来拡張計画は不採用とする。PALW 自身が consensus work と settlement を担い、別の validator 投票・報酬・運用基盤を増やす必要がないため。[RFC-0012](../../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) の移行が未有効化の間は、既存ネットワークの DNS 規則と過去 state の replay を維持する。
+旧ADR-0007 と 旧ADR-0008 により PQ signature・UTXO accumulator に Layer 0 PoW と Hash64 identity を追加した。DNS validator の将来拡張計画は不採用とする。PALW 自身が consensus work と settlement を担い、別の validator 投票・報酬・運用基盤を増やす必要がないため。[RFC-0012](../../rfc/0015-dag-blocks-and-settlement.md) の移行が未有効化の間は、既存ネットワークの DNS 規則と過去 state の replay を維持する。
 
 ## 0. Scope and non-goals
 
@@ -19,12 +19,12 @@ mainline Kaspa network.
 
 1. Signature scheme replacement: ML-DSA-65 (FIPS 204) P2PKH only. Address
    payload is the 64-byte BLAKE2b-512 hash of the public key
-   (ADR-0008 §"Address payload width").
+   (旧ADR-0008 §"Address payload width").
 2. UTXO accumulator replacement: LtHash32_1024. Final commitment is the
    64-byte BLAKE2b-512 of the 4096-byte LtHash state
-   (`UtxoCommitmentHash64`, ADR-0008).
+   (`UtxoCommitmentHash64`, 旧ADR-0008).
 3. Network-level isolation (NetworkId, genesis, address prefix, ports).
-4. **Layered PoW** (ADR-0007): Layer 0 is the consensus-critical
+4. **Layered PoW** (旧ADR-0007): Layer 0 is the consensus-critical
    BLAKE2b-512 finalizer over a 512-bit comparison domain; Layer 1 is the
    `algo_id`-identified ASIC-resistance tag (`algo_id = 1` =
    kHeavyHash-compatible at Phase 1; ASIC-hard variants are Phase
@@ -35,19 +35,19 @@ mainline Kaspa network.
    message the `Header.pow_algo_id` is always initialized to `1`
    (`protocol/p2p/src/convert/header.rs`), and consensus rejects any other
    value (`check_algo_id_phase1`). Adding `algo_id ≥ 2` is a Phase-2 change
-   that must add the proto field + a hard-fork activation together (ADR-0007).
-5. **64-byte consensus identity** end-to-end (ADR-0008). Block hash,
+   that must add the proto field + a hard-fork activation together (旧ADR-0007).
+5. **64-byte consensus identity** end-to-end (旧ADR-0008). Block hash,
    transaction id, transaction hash, merkle root, accepted-id merkle
    root, UTXO commitment, pruning point, parent references all move
    from 32-byte `Hash` to 64-byte `Hash64`. The 32-byte type remains as
    `Hash32` for incidental internal use (cache keys, debug
    fingerprints, the Layer 1 kHeavyHash internals).
-6. **DNS validator 拡張は不採用。** PALW consensus と settlement への一本化により別の投票・報酬・運用基盤は不要なため。移行境界は [RFC-0012](../../rfc/0012-palw-only-consensus-and-native-evm-settlement.md) に従う。
+6. **DNS validator 拡張は不採用。** PALW consensus と settlement への一本化により別の投票・報酬・運用基盤は不要なため。移行境界は [RFC-0012](../../rfc/0015-dag-blocks-and-settlement.md) に従う。
 
 ### Out of scope
 
 - Mainline Kaspa interoperability (wallet, RPC, P2P, address). kaspa-pq
-  is a separate network (ADR-0001), not a soft-/hard-fork of mainline.
+  is a separate network (旧ADR-0001), not a soft-/hard-fork of mainline.
 - ML-DSA multisig, script-hash composite scripts, smart contracts. The
   P2PKH ML-DSA-65 template is the only standard send.
 - Hardware-wallet support; BIP32-style hierarchical key derivation that
@@ -55,7 +55,7 @@ mainline Kaspa network.
 
 ### Public-claim discipline (binding)
 
-The kaspa-pq Phase 9 security claim, taken verbatim from ADR-0008 §"Security
+The kaspa-pq Phase 9 security claim, taken verbatim from 旧ADR-0008 §"Security
 framing":
 
 - ✅ "512-bit commitment domain"
@@ -69,7 +69,7 @@ Quantum collision resistance under the BHT bound is approximately
 phrasings above and **must not** over-claim collision resistance.
 
 The kaspa-pq Phase 10 DNS finality claim, taken verbatim from
-ADR-0009 §"Public-claim discipline (binding)":
+旧ADR-0009 §"Public-claim discipline (binding)":
 
 - ✅ "PoW-ledger + PoS probabilistic finality"
 - ✅ "Two-resource confirmed history"
@@ -130,11 +130,11 @@ running code.
 ### 3.1 Signature
 
 - Algorithm: ML-DSA-65 (FIPS 204), pure mode, with a fixed `ctx` value
-  (see §2 and [ADR-0002](../../adr/0002-mldsa65-p2pkh.md)).
+  (see §2 and [旧ADR-0002](../../rfc/0001-principles-and-governance.md)).
 - Library: `libcrux-ml-dsa = "=0.0.9"` (exact pin).
 - Verify-time pre-checks: signature length and public-key length must be
   validated **before** calling into `verify`.
-- See [ADR-0002](../../adr/0002-mldsa65-p2pkh.md).
+- See [旧ADR-0002](../../rfc/0001-principles-and-governance.md).
 
 ### 3.2 UTXO accumulator
 
@@ -142,7 +142,7 @@ running code.
 - State: 1024 lanes × 32 bits = 4096 bytes.
 - Element serialization includes the spending outpoint to defeat the
   2^16 duplication wrap-around.
-- See [ADR-0003](../../adr/0003-lthash-utxo-accumulator.md).
+- See [旧ADR-0003](../../rfc/0018-storage-pruning-and-ibd.md).
 
 ### 3.3 UTXO commitment
 
@@ -150,7 +150,7 @@ running code.
   `UtxoCommitment64` type.
 - PoC: 32-byte commitment is permitted but must not be claimed as
   the 200-bit-security finalization of LtHash.
-- See [ADR-0004](../../adr/0004-utxo-commitment64.md).
+- See [旧ADR-0004](../../rfc/0001-principles-and-governance.md).
 
 ### 3.4 Hashes that stay 32 bytes
 
@@ -163,7 +163,7 @@ running code.
 
 - New `NetworkId`, genesis block, address prefix (`kaspapq`), P2P port,
   RPC port, DNS seed list, protocol handshake magic, initial UTXO commitment.
-- See [ADR-0001](../../adr/0001-network-isolation.md).
+- See [旧ADR-0001](../../rfc/0001-principles-and-governance.md).
 
 ## 5. Standard transaction format
 
@@ -186,7 +186,7 @@ OP_CHECKSIG_MLDSA87
 ```
 
 Exactly 69 bytes per output (the address payload is the **keyed** BLAKE2b-512
-of the public key under `kaspa-pq-v2/address/mldsa87`; md2 §4.2 / ADR-0019).
+of the public key under `kaspa-pq-v2/address/mldsa87`; md2 §4.2 / 旧ADR-0019).
 
 ### 5.3 signatureScript (input)
 
@@ -196,7 +196,7 @@ PUSH <ML-DSA-87 public key>          ; 2592 bytes payload
 ```
 
 (The ML-DSA-87 signature is 4627 bytes and the public key 2592 bytes;
-ADR-0019.)
+旧ADR-0019.)
 
 ### 5.4 sighash
 
@@ -208,7 +208,7 @@ The ML-DSA `ctx` parameter binds the signature to the network and scheme
 ## 6. Mass / DoS policy (initial)
 
 These values are placeholders for PoC. They will be replaced by
-benchmarked values in Phase 6 — see [ADR-0005](../../adr/0005-mass-policy.md).
+benchmarked values in Phase 6 — see [旧ADR-0005](../../rfc/0014-exec-schedule-and-capacity.md).
 
 | Parameter | PoC value | Notes |
 |---|---|---|
@@ -330,34 +330,34 @@ mandatory acceptance criteria for each phase:
 
 > **The maintained index is [`docs/adr/README.md`](../../adr/README.md)** — it covers every ADR
 > (0001–0076, including the PALW lineage) together with the supersede map that says which
-> decisions were later reversed. The list below is the PQ-phase snapshot (ADR-0001–0015) and
+> decisions were later reversed. The list below is the PQ-phase snapshot (旧ADR-0001–0015) and
 > is kept for the revision history; it is not extended.
 
-- [ADR-0001 — Network isolation](../../adr/0001-network-isolation.md)
-- [ADR-0002 — ML-DSA-65 P2PKH as the only standard script](../../adr/0002-mldsa65-p2pkh.md)
-- [ADR-0003 — LtHash32_1024 UTXO accumulator](../../adr/0003-lthash-utxo-accumulator.md)
-- [ADR-0004 — 64-byte UTXO commitment](../../adr/0004-utxo-commitment64.md)
-- [ADR-0005 — Mass / DoS policy](../../adr/0005-mass-policy.md)
-- [ADR-0006 — RPC / WASM / SDK types](../../adr/0006-rpc-wasm-sdk-types.md) (Phase 7 scope freeze)
-- [ADR-0007 — Layered PoW](../../adr/0007-layered-pow.md) (Layer 0 BLAKE2b-512 finalizer + Layer 1 algo_id; Phase 1 = quantum-resistant PoW domain, Phase 2+ = ASIC-hard Layer 1)
-- [ADR-0008 — Full Hash64 consensus identity](../../adr/0008-hash64-consensus-identity.md) (Phase 9 — block hash / txid / merkle root / pruning point / parent references / UTXO commitment / address payload all move to 64 bytes via keyed BLAKE2b-512; 256-bit quantum preimage margin, **not** 256-bit quantum collision)
-- [ADR-0009 — DNS Probabilistic Finality Overlay](../../adr/0009-dns-probabilistic-finality.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0010 — Validator Node Architecture](../../adr/0010-validator-node-architecture.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0011 — Validator Single-Host Deployment + Equivocation-Safety](../../adr/0011-validator-deployment-and-equivocation-safety.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0012 — Mainnet Validator Sortition via On-Chain Commit-Reveal](../../adr/0012-mainnet-validator-sortition-commit-reveal.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0013 — Validator Reward Distribution](../../adr/0013-validator-reward-distribution.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0014 — Coordinated-Failover Protocol for Validator Hosts](../../adr/0014-coordinated-failover-protocol.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
-- [ADR-0015 — Remote-Signer / HSM Protocol for Validator Signing](../../adr/0015-remote-signer-hsm-protocol.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0001 — Network isolation](../../rfc/0001-principles-and-governance.md)
+- [旧ADR-0002 — ML-DSA-65 P2PKH as the only standard script](../../rfc/0001-principles-and-governance.md)
+- [旧ADR-0003 — LtHash32_1024 UTXO accumulator](../../rfc/0018-storage-pruning-and-ibd.md)
+- [旧ADR-0004 — 64-byte UTXO commitment](../../rfc/0001-principles-and-governance.md)
+- [旧ADR-0005 — Mass / DoS policy](../../rfc/0014-exec-schedule-and-capacity.md)
+- [旧ADR-0006 — RPC / WASM / SDK types](../../rfc/0019-clients-rpc-and-diagnostics.md) (Phase 7 scope freeze)
+- [旧ADR-0007 — Layered PoW](../../rfc/0014-exec-schedule-and-capacity.md) (Layer 0 BLAKE2b-512 finalizer + Layer 1 algo_id; Phase 1 = quantum-resistant PoW domain, Phase 2+ = ASIC-hard Layer 1)
+- [旧ADR-0008 — Full Hash64 consensus identity](../../rfc/0001-principles-and-governance.md) (Phase 9 — block hash / txid / merkle root / pruning point / parent references / UTXO commitment / address payload all move to 64 bytes via keyed BLAKE2b-512; 256-bit quantum preimage margin, **not** 256-bit quantum collision)
+- [旧ADR-0009 — DNS Probabilistic Finality Overlay](../../rfc/0001-principles-and-governance.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0010 — Validator Node Architecture](../../adr/0001-principles-and-authority.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0011 — Validator Single-Host Deployment + Equivocation-Safety](../../rfc/0019-clients-rpc-and-diagnostics.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0012 — Mainnet Validator Sortition via On-Chain Commit-Reveal](../../rfc/0006-tb1-randomness-and-release.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0013 — Validator Reward Distribution](../../adr/0016-position-economics-and-permanent-liquidity.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0014 — Coordinated-Failover Protocol for Validator Hosts](../../adr/0019-clients-and-cause-preserving-diagnostics.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
+- [旧ADR-0015 — Remote-Signer / HSM Protocol for Validator Signing](../../adr/0019-clients-and-cause-preserving-diagnostics.md) — 不採用理由は参照先、DNS 移行境界は RFC-0012 に従う。
 
 ## 13. Revision history
 
 | Version | Date | Change |
 |---|---|---|
 | 0.1 | 2026-05-28 | Initial draft. |
-| 0.2 | 2026-05-28 | ADR-0007 + ADR-0008 incorporated. Removed the "do not widen Hash past 32 bytes" non-goal (it directly contradicts ADR-0008); added the full 64-byte consensus identity goal; added the Phase 8 / Phase 9 entries to the phase plan; codified the public-claim discipline section. Revised non-goal removal: previously `PQ-strengthening the PoW hash, block hash, txid, or merkle root` was listed as out-of-scope; this is now the explicit Phase 8 + Phase 9 in-scope work. |
-| 0.3 | 2026-05-28 | ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11 (test plan). |
-| 0.4 | 2026-05-28 | ADR-0010 incorporated. Added Phase 11 row (operational design, no new consensus surface) to the phase plan, with the refined 14-slot Phase 10 implementation roadmap from ADR-0010 §"Phase 10 PR plan" inlined as a sub-table. Added Phase 11 acceptance criteria (8-step operator runbook + byte-identical `validator_set_commitment` across nodes) to §11 (test plan). Added ADR-0010 to the ADR index (§12). Renumbered §12 → §13 to fix the pre-existing duplicate-§11 mis-numbering; ADR-0006's "§11 (ADR index)" reference updated to "§12 (ADR index)" in the same commit. |
-| 0.5 | 2026-05-28 | ADR-0011 incorporated. Added Phase 12 row (operational design, no new consensus surface) to the phase plan; widened the Phase 10 PR sub-table with the `'`-suffixed implementation sub-slots (PR-10.6′ sidecar binary, PR-10.6″ signed-epoch store, PR-10.6‴ `--dry-run`, PR-10.13′ CLI validator commands, PR-10.14′ `getValidatorStatus` RPC + sidecar smoke). Added Phase 12 acceptance criteria (sidecar-shape end-to-end runbook + `check_signed_epoch_record` decision matrix + 100-epoch `--dry-run` sweep emitting zero on-chain attestations) to §11 (test plan). Added ADR-0011 to the ADR index (§12). |
-| 0.6 | 2026-05-28 | ADR-0012 incorporated (Phase 13, 1/4). Added Phase 13 row (🚧 1/4 ADRs landed — mainnet completeness phase covering sortition + rewards + failover + HSM); refined the PR sub-table with PR-13.1 / PR-13.2 / PR-13.3 entries and rewrote the PR-10.9 entry to reference ADR-0012 explicitly (was: "PoC deterministic; mainnet commit-reveal in a follow-up ADR"). Added Phase 13 (1/4) acceptance criteria to §11 (test plan) — sortition determinism, commit-reveal cycle, ≥ 2/3 threshold boundary pin, stake-weighted committee bias-test, commit-without-reveal slashing, fallback-chain bottom-out at `Hash64::ZERO` for `epoch == 0`. Added ADR-0012 to the ADR index (§12) with the explicit "NOT an unbiased random oracle" framing per ADR-0012 §"Public-claim discipline". |
-| 0.7 | 2026-05-28 | ADR-0013 incorporated (Phase 13, 2/4). Phase 13 row flipped to 🚧 2/4. Refined PR sub-table with PR-13.4 / PR-13.5 / PR-13.6 entries and the two `'`-suffixed implementation sub-slots (PR-10.5′ coinbase fan-out, PR-10.12′ slashing distribution). Added Phase 13 (2/4) acceptance criteria to §11 (test plan) — coinbase fan-out emits `N + 1` outputs landing at the owner address (cold key), `compute_attestation_reward_payouts` cap + refund correctness, `compute_slashing_distribution` 30-case invariant matrix (reporter + burned == slashed across 5 amounts × 6 bps including u64::MAX no-overflow), mainnet 1000-bps recommendation pinned, `apply_unreveal_reporter_min_cap` clamp + surplus-to-burn behaviour. Added ADR-0013 to the ADR index (§12) with the explicit "tx fees stay with miners" / "rewards to owner cold key" / "NOT guaranteed" framing. |
-| 0.8 | 2026-05-28 | ADR-0014 + ADR-0015 incorporated (Phase 13, 4/4 — closes the Phase 13 design freeze). Phase 13 row flipped to ✅ design-freeze landed. Refined PR sub-table with PR-13.7 (ADR-0014), PR-13.8 (failover types), PR-13.9 (ADR-0015), PR-13.10 (signer types), PR-13.11 (this PR — spec close), and six new `'`-suffixed implementation sub-slots (PR-10.6‴′ failover CLI, PR-10.6′′′′ signer binary, PR-10.6′′′′a validator handshake, PR-10.12′′ Strict-mode signer-side equivocation guard, PR-10.12′′a Pkcs11Adapter, PR-10.14′′ failover smoke test). Added Phase 13 (3/4 — coordinated failover) and (4/4 — remote-signer / HSM) acceptance criteria to §11 (test plan) — TakeoverToken handoff determinism, replay-rejection, anti-spoofing host_id, slashing-acknowledged emergency path; SIGNER_PROTOCOL_VERSION handshake mismatch handling, capability bitflag composition, SignerRequest/Response Result-arm round-trip, Strict-mode signer-side equivocation guard rejection, BLAKE2b-512-chained audit log tamper-detection. Added ADR-0014 and ADR-0015 to the ADR index (§12), each with the full NOT-claimed framing required by their respective public-claim discipline sections. |
+| 0.2 | 2026-05-28 | 旧ADR-0007 + 旧ADR-0008 incorporated. Removed the "do not widen Hash past 32 bytes" non-goal (it directly contradicts 旧ADR-0008); added the full 64-byte consensus identity goal; added the Phase 8 / Phase 9 entries to the phase plan; codified the public-claim discipline section. Revised non-goal removal: previously `PQ-strengthening the PoW hash, block hash, txid, or merkle root` was listed as out-of-scope; this is now the explicit Phase 8 + Phase 9 in-scope work. |
+| 0.3 | 2026-05-28 | 旧ADR-0009 incorporated. Added in-scope item 6 (DNS Probabilistic Finality Overlay) and Phase 10 row in the phase plan. Codified the DNS-specific public-claim discipline section (binding) — explicitly rejecting "hard finality", "reorg-probability product", and "2^k post-quantum finality" framings. Added Phase 10 acceptance criteria to §11 (test plan). |
+| 0.4 | 2026-05-28 | 旧ADR-0010 incorporated. Added Phase 11 row (operational design, no new consensus surface) to the phase plan, with the refined 14-slot Phase 10 implementation roadmap from 旧ADR-0010 §"Phase 10 PR plan" inlined as a sub-table. Added Phase 11 acceptance criteria (8-step operator runbook + byte-identical `validator_set_commitment` across nodes) to §11 (test plan). Added 旧ADR-0010 to the ADR index (§12). Renumbered §12 → §13 to fix the pre-existing duplicate-§11 mis-numbering; 旧ADR-0006's "§11 (ADR index)" reference updated to "§12 (ADR index)" in the same commit. |
+| 0.5 | 2026-05-28 | 旧ADR-0011 incorporated. Added Phase 12 row (operational design, no new consensus surface) to the phase plan; widened the Phase 10 PR sub-table with the `'`-suffixed implementation sub-slots (PR-10.6′ sidecar binary, PR-10.6″ signed-epoch store, PR-10.6‴ `--dry-run`, PR-10.13′ CLI validator commands, PR-10.14′ `getValidatorStatus` RPC + sidecar smoke). Added Phase 12 acceptance criteria (sidecar-shape end-to-end runbook + `check_signed_epoch_record` decision matrix + 100-epoch `--dry-run` sweep emitting zero on-chain attestations) to §11 (test plan). Added 旧ADR-0011 to the ADR index (§12). |
+| 0.6 | 2026-05-28 | 旧ADR-0012 incorporated (Phase 13, 1/4). Added Phase 13 row (🚧 1/4 ADRs landed — mainnet completeness phase covering sortition + rewards + failover + HSM); refined the PR sub-table with PR-13.1 / PR-13.2 / PR-13.3 entries and rewrote the PR-10.9 entry to reference 旧ADR-0012 explicitly (was: "PoC deterministic; mainnet commit-reveal in a follow-up ADR"). Added Phase 13 (1/4) acceptance criteria to §11 (test plan) — sortition determinism, commit-reveal cycle, ≥ 2/3 threshold boundary pin, stake-weighted committee bias-test, commit-without-reveal slashing, fallback-chain bottom-out at `Hash64::ZERO` for `epoch == 0`. Added 旧ADR-0012 to the ADR index (§12) with the explicit "NOT an unbiased random oracle" framing per 旧ADR-0012 §"Public-claim discipline". |
+| 0.7 | 2026-05-28 | 旧ADR-0013 incorporated (Phase 13, 2/4). Phase 13 row flipped to 🚧 2/4. Refined PR sub-table with PR-13.4 / PR-13.5 / PR-13.6 entries and the two `'`-suffixed implementation sub-slots (PR-10.5′ coinbase fan-out, PR-10.12′ slashing distribution). Added Phase 13 (2/4) acceptance criteria to §11 (test plan) — coinbase fan-out emits `N + 1` outputs landing at the owner address (cold key), `compute_attestation_reward_payouts` cap + refund correctness, `compute_slashing_distribution` 30-case invariant matrix (reporter + burned == slashed across 5 amounts × 6 bps including u64::MAX no-overflow), mainnet 1000-bps recommendation pinned, `apply_unreveal_reporter_min_cap` clamp + surplus-to-burn behaviour. Added 旧ADR-0013 to the ADR index (§12) with the explicit "tx fees stay with miners" / "rewards to owner cold key" / "NOT guaranteed" framing. |
+| 0.8 | 2026-05-28 | 旧ADR-0014 + 旧ADR-0015 incorporated (Phase 13, 4/4 — closes the Phase 13 design freeze). Phase 13 row flipped to ✅ design-freeze landed. Refined PR sub-table with PR-13.7 (旧ADR-0014), PR-13.8 (failover types), PR-13.9 (旧ADR-0015), PR-13.10 (signer types), PR-13.11 (this PR — spec close), and six new `'`-suffixed implementation sub-slots (PR-10.6‴′ failover CLI, PR-10.6′′′′ signer binary, PR-10.6′′′′a validator handshake, PR-10.12′′ Strict-mode signer-side equivocation guard, PR-10.12′′a Pkcs11Adapter, PR-10.14′′ failover smoke test). Added Phase 13 (3/4 — coordinated failover) and (4/4 — remote-signer / HSM) acceptance criteria to §11 (test plan) — TakeoverToken handoff determinism, replay-rejection, anti-spoofing host_id, slashing-acknowledged emergency path; SIGNER_PROTOCOL_VERSION handshake mismatch handling, capability bitflag composition, SignerRequest/Response Result-arm round-trip, Strict-mode signer-side equivocation guard rejection, BLAKE2b-512-chained audit log tamper-detection. Added 旧ADR-0014 and 旧ADR-0015 to the ADR index (§12), each with the full NOT-claimed framing required by their respective public-claim discipline sections. |

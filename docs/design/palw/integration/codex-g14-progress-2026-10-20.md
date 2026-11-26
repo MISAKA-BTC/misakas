@@ -1,13 +1,13 @@
 # RFC14 / G14 実装進捗 — 2026-10-20
 
 Source: `7fe073ec2`、専用 worktree `rfc14-g14-completion`。武装・他 branch の統合・配備なし。
-[引き継ぎ](codex-handover-court-rfc14-2026-10-20.md)と [RFC-0026](../../../rfc/0026-court-policy-master-contract.md)を正本とする。
+[引き継ぎ](codex-handover-court-rfc14-2026-10-20.md)と [RFC-0026](../../../rfc/0009-court-and-claim-final.md)を正本とする。
 
 ## 今回の変更範囲
 
 - P0-2 の拒否 gate: 通常 network の readiness record 検証が形式上成功しても、`OneOutsiderCapacityIncomplete` / `ServiceOpportunityIncomplete` で実経路の武装を拒否。隔離 G14 test genesis の既存経路は維持。外部者経路や帰責そのものの実装完了ではない。
 - P1-1 / P1-2 の導出部品: original acceptance から notice boundary 3,120 / hard deadline 10,000 を導出。最短署名済み依存 horizon と後続責任を検査。保持と bond の別 claim を含む最大責任を checked arithmetic で求める。state/fold 未接続、T06/T09 未達。
-- [ADR-0192](../../../adr/0192-court-service-opportunity-and-shared-pursuit.md): F02/F03 の選択肢と推奨案。Proposed、未採択。新しい数値・notice 等号・tag 230 は決めていない。
+- [旧ADR-0192](../../../rfc/0009-court-and-claim-final.md): F02/F03 の選択肢と推奨案。Proposed、未採択。新しい数値・notice 等号・tag 230 は決めていない。
 
 ## A/A 詳細仕様化（ユーザー指示後）
 
@@ -122,7 +122,7 @@ release 回帰 **45 passed**、最終 native `rooted_service_ --nocapture` **4 p
 
 X3 起点 `05fcf7b5c` の現行実装を確認すると、preparation は whole pass ごと、owner/response は turn ごとの WorkDebit に既にまとめられている。`palw_tir_frame_cost_v1` の de-stacked clock と `kaspad/src/palw_tir_public_custodian.rs` の pass budget は、上記 legacy `network_v1` quote と区別する。12,420 DAA は legacy 式の条件付き下界であり、X3 の現行 profile や全ての許容設計に同じ下界があることを証明しない。既存の元資料・数値を変更していない。
 
-X3 でも全 preset の frame-cost は None、pinned cost record は空で、actual measured network profile と door ≤ 3,120 はまだない。また実 filer は staged witness の accepted offset を読んで次の part を送る。byte throughput と別にこの直列待ちを計上する補助案を ADR-0193（別 branch、Proposed）へ記録している。十分長い collection window が待ちを覆う場合もあり、全既存 plan の期限不足を主張しない。候補 version 2 は旧 version 1 の意味と bytes を保持し、同じ既存 maximum door を越える plan を拒否する。採択・武装・統合・配備や G14 完了ではない。
+X3 でも全 preset の frame-cost は None、pinned cost record は空で、actual measured network profile と door ≤ 3,120 はまだない。また実 filer は staged witness の accepted offset を読んで次の part を送る。byte throughput と別にこの直列待ちを計上する補助案を 旧ADR-0193（別 branch、Proposed）へ記録している。十分長い collection window が待ちを覆う場合もあり、全既存 plan の期限不足を主張しない。候補 version 2 は旧 version 1 の意味と bytes を保持し、同じ既存 maximum door を越える plan を拒否する。採択・武装・統合・配備や G14 完了ではない。
 
 X3 候補 commit は `0c3cb9f93`。release native plan 2 件 + t12/G14/activation/release/transport/version discrimination 回帰 29 件 = **31 passed / 0 failed / 0 ignored**、consensus release check 成功。旧 fixture の byte-for-byte plan 再導出、collection window が待ちを覆う場合、同一の既存 test-only 設定での collect/material/bond 反映、元 door cap の拒否を確認した。初回の試験想定の失敗と最終版の生ログ/SHA-256 は別 branch の `docs/evidence/palw/filing-clock-v2-2026-10-20/README.md` に保存。X3 の文書検査は新規 0 件/既知 43 件で PASS、本 branch は imported assets 由来の同じ 5 件で FAIL。baseline と元 assets は変更していない。これらのコードを本 branch や pre へ統合していない。
 
@@ -182,7 +182,7 @@ Legacy funded relay now checks actual virtual UTXOs and full selected-block repl
 
 隔離候補 `codex/rfc14-g14-integration-candidate` で、native Begin/Part の受理時刻が異なっても retained owner row/current duty が同じになる反例を確認。割当 DAA の開始時に前提が成立済みかを current metadata だけで判定できない。全 node history が同一という主張ではない。
 
-[ADR-0195](../../../adr/0195-rooted-court-response-eligibility-history.md) / [RFC-0028](../../../rfc/0028-rooted-court-response-eligibility-history.md) を Proposed として追加。新 marker runtime は未実装。最後の段階の遅れだけで免責・責任を決めず、全 causal path、original admission、実 supply、配送前提の未完を維持する。production Rust と既存 wire/clock/cap/t12 固定値は未変更。
+[旧ADR-0195](../../../rfc/0009-court-and-claim-final.md) / [RFC-0028](../../../rfc/0009-court-and-claim-final.md) を Proposed として追加。新 marker runtime は未実装。最後の段階の遅れだけで免責・責任を決めず、全 causal path、original admission、実 supply、配送前提の未完を維持する。production Rust と既存 wire/clock/cap/t12 固定値は未変更。
 
 重複を除く選択結果は **54 passed / 0 failed / 0 ignored**（fresh core native 28、以前の identity/gate executables 再実行 26）。targeted 1 は 28 に含む。[raw log・コマンド・SHA-256](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#retained-stage-timing-counterexample)。文書検査は同じ imported 5 件で FAIL、baseline は未変更。G14 全体の完了・有効化ではない。
 
@@ -198,7 +198,7 @@ verified-half fixture と in-memory carriage/journal の検証であり、node i
 
 `705b27616` 後の隔離候補で、owner/relay/先着順から独立した全 query scope、実 ML-DSA の request intent、重複統合・別 choice の共存、認証済み公開 unit と full-ID seal 後だけの共有を追加。別 source/profile/network/key/context/coordinate の代入を拒否する。全 source-unit の body/parser/hash/RAM 上限成分を query 全列挙なしで導出し、native tiny oracle・ragged tree・overflow で確認した。未知の署名/搬送/IO/保持/全対話費用は未完で、ゼロでも完全な予約証明でもない。
 
-[ADR-0196](../../../adr/0196-owner-independent-shared-tir-query-data.md) / [RFC-0029](../../../rfc/0029-owner-independent-shared-tir-query-data.md) は Proposed。旧 tag245 の digest registry は read-only 監査し、native source/署名/accepting-clock の代替にせず、取り込み・再解釈・武装はしない。新 primitive は in-memory、native の lifecycle/有料受付/応答義務には未接続。
+[旧ADR-0196](../../../rfc/0009-court-and-claim-final.md) / [RFC-0029](../../../rfc/0010-materials-and-funded-delivery.md) は Proposed。旧 tag245 の digest registry は read-only 監査し、native source/署名/accepting-clock の代替にせず、取り込み・再解釈・武装はしない。新 primitive は in-memory、native の lifecycle/有料受付/応答義務には未接続。
 
 選択結果 **67 passed / 0 failed / 0 ignored**（11 + fresh identity/gate 26 + fresh core native replay 30）。non-test consensus check・既存生成器の一致も成功。[raw log・初期失敗・hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#owner-independent-shared-source-data-candidate)。初期 private-field compile 失敗と verifier の message/signature 逆順による9 pass/2 fail は保存し、最終件数へ加算しない。
 
@@ -218,7 +218,7 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 最終選択 **73 passed / 0 failed / 0 ignored**（query/frontier15、codec/identity27、同じ最終core executableのnative31）。初回4・途中native31・過去69等は加算しない。non-test consensus check と生成物一致も成功。[raw logs・hash・source patch・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/README.md#signed-bounded-shared-stream-envelope-candidate)。
 
-搬送形式だけのcheckpointであり、Ready照合、rooted prefix/chunk、EOF再認証と原子的rollback、再読込/reorg/prune、完全予約・fee・実供給・T05は未接続。現行whole-body内部adapterを本番入口へ出していない。[Draft仕様](../../../rfc/0029-owner-independent-shared-tir-query-data.md#8-signed-bounded-stream-envelope-candidate)とADR-0196へ境界を明記。G14全体は継続中、有効化なし。
+搬送形式だけのcheckpointであり、Ready照合、rooted prefix/chunk、EOF再認証と原子的rollback、再読込/reorg/prune、完全予約・fee・実供給・T05は未接続。現行whole-body内部adapterを本番入口へ出していない。[Draft仕様](../../../rfc/0010-materials-and-funded-delivery.md)と旧ADR-0196へ境界を明記。G14全体は継続中、有効化なし。
 
 ## Rooted signed shared-stream (2026-10-21)
 
@@ -285,7 +285,7 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 ## F08終了効果のA案と、service bookの前向き消去の修正候補
 
-`c54ba38fd`後、[RFC-0030](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md) / [ADR-0197](../../../adr/0197-court-end-effects-and-pending-liability-archive.md)に、RFC-0026 §4.3の全6終了理由と完成assembly不整合のfield別効果を具体化した。利用者は2026-10-21にA（裁定と未決責任のarchiveを分離）の詳細仕様化・隔離実装を指示した。本番採択・pre統合・武装・配備ではない。archive row、全金融hold移行、解除validatorと有料original全分岐graphはまだ実装していない。
+`c54ba38fd`後、[RFC-0030](../../../rfc/0009-court-and-claim-final.md) / [旧ADR-0197](../../../rfc/0009-court-and-claim-final.md)に、RFC-0026 §4.3の全6終了理由と完成assembly不整合のfield別効果を具体化した。利用者は2026-10-21にA（裁定と未決責任のarchiveを分離）の詳細仕様化・隔離実装を指示した。本番採択・pre統合・武装・配備ではない。archive row、全金融hold移行、解除validatorと有料original全分岐graphはまだ実装していない。
 
 [ソース調査](../../../evidence/palw/g14-integration-candidate-2026-10-20/court-end-effects-source-audit.json)では、現close depositはdeclaration時に送金されたescrowではなく、残存collateralから後で徴収する額であることを確認した。archiveに額を保存しただけでは資金が確保されたとはならない。`offence_attribution_active`時の中立voidも、共通session削除writerを通り残存groupの徴収/削除へ到達する。正常なfraudの成立を止めて回避しない。
 
@@ -297,7 +297,7 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 ## F08 A案：rooted archiveの部分実装
 
-親`494361118`。利用者のA判断に従い、[RFC-0030 §8](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#8-a案の隔離実装--2026-10-21)のprivate adapterを追加。serviceに束縛されたcourtの終了時に、元session・phase・残存両group・完成raw bytes・全decoded TIR終了証拠をarchiveへ原子的に移す。反対側の未完groupを自動徴収せず、完成不整合側の実deposit debitと正常完成groupのfulfilled状態を区別する。未決名目額を既存accuser exposureとexit holdへ接続する。未接続/関連causeだけの終了では元court stakeを保持し、未知の裁定/pointを作らない。
+親`494361118`。利用者のA判断に従い、[RFC-0030 §8](../../../rfc/0009-court-and-claim-final.md)のprivate adapterを追加。serviceに束縛されたcourtの終了時に、元session・phase・残存両group・完成raw bytes・全decoded TIR終了証拠をarchiveへ原子的に移す。反対側の未完groupを自動徴収せず、完成不整合側の実deposit debitと正常完成groupのfulfilled状態を区別する。未決名目額を既存accuser exposureとexit holdへ接続する。未接続/関連causeだけの終了では元court stakeを保持し、未知の裁定/pointを作らない。
 
 新private key 20 / row 26を末尾へ追加し、旧X3/service/tag230の意味を変更しない。namespace identityは校正済み有料profileではない。全金融入口への原資予約、元署名全文、終了後の未完group提出とqualified settlement/pruning、全分岐original受付・実供給・公開ingressは未実装。保留の継続だけをF08/G14完成としない。
 
@@ -311,7 +311,7 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 ## F08：元declaration署名とnative v5入力の保存
 
-親`e2e367e98`。[RFC-0030 §9](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#9-宣言時の署名native裁定入力の保存候補)のprivate receiptをnative CourtCloseDeclared経路へ接続する。元object/署名/公開鍵、宣言時のsession/embedded・別TIR phase、実point、native processor由来のv5入力を保存する。署名再検査と現group契約の一致、forward immutable、実declarationイベントとextrasの一致により、過去の署名へ任意のnative条件を後付けしない。入力のない旧groupは未被覆のまま、`rules=None`はdefault paramsの代用ではない。
+親`e2e367e98`。[RFC-0030 §9](../../../rfc/0009-court-and-claim-final.md)のprivate receiptをnative CourtCloseDeclared経路へ接続する。元object/署名/公開鍵、宣言時のsession/embedded・別TIR phase、実point、native processor由来のv5入力を保存する。署名再検査と現group契約の一致、forward immutable、実declarationイベントとextrasの一致により、過去の署名へ任意のnative条件を後付けしない。入力のない旧groupは未被覆のまま、`rules=None`はdefault paramsの代用ではない。
 
 新key 21 / row 27は末尾の隔離候補で、archive20/26とX3/service/tag230を変えない。native extrasの入力追加はpresetのBorsh/identity/feeやfenceの変更ではない。資料を保存するだけで新配送義務・無応答default・担保解除・pruningを許可しない。元の署名はnative fork条件への追加署名ではなく、native条件は別の合意受理履歴として保持する。
 
@@ -323,7 +323,7 @@ original/context/登録/payment は fixture、lifecycle 未割当・production i
 
 ## F08：保存した入力によるprivate v5再検査
 
-親`c153ecc02`。[RFC-0030 §10](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#10-保存した入力によるprivate-v5再検査候補)に、元の署名/contract/chunk prefixと完成raw bytesを照合し、保存したnative入力とsession/phaseで既存v5を呼ぶprivate verifierを追加した。現在のextrasやv2へfallbackせず、実結果と署名verdictの不一致を拒否する。非Borsh・非Cloneの結果は元state root/session/side/raw group/decoded closeへ束縛する。元state・担保・credit・journalは変更せず、解除/精算/defaultを許可しない。
+親`c153ecc02`。[RFC-0030 §10](../../../rfc/0009-court-and-claim-final.md)に、元の署名/contract/chunk prefixと完成raw bytesを照合し、保存したnative入力とsession/phaseで既存v5を呼ぶprivate verifierを追加した。現在のextrasやv2へfallbackせず、実結果と署名verdictの不一致を拒否する。非Borsh・非Cloneの結果は元state root/session/side/raw group/decoded closeへ束縛する。元state・担保・credit・journalは変更せず、解除/精算/defaultを許可しない。
 
 wire CPU予算/shape算術・OOMをNativeResourceとして伝播し、切断された構造入力と区別するため、最初の自分のrelease buildを実PID確認後に明示SIGINTした（exit130、実行試験0）。timeoutで停止と推測した再起動ではない。中間source/patch/logを保存し、修正後に型検査とrelease試験を行った。原本ログを変更していない。
 
@@ -334,7 +334,7 @@ wire CPU予算/shape算術・OOMをNativeResourceとして伝播し、切断さ�
 
 ## Archive再検査の全state copyを除去する候補
 
-親`54c0081d6`。公開native v5と保存済みrecordのprivate再検査を同じkernelへ接続し、archive経路のglobal state/session/phase cloneと一時active行の設置を除く。既存のcost gateをstate参照前に維持し、別phaseの取得先3箇所以外のkernel本文は変更前とbyte単位で一致する。出力group・署名message・assembly・decodeのquoteは残す。[RFC-0030 §11](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#11-借用recordを使う共通v5-kernel)を参照。
+親`54c0081d6`。公開native v5と保存済みrecordのprivate再検査を同じkernelへ接続し、archive経路のglobal state/session/phase cloneと一時active行の設置を除く。既存のcost gateをstate参照前に維持し、別phaseの取得先3箇所以外のkernel本文は変更前とbyte単位で一致する。出力group・署名message・assembly・decodeのquoteは残す。[RFC-0030 §11](../../../rfc/0009-court-and-claim-final.md)を参照。
 
 元rootのhash、署名、内側のlegacy allocation/CPUと物理容量はなお全profileの未校正費用。全original分岐の有料受付、公開ingress、実供給、金融精算/解除/pruningを実装したという意味ではない。最終検証の結果と正確な範囲は[artifact](../../../evidence/palw/g14-integration-candidate-2026-10-20/borrowed-v5-artifact.json)へ保存する。G14全体・武装・統合・配備は未完/保留を維持する。
 
@@ -343,7 +343,7 @@ Final borrowed-v5 selection: 134 unique passes (native40 + public-prefix17 + ord
 Core test type-check and non-test consensus release check both exited 0. Documentation checking remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no newly authored missing link or baseline update. All three changed runtime files were reconstructed from the parent and saved patch and matched SHA-256.
 ## 終了後の署名済みmaterial追加候補
 
-親`2fcbcac6a`。[RFC-0030 §12](../../../rfc/0030-court-end-effects-and-pending-liability-archive.md#12-private-append-of-precommitted-archive-material)のprivate内部経路で、元宣言が指定した未受理chunkだけをarchiveへ追加する。署名・index・size・digestを確認し、元scope/session/phase/終了証拠・受理済みbytes・期限・stake/deposit・徴収済み/fulfilled状態を変えない。既存journal writerの前向き更新を、materialの追加に限定して許可する。wire/row/key/schemaの変更はない。
+親`2fcbcac6a`。[RFC-0030 §12](../../../rfc/0009-court-and-claim-final.md)のprivate内部経路で、元宣言が指定した未受理chunkだけをarchiveへ追加する。署名・index・size・digestを確認し、元scope/session/phase/終了証拠・受理済みbytes・期限・stake/deposit・徴収済み/fulfilled状態を変えない。既存journal writerの前向き更新を、materialの追加に限定して許可する。wire/row/key/schemaの変更はない。
 
 完成しても履行済みや適時応答と認定せず、名目責任・担保・claimを維持する。不整合な宣言の実bytesも保存し、既存private v5再検査の拒否結果と区別する。実費予約を伴う公開入口、公開late適用時点、適格な金融精算・解除・pruning、全original graph・実供給・P2・T01–T15/実doorは未完。単なる無期限holdを完成にせず、これらへの後続接続に必要な実materialを保存する段階である。
 今回の最終選択は134件（native40＋prefix17＋通常court13＋kernel23＋integration41）。既存8組の試験を拡張したため、新規test件数として加算しない。targeted1・過去134等も除外する。[実行コマンド・hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/archive-material-artifact.json)に保存する。最初の型検査は試験引数の参照型不一致によりexit101で、修正前source/patch/logを別保存した。実行試験0である。
@@ -357,7 +357,7 @@ Non-test consensus release check exited0. The four changed runtime sources were 
 Non-test consensus release check exited0. The changed runtime source was reconstructed from the parent plus saved patch and matched SHA-256. Documentation remains FAIL/exit1 with the same five imported missing references and43 baseline-known occurrences; no new authored missing link or baseline update.
 ## 共有queryのIDs再処理と所有copyの局所化
 
-親`52c20b99e`。[RFC-0029 §12](../../../rfc/0029-owner-independent-shared-tir-query-data.md#12-query-local-rows-identity-without-per-read-id-ownership)の候補では、step系は元step rootだけで認証し、無関係なIDs全列を参照・hash・copyしない。trace系は元outer rootに対して完全IDsを毎回再検査し、opaqueなrows identityだけを保持してID Vecの所有copyを作らない。native認証本体・完全IDs検査・loaded IDS context・FullIds EOFの所有出力は維持する。raw digest/serialized sealを認証器にせず、認証済みboolも新設しない。
+親`52c20b99e`。[RFC-0029 §12](../../../rfc/0010-materials-and-funded-delivery.md)の候補では、step系は元step rootだけで認証し、無関係なIDs全列を参照・hash・copyしない。trace系は元outer rootに対して完全IDsを毎回再検査し、opaqueなrows identityだけを保持してID Vecの所有copyを作らない。native認証本体・完全IDs検査・loaded IDS context・FullIds EOFの所有出力は維持する。raw digest/serialized sealを認証器にせず、認証済みboolも新設しない。
 
 既存のnarrow/wide署名stream fixtureにtrace公開のIDs前拒否・EOF後成功、読出し・carriage・全undo/replayを追加する。直接改変した不正stateはnative受理済みとせず、stepの局所読出しが独立していてもtrace読出しと全体loadが拒否することを検査する。source試験では旧owned-ID方式とborrowed anchor方式の認証結果を比較する。[検証・source/実行file/log hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/borrowed-rows-artifact.json)。
 
@@ -368,19 +368,19 @@ CPU/RSS削減の実測や全profile校正ではない。traceのouter hash・既
 次のP0は、データ共有だけで止まっているclaim共通frontierをsemantic/courtの義務・終端へ接続し、元originalの全合法分岐・全actor資本と実feeを原子的に導出/予約するcoordinatorを具体化すること。今回のcopy除去や署名envelope部分上限だけを完全profile/有料受付済みにしない。公開node入口・実供給/配送収録前提・T05/T01–T15と実doorの元条件は残す。
 ## 全childを保持する数値frontier
 
-親`65dd205cd`。固定された初期TIR rootに対し、元のpinned child pathごとに開示を保存し、先のchildを調べても他のchildを失わない非排他的な数値部品を追加する。[RFC-0029 §13](../../../rfc/0029-owner-independent-shared-tir-query-data.md#13-nonexclusive-numerical-disclosure-frontier)。nativeのshape/interval/数値fold検査を共通化し、展開後の時限付き`apply_round`本体は親とbyte一致。旧phaseのBorsh fieldと`apply_choice`は変更しない。unrooted projectionは実choice/署名/受理clockを作らず、native状態へ設置したりabsence帰責へ使ったりしない。
+親`65dd205cd`。固定された初期TIR rootに対し、元のpinned child pathごとに開示を保存し、先のchildを調べても他のchildを失わない非排他的な数値部品を追加する。[RFC-0029 §13](../../../rfc/0010-materials-and-funded-delivery.md)。nativeのshape/interval/数値fold検査を共通化し、展開後の時限付き`apply_round`本体は親とbyte一致。旧phaseのBorsh fieldと`apply_choice`は変更しない。unrooted projectionは実choice/署名/受理clockを作らず、native状態へ設置したりabsence帰責へ使ったりしない。
 
 最終選択42件（F7の7＋service6/policy3/gate12/activation5/t12同一性9）。新規1ケースは7に含み、過去99等を加算しない。24 positions/2-position tilesの既存dense-GQA corpus、arity2/4、正常root/false-sum rootで全分岐と既存bottom検査を比較する。正しい12終端range、fold不整合の原子的拒否、重複統合・差替え拒否、native状態/clock不変を確認する。fixture署名は従来のexact-message verifierで、実ML-DSA/UTXO node受付やpublic originalの試験ではない。[source/log/実行file/patchと境界](../../../evidence/palw/g14-integration-candidate-2026-10-20/numerical-frontier-artifact.json)。
 
 `N-1`開示の上限は単一固定rootのtree幾何だけで、全leaf/root/claim/actorの費用ではない。root認証、canonical claim/source/leaf/rules/profile identity、新署名domain、原子的な全分岐資本/実fee予約、rooted writer・公開入口・実供給・qualified終了/精算は未完。旧actor別session署名を共有権限に転用しない。G14未完・武装/統合/配備保留を維持する。
 
-notice等号について[RFC-0031](../../../rfc/0031-shared-court-initial-notice-boundary.md) / [ADR-0198](../../../adr/0198-shared-court-initial-notice-boundary.md)にA（`<= a+3,120`）/B（`< a+3,120`）の区間表を具体化し、利用者へ詳細仕様化の選択を質問した。runtimeは未選択で、値・hard起点・旧claim・本番採択を変更しない。未回答でもcanonical root/資本/全graphの独立作業を継続する。
+notice等号について[RFC-0031](../../../rfc/0009-court-and-claim-final.md) / [旧ADR-0198](../../../rfc/0009-court-and-claim-final.md)にA（`<= a+3,120`）/B（`< a+3,120`）の区間表を具体化し、利用者へ詳細仕様化の選択を質問した。runtimeは未選択で、値・hard起点・旧claim・本番採択を変更しない。未回答でもcanonical root/資本/全graphの独立作業を継続する。
 non-test consensus release checkとcore全testsの型検査はexit0。二つの変更source/test fileを親＋保存patchから再構成しSHA-256一致。RFC/ADR追加による索引staleを標準generatorで修正し、修正前文書検査logも保存した。最終文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1で、新規著者リンク欠損は0、baseline更新なし。
 ## sessionを捏造しない実claim指定のroot検査
 
-親`e69fbcac4`。[RFC-0029 §14](../../../rfc/0029-owner-independent-shared-tir-query-data.md#14-named-root-binding-without-a-fabricated-session)のread-only入口は、実claim IDとleafからnative class/program・artifact/execution/trace root・arity文脈・finalizeを検査する。既存session経由は従来のsession/phase/terminal guardを残し、同じ検査本体を呼ぶ。本体・guardは親とbyte一致。新しいchallenger/ladder/session/phaseを作らず、旧session署名を共有権限へ転用しない。
+親`e69fbcac4`。[RFC-0029 §14](../../../rfc/0010-materials-and-funded-delivery.md)のread-only入口は、実claim IDとleafからnative class/program・artifact/execution/trace root・arity文脈・finalizeを検査する。既存session経由は従来のsession/phase/terminal guardを残し、同じ検査本体を呼ぶ。本体・guardは親とbyte一致。新しいchallenger/ladder/session/phaseを作らず、旧session署名を共有権限へ転用しない。
 
 既存の数値frontierケースを拡張し、session 0件で正常/false-sum rootを検査してから同じrootを旧native経路へ通す。存在しないclaim、別leaf、arity不一致、execution root差替えの拒否と状態不変を確認する。最終選択42件（F7の7＋service6/policy3/gate12/activation5/t12同一性9）。新規test件数を加算せず、過去42等も除外する。[コマンド・source/実行file/log hash・範囲](../../../evidence/palw/g14-integration-candidate-2026-10-20/named-root-artifact.json)。native-claim corpus/従来のexact-message署名fixtureであり、public-original frameや実ML-DSA/UTXO node受付ではない。
 
-このpredicateは共有署名・notice・public-original/source/profile・原資を認証しない。次のcoordinatorは実contextと新しい共有domainの署名、canonical rootの一意性、copy/finalize仕事、依存horizon、全分岐の資本・実feeを原子的に接続する必要がある。Rootのfinalize一致は全reduction値の正しさやclaimのcreditではなく、底の裁定を残す。notice等号はADR-0198で未選択。武装・統合・配備/G14完了へは変更しない。
+このpredicateは共有署名・notice・public-original/source/profile・原資を認証しない。次のcoordinatorは実contextと新しい共有domainの署名、canonical rootの一意性、copy/finalize仕事、依存horizon、全分岐の資本・実feeを原子的に接続する必要がある。Rootのfinalize一致は全reduction値の正しさやclaimのcreditではなく、底の裁定を残す。notice等号は旧ADR-0198で未選択。武装・統合・配備/G14完了へは変更しない。
 core全testsの型検査・non-test consensus release checkはexit0。変更source/test二つは親＋保存patchから再構成しSHA-256一致。文書検査は同じimport済み欠損5件とbaseline既知43件によりFAIL/exit1、新規著者リンク欠損0、baseline更新なし。

@@ -1,0 +1,103 @@
+{
+  "profile": "tb1-short-v1",
+  "genesis": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+  "rules": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+  "close": "f3ee08411c828f16bfe373968a4fda4284b39ebec14c3ab09d84f4d5660003eeb007eceff588ae69a1a696be738ab6b0798deb80b4b807b581c52070edf7e9e1",
+  "start": {
+    "sink": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+    "daa": 8,
+    "blue": 18,
+    "pruning": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+    "native": {
+      "depth": 0,
+      "finalized": null,
+      "frontier": null,
+      "generation": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+      "latest": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+      "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+      "retirementDaa": 1,
+      "rulesetId": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+      "safe": null,
+      "stop": "frontierNotCovered",
+      "uniqueWork": "0",
+      "version": 1
+    }
+  },
+  "opened": {
+    "sink": "36b692ef570f76e6c9e3731e32d5428e260adc6ddf3ac7cf605dd8510b5f1e0c9ab054aeb2dfaddc3f1caf4ff153f1026037e60c6bf5cb21d9aca48bb1094de0",
+    "daa": 25,
+    "blue": 51,
+    "pruning": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+    "native": {
+      "depth": 0,
+      "finalized": null,
+      "frontier": null,
+      "generation": "36b692ef570f76e6c9e3731e32d5428e260adc6ddf3ac7cf605dd8510b5f1e0c9ab054aeb2dfaddc3f1caf4ff153f1026037e60c6bf5cb21d9aca48bb1094de0",
+      "latest": "36b692ef570f76e6c9e3731e32d5428e260adc6ddf3ac7cf605dd8510b5f1e0c9ab054aeb2dfaddc3f1caf4ff153f1026037e60c6bf5cb21d9aca48bb1094de0",
+      "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+      "retirementDaa": 1,
+      "rulesetId": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+      "safe": null,
+      "stop": "frontierNotCovered",
+      "uniqueWork": "0",
+      "version": 1
+    }
+  },
+  "expired": {
+    "sink": "4c88605848e5ef6601e24788a94c782c67e83cc4eac9cb64316849056829c6911e98df0a8b3cf3929200c1449fa346249ca2598f079fbeca091f5af5d6156a0d",
+    "daa": 48,
+    "blue": 97,
+    "pruning": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+    "native": {
+      "depth": 0,
+      "finalized": null,
+      "frontier": null,
+      "generation": "4c88605848e5ef6601e24788a94c782c67e83cc4eac9cb64316849056829c6911e98df0a8b3cf3929200c1449fa346249ca2598f079fbeca091f5af5d6156a0d",
+      "latest": "4c88605848e5ef6601e24788a94c782c67e83cc4eac9cb64316849056829c6911e98df0a8b3cf3929200c1449fa346249ca2598f079fbeca091f5af5d6156a0d",
+      "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+      "retirementDaa": 1,
+      "rulesetId": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+      "safe": null,
+      "stop": "frontierNotCovered",
+      "uniqueWork": "0",
+      "version": 1
+    }
+  },
+  "verifierCut": {
+    "ageEligibleByDeadline": 0,
+    "committedRoot": "c1e0dc09467cbd58f35e0733badd52e3eb6c9df999a3bb9cb9a44cc2c2130b0a648c7ca4724e45628e303b93ae5c0973ea56e429aabca737c3323d57aaab7cbe",
+    "daa": 8,
+    "draws": 75,
+    "execDeadlineExclusive": 48,
+    "firstBondAgeEligibleDaa": 5040,
+    "point": "f3ee08411c828f16bfe373968a4fda4284b39ebec14c3ab09d84f4d5660003eeb007eceff588ae69a1a696be738ab6b0798deb80b4b807b581c52070edf7e9e1",
+    "quorum": 41,
+    "registeredBonds": 8,
+    "verifierMaturityDaa": 5040
+  },
+  "window": [
+    25,
+    48
+  ],
+  "blocksChecked": 79,
+  "custodyJournals": 8,
+  "publicationFeeInputs": 5,
+  "nodeExitCodes": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "sourceDbFilesVerified": 92,
+  "runtimeSeconds": 113.48,
+  "minHostFreeBytes": 12989865984,
+  "s3At8602": {
+    "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+    "identity": {
+      "consensusParamsId": "5ba9ad0813d64cbd87fc0122734e19d586b985c6fcb92c816109c1367f8dddec",
+      "genesis": "ae26a0b875795fb4a90575a96670552a77a41fa31704ee07ee698768cad85c30496379859bde40517f1c5a5253d68069d5507d6654ef074b65dd1e96cd89f1b4",
+      "networkDomain": "a8591a53aef9855c44234281d7cd779d14a16183d0b015bb29b0b1d41ec3c8f73fc10f24b0246da355ad5cfebd6ff056326ed53d545f67d0bdc0a5b228a792ee",
+      "profile": "tfo3"
+    }
+  }
+}

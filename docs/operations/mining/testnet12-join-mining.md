@@ -2,21 +2,21 @@
 
 > **版依存の資料です。** 今回CLI・稼働nodeを再検証していません。旧資格・旧数値を現在の設計へ流用せず、[状態](../../STATUS.md) と [画像・動画・改善の当面無効化](../../governance/post-mainnet-scope.md) を先に確認してください。
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **testnet-12 launched on 2026-09-25/26 JST** from release commit `0e8ec984e` (`rcore/int-3`, now
 `main`). The identity values below were checked against that release. Read
-[`t12-launch-2026-09-25.md`](../../history/networks/testnet-12/t12-launch-2026-09-25.md) first: it lists what the release contains, the
+[`t12-launch-2026-09-25.md`](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-12/t12-launch-2026-09-25.md) first: it lists what the release contains, the
 known issues (two CRITICAL ones are fixed by post-launch activation fences) and when a payment may be
 treated as final.
 
 The collateral and bond sections (§5 onwards) were written for `5a559459` (2026-09-23), before R-core+
-(ADR-0152 v3.1) replaced the collateral model. They are being re-checked against the release. Where
+(旧ADR-0152 v3.1) replaced the collateral model. They are being re-checked against the release. Where
 they disagree with the node, the node and `misaka bond status` are authoritative. The faucet is still
 **TBD**: it has no testnet-12 funding yet (the operator decides that).
 
 The deployment record, which covers the genesis, the collateral and why, is
-[`testnet-12-regenesis-2026-09-23.md`](../../history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md).
+[`testnet-12-regenesis-2026-09-23.md`](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md).
 
 Blocks are produced by PALW ConsensusV2 at a fixed 120-second cadence. On testnet-12 one DAA step is
 one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-miner` and
@@ -193,7 +193,7 @@ misaka --network testnet-12 mining setup     # a producer's bond
 misaka --network testnet-12 verifier setup   # a panel seat's bond
 ```
 
-The ADR-0122 wizard checks the node, the network, the model, the key, funds, the bond registry, the
+The 旧ADR-0122 wizard checks the node, the network, the model, the key, funds, the bond registry, the
 artifact, capability and the fee output, then writes `~/.misaka/mining.toml`. Running it again
 resumes from chain and local state. It registers through `kaspad --palw-register-bond`, so it gets
 the operator-possession fix, and it always passes `--palw-bond-collateral` with the amount it showed
@@ -216,7 +216,7 @@ days at the 120-second block target). The model chooser shows each model's figur
 model no bond can be registered for shows `not available on this chain` instead of a number: one
 whose figure no single output can hold, and one the chain takes no claim of. On the release that is
 the 2M row in both choosers: its producer sizing is `u64::MAX`, and it takes no claim until a measured
-verification row is installed for it (ADR-0152 §4-quater). To lock a different amount, use the manual
+verification row is installed for it (旧ADR-0152 §4-quater). To lock a different amount, use the manual
 form.
 
 ### Manual, one shot
@@ -448,10 +448,10 @@ goes to `Held`.
 
 * **The admission audit runs once every 100 DAA on testnet-12** (`Params::palw_admission_audit_period_daa`
   = `PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD`; with `span_daa = 1` that is every 100th span), which
-  is about 3 hours 20 minutes at the 120-second cadence. ADR-0147's own default was one epoch
+  is about 3 hours 20 minutes at the 120-second cadence. 旧ADR-0147's own default was one epoch
   (1,000 DAA, about 33 hours); 100 DAA is the standard since 2026-09-23. A class registered just
   after an audit waits up to that period, even if its seats were ready within minutes. That is by
-  design (ADR-0147): a lottery that could be re-drawn every span would be passed by waiting. There is
+  design (旧ADR-0147): a lottery that could be re-drawn every span would be passed by waiting. There is
   no flag to shorten it.
 * **The genesis rows** (8k `ebf44d0a…` and 2M `74c67e63…`) skip `Candidate`. They open at
   `Prefetching` and reach `Probation` on any span once 7 seats are ready. The registry starts
@@ -497,7 +497,7 @@ collateral can move.
 
 ## 10. Epoch budgets
 
-testnet-12 arms ADR-0123's `palw_epoch_budget_release` from DAA 0. A class whose epoch budget is spent
+testnet-12 arms 旧ADR-0123's `palw_epoch_budget_release` from DAA 0. A class whose epoch budget is spent
 borrows the epoch slots that other classes are not filling. On testnet-11 this is still dormant. A
 class registered mid-epoch has budget 0 until the next boundary. `kaspad --palw-dump-classes` logs
 every class's share and budget.

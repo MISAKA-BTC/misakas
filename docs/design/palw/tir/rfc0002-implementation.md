@@ -1,16 +1,6 @@
 # RFC-0002 implementation ledger
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-Goal: implement the full [RFC02 completion contract](../../../rfc/0002-palw-tensor-ir.md#ii14-completion-contract--2026-10-10)
+Goal: implement the full [RFC02 completion contract](../../../rfc/0002-tensor-ir-kernels-and-runtime.md)
 from the 2026-10-10 review, preserving A1–A8 and the versioned kernel boundary. **Not complete.**
 Baseline: integration `3730cc90f`, plus RFC10 audit `d6a0bd54d`; subsequently integrated
 G14 prosecution/bounds and X8R/BUDGET integration through `123d8254e`. Original work branch: `codex/rfc02-implementation`; this review increment is isolated on
@@ -3432,7 +3422,7 @@ requested code-first phase. D_all remains0/128 end-to-end measured.
 All items below are **unverified source checkpoints**: no build, check, test,
 clippy, node, devnet or measurement ran (code-first phase). Nothing is armed;
 every new path stays behind `palw_funded_execution_v11` ∧ `palw_native_final_v27`
-(absent on every preset). RFC text: [II.14.58](../../../rfc/0002-palw-tensor-ir.md#ii1458-text29-native-lane-accepted-spend-redemption-and-the-a6a8-receipt-rule-2026-10-15).
+(absent on every preset). RFC text: [II.14.58](../../../rfc/0002-tensor-ir-kernels-and-runtime.md).
 
 - **Calibration34 wiring.** One shared factory,
   `load_isolated_native_calibration_v34`, is used by the daemon
@@ -3487,7 +3477,7 @@ two receipt windows. D_all remains 0/128 end-to-end measured.
 ### Lead defaults and remaining code (Claude, 2026-10-15, second pass) — unverified source checkpoint
 
 Each item below is a **lead default pending user review** (reversible); see
-[II.14.59](../../../rfc/0002-palw-tensor-ir.md#ii1459-versioned-length-fields-and-lead-defaults-2026-10-15).
+[II.14.59](../../../rfc/0002-tensor-ir-kernels-and-runtime.md).
 No build/test/node run; nothing armed; public presets unchanged.
 
 - **Stage28 independent Final/redemption.** `audit_record_from_rows_v28` extracts namespace-28
@@ -3699,12 +3689,12 @@ PASS; every new consensus path is dormant behind `palw_native_execution_v39` or 
   image/frontend-to-Master adapter, the PALWQ361 differential driver, two-window A6/A8 for v39 and the
   payout/redemption audit that separates settlement, pending, coinbase delivery and UTXO spend.
 - **Mining (73–79, `PNR9`):** canonical work from actual positions, final lengths and every component's
-  compute; ordinary registration with seats and an ADR-0176 stake liability; claim-level drawn approval
-  only, as an RFC-0018 Gate C `'V'` subject; ADR-0176 budget plan/commit with bond formula v2 and the
+  compute; ordinary registration with seats and an 旧ADR-0176 stake liability; claim-level drawn approval
+  only, as an RFC-0018 Gate C `'V'` subject; 旧ADR-0176 budget plan/commit with bond formula v2 and the
   0.51 export cap; one-use receipt quanta spent by an algo-7 `PNR9` header through the existing
   receipt-spend entitlement and coinbase path. A privately paid job's Final grants none of these rights.
 - **User decisions 2026-10-15 rounds 4–5:** registered models are fixed at tier 0.3 from registration
-  with no model-level exam, probation, renewal or promotion; the tier comes from ADR-0179
+  with no model-level exam, probation, renewal or promotion; the tier comes from 旧ADR-0179
   `palw_model_tier_v1` (on `integ/decisions-1015`, consumed through a one-line swap point until it reaches
   integ). Model-level drawn approval and private eligibility issuance were therefore not built; RFC-0017
   table 131 is not consulted.

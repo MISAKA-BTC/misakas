@@ -1,10 +1,10 @@
 # PALW mainnet audit, 2026-08-30 — the union build
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Scope: everything the 2026-08-30 train adds over `acc430a2` (68 files, +4,593 lines) — the 10B
-premine cap (ADR-0059), the liveness doctrine (ADR-0060), zero-seat genesis and right-sized
-collateral (ADR-0061), and the bond-economics pass (VLT floors, escrow backing, the panel
+premine cap (旧ADR-0059), the liveness doctrine (旧ADR-0060), zero-seat genesis and right-sized
+collateral (旧ADR-0061), and the bond-economics pass (VLT floors, escrow backing, the panel
 redraw). Six adversarial passes, each given one dimension and told to substantiate or drop every
 claim. Question asked of every finding: **would this hurt on a mainnet carrying real value?**
 
@@ -20,7 +20,7 @@ quoted.
 | MEDIUM | 9 | 4 | — | 5 |
 
 Two features are **switched off rather than shipped**: the heartbeat lane and the finality
-inactivity leak. Both are ADR-0060's, both were mine, and in both cases the mechanism is sound
+inactivity leak. Both are 旧ADR-0060's, both were mine, and in both cases the mechanism is sound
 while the implementation cannot be fed what it needs. Turning them off is the finding, not a
 workaround for it.
 
@@ -28,13 +28,13 @@ workaround for it.
 
 ## The two that ship OFF
 
-### The heartbeat lane (ADR-0060 D1/D2) — withdrawn here, redesigned by ADR-0066
+### The heartbeat lane (旧ADR-0060 D1/D2) — withdrawn here, redesigned by 旧ADR-0066
 
-> **Update 2026-08-31.** The switch this heading names no longer exists. ADR-0066 landed the
+> **Update 2026-08-31.** The switch this heading names no longer exists. 旧ADR-0066 landed the
 > redesign: the lane has its own algorithm id (8), its price is a network constant substituted in
 > `StateLayer0::new` rather than `header.bits`, the evidence walk is deleted, and the lane is armed
 > by `Params::palw_heartbeat` — a top-level fence, not a `const bool`. **F1 and F3b (below) are
-> closed as arithmetic; F4 is closed by deletion. F3a is open and F2 is staged as ADR-0066
+> closed as arithmetic; F4 is closed by deletion. F3a is open and F2 is staged as 旧ADR-0066
 > Decision 3.** The findings below stand as the record of why.
 
 
@@ -74,12 +74,12 @@ chain walk for two hashes — now an O(1) floor gate runs first, and the caps ar
 32/30,000), and nothing refused a stuffed `palw_state_root` on a lane that does not commit one
 (hash-invisible bytes = block-identity malleability; now `UncommittedPalwStateRoot` at the door).
 
-### The finality inactivity leak (ADR-0060 D4) — withdrawn here, re-fenced by ADR-0066
+### The finality inactivity leak (旧ADR-0060 D4) — withdrawn here, re-fenced by 旧ADR-0066
 
 > **Update 2026-08-31.** The leak is armed by `Params::palw_inactivity_leak`, a top-level fence
 > carrying `t_leak_daa`. `DnsParams.inactivity_leak_daa` is retired at `u64::MAX` permanently and
 > pinned there by a test — the CRITICAL below is closed at its cause rather than by a warning.
-> The committed per-validator table (ADR-0066 Decision 4's other half) is NOT landed; the leak
+> The committed per-validator table (旧ADR-0066 Decision 4's other half) is NOT landed; the leak
 > ships dormant, so nothing depends on it.
 
 
@@ -144,14 +144,14 @@ only by the redraw being inert. Now 7,200, and the guard test that "proved" the 
 tautological (`X == <its own definition>`); it now walks the state machine's arms and demands the
 constant cover the longest path.
 
-**HIGH — a zero-seat genesis silently dropped the entire ConsensusV2 bundle.** ADR-0061 retired the
+**HIGH — a zero-seat genesis silently dropped the entire ConsensusV2 bundle.** 旧ADR-0061 retired the
 panel gate, but `palw_rc_shipped_params` still keyed the whole ruleset off the bond card: emptying
 the registry to mint the zero-seat genesis the ADR describes returned a **hash-only chain** with a
 10B premine and nothing to spend it on, and a fleet of identical binaries fingerprints identically
 and peers happily, so the one warning that fires is false exactly when it matters. The fallback is
 now keyed on the artifact root — the one input code cannot mint.
 
-**MEDIUM — ADR-0061's "≈3× collateral margin" did not exist.** Every runtime exposure ceiling reads
+**MEDIUM — 旧ADR-0061's "≈3× collateral margin" did not exist.** Every runtime exposure ceiling reads
 the *declared* collateral, which was pinned to the derived structural minimum; the surplus sitting
 in the 10,000 MSK outpoint bought exactly one extra concurrent claim. The declaration is now
 `max(derived, held)`, so the money that is really there is the money consensus prices.
@@ -163,7 +163,7 @@ in the 10,000 MSK outpoint bought exactly one extra concurrent claim. The declar
 * **`GENESIS_BOND_COLLATERAL_SOMPI` is now a ceiling on the dearest registrable genesis class**
   (10,000 MSK ⇒ `pwu_per_inference ≤ ~8.3M`; Qwen3.6 is 2.69M, a 3.1× headroom) and exceeding it
   panics inside a `From` impl — the boot path for every binary. Documented rather than changed:
-  raising the carve is a supply decision, and the ADR-0059 cap is the operator's.
+  raising the carve is a supply decision, and the 旧ADR-0059 cap is the operator's.
 * **`MAX_SOMPI` is a transaction-validity rule outside the fingerprint.** Pre-existing class;
   practically unreachable (it bounds a transaction moving the entire supply).
 * **`--features devnet-prealloc` disables the M-07 divergent-genesis guard on any network**,
@@ -187,7 +187,7 @@ the remediation touched the premine.
 
 ## Addendum, same day — a CRITICAL this audit did not look for
 
-Found while answering a *design* question (ADR-0064, trustless recovery from a total stop). It is
+Found while answering a *design* question (旧ADR-0064, trustless recovery from a total stop). It is
 not a consequence of that proposal; it is a property of the shipped tree. Every link was read in
 the code, not inferred.
 
@@ -221,7 +221,7 @@ cannot be manufactured privately, and it is the input the deep-reorg comparator 
 permanent*: one 0.004 MSK registration made at any time in the network's life is a standing option
 to run this at any later date, and nothing expires it.
 
-### What closing it needs (written as ADR-0065; two of the four have landed — see the note after)
+### What closing it needs (written as 旧ADR-0065; two of the four have landed — see the note after)
 
 * **Seat maturity.** A bond may be drawn for a panel only if `daa - registered_daa ≥ maturity`.
   This is the rule `registered_daa` was evidently recorded for; the field already exists, so this
@@ -240,7 +240,7 @@ It is a **mainnet blocker** and it is live on testnet-11 now.
 
 > **Where these four ended up, and two of them did not survive contact with the code.**
 >
-> * **Seat maturity — LANDED, dormant** (ADR-0065 D1), behind a top-level fence. Measured from the
+> * **Seat maturity — LANDED, dormant** (旧ADR-0065 D1), behind a top-level fence. Measured from the
 >   claim's own anchor rather than the binding block, so the panel stays a pure function of the
 >   claim, and `validate_palw_v2` refuses a fence armed before its own window has elapsed — the
 >   shipped genesis has exactly `seat_count + 1` bonds and the draw excludes the executor, so
@@ -251,7 +251,7 @@ It is a **mainnet blocker** and it is live on testnet-11 now.
 >   for the same block. And the "otherwise the attacker simply roots the fork later" above is
 >   wrong: `registered_daa` and the comparison DAA are both branch-local, so the attacker's cost is
 >   to EXTEND the fork by the window — which is exactly the cost maturity was meant to impose, and
->   does. ADR-0065 D2 restates it as a comparison-site rule (which cannot cover IBD) plus an anchor
+>   does. 旧ADR-0065 D2 restates it as a comparison-site rule (which cannot cover IBD) plus an anchor
 >   that needs new state.
 > * **Bond removal — DECIDED: append-only, deliberately.** A retirement is a status transition, and
 >   the record is the only thing that proves the withdrawal delay elapsed. A `Retiring` bond already
@@ -315,7 +315,7 @@ the claim hangs until it times out.
    never leave the registry — **quorum is purchasable for roughly a cent.** That is the same root as
    the sybil-frontier finding, reached from the liveness side instead of the safety side.
 
-   > **Wrong as written, and the conclusion survives anyway — see the correction below and ADR-0065
+   > **Wrong as written, and the conclusion survives anyway — see the correction below and 旧ADR-0065
    > D3 (withdrawn).** `derive_panel_v2` does *not* draw per bond: `palw_panel_v2.rs:216-228` skips
    > any bond whose `operator_id` is already seated, and `palw_state_v2.rs:4632` refuses a second
    > bond for a key already bonded. Host C's three seats are three bonds, three operator keys and
@@ -367,7 +367,7 @@ fraud signal, until availability and the seat-diversity rule are fixed.
 > `palw_bond_may_take_work_v2` (`:965`) stops it taking work at all — the chain would then be
 > refusing its own only producer for an offence it did not commit.
 
-Remedies belong with ADR-0065: draw seats from distinct operators (the bond-maturity work has to
+Remedies belong with 旧ADR-0065: draw seats from distinct operators (the bond-maturity work has to
 touch the same draw), and either make `Unavailable` require positive proof of a refusal rather than
 a failed fetch, or require the seats reporting it to be provably distinct from one another.
 
@@ -401,7 +401,7 @@ gossip/material/pull line over the whole post-restart window returns nothing.
 
 So the conviction rate is a measurement of relay loss, wearing a fraud verdict's clothes.
 
-**This strengthens ADR-0065 D4 rather than replacing it.** The remedy is not "ship the artifacts" —
+**This strengthens 旧ADR-0065 D4 rather than replacing it.** The remedy is not "ship the artifacts" —
 that is now done and the convictions continue. It is that `Unavailable` must require positive
 evidence of a refusal, because the seat cannot distinguish *the producer withheld* from *the network
 did not deliver*, and under the current rule the second is punished as the first. Two additions the

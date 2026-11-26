@@ -1,6 +1,6 @@
 # Registered tiled service — native entry checkpoint
 
-2026-10-11、基点 e8da85b1032e4d30a8a237c780f44dbb80b7156f。G14全域は未完了。ADR-0177 D7を維持する。
+2026-10-11、基点 e8da85b1032e4d30a8a237c780f44dbb80b7156f。G14全域は未完了。旧ADR-0177 D7を維持する。
 
 通常のQwen25 A16 v2 classをML-DSA署名付きで登録し、各model holderが自身のfileからnative readiness inventoryを開く。外部juryのCandidate→Prefetching→Probation、通常family certification、実work由来のFP quote、wallet V6 transaction、5席Panel結合を確認した。network quantumを変えず、実7-position computeが2quantum以上となる通常geometryを選ぶ（hidden256、2layers、vocab4099、context16、canonical1/2）。tokenizer bytesからtableを作りnonzero tokenizer commitmentをartifactへ持たせる。これ自体は登録rootとのsemantic association全域を証明しない。
 

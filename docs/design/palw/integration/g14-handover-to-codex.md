@@ -1,15 +1,5 @@
 # G14 — codex への引継ぎ（2026-10-10, Lead）
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 ユーザーの指示により、G14（RFC-0014/0015 の公開告発の完成）は codex が担当する。この文書は、Claude 側 lane の到達点と未完了項目の一覧である。
 判定の上位基準は [PESG](../economics/probabilistic-economic-security-gate.md) の §4 C、そして [g14-completion-matrix.md](g14-completion-matrix.md) である。
 
@@ -40,7 +30,7 @@
 
 - PanelDA User入力の公開court bootstrapを追加した。producer側のinput retentionだけを回答に使い、verifierは公開認証済みchunkを学習後、自身の登録modelで再計算する。worker handoffで入力accumulatorを失わないよう修正し、reorgでinputを破棄する。最大contextの34-session適合、FP commitment自体の再取得、full-service包含は残る。検証結果と範囲は監査記録末尾を参照。
 
-G14全域の完成判定はしていない。ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
+G14全域の完成判定はしていない。旧ADR-0177の登録モデル保有前提はユーザー確認済みであり、モデル配布義務の追加やactivation fenceの変更は行っていない。
 
 whole-rootの課金済みrootが共有FIFOから退避され再計算される問題へ、受入・rehearsal・最終foldを覆うblock memoを追加した。別threadの退避を挟んでも262,143 idsを1回だけ計算するV-foldを確認し、関連86件と通常binary check、shipping 361 pinが通過した。追加修正でfunded lifecycle signerはprotocol rent＋relay feeを支払い、priority/common submitterはobjectごとの必要額でfundingを選び直す。新5 V-unitを含む108件と通常binary check、shipping pinも通過した。次はfresh-node自身のservice／RPCからmempool・採掘・包含・終局までの経路、ordinary mature bond、全family／公開jobの残条件を閉じる。実採掘・包含の完走はまだ立証していない。詳細・試験の限界・生logは監査記録末尾を参照。
 
@@ -117,7 +107,7 @@ M\*-49 と default 時の取り分の保留を、新しい休眠 fence `palw_ver
 
 PESG に従い、PASS / FAIL / UNKNOWN の 3 種類だけを使う。
 fixture の PASS や `cfg(test)` の seam は、production 経路が完成した証拠にしない。
-ADR-0177 に従い、G14 は model を取得できた verifier を前提とする。閉鎖 model の `p = 0` は独立した未解決 gate である。
+旧ADR-0177 に従い、G14 は model を取得できた verifier を前提とする。閉鎖 model の `p = 0` は独立した未解決 gate である。
 
 ## Codex追記: 回答済み公開DAの再取得
 
@@ -141,7 +131,7 @@ public bindingから作る直接kind-4 proofも、public caseのsettlement前に
 
 kind-3 identity convictionが先に成立すると、producerの没収もそのrecordに含まれ、後続kind-4には二重の徴収又はrewardが開かない。fixtureはproducerの実collateral減少、全Valid signerの制裁、外部verifierのcommit/reveal、公開IdentityMismatch proofの実block包含を検査する。登録floor modelを別jobで実行したrootsを使い、秘密materialはverifierへ渡さない。最終結果、失敗と再試験、fixture例外は[実装修正記録](../../../audit/g14-review-2026-10-10/implementation.md)を参照。
 
-全G14は未達。開示された算術／input／output／state違反のfull service、全familyの正規eligibility、最大context／populationと期限内包含、恒久pruneされたFP job、restart／reorg／pruned IBD、累積scope・64要素hiding tileは引き続き必要である。ADR-0177 D7と有効化拒否を維持する。
+全G14は未達。開示された算術／input／output／state違反のfull service、全familyの正規eligibility、最大context／populationと期限内包含、恒久pruneされたFP job、restart／reorg／pruned IBD、累積scope・64要素hiding tileは引き続き必要である。旧ADR-0177 D7と有効化拒否を維持する。
 
 実serviceの停止時sampleで、mempoolの外側virtual readとDNS settlementの二重readがqueued commit upgradeとdeadlockすることを確認した。UTXO policyへ既存DAA snapshotを渡し、元のUTXO guardを保ったまま再取得を除く。旧wrapperをnegative controlとするqueued-writer試験を追加した。詳細と最終再試験は上記監査記録を参照。
 
@@ -161,7 +151,7 @@ kind-3 identity convictionが先に成立すると、producerの没収もそのr
 2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](../../../audit/g14-review-2026-10-10/implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
 
 
-2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](../../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorと旧ADR-0177 D7を維持する。[実装・失敗・最終証拠](../../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
 
 
 2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](../../../audit/g14-review-2026-10-10/implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。

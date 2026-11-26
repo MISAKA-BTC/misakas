@@ -1,15 +1,5 @@
 # Remaining RFCs (Workstream C) — integration matrix
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 > **適用時期の現行方針（2026-10-17 文書化）:** RFC-0003 の画像・動画と RFC-0004 のモデル改善は **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../../../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。
 > 旧「全 RFC 完成」条件から延期範囲の肯定的完成・性能評価を外す。ただし対象経路の閉鎖確認、共有コードがテキスト・合意・認証・会計・回復に及ぼす問題は免除しない。
 
@@ -102,16 +92,16 @@ wire/fence impact · test · real-node result · status.
 | RPC ops (tooling lane, 2026-10-22) | **225–228** (`getPalwClaimDetail`, `getPalwCourtState`, `getPalwFenceSchedule`, `getPalwBondDetail`; gRPC 1264–1271): read-only user views, the unused tail of C2's 220–229 range | — | — | — |
 | Other fences (dormant) | `palw_provider_court_v1` (DA16), `palw_fork_choice_commitment_v1` (L2FC), `palw_tir_shard_segment_v2` (SHARD), `palw_typed_roots_v1` (R4X), `palw_task_heads_v1` (HFX) | — | — | — |
 | Kernel route inner kinds / ledger tables (inside tag 110) | inner discriminants: 12 SealClaim, 13/14 OPV mode, **15 G14-R4 accuser seal**, **16 CommitSegmentedClaim, 17 PostTiledJob, 18 PostPromptTile (K2S)**, **19 Spec (R4X, RFC-0004 Part II)**, **20 CommitClaimSalted (G14R, `claim_seal_v2`, OPV beacon v3 GAP-B1a; fence `palw_panel_free_v1`; inner `SaltedCommitV1` 5 Claim / 6 Pipeline / 16 Segmented (K2S, at merge) / 19 Spec (also needs `palw_typed_roots_v1`); table 26 prune horizon pending the v3 policy constants)** — 21–37 RFC-02 (rfc02/takeover), 38/39 G14R verifier pay (re-allocated, reserved), 40 codex RFC-7 `OptInBeaconSource` (R6781), 41 and up free; `ProsecutionV1` 3 Segmented (K2S), 4 Spec (R4X); `ClaimBodyV1` 2 Segmented (K2S), 3 Spec (R4X); kernel ledger tables 1–14 used, **15–19 G14-R4** (18 `job_posters`, F-C4R4-08), **20–21 K2S**, **22–24 R4X**, **25 `claim_beacon_salts`, 26 `forfeited_claim_seals` (G14R, seal v2; one root extension)** (hashed only when non-empty); kernel route aux tables 36–38 onboarding, 39–40 OB-P0, 41–42 G14-R4, **43–45 DA16**; LedgerEventV1 21–24 G14-R4 (24 ServedDemandBondsBurned), 30 ProviderLiableDefault + 31 ProviderLapsed (DA16); SettlementKindV1 14–21 G14-R4 (21 ForfeitDemandBond); fence `palw_typed_roots_v1` (R4X, dormant, refused) | — | — | — |
-| Bond budget + model allocation (BUDGET, ADR-0176/0177, 2026-10-10) | **140–149** (verify unused before first use) | **190–199** | **0xEF** | `palw_bond_budget_v1`, `palw_model_bond_allocation_v1` (dormant, refused when armed); RPC **250–259**; V2 root block `bond_budget/v1` |
-| Reporter share migration (INTF, ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
-| Immutable registrations (pre, ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
+| Bond budget + model allocation (BUDGET, 旧ADR-0176/0177, 2026-10-10) | **140–149** (verify unused before first use) | **190–199** | **0xEF** | `palw_bond_budget_v1`, `palw_model_bond_allocation_v1` (dormant, refused when armed); RPC **250–259**; V2 root block `bond_budget/v1` |
+| Reporter share migration (INTF, 旧ADR-0032 2026-10-10) | — | — | — | `palw_reporter_share_v2` (dormant; Some-only hashed) |
+| Immutable registrations (pre, 旧ADR-0175) | — (refuses existing lifecycle tags past it) | — | — | `palw_model_immutable_v1` (dormant) |
 | `PalwVoidReasonV2` | C2 120–122; X8R 130–132 (explicit; 130 was X8's implicit 11) | — | — | — |
 | Legacy V2 Panel route G14, filer/reservation (LG14-A, RFC-0014 §6–§7, 2026-10-10) | **154–156** | **200–204** (200 disputes, 201 accepted FP metadata) | **0xE2 / 0xF0** | `palw_legacy_public_filer_v1` (dormant, refused); RPC **204–206** |
 | Legacy V2 Panel route G14, held/fused DA + localization (LG14-B, RFC-0014 §4–§5, 2026-10-10) | **157–159** | **205–209** | **0xE3** | `palw_legacy_held_da_v2` (dormant, refused); RPC **207–209** |
 | Kernel `LedgerEventV1` (2026-10-10) | 21–23 G14R, **24 G14R** (approved 10-10), 30–31 DA16 | — | — | — |
 | Verifier pay (G14R, palw_verifier_pay_v1, 2026-10-10) | kernel inner kinds **38** (verifier attestation), **39** (beacon-source opt-in) — re-allocated 2026-10-11: the planned 21/22 were never implemented, and RFC-0002 (codex, implemented) took 21–35, RFC02-T 36–37 | — | — | ledger table 27, `LedgerEventV1` 25–26 |
 | `PalwVoidReasonV2` | C2 120–122; X8 one variant (assign an explicit number ≥ 130 at merge) | — | — | — |
-| Court scope + hiding tiles (G14-S, ADR-0177 D2 / DA16b §7.9, 2026-10-11) | — (no object tag, no kernel inner kind; `ProsecutionV1::Segmented` gains `SegFaultV1` 4 `HidingLeaf` / 5 `HidingDecode`, `seg_da::ChunkSpecV1::Hidden` / `ChunkBodyV1` 3 `Hidden`, all inside dormant K2-TIR-v4 bytes) | — | — | **kernel ledger table 28** `court_scope` (root extension `misaka-palw/kernel/ledger-court-scope-extension/v1`, only once non-empty), written only past `palw_provider_court_v1` (consumer-injected `CourtScopePolicyV1`); A2U `StateEncoding` row landed |
+| Court scope + hiding tiles (G14-S, 旧ADR-0177 D2 / DA16b §7.9, 2026-10-11) | — (no object tag, no kernel inner kind; `ProsecutionV1::Segmented` gains `SegFaultV1` 4 `HidingLeaf` / 5 `HidingDecode`, `seg_da::ChunkSpecV1::Hidden` / `ChunkBodyV1` 3 `Hidden`, all inside dormant K2-TIR-v4 bytes) | — | — | **kernel ledger table 28** `court_scope` (root extension `misaka-palw/kernel/ledger-court-scope-extension/v1`, only once non-empty), written only past `palw_provider_court_v1` (consumer-injected `CourtScopePolicyV1`); A2U `StateEncoding` row landed |
 | Commitment-only court scope activation (codex G14 final, merged 2026-10-12) | — | — | — | **kernel route aux table 107** (codex used 46 = RFC-0002 model artifact bindings v2; aux 32–106 all used) |
 | Conformance-only candidate classes (codex RFC-02, taken over by lane RFC02-T, 2026-10-11) | — | — | — | **kernel ledger table 29** (codex used 28 on `codex/rfc02-implementation`; 28 is G14-S's court scope, landed first) |
 | RFC-0002 model onboarding (codex `codex/rfc02-implementation`, recorded at the RFC02-T merge 2026-10-11) | — (no object tag) | — | — | kernel inner kinds **21** RegisterConformanceClass, **22–35** model artifact binding/refutation (22/23), conformance class/complete (24/25), model vector v2 post/refute/demand/answer/settle (26–30), flat model vector v3 post/refute/demand/answer/settle (31–35), all `palw_panel_free_v1`; kernel route aux tables **46–48** (model artifact v2), **49–50** (conformance v2), **51–56** (model vector v2 + DA), **57–63** (flat model vector v3 + DA); **kernel ledger table 29** conformance-only candidate classes — codex allocated **28** on its branch, G14-S's court scope landed on 28 first, so the candidates **moved to 29** at the merge; root extension `misaka-palw/kernel/ledger-conformance-extension/v1`, applied AFTER table 28's, each only when its table is non-empty (an unarmed network roots as before); A2U `StateEncoding` row landed |
@@ -160,7 +150,7 @@ the same commit, keeping the change under its row's fence. **BUDGET (140–149):
 its owner arm (a `PalwLifecycleKindFenceV1` variant per fence), its `PALW_LIFECYCLE_NEW_KINDS_V1` entry, an `ObjectTags` row naming
 `palw_bond_budget_v1` or `palw_model_bond_allocation_v1`, its pin, and its `StateEncoding` rows flipped to landed. **DA16 (150–153
 re-scope):** the commit removing the `Artifact` lease subject re-pins 150–153 and keeps `palw_provider_court_v1` (or adds a row for
-another fence). (c) Kinds int-12 decodes that a fence judges anew (ADR-0175 `palw_model_immutable_v1`: 27, 28, 29, 81, 37 with
+another fence). (c) Kinds int-12 decodes that a fence judges anew (旧ADR-0175 `palw_model_immutable_v1`: 27, 28, 29, 81, 37 with
 `EARLY_VERSION` refused by name; 3, 26, 39, 61, 68, 70, 91 folded by state) have `Int12RefusedByName` / `Int12FoldPastFence` rows: past
 the fence the object is not applied and its block stands — never an isolation or header-context refusal. (d) `palw_reporter_share_v2`
 (INTF) has a pending `StateEncoding` row: on `b8ae9412b` the 49% share is unfenced while testnet-12 arms R-core+ at genesis.

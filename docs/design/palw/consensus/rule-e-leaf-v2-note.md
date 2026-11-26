@@ -1,6 +1,6 @@
 # Rule E and the L2 fork-choice leaf — what leaf v2 must carry (FINX → L2FC, 2026-10-09; revised 2026-10-10)
 
-> **INTERNAL — not for publication.** Rule E (ADR-0178) is the fix for an internal fork-choice finding; this note lives on the
+> **INTERNAL — not for publication.** Rule E (旧ADR-0178) is the fix for an internal fork-choice finding; this note lives on the
 > internal branch `fin/palw-finality-consistency` and goes to lane L2FC by hand. It describes what rule E reads, not why it was
 > needed.
 
@@ -17,8 +17,8 @@ selected-chain ancestor `F`:
 | input | definition | where it lives |
 |---|---|---|
 | exclusive claims of `a` | claims `a`'s chain accepted above `F` (`accepted_blue_score > bs(F)`) whose id `b`'s state does not hold | state (claims) + `bs(F)` (headers) |
-| participation of `a` | distinct executor bonds of `a`'s exclusive **attempt** claims (mergeset attempts included — ADR-0058) registered in `F`'s registry | state (claim records; `F`'s registry) |
-| economic keys of `a` | `(frontier, safe, live)` over the exclusive claims, each claim priced at `a`'s state by the fold's own expressions (or, past `palw_bond_budget_v1`, by BUDGET's allocation), F-W's per-bond cap over the exclusive set, and each budgeted `(bond, version, window)` at most its `F_max` on both keys (ADR-0176 D3) | state (priced records) |
+| participation of `a` | distinct executor bonds of `a`'s exclusive **attempt** claims (mergeset attempts included — 旧ADR-0058) registered in `F`'s registry | state (claim records; `F`'s registry) |
+| economic keys of `a` | `(frontier, safe, live)` over the exclusive claims, each claim priced at `a`'s state by the fold's own expressions (or, past `palw_bond_budget_v1`, by BUDGET's allocation), F-W's per-bond cap over the exclusive set, and each budgeted `(bond, version, window)` at most its `F_max` on both keys (旧ADR-0176 D3) | state (priced records) |
 | participation counts? | `min(daa(a), daa(b)) − daa(F) ≥ W_p` = 20 | headers |
 | even split | `max(1, ⌈bonds_len(F)/3⌉)` | `F`'s leaf (v1 field) |
 | ties | GHOSTDAG order at an even split; else strict-win's shallow question; else the incumbent | headers + which tip is the incumbent (node-local: both ways) |
@@ -63,7 +63,7 @@ API for the client (L2FC2): `verify_window_suffix_v1`, `verify_registry_membersh
 5. `palw_rule_e_decide_v1` for each orientation and tie answer; STOP unless all agree.
 
 Cost (DERIVED): ~150 bytes a record (+27 with budget terms); a registry proof is `O(log n)` hashes per participating bond. A window
-holds every claim of the last finality depth: tens per 100 DAA at today's rate, but under ADR-0160 S a 13,000 MSK bond issues
+holds every claim of the last finality depth: tens per 100 DAA at today's rate, but under 旧ADR-0160 S a 13,000 MSK bond issues
 `u·ρ/20` claims a DAA (1 at ρ = 10, 10 at ρ = 100, 100 at ρ = 1,000), so nine such bonds at ρ = 100 put ~27,000 records in a
 300-DAA window. **The node no longer refuses on volume** (a refusal keeps the incumbent, so volume would buy a veto); the bound
 `PALW_RULE_E_MAX_EXCLUSIVE_CLAIMS_V1` = 16,384 now applies only where records are materialized — `PalwForkChoiceLeafV2::of` is
@@ -81,7 +81,7 @@ holds every claim of the last finality depth: tens per 100 DAA at today's rate, 
 1. **The window at high ρ.** `of` returning `None` past 16,384 records cannot stand inside an envelope every block must carry.
    PROPOSED: keep per-claim records (the claim-id difference needs them), build the window tree incrementally — a leaf changes only
    at a claim's acceptance, its phase transitions and its fall below the floor, so each block costs `O(changes · log n)` — and size
-   the bound from ADR-0160 S's ceilings over a finality depth instead of a constant. Until then a leaf v2 cannot carry a busy
+   the bound from 旧ADR-0160 S's ceilings over a finality depth instead of a constant. Until then a leaf v2 cannot carry a busy
    window (nine 13,000 MSK bonds: fine at ρ = 25, ~6,750 records; past the bound at ρ = 100).
 2. **The allocation.** Past `palw_bond_budget_v1` a record carries BUDGET's weights and terms (`PalwRuleEBondBudgetV1`, selected by
    `palw_rule_e_bond_budget_v1` — the one place, read by the node, the IBD path and `palw_rule_e_window_v1` alike). Nothing for the

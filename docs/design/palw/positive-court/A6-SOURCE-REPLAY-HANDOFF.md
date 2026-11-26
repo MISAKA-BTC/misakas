@@ -22,7 +22,7 @@ A4の追加read-only監査を受け、`199ae602f` の実装も照合した。hel
 
 53件のlocal試験は差分の一度加算・source due・失敗隔離を確認したものであり、役割別の予約保護やnative capへの正規射影を認証した結果ではない。mapperが明示toyであることに加え、mapperを通らず加算されるCourt wireにも保護が必要である。現時点で実native policyは未接続であり、このhelperをそのままnative受付へ有効化しない。
 
-[RFC-0044 §13](../../../rfc/0044-positive-court-full-coverage.md) はMinerの資料供給、Panelの再計算・証拠構築、Nodeの検査・保存・復旧を別々に測り予約する。[COMMON-CONTRACT §4](COMMON-CONTRACT.md) の全Panel合計はMinerの有限義務を鍵替え等で再生させない条件で、Panel/Nodeの計算担当をMinerへ移す授権ではない。[NATIVE-CONTRACT-R1](NATIVE-CONTRACT-R1.md) はfeeの区分を明示している一方、work/retention/wireの各fieldについてsourceとwhole-Caseの射影を確定し切っていない。3fieldを厳密にsource専用と断言したり、全作業を同じMiner義務へ合算してよいと扱ったりしない。
+[RFC-0044 §13](../../../rfc/0008-g14-panel-and-verification.md) はMinerの資料供給、Panelの再計算・証拠構築、Nodeの検査・保存・復旧を別々に測り予約する。[COMMON-CONTRACT §4](COMMON-CONTRACT.md) の全Panel合計はMinerの有限義務を鍵替え等で再生させない条件で、Panel/Nodeの計算担当をMinerへ移す授権ではない。[NATIVE-CONTRACT-R1](NATIVE-CONTRACT-R1.md) はfeeの区分を明示している一方、work/retention/wireの各fieldについてsourceとwhole-Caseの射影を確定し切っていない。3fieldを厳密にsource専用と断言したり、全作業を同じMiner義務へ合算してよいと扱ったりしない。
 
 native接続には、役割別cold最悪値と全未完了source dutyの予約をadmission時に確保し、Court遷移後も各capで「消費済み＋未完了source予約＋許可するCourt消費」が収まることを守るownerが必要である。source応答で予約を解放する際も、消費への移動を同じ原子的遷移に含め、二重計上・枠の再生を防ぐ。workspaceをcanonical retentionへ足さず、payer同意でMinerの計算担当・責任範囲を拡張しない。具体的な射影・予約・役割責任の契約はA0が明文化した後に接続し、新rate/schemaや成功stubをここで補わない。
 

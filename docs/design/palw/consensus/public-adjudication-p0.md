@@ -40,7 +40,7 @@ HEAD は `2afa6ccf47efca499fc95fb7f3bb1468698c7837` である。この記録を�
 ?? docs/design/palw/consensus/public-adjudication-policy-v0.1.md
 ?? docs/design/palw/tir/evidence/
 ?? docs/evidence/
-?? docs/rfc/0047-batch-court-time-contract.md
+?? docs/rfc/0009-court-and-claim-final.md
 ```
 
 ## コード側の ruleset id

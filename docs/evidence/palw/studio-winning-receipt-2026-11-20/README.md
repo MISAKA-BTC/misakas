@@ -18,9 +18,9 @@ DAA 323 で抽選された seat 7 が、実行者の seat 0 とは別のピア�
 
 ## 適用した RFC
 
-この claim は RFC-0054 の protected TFO3 として受理された。以後の Panel、異議、Final、Gate C と receipt quantum は受付時の識別子と期限で追跡する。RFC-0054 は同一 claim の権利消費と対応ブロック受理までを通し確認に含める。[RFC-0054](../../../rfc/0054-public-t12-original-admission-profile.md)
+この claim は RFC-0054 の protected TFO3 として受理された。以後の Panel、異議、Final、Gate C と receipt quantum は受付時の識別子と期限で追跡する。RFC-0054 は同一 claim の権利消費と対応ブロック受理までを通し確認に含める。[RFC-0054](../../../rfc/0020-devnet-release-and-migration.md)
 
-追加マージの CAD1 ゲートは既存 TFO3 に新しい受付 Ticket を要求できる構造だった。また SWC1 用の決済変換は既存の work identity の先頭 32 byte を OriginalId として使っていた。RFC-0058 §2.4 の OriginalId は専用の入力から導出する。両者の native 接続を追加マージ前の実装に戻した。AN1 と MOR1 の規範は新しい family／profile に適用する。分離した草案モジュールはこの実行の合意経路に入らない。[RFC-0058](../../../rfc/0058-staged-work-commitments-and-consensus-eligibility.md)・[RFC-0059 §0](../../../rfc/0059-palw-an1-input-binding-and-panel-court.md)・[RFC-0060 §0](../../../rfc/0060-model-registration-and-attempt-output-binding.md)
+追加マージの CAD1 ゲートは既存 TFO3 に新しい受付 Ticket を要求できる構造だった。また SWC1 用の決済変換は既存の work identity の先頭 32 byte を OriginalId として使っていた。RFC-0058 §2.4 の OriginalId は専用の入力から導出する。両者の native 接続を追加マージ前の実装に戻した。AN1 と MOR1 の規範は新しい family／profile に適用する。分離した草案モジュールはこの実行の合意経路に入らない。[RFC-0058](../../../rfc/0004-fow1-execution-and-ticket.md)・[RFC-0059 §0](../../../rfc/0004-fow1-execution-and-ticket.md)・[RFC-0060 §0](../../../rfc/0004-fow1-execution-and-ticket.md)
 
 ## 回帰確認
 

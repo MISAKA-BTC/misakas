@@ -6,7 +6,7 @@
 本決定は設計・受入条件の追加であり、既存networkのパラメータ、wire、fingerprint、activationを変更しない。
 以下の条件と既存の全activation gateが成立するまで、新しい経済規則と統合EXECを有効化しない。
 
-このcheckoutは2026-09-22のコードを基点としており、参照先のRFC-0008・ADR-0176を含まない。
+このcheckoutは2026-09-22のコードを基点としており、参照先のRFC-0008・旧ADR-0176を含まない。
 そのため本書を独立した追加条件として記録する。後続branchへ統合する際は、RFC-0008の実装仕様と
 bond会計の受入表にも接続し、本書の採用を既存コードの実装済み証拠として扱わない。
 
@@ -46,7 +46,7 @@ bond上限は共有window抽選の候補集合を作る前に適用する。
 行使不能な候補を大量投入して当選枠を占有し、当選後だけ上限を検査する方式は受け入れない。
 抽選直前の残余予算と既存予約を検査し、別windowへの同時予約で上限を超えない。
 
-Round発行権・実行回数・取引手数料・claim報酬とADR-0176のQ/B/R/F予算の関係を明文化する。
+Round発行権・実行回数・取引手数料・claim報酬と旧ADR-0176のQ/B/R/F予算の関係を明文化する。
 特にfee-only RoundをB_maxの対象とするか、別の明示的な実行上限で制約するかを確定する。
 市場依存の手数料収入をR_maxへ含める場合は、その範囲と超過時の処理・会計を定義する。
 未決定のままfee-only経路を上限の迂回路として残さない。
@@ -94,6 +94,6 @@ ticket数を増やすことだけで大型モデルの採算成立を宣言し�
 ## 参照
 
 - [既存Round ticket実装](../../../consensus/core/src/palw_execution_quanta_v1.rs)
-- [RFC-0008: 統合EXEC設計](https://github.com/MISAKA-BTC/misakas/blob/pre/docs/rfc/0008-palw-claim-backed-consensus-blocks.md)
+- [RFC-0008: 統合EXEC設計](https://github.com/MISAKA-BTC/misakas/blob/pre/docs/rfc/0014-exec-schedule-and-capacity.md)
 - [RFC-0008実装仕様・activation gates](https://github.com/MISAKA-BTC/misakas/blob/pre/docs/design/palw/execution/rfc-0008-implementation-spec.md)
-- [ADR-0176: bondと共通期間による上限](https://github.com/MISAKA-BTC/misakas/blob/pre/docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)
+- [旧ADR-0176: bondと共通期間による上限](https://github.com/MISAKA-BTC/misakas/blob/pre/docs/rfc/0012-bonds-budgets-and-slashing.md)

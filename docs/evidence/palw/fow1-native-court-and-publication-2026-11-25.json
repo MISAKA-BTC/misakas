@@ -1,0 +1,39 @@
+{
+  "consensusHead": "3fa4d1904",
+  "binarySha256": "bc40b745bff7bcf2caedefb58809a9e3f37b5b82f4903fa9ca85f4dd36ea3c52",
+  "registeredSingleProcessFixture": [
+    {
+      "losingTarget": false,
+      "original": "8925b45dcb0c87a36868334f26a302c7f5e0591252e6e40a867e9e507175c2eea29f909d56319a488b282a7d9f648038775fb8553216d69ed17cddddaa9d0c74",
+      "approvalBlock": "8544f9b7f1956620490725e4c73f30b722d1426c7fe38189285ed446bcd9d286b6b29d00859091d5a14a6f3963a3589a56e680081cf5db3ac6d43915f1122f11",
+      "court": "ReplayVerified",
+      "deadline": 61,
+      "deadlineBlock": "84a920dd58081438c4df334eeae3b8b9a5ae2a2835f94f65b0b6ceab40bf8f3e4cda51e9fc571d30ffe4237c1be894ceae4513e5db32936a04213ee641eb90d4",
+      "seconds": 23.11,
+      "logSha256": "447052254310003b2d755aa629fbcabaa693748f319e9318839ae7218332f0d0"
+    },
+    {
+      "losingTarget": true,
+      "original": "11bd0b88dd99a3b56a38fb4cd3c3d03968db41ce84847b170e25bf23000cc333d58dd7dff1ce07652750691d66a8277959147cdb104bd6f3d117abe9319c36bc",
+      "approvalBlock": "d93018e0c9596446d577d80cae08b40926e322dbc7a747f4196f8b9d2d0c32e1af0e0f65e28010a4c780d595a4b7c54615ec171dd530d0e84d8c72364c8b8826",
+      "court": "ReplayVerified",
+      "deadline": 61,
+      "deadlineBlock": "8f7c374fb08e46d89058eb3e1efd070d8d3a713004fcf7b0e98a218e793f071bec01672b36aa67a42609b22f16d8ebcb8285f124ebfb622709bddb449cf78aba",
+      "seconds": 23.0,
+      "logSha256": "b4cb23bb685033fc1bc5d595a757f09b49e9211e4d5f90ce4dd06a4daad890ff"
+    }
+  ],
+  "approvedPublication": {
+    "peers": 3,
+    "parent": "bb427b979f27adbba36084f59bd39f5b2291a9433e6e6c939ebc159bae49d7d1d2341e67736dd62b70e302f31f6d44d718a09c77130e7ae16a42a097845982fb",
+    "reply": "8b1b18918777c61c78116d6c064cb63cc1833a86e237c475c908773abba7b9d33877a9588e53059c55ef48388f287607f8a45dea5ae9e9034b66e646873a5d8f",
+    "original": "78690909288e3c677887bc8ce3f0c85407a0df2372f2812a7c572b4f27d91096ef0a84ad7397e7a95990de5c2b79494641cf3d2efa7c7b4dc4da5bbf8912f433",
+    "work": "d3330d01a279335a6172b86aaa5f2198923db17be2f9a69852a7b46b208d1d6df60adf4e267c928dfe98cf5df8943a2122543cc0f6d783164d8d6be9015ad472",
+    "logSha256": "c1d1cd09284298d70332fe1e61bc668b7cd50f125e5131e4a4b00e725751281b"
+  },
+  "fixtureLimits": [
+    "short private maturity and schedule fixture",
+    "small TIR fixture and registered tokenizer",
+    "no mining Final, independent positive Gate C, reward or public activation demonstrated"
+  ]
+}

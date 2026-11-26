@@ -1,6 +1,6 @@
 # PALW — third-pass audit of the mainnet remediation, and the testnet-11 re-mint decision (2026-08-29)
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **What this is.** A third read of the same changeset, run after
 `docs/palw-mainnet-reaudit-2026-08-29.md` and against the tree that document's own repairs produced:
@@ -156,7 +156,7 @@ and aborts `IBD with headers proof`.
 Acceptance does not stop it: processor.rs:4495-4625 checks only the target, the floor share, an
 Active registrant bond, the signature and `verify_class_admission_v2` — `activation_daa` is read
 but never constrained to 0, and the transition's only bound on it is the 4,000-DAA lookahead
-(:4568-4575), which is what makes a weightless registration legal by design (ADR-0049 conditions
+(:4568-4575), which is what makes a weightless registration legal by design (旧ADR-0049 conditions
 12/13). The sequential filter at processor.rs:4290-4310 rehearses with `apply_palw_transition_v2`,
 which runs this same code and succeeds, so the object is accepted rather than dropped.
 
@@ -229,7 +229,7 @@ consumed only by an `info!` line (processor.rs:1420-1423); it never reaches the 
 
 The coinbase then pays the block in full. Blues: `if palw_unentitled_blues.contains(blue) {
 continue; }` is the only gate (coinbase.rs:210). Reds — which at `ghostdag_k = 1` is every block
-of every class slower than the floor, by ADR-0058's own argument — are paid to their own script by
+of every class slower than the floor, by 旧ADR-0058's own argument — are paid to their own script by
 `if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) { ...
 outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone())); } continue;`
 (coinbase.rs:270-285), with `palw_pay_entitled_reds_to_their_miner =
@@ -472,7 +472,7 @@ This is the exact trap `shipped_presets_have_pinned_fingerprints` records two hu
 it (params.rs:5498-5504: "MATERIALIZED, not the raw const... caught live, where a correctly-built
 release announced 5fabb683… while this test was green on 62e299b6…").
 
-**Failure scenario.** Mainnet is live on this build. The team cuts the release that ADR-0024 step 3 calls for and that
+**Failure scenario.** Mainnet is live on this build. The team cuts the release that 旧ADR-0024 step 3 calls for and that
 params.rs:2010-2018 documents as the next mainnet fork: `PRODUCTION_DNS_PARAMS.vlt` becomes
 `VltParams { vlt_shadow_activation_daa_score: H, vlt_activation_daa_score: u64::MAX,
 ..VltParams::INERT }` with H a coordinated FUTURE DAA score — exactly the shape
@@ -578,9 +578,9 @@ Everything else in the pipeline treats algo-7 as first-class. `palw_v2_merged_wo
 works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)), ...}` (processor.rs:4948-4953). Step 4b
 applies it, and `apply_receipt_spend` credits `builder.state.safe_weight += per_quantum` and bumps
 `receipt_epoch_counters` (palw_state_v2.rs:5018-5043) — but writes no payout and no escrow, so the
-coinbase is the receipt block's ONLY compensation. ADR-0044 states the intended rule directly:
+coinbase is the receipt block's ONLY compensation. 旧ADR-0044 states the intended rule directly:
 "the receipt block's coinbase needs **no escrow ladder** ... a receipt block cannot [be voided].
-Ordinary coinbase maturity applies" (docs/adr/0044-palw-free-prompt-receipts.md:313-315) — i.e.
+Ordinary coinbase maturity applies" (docs/rfc/0004-fow1-execution-and-ticket.md:313-315) — i.e.
 paid in full, unescrowed, not paid nothing.
 
 The denial is total, not partial: the set is consumed by the blues loop (`coinbase.rs:210`), the
@@ -1379,7 +1379,7 @@ timestamp_deviation_tolerance, which for_each_fence binds `timestamp_deviation_t
 - `[low]` **The launch runbook still tells third-party miners the domain is `H(network_id)`, and no RPC serves the value that replaced it** — `docs/history/palw-rc-testnet11-launch-runbook.md:372`
   - held: Holds as stated; every sub-claim verified in code. (1) docs/palw-rc-testnet11-launch-
 runbook.md:372 says verbatim "(`network_domain` is `H(network_id)`, derivable from what the node
-already publishes)", and it is the ONLY line in that runbook mentioning a domain — ADR-0042 (:165,
+already publishes)", and it is the ONLY line in that runbook mentioning a domain — 旧ADR-0042 (:165,
 :180, :477) uses network_domain as a primitive and never defines its preimage, so this is indeed
 the only stated derivation for an external implementer. (2) The value is no longer the name alone:
 consensus/core/src/palw_attempt_v2.rs:155-163 mixes a length prefix, the id, and the genesis under

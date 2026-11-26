@@ -4,8 +4,8 @@
   "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
   "date": "2026-11-20",
   "timezone": "Asia/Tokyo",
-  "normative_rfc": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
-  "decision_record": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+  "normative_rfc": "docs/rfc/0005-qf1-qwen3-execution-profile.md",
+  "decision_record": "docs/rfc/0005-qf1-qwen3-execution-profile.md",
   "runtime_enabled": false,
   "wire_ids_assigned": false,
   "native_implemented_here": false,
@@ -17,9 +17,10 @@
   "g_cost_admission": {
     "revision": "2026-11-21",
     "method": "repeated_empirical_comparison",
-    "normative_contract": "docs/rfc/0062-palw-function-output-and-work-admissibility.md#g-cost-review",
+    "normative_contract": "docs/rfc/0004-fow1-execution-and-ticket.md#g-cost-review",
     "universal_cost_proof_required": false,
-    "incomplete": "UNKNOWN"
+    "incomplete": "UNKNOWN",
+    "purpose": "optional assessment, not an automatic admission gate"
   },
   "source_family": {
     "repository": "Qwen/Qwen3-8B",
@@ -187,8 +188,8 @@
     "free_signature_or_carrier_fields": false
   },
   "registration": {
-    "revision": "2026-11-23",
-    "normative_admission": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+    "revision": "2026-11-26",
+    "normative_admission": "docs/rfc/0007-bft-model-admission.md",
     "base_mandatory": [
       "all artifact bytes and digests",
       "exact TIR program and all numeric parameters",
@@ -198,14 +199,7 @@
       "G_EXEC execution/checker compatibility; no per-model cost/collision theorem"
     ],
     "admission_basis": [
-      "KERNEL_AUTO",
       "BFT_DECISION"
-    ],
-    "automatic_required": [
-      "G_COLL",
-      "G_COST",
-      "G_USE",
-      "MAS1 structural analysis and current evidence"
     ],
     "bft_required": [
       "BaseCompatible",
@@ -214,31 +208,9 @@
       "no applicable stops"
     ],
     "bft_theorem_or_evaluation_evidence_required": false,
-    "unknown_auto_admission_allowed": false,
     "unknown_assessments_with_valid_bft_yes_allowed": true,
     "unknown_assessments_rewritten_pass": false,
-    "legacy_mas1_registration": {
-      "mandatory": [
-        "all artifact bytes and digests",
-        "exact TIR program and all numeric parameters",
-        "canonical tokenizer and frame tokens",
-        "StateMap and trace schema",
-        "bounded Court catalog and sizing",
-        "G_EXEC",
-        "G_COLL",
-        "G_COST",
-        "G_USE",
-        "MAS1 structural analysis and current safety state"
-      ],
-      "unknown_result": "REVIEW_HOLD",
-      "unknown_mining_allowed": false,
-      "bft_resolve_replaces_theorem": false,
-      "evaluation_mode": "NON_REWARDING_MODEL_EVALUATION",
-      "evaluation_randomness": "TB1-MODEL_AUDIT plus separate later TB1-PANEL",
-      "economic_policy": "MOE2 unchanged; market created atomically at additional-model registration"
-    },
-    "economic_policy": "MOE2 unchanged; market created atomically at additional-model registration",
-    "actual_bft_approval_performed_here": false
+    "economic_policy": "MOE3 all models; market created atomically at formal registration after BFT YES"
   },
   "validation_scope": {
     "reference_program": "synthetic positions, bytes, tree, Ticket and BLAKE2b chunks only",
@@ -255,11 +227,10 @@
     ]
   },
   "mad2_origin_policy": {
-    "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
-    "genesis_bft_management": false,
+    "normative_rfc": "docs/rfc/0007-bft-model-admission.md",
+    "all_models_bft_management": true,
     "genesis_requires_exact_original_manifest": true,
-    "additional_bft_management": true,
-    "fork_bft_add_and_stop": true,
+    "new_fork_special_category": false,
     "individual_claim_validation_unchanged": true
   }
 }

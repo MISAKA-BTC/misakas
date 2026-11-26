@@ -2,7 +2,7 @@
 
 The DNS-finality validator sidecar for MISAKA. It connects to a co-located `kaspad` over wRPC Borsh, tracks a stake Bond and signs canonical-ready epoch attestations with ML-DSA-87.
 
-This is separate from a PALW producer/panel Bond. See [the current validator runbook](../../../docs/history/operations/dns-validator/validator-runbook.md).
+This is separate from a PALW producer/panel Bond. See [the current validator runbook](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/operations/dns-validator/validator-runbook.md).
 
 ## Recommended entry point
 

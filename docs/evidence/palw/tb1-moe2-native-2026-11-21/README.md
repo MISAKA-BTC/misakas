@@ -12,7 +12,7 @@ holder は roster の鍵と有限体座標、期限内の VSS 終了記録、有
 
 3者の署名前強制終了・再起動試験では、元の3署名が揃い、seed は `99df6ee58636a43cf174f09e4f60eac5c81ac8e5e7addcc21b7b00de72a06f4e` になった。この seed は custody 試験固有の入力に対応する。[holder の再起動と seed の検証ログ](holder-custody.txt)
 
-VSS の終了記録、資源予約参照、consumer と policy の内容、成熟した仕事と pruning frontier には試験入力を使用する。ブロックの受け渡しにはファイルに保存した RPC raw block を使う。通常の P2P 通信、新規 FOW1 claim の推論・Panel・Court・受賞ブロックはこの試験の対象外。FOW1 採掘には、関数系列に適合する descriptor と G-COLL・G-COST の成立条件を満たす必要がある。[RFC-0062](../../../rfc/0062-palw-function-output-and-work-admissibility.md)
+VSS の終了記録、資源予約参照、consumer と policy の内容、成熟した仕事と pruning frontier には試験入力を使用する。ブロックの受け渡しにはファイルに保存した RPC raw block を使う。通常の P2P 通信、新規 FOW1 claim の推論・Panel・Court・受賞ブロックはこの試験の対象外。FOW1 採掘には、関数系列に適合する descriptor と G-COLL・G-COST の成立条件を満たす必要がある。[RFC-0062](../../../rfc/0004-fow1-execution-and-ticket.md)
 
 ### 署名公開から EXEC seed まで
 

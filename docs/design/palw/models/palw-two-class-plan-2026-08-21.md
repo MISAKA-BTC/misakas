@@ -5,7 +5,7 @@ Deliberately not numbered as an ADR — the 0043/0045 numbers have collided twic
 lane; promote this when a number can be taken safely.
 
 **The plan.** Ship `PALW_RC_BASE0_GEOMETRY` — 4 layers, `d_model` 256 — as the RC's liveness floor,
-unchanged. It is ADR-0039 §2a's slow floor and it is not a performance claim. Add a Qwen-scale
+unchanged. It is 旧ADR-0039 §2a's slow floor and it is not a performance claim. Add a Qwen-scale
 BASE-0 class afterwards, once the depth question and the PTQ pipeline are settled.
 
 Checking whether the tree supports the second half found that it did not, and the three reasons are
@@ -103,7 +103,7 @@ here that expires, so it is the first one checked.
 from Hugging Face's `config.json` and the real `safetensors` header: `QWEN25_1_5B` (28 layers,
 1536, 8960, 12 heads / 2 kv) and `QWEN25_3B` (36, 2048, 11008, 16 / 2). It is a second class over
 the same closed catalog, with GQA carried, the RMSNorm gain folded into the following linears, the
-QKV biases riding the requantize zero point (an ADR-0040 amendment), and coverage at **100 %**.
+QKV biases riding the requantize zero point (an 旧ADR-0040 amendment), and coverage at **100 %**.
 
 Priced against the ladder — `misaka/palw/base0/src/bin/base0-class-sizing.rs` — one number does not
 work:
@@ -147,7 +147,7 @@ node more storage.
    `docs/palw-base0-ptq-pipeline-scope.md`, whose §5 engine gaps (norm gain via `MulElem`, GQA,
    per-channel requant) are what decide how faithful a dense-Qwen port can be.
 3. **A carrier for `ClassRegistered`**, calling §3's gate before the transition. Belongs with the
-   ADR-0046 carriage. Until it exists the pipeline **refuses** the object rather than passing it:
+   旧ADR-0046 carriage. Until it exists the pipeline **refuses** the object rather than passing it:
    `palw_v2_validate_objects` had a catch-all that let an unlisted object through unchecked, which
    would have installed a class with no coverage, ladder or pwu check — the A4 hole in the one place
    A4 is decided. The refusal names what a carrier must add.

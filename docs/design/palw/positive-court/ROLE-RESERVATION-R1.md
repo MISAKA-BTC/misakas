@@ -1,6 +1,6 @@
 # Positive Court — 役割別の残予約を保護する接続条件
 
-2026-11-01。採択済み [RFC-0044](../../../rfc/0044-positive-court-full-coverage.md) の責務分離と全分岐予約を実装へ接続するための条件。新しい価格、wire、状態schema、役割、登録審査を割り当てる文書ではない。現時点のpure replayとtoy mapperは、以下のnative予約保護を実装・検証した実績にはならない。
+2026-11-01。採択済み [RFC-0044](../../../rfc/0008-g14-panel-and-verification.md) の責務分離と全分岐予約を実装へ接続するための条件。新しい価格、wire、状態schema、役割、登録審査を割り当てる文書ではない。現時点のpure replayとtoy mapperは、以下のnative予約保護を実装・検証した実績にはならない。
 
 ## 分けて扱う量
 

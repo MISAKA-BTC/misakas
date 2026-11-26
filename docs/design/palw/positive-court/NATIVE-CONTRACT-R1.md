@@ -1,15 +1,5 @@
 # A0 — native接続契約 v2/r1
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 2026-10-31。[共通契約](COMMON-CONTRACT.md)、[TIR annex](TIR-INTERCHANGE-R1.md) のnative接続先。これはcodec/fold/実資金/全consumerの完成宣言ではない。以下の番号・署名scope・原子的境界をA0が所有し、A4/A5/A6が実装する。
 
 ## 1. 名前空間
@@ -19,7 +9,7 @@
 - lifecycle object **176** を `PositiveCourtEventV2` 用に中央 `PALW_A2_TAG_ALLOCATIONS_V1` へ予約。既存170/171/175/178、旧Miner-trace形式を再利用しない。176のlive decoder・kindはまだない。typed fenceは下記の通り無効のまま追加した。
 - kernel-route aux table **151** を使用。150（court capital）、161（rejected response）と別。既存aux root、`KernelRouteRow` delta 160、carriage tail `0xEC`を使い、空の新top-level root blockを追加しない。
 - keyはBorsh `(2u16,1u16,NativeRowKey)`。kind 0 Result、1 ClaimIndex、2 Case、3 Witness、4 Coverage、5 SourceUnion、6 ServiceReceipt、7 Funding、8 PacketReceipt、9 JournalHead。keyのidentity型と順序はcodeを参照。
-- 採択済み[RFC-0045](../../../rfc/0045-positive-court-canonical-assignment.md)のappend-only追加は10 Assignment、11 AssignmentNonce、12 AssignmentUse、13 AssignmentFunding、14 AssignmentSettlement、15 AssignmentRole、16 AssignmentJournalHead、17 AssignmentJournalFrame、18 AssignmentProverFunding。0–9を再decodeせず、10–17の番号も維持する。kind18はop13の参加prover自身の別原資を保存する従属accountであり、新しいResult kindではない。keyはAssignmentId＋prover native bond（prefix込み137 bytes）、valueはliteral join consentと一人分のkey/signature・実outpoint・fee/capital/surplus・未払due/責任floor・予約/精算参照を持つ。同じassignment/bondの別consentによるaccount新設・全体予算resetは拒否する。 kind14 valueは`Poster / Prover(native bond)`で実debit元accountを区別する。key142 bytesを変えず、ordinalはassignment/leg/partyごとに全accountを横断して一意とし、account間のonce key衝突・上書きを拒否する。
+- 採択済み[RFC-0045](../../../rfc/0008-g14-panel-and-verification.md)のappend-only追加は10 Assignment、11 AssignmentNonce、12 AssignmentUse、13 AssignmentFunding、14 AssignmentSettlement、15 AssignmentRole、16 AssignmentJournalHead、17 AssignmentJournalFrame、18 AssignmentProverFunding。0–9を再decodeせず、10–17の番号も維持する。kind18はop13の参加prover自身の別原資を保存する従属accountであり、新しいResult kindではない。keyはAssignmentId＋prover native bond（prefix込み137 bytes）、valueはliteral join consentと一人分のkey/signature・実outpoint・fee/capital/surplus・未払due/責任floor・予約/精算参照を持つ。同じassignment/bondの別consentによるaccount新設・全体予算resetは拒否する。 kind14 valueは`Poster / Prover(native bond)`で実debit元accountを区別する。key142 bytesを変えず、ordinalはassignment/leg/partyごとに全accountを横断して一意とし、account間のonce key衝突・上書きを拒否する。
 - 新claimのGate C subject prefixは **P（0x50）**、IDは `native::certification_subject(full_result)`。旧S/K/V subjectや任意旧claim IDの承認を借りない。全LLMで実際のclaim抽選承認の`Certified`が必要で、`PublicCheckCertified`、Positive単体、一致したlocal replayを代替にしない。
 
 namespace予約だけでaux151を任意bytesとして受理しない。A6は`wire_kernel_aux.rs`へ正規key/value型のbounded scanner・NativeHeap・復元整合性を接続する。未知key、孤立Witness/Case、誤ID、別schema、上限超過を拒否する。

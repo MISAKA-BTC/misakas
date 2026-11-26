@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "rfc_count": 20,
+  "adr_count": 20,
+  "source_rfc_map_count": 71,
+  "source_adr_map_count": 235,
+  "current_link_errors": 0,
+  "policy_routes": [
+    "BFT_DECISION"
+  ],
+  "runtime_verified": false,
+  "failures": [],
+  "scope": "Current document structure, local links, policy boundaries and proposal status only."
+}

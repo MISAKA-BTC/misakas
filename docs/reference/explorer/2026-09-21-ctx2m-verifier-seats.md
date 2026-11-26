@@ -11,6 +11,6 @@
 
 `readySeatsNow` / `requiredReadySeats` still come from `getPalwModelRegistry` for that id.
 For graph-v7@2097152 the registry derives **9,992** required seats (canonical `262143+2`,
-ADR-0135), not the panel floor of 7 — misakascan was correct to show `0 / 9,992`; the prose
+旧ADR-0135), not the panel floor of 7 — misakascan was correct to show `0 / 9,992`; the prose
 that said "currently 7" was wrong for held 2M.
 Cache token: `app.js?v=ctx2m2`.

@@ -1,0 +1,15 @@
+{
+  "markdown_parser": {
+    "passed": true,
+    "tests": 16,
+    "exit_code": 0
+  },
+  "qf1_reference": {
+    "passed": true,
+    "checks": 57,
+    "exit_code": 0,
+    "qwen_executed": false,
+    "native_court_tested": false
+  },
+  "runtime_verified": false
+}

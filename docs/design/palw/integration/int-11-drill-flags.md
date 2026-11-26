@@ -56,7 +56,7 @@ flag's own height; arm them first (a lower height) or the node refuses the flag 
 | 15 | `--palw-drill-held-chunks-at=H` | arms RFC-0003's held leaf challenge (object tag 90) | `palw_held_close_chunks_v1` | `palw_tir_v1`, `palw_held_context` | `held_chunks_at=` | `held_chunks_at` |
 | 16 | `--palw-drill-class-seating-at=H` | **reserved** — lane F's class-seating fence (the possession floor and the independence read) | `palw_class_seating` (name fixed by lane F) | lane F states them | `class_seating_at=` | `class_seating_at` |
 | 17 | `--palw-drill-improve-at=H` | arms RFC-0004's improvement fence (pipeline-claim data availability, spec 17 §17.14, rides with it) | `palw_improvement_v1` | `palw_tir_v1`, `palw_tir_fence2`, `palw_gen_v1`, `palw_kary_court`, `palw_fp_decode_rules` | `extra_at=…improve:` | `improve_at` |
-| 18 | `--palw-drill-int11-at=H'` | **moves the flag day's whole list** to H' — decode rules, gen, FP Job V5, the held leaf challenge, improvement, **int-12's additions** (`palw_tir_shard_v1`, `palw_verification_vertex_v1`, `palw_witness_manifest_v1`, `palw_audit_mesh_v1`, `palw_capped_onboarding_v1`, `palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`, `palw_fp_tokenizer_match`, `palw_adapter_class_v1`, `palw_class_seating`, `palw_gdn_key_heads`, lane PL's three, lane RS's two, ADR-0170's `palw_anchor_window_v1` — see the addendum), `L_ver`, the capacity x1000 fences (F-EM, F-M1, F-K), ρ = 25 — and ρ = 100 / 250 / 1000 to **H' + 95 / + 190 / + 285**, as the release arms them; **instead of** rows 8–11, 12–15 and 17, never with them (refused by name) | `PALW_T12_INT11_FENCES_V1` + `PALW_T12_INT11_RHO100_FENCES_V1` / `_RHO250_` / `_RHO1000_` | rows 1, 3, 4, 5 below it (`palw_tir_v1`, `palw_tir_fence2`, the capacity flag day: ρ = 10 and F-N) | `int11_at=` | `int11_at` |
+| 18 | `--palw-drill-int11-at=H'` | **moves the flag day's whole list** to H' — decode rules, gen, FP Job V5, the held leaf challenge, improvement, **int-12's additions** (`palw_tir_shard_v1`, `palw_verification_vertex_v1`, `palw_witness_manifest_v1`, `palw_audit_mesh_v1`, `palw_capped_onboarding_v1`, `palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`, `palw_fp_tokenizer_match`, `palw_adapter_class_v1`, `palw_class_seating`, `palw_gdn_key_heads`, lane PL's three, lane RS's two, 旧ADR-0170's `palw_anchor_window_v1` — see the addendum), `L_ver`, the capacity x1000 fences (F-EM, F-M1, F-K), ρ = 25 — and ρ = 100 / 250 / 1000 to **H' + 95 / + 190 / + 285**, as the release arms them; **instead of** rows 8–11, 12–15 and 17, never with them (refused by name) | `PALW_T12_INT11_FENCES_V1` + `PALW_T12_INT11_RHO100_FENCES_V1` / `_RHO250_` / `_RHO1000_` | rows 1, 3, 4, 5 below it (`palw_tir_v1`, `palw_tir_fence2`, the capacity flag day: ρ = 10 and F-N) | `int11_at=` | `int11_at` |
 
 Marker lines. The release line's own `tir2_at=` and `model_court_at=` are unchanged. The capacity flags share `capacity_at=`
 (`none` when none stands, else `room:…,verify:…,step2:…,step3:…,rho100:…`). The four RFC-0003 / RFC-0004 flags of 12–14 and 17
@@ -95,7 +95,7 @@ arms, each through the fence's own `set`, at **one height H = `PALW_T12_INT11_FL
 the final one)**: `palw_fp_decode_rules`, `palw_gen_v1`, `palw_fp_job_v5`, `palw_held_close_chunks_v1`, `palw_improvement_v1`,
 `palw_capacity_network_verify` (`L_ver` = 435 at the shipped 600 / 20: "at or before" ρ = 25's height — at it) and the capacity ramp's
 ρ = 25 step (F-L's second step); **ρ = 100 (F-L's third step) at H + 95** (`PALW_T12_INT11_RHO100_OFFSET_DAA`), its own entry.
-`palw_class_seating` joins the list when lane F's fence lands. `palw_model_court_window` (armed nowhere) and ADR-0162's
+`palw_class_seating` joins the list when lane F's fence lands. `palw_model_court_window` (armed nowhere) and 旧ADR-0162's
 `palw_model_virtual_v1` (the user has not decided) are **not** scheduled. Rows 12–17 drill exactly those entries, one flag each, and
 row 18 drills the list as the release arms it. The sub-features of `palw_improvement_v1` (the evaluation court, the pipeline-claim DA
 units and objects 83–86, 89) are not fences of their own and have no flag: they are in force when row 17 is.
@@ -115,7 +115,7 @@ Flags that make a node lie or withhold, to exercise the courts; they apply on a 
 | `--palw-drill-tamper-fp-leaf=N` | this node's canonical free-prompt claims commit a capture with one lane of leaf N corrupted (the one-move court's drill) |
 | `--palw-drill-tamper-eval=leaf:N\|output\|score[@LINEHEX][/parent\|candidate]` | commits one evaluation with a fault: a self-consistent lie an honest replay disputes, told again on the next job until one lands (RFC-0004 D-M3) |
 | `--palw-drill-challenge-all` | opens a court against every licensed claim, reproduced or not |
-| `--palw-drill-answer-only` | free-prompt claims are broadcast and served as their answer envelope, never the capture (ADR-0111's drill) |
+| `--palw-drill-answer-only` | free-prompt claims are broadcast and served as their answer envelope, never the capture (旧ADR-0111's drill) |
 | `--palw-drill-refuse-leaf-evidence` | refuses every leaf-evidence request on the interval lane, so a seat that named a leaf must demand its evidence on chain |
 
 ## 6. Scenario inputs that use these flags
@@ -151,7 +151,7 @@ announces another ruleset's fingerprint).
 
 ## int-12 addendum (2026-10-03): the list is now 29 entries, and the ramp has two more steps
 
-The user's directive of 2026-10-03 arms every RFC but 0005, the Useful Work Transition, capacity x1000 and ADR-0170's anchor window at the same height
+The user's directive of 2026-10-03 arms every RFC but 0005, the Useful Work Transition, capacity x1000 and 旧ADR-0170's anchor window at the same height
 H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 29 entries, in prerequisite order:
 
 1. the int-11 five (decode rules, generative, FP Job V5, held leaf challenge, improvement);
@@ -160,10 +160,10 @@ H = DAA 5,300, so `PALW_T12_INT11_FENCES_V1` grew from 7 to 29 entries, in prere
 4. RFC-0001 — `palw_fp_decode_constraint`, `palw_fp_constraint_v2`, `palw_fp_prefix_state`, `palw_fp_prefix_inherit`,
    `palw_fp_tokenizer_match`, `palw_adapter_class_v1`;
 5. RFC-0002's rest — `palw_class_seating`, `palw_gdn_key_heads`;
-6. lane PL (ADR-0166) — `palw_panel_unavailable_expiry`, `palw_panel_fast_switch`, `palw_seat_availability`;
-7. lane RS (ADR-0165) — `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`;
-   lane P2 (ADR-0170) — `palw_anchor_window_v1` (after RS's pair, before the capacity entries; no drill flag of its own);
-8. F-N's `L_ver` (`palw_capacity_network_verify`), then capacity x1000's three (ADR-0164: `palw_capacity_emission_budget`,
+6. lane PL (旧ADR-0166) — `palw_panel_unavailable_expiry`, `palw_panel_fast_switch`, `palw_seat_availability`;
+7. lane RS (旧ADR-0165) — `palw_floor_reserve_v1`, `palw_real_clock_tick_v1`;
+   lane P2 (旧ADR-0170) — `palw_anchor_window_v1` (after RS's pair, before the capacity entries; no drill flag of its own);
+8. F-N's `L_ver` (`palw_capacity_network_verify`), then capacity x1000's three (旧ADR-0164: `palw_capacity_emission_budget`,
    `palw_capacity_multi_claim`, `palw_capacity_rho_breaker`), then rho = 25.
 
 The ramp's later steps keep their own entries: rho = 100 at H + 95 (5,395), rho = 250 at H + 190 (5,490), rho = 1000 at H + 285 (5,585).
@@ -175,8 +175,8 @@ and 1000 where the release has them). Lane PL's list has its own flag, `--palw-d
 `--palw-drill-useful-work-at`. Each new entry's prerequisites are inside the list or in the DAA-3,600 list below it
 (`consensus/core/tests/palw_t12_flag_day_int11.rs`, `the_list_holds_its_prerequisites_by_name`).
 
-Object tags: 91–93 RFC-0006, 94 the adapter listing, 95 capacity riders (ADR-0167), 100–103 RFC-0007 (spec 17 §17.0). State-delta numbers: 101 vertex rows (RFC-0007),
-102–103 shard plan / claim (RFC-0006), 104 `RealWork` (ADR-0165), 105 `CapacityLedger` (ADR-0164), 106 `SeatAvailability` (ADR-0166).
+Object tags: 91–93 RFC-0006, 94 the adapter listing, 95 capacity riders (旧ADR-0167), 100–103 RFC-0007 (spec 17 §17.0). State-delta numbers: 101 vertex rows (RFC-0007),
+102–103 shard plan / claim (RFC-0006), 104 `RealWork` (旧ADR-0165), 105 `CapacityLedger` (旧ADR-0164), 106 `SeatAvailability` (旧ADR-0166).
 Carriage tails: `0xE4` vertex, `0xE1` shard, `0xEA` real work, `0xE6` seat availability. Interval-request kinds: bit 29 leaf evidence,
 28 shard rows, 27 shard runs, 26 weight blocks, 25 witness chunks.
 

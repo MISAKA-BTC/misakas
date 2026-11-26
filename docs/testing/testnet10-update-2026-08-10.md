@@ -163,7 +163,7 @@ four things worth keeping, three of them defects and one a design edge behaving 
 
 1. **Quarantine had no operator exit (FIXED, `cca8b1e`).** B and C were both driven to
    `Quarantined` by IBDs that failed after `staging.commit()`; A joined them via the
-   unresolved-candidates commit barrier. ADR-0025 said "until an operator intervenes" but shipped
+   unresolved-candidates commit barrier. 旧ADR-0025 said "until an operator intervenes" but shipped
    no interface — the only exit was hand-deleting the meta-DB key. Added `--clear-quarantine`
    (one-shot, WARNs each boot, clears quarantine only, keeps the switch counter).
 

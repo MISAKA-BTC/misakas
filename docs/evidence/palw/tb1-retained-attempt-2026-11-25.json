@@ -1,0 +1,216 @@
+{
+  "genesisHash": "85151853ecab03e6686c6103ebeaa6d1ec7d20b8e588ee6e5cf381e8094189e8316923cc8fd3e42738ae58527d78dbb0506b30f481efa49ec29aa0daebc7b33c",
+  "consensusParamsId": "5006b87d4ece91b3fd0d6c2aec1da5daea35b9d3c1c83a37bfb6a361b5bb510c",
+  "source": "541b0a37e10a4889b6f3e75d5a1b41dcdb19d7b9b6b95cb4cc7e5170ea356083aa34b8417bd2f6440eacfd2180f383d59754168e63fdc42bc0128895eb0c81f5",
+  "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+  "fee": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:45",
+  "feeObserved": true,
+  "facts": {
+    "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+    "chainPoint": "c713a284082afdac5fe21a4d0e6c48dbefd63730d78f330c22da2e35585ee99efd606523b34e195afc24144e67edafe2ec7f1f1e3b27505ad106bc0527f86d67",
+    "pwu": 6042506112,
+    "epochBudgetBlocks": 998,
+    "notReadyReason": ""
+  },
+  "observations": [
+    {
+      "sink": "c713a284082afdac5fe21a4d0e6c48dbefd63730d78f330c22da2e35585ee99efd606523b34e195afc24144e67edafe2ec7f1f1e3b27505ad106bc0527f86d67",
+      "daa": 11,
+      "claims": [
+        "1e206ef8856345f9d6bbe3ca54666efbafee8d3b2c3303eb23e968cb8655bf644f4a2b3c126bad515da743461b632218f743e1e067c7a62df702a238265522d9"
+      ],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 18,
+      "producedBlocks": 1
+    }
+  ],
+  "acceptedAttempt": {
+    "tip": "c713a284082afdac5fe21a4d0e6c48dbefd63730d78f330c22da2e35585ee99efd606523b34e195afc24144e67edafe2ec7f1f1e3b27505ad106bc0527f86d67",
+    "claim": {
+      "acceptedBlock": "c713a284082afdac5fe21a4d0e6c48dbefd63730d78f330c22da2e35585ee99efd606523b34e195afc24144e67edafe2ec7f1f1e3b27505ad106bc0527f86d67",
+      "acceptedBlueScore": 23,
+      "acceptedDaa": 11,
+      "boundDaa": null,
+      "claimId": "1e206ef8856345f9d6bbe3ca54666efbafee8d3b2c3303eb23e968cb8655bf644f4a2b3c126bad515da743461b632218f743e1e067c7a62df702a238265522d9",
+      "claimLocalSettlement": null,
+      "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+      "committedSompi": "320095402740",
+      "escrowedRewardSompi": 320084650080,
+      "execLane": null,
+      "executorBond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+      "freePrompt": false,
+      "openCourts": 0,
+      "payoutPendingSompi": null,
+      "phase": "provisional",
+      "phaseDaa": 0,
+      "phaseDeadlineDaa": 31,
+      "quanta": 0,
+      "quantaSpent": 0,
+      "reboundDaa": null,
+      "reservationSplit": null,
+      "reservedSompi": "10752660",
+      "seats": [],
+      "securityCertification": "pending",
+      "voidReason": null,
+      "workLeaves": 0
+    },
+    "gateCGoverns": true,
+    "outputRoot": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+    "retainedBytes": 1599245,
+    "retainedSha256": "584dd4d79ab84313eda4b3ca90f810f2ec0ec3e8a7ffc5133db807676ae72bcf"
+  },
+  "nodeExitCodes": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "prefixFile": "tb1-retention-replay-prefix-2026-11-25.json",
+  "prefixSha256": "4b4b49ab3de509990d12483dd57b8c811dde2ed19acaaf382d556c197d9ed611",
+  "prefixBlocks": [
+    "7456ff29ef47e2f9af8061fcbadb011668a3e84f958ba5d1051a42ddfd7a8158999a75120ee8d29e632a4dc369fd9a1d686448c3b8c8836996c8d8ff37e836b9",
+    "998b18feb9c0f1234b9ec06e354182516e13a0bdccdcb7c6e1eb6a75387488ba2b40143cc660f404afa444f3f062aca61977325eeb5a9fd41b73c7da3bcf1d48",
+    "16e4b110dfe0043251dd7b7601badb348410ae9245473ca89028648dd80f0fad149b31e525527819f4807f987439269bdbbee14b030f72cfb3d1341e5fc09902",
+    "5c34511881d7cc2885e1638ee05aea210ed509f060bf9aff4e0eb1521fc73ce342a0b2190aa487f52661570b5a59d1195d5d874e8db9fd9cbe61218f78d70327"
+  ],
+  "seconds": 68.68,
+  "minimumHostFreeBytes": 12995158016,
+  "controls": {
+    "smallVolumeBeforeFix": {
+      "lastObservation": {
+        "sink": "0dabe73749c83a4f7d04c223ec1112ab1926f6a87cb637c0b3294973e191f5a1f00025f7b473174c29e19799ed1beaf306fd42706a8d6c41092d7d26afcb165c",
+        "daa": 13,
+        "claims": [],
+        "producerState": "drawing",
+        "producerReason": "",
+        "draws": 252,
+        "producedBlocks": 0
+      },
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "accepted": null
+    },
+    "unlistedVolumeBeforeFix": {
+      "lastObservation": {
+        "sink": "8c5b951627e1dae5f3aee8715c0b52150e03549dfa3f56bf7cf0b8f400e891e2d8eb9e83d37d5088b6d806e78a9263e62e010da5a840688b9cc71585a755d076",
+        "daa": 13,
+        "claims": [],
+        "producerState": "drawing",
+        "producerReason": "",
+        "draws": 255,
+        "producedBlocks": 0
+      },
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "accepted": null
+    },
+    "otherPrefixAfterFix": {
+      "lastObservation": {
+        "sink": "f355cd6d1fc9eae82f7344980b02f7b89336cd47e74eeca06bd2a8668a7fc7b535223bbe23a78181e9fdf81c63a209aa255561feefa955626300b1e1ca175752",
+        "daa": 13,
+        "claims": [],
+        "producerState": "drawing",
+        "producerReason": "",
+        "draws": 253,
+        "producedBlocks": 0
+      },
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "accepted": null
+    },
+    "smallVolumeAfterFix": {
+      "lastObservation": {
+        "sink": "6c12e2eb60ad64b12cbd7d04a396714c050fef340e24caf892501c09bf636cdf8ab4bf93358c528fd28cd6e8174fa9a6fc9f37c7e02ace6c9170c7f5e4a97959",
+        "daa": 14,
+        "claims": [],
+        "producerState": "holding",
+        "producerReason": "attempt retention volume has 1403097088 bytes free, requires more than 8589934592",
+        "draws": 0,
+        "producedBlocks": 0
+      },
+      "exits": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": 79.65,
+      "minimumHostFreeBytes": 12985077760,
+      "genesis": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5"
+    }
+  },
+  "volumeProbe": {
+    "listedVolumeTotalBytes": 8589934592,
+    "unlistedVolumeTotalBytes": 10737418240,
+    "beforeFixUnlistedProbeTotalBytes": 494384795648,
+    "afterFixUnlistedProbeFreeBytes": 10701684736
+  },
+  "sealedSourceFilesVerified": 92,
+  "coldRestore": {
+    "sink": "c713a284082afdac5fe21a4d0e6c48dbefd63730d78f330c22da2e35585ee99efd606523b34e195afc24144e67edafe2ec7f1f1e3b27505ad106bc0527f86d67",
+    "claim": "1e206ef8856345f9d6bbe3ca54666efbafee8d3b2c3303eb23e968cb8655bf644f4a2b3c126bad515da743461b632218f743e1e067c7a62df702a238265522d9",
+    "root": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+    "captureBytes": 1599245,
+    "archiveSha256": "cff55be8ca0e630eb036ae0e685979b5724c8b240cbf5178312bbcef0d27ef45",
+    "nodeExitCode": 0
+  },
+  "archiveBytes": 4173263,
+  "finalBuildReplay": {
+    "acceptedAttempt": {
+      "tip": "95d1829b98ef31e4873861c03b09dced6116dc35bb9673c6ee5289fbe45b9033fc1ef337ce70128a2e45f3c2a320f710c1904cda36439f5161b3e79518356124",
+      "claim": {
+        "acceptedBlock": "95d1829b98ef31e4873861c03b09dced6116dc35bb9673c6ee5289fbe45b9033fc1ef337ce70128a2e45f3c2a320f710c1904cda36439f5161b3e79518356124",
+        "acceptedBlueScore": 23,
+        "acceptedDaa": 11,
+        "boundDaa": null,
+        "claimId": "6cc0958ec5879055bf3c7729f729dbe4be9e615eb999238d41e7faa17551e3d84730864ee1e597dcb0b07140dee3470a6fcacf653bb013bd9b9eed1031933b11",
+        "claimLocalSettlement": null,
+        "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "committedSompi": "320095402740",
+        "escrowedRewardSompi": 320084650080,
+        "execLane": null,
+        "executorBond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+        "freePrompt": false,
+        "openCourts": 0,
+        "payoutPendingSompi": null,
+        "phase": "provisional",
+        "phaseDaa": 0,
+        "phaseDeadlineDaa": 31,
+        "quanta": 0,
+        "quantaSpent": 0,
+        "reboundDaa": null,
+        "reservationSplit": null,
+        "reservedSompi": "10752660",
+        "seats": [],
+        "securityCertification": "pending",
+        "voidReason": null,
+        "workLeaves": 0
+      },
+      "gateCGoverns": true,
+      "outputRoot": "40c661f8d3669d2382d97609c60e33ede58cf98ba0c03fcefee74a28887b341db6996c22010abb098adbc14f5c5e013f6a6bee7c3528596bd806fa6322ba11ac",
+      "retainedBytes": 1599245,
+      "retainedSha256": "584dd4d79ab84313eda4b3ca90f810f2ec0ec3e8a7ffc5133db807676ae72bcf"
+    },
+    "seconds": 68.64,
+    "minimumHostFreeBytes": 12967374848,
+    "exits": [
+      0,
+      0,
+      0,
+      0
+    ]
+  }
+}

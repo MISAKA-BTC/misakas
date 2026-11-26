@@ -1,53 +1,12 @@
 # MISAKA Architecture Specification
 
-<!-- MOE2-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 後続採択 — MOE2の30%購入・20%永久流動性・50%残余
+> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0014-exec-schedule-and-capacity.md) と [旧ADR-0216](../rfc/0014-exec-schedule-and-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
 
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新経済profileの正本は[RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)／[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)／[移行契約](../governance/model-option-economics-transition.md)。ADDITIONALの対象worker報酬Rを `B=floor(300R/1000)`、`A=floor(200R/1000)`、`D=R-B-A` に分け、Bで購入したPositionの必要分をAと同じ市場へ追加し、余剰だけをburnする。全工程とDの支払を同じ原子的決済に結合する。
-
-永久LPはnativeの非償還記録であり、withdraw・transfer・owner/管理者引出し・LP手数料請求を持たない。実資産は通常swapに使い、Aを旧locked seed下限へ加算しない。登録時の一意市場生成、coreの市場なし・Miner=R、通常AMM5%/3%・直接移転、TB1/FOW1は維持する。永久LP記録済みmodel IDのcore指定は禁止する。
-
-旧MOE1の「50%を全額購入し、購入Positionを全retireする」は旧cohortの規則であり、MOE2の新規経路へ適用しない。以下の旧採択・原条文・測定はその版の履歴として保存する。
-<!-- MOE2-ADOPTED-20261120-END -->
-
-
-<!-- MOE1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — 追加モデル限定MisakaOption経済MOE1
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。§6の現行本文をMOE1へ改訂した。transfer可能化はmodel owner、管理鍵、bond、claim、ExecCredit、過去責任の移転を意味しない。
-
-追加モデル登録と一意な市場の作成を同じ原子遷移とし、通常の登録済み・市場未作成状態やseed待ちを設けない。genesis・有効softfork指定モデルは市場を作らず、価格付け・共通上限処理後の対象worker報酬RをMinerへ100%配分する。追加モデルのみ50%買上げ、通常AMMはburn5%・owner総額3%・net残差、直接送受信はAMM手数料なしとする。
-
-[RFC0063](../rfc/0063-additional-model-option-economics.md) / [ADR0231](../adr/0231-additional-model-option-economics.md) / [適用と移行](../governance/model-option-economics-transition.md)。新経済profileではこの後続採択を優先する。旧率・旧署名・原文引用・過去の実装試験はその版の記録として保持し、新規経路へfallbackしない。TB1/FOW1の正当性・乱数・Court・適格性条件を免除しない。
-<!-- MOE1-ADOPTED-20261120-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-<!-- SWC1-PROPOSAL-BEGIN -->
-> **2026-11-17 監査対応の設計案:** [RFC-0058](../rfc/0058-staged-work-commitments-and-consensus-eligibility.md) / [ADR-0226](../adr/0226-staged-work-commitments-and-consensus-eligibility.md) とRFC-0056・0057の追補は、実行commit、仕事の一回性、JOB／TICKET／PANELの段階別抽選、用途別の成熟・取消接続を扱う。状態は **PROPOSED_DESIGN_NOT_ACTIVATED**。既存原則・採択済み本文・旧claim・runtimeをこの参照で変更しない。新BFT乱数候補は無効、PoW費用下界とDAG定理は未証明である。[変更と検証](../maintenance/revisions/2026-11-17-work-binding/README.md)を参照。
-<!-- SWC1-PROPOSAL-END -->
-
-<!-- CAD1-PROPOSAL-BEGIN -->
-## 2026-11-17 受付難易度の設計案
-
-新規originalの受付DとREALのW・Final後receipt・搬送1 BPSの役割分離は [RFC-0056](../rfc/0056-global-claim-admission-difficulty.md) を参照する。court資源上限・全工程予約は [RFC-0055](../rfc/0055-global-admission-court-calendar-and-one-bps.md)。状態は0056/0224がPROPOSED_DESIGN_NOT_ACTIVATEDであり、この注記で現行仕様・署名・activationを変更しない。
-<!-- CAD1-PROPOSAL-END -->
-
-> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) と [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
-
-> **2026-11-08 の適用範囲:** 下の本文・状態表は2026-11-03の統合仕様と、その時点の照合範囲を保持します。今回採択した新しい claim / profile には [RFC-v2-0016〜0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/README.md)、[ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) の明示改定を適用します。状態は **ADOPTED_DESIGN_NOT_ACTIVATED** であり、実装・測定・activation の完了を示しません。
+> **2026-11-08 の適用範囲:** 下の本文・状態表は2026-11-03の統合仕様と、その時点の照合範囲を保持します。今回採択した新しい claim / profile には [RFC-v2-0016〜0020](../rfc/README.md)、[旧ADR-0215](../rfc/0009-court-and-claim-final.md)、[公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) の明示改定を適用します。状態は **ADOPTED_DESIGN_NOT_ACTIVATED** であり、実装・測定・activation の完了を示しません。
 >
 > **新しい claim 版の必須境界:** Node はモデル本体を取得・保持せず、全推論・GPU・外部モデル取得を要求されません。Miner が trace と資料供給責任を固定し、独立選出 Panel が所定の検証を行い、Node は承認情報と認証付きの上限付き局所証拠を検査します。通常 Node の Panel 兼務は必須にしません。モデル未共有とモデル内 Miner／Panel の全結託を想定し、global pool の独立選出と正直な検証者の前提は残します。
 >
-> **状態遷移の改定:** 正常時の positive は非対話、不一致の局所化は negative の対話で進めます。新版は結果固定後に認証を開始し、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等も成立した場合だけ成功 Final へ進みます。局所 positive と全体の承認を区別し、資料不足を計算不正と同一視しません。旧 `Final` 後認証の記述は旧版に限定し、旧署名済み claim の意味を変更しません。詳細な優先関係は [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) に従います。
+> **状態遷移の改定:** 正常時の positive は非対話、不一致の局所化は negative の対話で進めます。新版は結果固定後に認証を開始し、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等も成立した場合だけ成功 Final へ進みます。局所 positive と全体の承認を区別し、資料不足を計算不正と同一視しません。旧 `Final` 後認証の記述は旧版に限定し、旧署名済み claim の意味を変更しません。詳細な優先関係は [RFC-v2-0020](../rfc/0009-court-and-claim-final.md) に従います。
 
 
 ## Local Useful Inference, Panel-Assisted Verification, Court and Model Economy
@@ -452,7 +411,7 @@ Merkle openingが正しいだけでは、演算が正しいとは判定しない
 正しいモデルを保有・取得できたpublic verifierは、公開された参加条件と認証済み資料を用いて、Panelの許可なしに不正追及を開始できなければならない。
 
 
-Panelが誤って承認した場合や追及を拒否した場合にも、外部からCourtへ到達する経路を維持する。[公開検証設計](../rfc/0015-panel-free-permissionless-verification.md) の、producerの秘密状態に依存しない局所化と客観的裁定の要件を維持する。
+Panelが誤って承認した場合や追及を拒否した場合にも、外部からCourtへ到達する経路を維持する。[公開検証設計](../rfc/0008-g14-panel-and-verification.md) の、producerの秘密状態に依存しない局所化と客観的裁定の要件を維持する。
 
 
 ---
@@ -570,7 +529,7 @@ quantum消費・ブロック生成
 `Final`、`SecurityCertified`、Receipt成熟、報酬の利用可能性は別に管理する。
 
 
-Gate Cを適用するprofileでは、`Final`だけで合意creditを与えない。必要な抽選検証者の承認と公開告発期間等を満たした`SecurityCertified`を要求する。これは[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md)の区別に従う。
+Gate Cを適用するprofileでは、`Final`だけで合意creditを与えない。必要な抽選検証者の承認と公開告発期間等を満たした`SecurityCertified`を要求する。これは[RFC-0018](../rfc/0011-gate-c-and-consensus-credit.md)の区別に従う。
 
 
 旧profileのclaimを、新profileの条件で暗黙に再解釈してはならない。
@@ -695,7 +654,7 @@ Node-lessとは、**利用者が自分のfull nodeを運用しなくてよい**�
 ネットワーク上のNode、検証、状態管理、資料提供、Courtを不要にするものではない。
 
 
-[Remote Client設計](../rfc/0009-palw-remote-miner.md)に従い、鍵・bond・署名を利用者側に残し、任意Relay、資料提供者、公開redemption builderに役割を分離する。
+[Remote Client設計](../rfc/0019-clients-rpc-and-diagnostics.md)に従い、鍵・bond・署名を利用者側に残し、任意Relay、資料提供者、公開redemption builderに役割を分離する。
 
 
 ### 5.2 参加フロー
@@ -802,7 +761,7 @@ ModelPositionは、固定されたモデル登録に紐付く、プロトコル�
 モデルの重みそのもの、著作権、登録者の秘密鍵、claim所有権、bond、将来のマイナー報酬を自動的に移転するものではない。
 
 
-[MOE1](../rfc/0063-additional-model-option-economics.md)では、ModelPositionは**追加モデルだけに存在し、AMM売買とholder間の直接送受信・譲渡を許可する**。追加モデル登録と市場初期化は同一原子遷移であり、genesis・有効softfork指定モデルには市場を作らない。市場存在はFOW1採掘適格性の証明ではない。
+[MOE1](../rfc/0016-position-market-and-rewards.md)では、ModelPositionは**追加モデルだけに存在し、AMM売買とholder間の直接送受信・譲渡を許可する**。追加モデル登録と市場初期化は同一原子遷移であり、genesis・有効softfork指定モデルには市場を作らない。市場存在はFOW1採掘適格性の証明ではない。
 
 
 ### 6.2 固定された市場対象
@@ -1108,7 +1067,7 @@ Panelの共有は可能だが、共有Panelの運用都合を理由に、全モ�
 ### 8.7 DAGでの受理と計算creditの分離
 
 
-異なるモデルが同時に生成したsibling blockやclaimを、単一proposerの選択だけで排除する構造にしない。[RFC-0018](../rfc/0018-dag-parallel-multi-model-consensus.md)が扱う多モデルの並行生成と、共有上限で競合した場合の順序依存の解消に接続する。
+異なるモデルが同時に生成したsibling blockやclaimを、単一proposerの選択だけで排除する構造にしない。[RFC-0018](../rfc/0011-gate-c-and-consensus-credit.md)が扱う多モデルの並行生成と、共有上限で競合した場合の順序依存の解消に接続する。
 
 
 ただし、同時生成されたすべての提出物が無条件に報酬を得るわけではない。ブロックのDAG上の受理、claimの受理、検査、SecurityCertified、報酬、合意creditを区別する。
@@ -1431,4 +1390,4 @@ A_m = c_m · (S̄_m)^1.5
 添付原稿の会話用前置きを除き、参照先をリポジトリ内の相対リンクに整理した。原稿の外部READMEへの一般リンクは、Heartbeatの仕様上の位置づけとして記載し直した。式の表示はMarkdownで読めるtext blockへ整理した。これらを新たなruntime検証の結果として扱わない。
 
 
-根拠・照合先は[PRINCIPLES](../PRINCIPLES.md)、[変更管理](../governance/design-freeze.md)、[対象範囲](../governance/post-mainnet-scope.md)、[パラメーター台帳](../governance/parameter-register.md)、[Remote Client](../rfc/0009-palw-remote-miner.md)、[公開検証](../rfc/0015-panel-free-permissionless-verification.md)、[DAG・Gate C](../rfc/0018-dag-parallel-multi-model-consensus.md)、[ModelPosition](../adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md)、[検証者経済](../design/palw/economics/econ-verifier-incentive-and-allocation.md)とする。参照文書の過去の実装・試験記録を、今回の実装適合性やネットワーク有効化の証拠として流用しない。
+根拠・照合先は[PRINCIPLES](../PRINCIPLES.md)、[変更管理](../governance/design-freeze.md)、[対象範囲](../governance/post-mainnet-scope.md)、[パラメーター台帳](../governance/parameter-register.md)、[Remote Client](../rfc/0019-clients-rpc-and-diagnostics.md)、[公開検証](../rfc/0008-g14-panel-and-verification.md)、[DAG・Gate C](../rfc/0011-gate-c-and-consensus-credit.md)、[ModelPosition](../rfc/0016-position-market-and-rewards.md)、[検証者経済](../design/palw/economics/econ-verifier-incentive-and-allocation.md)とする。参照文書の過去の実装・試験記録を、今回の実装適合性やネットワーク有効化の証拠として流用しない。

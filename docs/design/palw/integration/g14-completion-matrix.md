@@ -1,15 +1,5 @@
 # G14 completion matrix — the authoritative gap list (lane G14C, milestone 1)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Owner: lane G14C. Branch `g14/completion`, from the integration head `b8ae9412b` (2026-10-10). This document only answers one
 question for every reward-bearing plan family: **which G14 conditions are proven by a test, at what level, and what is missing.**
 It does not replace `g14-integration-matrix.md`, `g14-node-e2e-record.md` or the lane records. Those keep their history. For the
@@ -29,7 +19,7 @@ the Panel carries the case to one of three outcomes:
 - the correct DA default, for withheld claim material;
 - a dismissal, for an honest claim or a wrong challenge.
 
-The verifier uses only public, authenticated material, never the producer's secret state. Under ADR-0177 the property is
+The verifier uses only public, authenticated material, never the producer's secret state. Under 旧ADR-0177 the property is
 conditional on the verifier having acquired the registered model. Court demands stay claim-specific.
 
 **Columns.** These are RFC-0015 §1.1 conditions 1–8 and 10. Condition 9 (post-commit challenge / beacon) is lane OPVB's and is not
@@ -129,7 +119,7 @@ bond, a node started after the claim (IBD or pruned import) and reads through th
 | F8 conformance | V-node | V-node (op 231/212 from an IBD node) | builders | complete check: the fold judges; a fresh node re-verifies from reads + its own artifact (GAP-71b) | B07 | only the complete check gates rewards (GAP-70) | digest court: DESIGN |
 | F9–F16 legacy V2 Panel route | fold-level (LG14-B: any bond) | — | — | **V-fold** (LG14-B, kaspad `lg14b_*`): garbage gather (tag 159), mid-layer matmul (tag 159), fused-tile lie (CKW → held dissection), withheld node / CKW → `ProducerWithholding`, honest vs malicious outsider; every seat colluding; [C12] gaps (a)–(c) closed at fold level | V-fold delta re-apply / revert / carriage | the user's GAP-80: legacy must meet G14 | **V-node on the canonical harness: GAP** — needs a held fixture class registered on the testnet-12 harness and LG14-A's common filer (the responder wiring); Final hold + pre-emption for non-seat pursuits (LG14-A); RPC 207–209 |
 
-**BUDGET (ADR-0176) hooks on this head.** Wired behind `palw_bond_budget_v1` (dormant): the V2 attempt and merged attempt, riders, the
+**BUDGET (旧ADR-0176) hooks on this head.** Wired behind `palw_bond_budget_v1` (dormant): the V2 attempt and merged attempt, riders, the
 free-prompt commitment and receipt spends, Final (reward and weight clip), immature weight, retire / void / conviction close hooks,
 and the model allocation (BUDGET's rows 1–5, 7, 9–11, 19). **Not calling them yet:**
 - the kernel route's Final reward (hook H-1: reserve at kernel claim commit, consume at `FinalReward`) — the route's OPV producer
@@ -139,7 +129,7 @@ and the model allocation (BUDGET's rows 1–5, 7, 9–11, 19). **Not calling the
 - rule E's reads of budgeted Final weight (H-4; FINX);
 - the FP admission pre-checks (H-5).
 
-Until those call the engine, every kernel-route, OPV, typed-root and EXEC reward stays non-reward-bearing (ADR-0176), independently
+Until those call the engine, every kernel-route, OPV, typed-root and EXEC reward stays non-reward-bearing (旧ADR-0176), independently
 of G14.
 
 ## 2b. Codex review refresh (`b6a90a0d0`, 2026-10-10)
@@ -176,7 +166,7 @@ The **overall G14 result remains FAIL / incomplete**; no activation or new famil
 
 **Ordinary PublicDA FP V3/V4 follow-up (2026-10-11):** the registered floor class now carries normal family drill certification (six public chunks) and graph publication before chain pricing and signed FP admission. An ordinary mature outsider starts the actual service against an empty DB that validates 2,065 public blocks, independently replays its own model and prosecutes a public foreign-job Event through the PQ mempool/template/block path. Both semantic Job V3 and V4 reach positive producer and all five Valid signer debits, own reporter commit/reveals, reservation release and normal exit. V4 uses a separately validated decode-rules fence in the fixture; the dormant public-filer shipping activation guard remains closed. These are user-prompt PublicDA job-identity cases, not post-genesis model registration, arithmetic localization, maximum profiles or all F9–F16. Canonical prompt omission remains intentionally refused by ordinary derived-work pricing; no pricing gate is waived. Test-only carrier ownership was corrected to retain the storage mass set on the mempool-validated transaction. Full results and exceptions are in the audit record.
 
-ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
+旧ADR-0177 D7's registered-model possession premise is confirmed by the user. GAP-80 has also been decided: legacy is in scope;
 the old "awaiting user decision" descriptions below are historical. Required family coverage is not waived.
 
 ## 2c. G14-B: maximum-profile budgets and deadlines (2026-10-11, lane G14-B, branch `g14/b-budgets-deadlines`)
@@ -560,7 +550,7 @@ library functions the service calls.
   dated by the planner's `by_daa` (pre-Final deadline, else the liability horizon), so the lane's EDF carries the pursuit nearest its
   horizon first. Nothing persists: an object on chain is never re-planned, one in this node's mempool (a restart) is never queued twice,
   one queued is re-offered only after 6 DAA.
-- The model: `--palw-kernel-model=<file>` (repeatable; `PalwPanelConfig::kernel_models`), a `PALWKM01` file (Borsh tensors). ADR-0177
+- The model: `--palw-kernel-model=<file>` (repeatable; `PalwPanelConfig::kernel_models`), a `PALWKM01` file (Borsh tensors). 旧ADR-0177
   D7: the verifier holds the registered model; it is used for a class only when it opens to the class's registered
   `ParamCommitmentsV1` root (v1/v2 `of`, v4/v5 `of_v3`; a memory class's rule program). A model that does not, or a class it cannot
   check, is logged once and never filed against.
@@ -911,7 +901,7 @@ beside itself). `prepare_original_v1` still refuses a job tail and a flat-logits
 | C3 authenticated material | Evidence is a cone/logits primitive, a decode-token primitive judged under the ORIGINAL job's own selection rule, or the complete original ID sequence (identity and stop rule); every byte opens against the claim's original roots; the registered program is filled natively (a carried program is refused). Semantic stages: the staged courts' own material. |
 | C4 bounded localization | The witness is bounded by the frame's prepaid terminal witness ceiling; one larger than a control rides in 16 KiB `WitnessPart`s (first part burns the conviction rent) assembled in order in a rooted `TirWitness` row and adjudicated by the completing part. Never truncated. |
 | C5 objective verdict | Native re-adjudication in the fold (`adjudicate_original_v1`, `adjudicate_original_decode_v1` with `PalwTirSelectionRuleV1`, `adjudicate_original_output_v1` + `original_stop_rule_fault_v1`). A holding predicate or any error refuses the filing and changes nothing. |
-| C6 real sanction | Credited Valid custodians: S4 (lock + S3/S4 tier) once per seat; producer: `convict_by_court_verdict_v1` (void / Final reversal, `CourtConviction` once, reporter reward to the filer, ADR-0160 intent-class forfeiture + freeze). Every liable bond must hold its original exit hold, so the debit is collectible. DA: outside owner Collect / PreparationCollect → `staged_selected_default_charge_v1`, with the same exit-hold assertion. |
+| C6 real sanction | Credited Valid custodians: S4 (lock + S3/S4 tier) once per seat; producer: `convict_by_court_verdict_v1` (void / Final reversal, `CourtConviction` once, reporter reward to the filer, 旧ADR-0160 intent-class forfeiture + freeze). Every liable bond must hold its original exit hold, so the debit is collectible. DA: outside owner Collect / PreparationCollect → `staged_selected_default_charge_v1`, with the same exit-hold assertion. |
 | C7 refusal of standing | A frame's claim is floored to `Final` at the frame's `collect_until` (`palw_claim_final_floor_v1`): no spend weight, Final weight, escrow, model allocation, Gate C credit or coinbase leg before the door closes; Gate C certification waits while the door is open; a convicted claim is voided, so receipt spends are refused by validation (Final required) and by the template's spendable list; execution-proving faults forfeit by root; the convicted producer is frozen (admission `ProducerFrozen`, producer readiness). |
 | C8 once / reorg | Consumed-offence keys shared with the kind-3 and DA routes; second filing refused; journal reverts the verdict (fold-level E2E source checks the root). |
 | C9 (OPVB) | Not scored here. |
@@ -1038,7 +1028,7 @@ Family-wide:
 - **Eligibility:** no onboarding path — OB GAP-B16, GAP-50. On OB the four node tests pass only through the `cfg(test)` seam
   (`6e9dfa065`, unbuilt).
 - **C10:** artifact and snapshot attestation is the test hook `kernel_route_test_attest_artifact_v1`. The line head moving at Final
-  must be squared with ADR-0175 (INTF's audit; not a G14C item).
+  must be squared with 旧ADR-0175 (INTF's audit; not a G14C item).
 - **POLICY 4d:** the memory line's value at risk.
 
 ### 3.7 F7 — RFC-0008 EXEC work slices (X8)
@@ -1083,7 +1073,7 @@ Family-wide:
 - **C8:** V-node B07 (reorg, restart, pruned import of tables 39 / 40).
 - **SDK fresh verifier:** it refuses v3 attempts (no public seal read, OB GAP-B17 — OPVB, condition 9). It also refuses complete-check
   attempts (GAP-B10).
-- **C10:** the binding is refutable by any verifier holding the bytes (ADR-0177). DA16's lease gating is GAP-05.
+- **C10:** the binding is refutable by any verifier holding the bytes (旧ADR-0177). DA16's lease gating is GAP-05.
 - **Floor:** under `min_effective_bits = 128` only complete-check classes pass (OB B22), so today no real-size class can pass
   conformance.
 
@@ -1158,7 +1148,7 @@ same job, the way slices are), or give the V2 claim a G14 path.
 
 Economics are outside the G14 columns, but they block reward under PRINCIPLES §6.5 and §6.6:
 - the verifier incentive / bounty capture (ECON);
-- ADR-0176 budgets (BUDGET);
+- 旧ADR-0176 budgets (BUDGET);
 - OPV collateral from max gain ÷ detection;
 - watcher absence (C4R4 O-C4R4-02).
 
@@ -1173,8 +1163,8 @@ milestone throughout.
 | GAP-01 | Ordinary public entry: prosecution by a bond registered after genesis through `BondRegistered` (published collateral, maturity, fees), matured, non-seat, non-operator, with every seat colluding. | C1 | all | **G14C** (one reusable harness helper + node test) | M |
 | GAP-02 | Fresh node: a second node started after the claim (IBD, and separately a pruned import mid-prosecution) builds the outsider from its own reads and prosecutes through its own mempool or the relay. | C2, C8 | all | **G14C** | M |
 | GAP-03 | RPC leg: ops 210–212 / 231 served by a running node to the outsider client; the prosecution submitted by RPC `submitTransaction` (node-less) → fold → conviction. | C7 | all | **G14C** (the `testing/integration` daemon harness with the fences armed through the `Config` seam) | M–L |
-| GAP-04 | ADR-0177 non-interference: the same chain and proofs give identical consensus results when artifact peers and local acquisition vary (RFC-0014 §16.8). | C10 | all kernel | **G14C** | S |
-| GAP-05 | DA16 (dormant, on INT) makes availability a consensus condition, which ADR-0177 withdraws: tag-150 `Artifact` leases, 104 binding only over ≥ 2 live leases, a lapsed pair attesting nothing (`da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound`). Keep the claim-material provider court. | C10 | F1, F3, F6–F8 | **DA16** (DA16b re-scope) | M |
+| GAP-04 | 旧ADR-0177 non-interference: the same chain and proofs give identical consensus results when artifact peers and local acquisition vary (RFC-0014 §16.8). | C10 | all kernel | **G14C** | S |
+| GAP-05 | DA16 (dormant, on INT) makes availability a consensus condition, which 旧ADR-0177 withdraws: tag-150 `Artifact` leases, 104 binding only over ≥ 2 live leases, a lapsed pair attesting nothing (`da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound`). Keep the claim-material provider court. | C10 | F1, F3, F6–F8 | **DA16** (DA16b re-scope) | M |
 | GAP-06 | Claim-specific court scope: permitted units per route, a cumulative scope per claim and requester, and a test that no demand can name weight or artifact ranges (kernel `FileDemand`, the DA16 provider court, R4X spec demands). | C10 | all kernel | **DA16** (court-scope D2) | M |
 | GAP-07 | Worst-case deadlines measured: `T_challenge ≥ T_beacon + T_fetch + T_check + T_localize + T_file + T_margin` per class; windows are INTERIM. | C8 | all | MEAS (EXTERNAL) | — |
 | GAP-10 | Node cases for K2 v1/v2 violations b–j (§3.1b): exact families, `i128` CRT, routing/TopK/MoE, history window, boundary, job copy, borrowed input, decode, consistent garbage. On a multi-layer fixture, Panel-licensed (all seats) and OPV, pre- and post-Final. | C2–C5, C7 | F1 | **G14C** | L |
@@ -1391,7 +1381,7 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 **DA16, INT** (V-node at `lead-v1`), `kre/da16`:
 - `da16_an_outsider_confirms_an_honest_binding_from_the_bytes_its_bonded_providers_serve`
 - `da16_a_false_binding_is_refuted_from_the_bytes_and_the_bound_side_the_court_forces_out`
-- `da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound` (contrary to ADR-0177: GAP-05)
+- `da16_unanswered_challenges_slash_the_providers_and_a_lapsed_pair_attests_nothing_until_rebound` (contrary to 旧ADR-0177: GAP-05)
 - `da16_a_transfer_needs_two_operators_through_the_bound_reserving_at_least_the_claim`
 - `da16_a_transferred_claims_unanswered_demand_charges_every_provider_never_the_producer`
 - `da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slash`
@@ -1407,7 +1397,7 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
   `g14_kernel_route_e2e/canonical.rs`, 10 tests (`g14_canonical_*`, Panel-licensed with every seat signing and OPV): a bond registered
   after the claim through a real `BondRegistered` carrier from its own node (IBD and pruned-import starts), reads through the shared
   RPC builders of ops 210–212 (`kaspa_rpc_core::convert::palw_kernel`, which the RPC service now calls), conviction before and after
-  Final, DA default, wrong challenge dismissed, and ADR-0177 non-interference; plus `conformance::g14_canonical_ops_231_and_212_…`
+  Final, DA default, wrong challenge dismissed, and 旧ADR-0177 non-interference; plus `conformance::g14_canonical_ops_231_and_212_…`
   (op 231 + 212 from an IBD node rebuild the SDK verdict). 11/11 pass; rpc-core 127 pass; rpc-service checks. Re-run of the rest of
   `g14_`/`r4x_` at `b8ae9412b`: 76 pass, 4 ignored (the known FAILs), 1 failed — `g14_registration_replay_on_a_second_node_and_across_a_reorg`,
   the known GAP-11 race (fixed on `g14/r4-fixes` by `39e4ea441`). GAP-01..04 move to verified at node level for F1 (the socket hop of
@@ -1469,7 +1459,7 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 2026-10-11の公開input follow-upでは、元FP V3 commitment body・acceptance rowを削除したfresh verifierの実serviceで、正しい公開bindingの後のinput非応答からDA default／producer徴収へ1 PASS（568.20 s）、不正input carrierを採用せず正しいchunkから独立replayのHonest判定／署名付き予約解放へ1 PASS（346.73 s）を確認した。input bootstrapの完了後もnode policyがcaseを保持し、既存tag 155でlive予約を解放する。filer/input 20件、pruned identity service 1件の回帰もPASS（今回23 unique）。閉じたguard/deposit上限、最大input、全family、scope、回復・最大負荷は未達。単独releaseだけではHonestを証明せず、今回の実worker判定はlogで確認した。[証拠と限界](../../../audit/g14-review-2026-10-10/implementation.md#履歴消失後の公開input取得非応答予約解放2026-10-11)。
 
 
-2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorとADR-0177 D7を維持する。[実装・失敗・最終証拠](../../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
+2026-10-11のpre-replay input follow-upでは、LG14-B内のuser inputを小さいticketで先に認証し、context／full replay ticket取得前から公開binding／PromptIdsのcourtへ進める。pruned PublicDAもexact jobの公開prefixを再取得でき、capture tailはコピー・実行しない。通常の完全な公開inputはworker起動前にbootstrapを外し、余分な予約を作らない。最終filer/input 23 unit、実serviceのpruned honest（実workerのHonest判定を直接assert）、input非応答、通常PublicDA honest／対象予約なし、pruned identity／producerと全5 Valid signer徴収・revealの4件がPASS（今回27 unique）。node binary checkもPASS。context取得不能／full ticket拒否の実service負荷試験、最大inputのsession予算、pre-fence永久消失job、initial/prefix-state、全family、scope／hiding、回復・最大負荷は引き続き未達。shipping validatorと旧ADR-0177 D7を維持する。[実装・失敗・最終証拠](../../../audit/g14-review-2026-10-10/implementation.md#再計算前のユーザーinput-bootstrap2026-10-11)。
 
 
 2026-10-11のmetadata無しFP follow-upでは、job保存fence前に通常受理し、元body/acceptance rowも削除したfresh outsiderが、再計算前の公開bindingだけからidentity conviction/producerと全5 Valid signerの徴収・reveal（314.21 s）、又はbinding非応答DA default（536.03 s）まで1件ずつPASSした。filer/input 26件、既存pruned honest取得/replay/release回帰1件もPASS、通常PublicDA honest回帰（290.18 s）もPASS、今回30 unique。busy replay/capture/seat枠の外でaccepted descriptorだけを確認し、実行中の同一candidateを再probeせず、prompt/signature vectorsをコピーしない。正しいbinding後のjob本体取得は依然未達で、そのcourt実装へ進む。wire/activationはこの区切りで変更せず、shipping harvestは再実行していない。[証拠と限界](../../../audit/g14-review-2026-10-10/implementation.md#保存metadataもないfp-claimの公開binding追及2026-10-11)。
@@ -1478,7 +1468,7 @@ Fold tests in `consensus/core/src/palw_state_v2/tests/exec_v2_fold_v1.rs` are ci
 2026-10-11の公開FP job-preimage follow-upでは、保存metadataと元body/acceptance rowの全てがないfresh verifierが、公開binding→署名付きjob descriptor→公開input→実workerのHonest判定→署名付きreleaseまで実serviceでPASS（306.57 s）。正しいbinding後のjob非応答もproducer DA default/徴収までPASS（554.56 s）。filer/inputとproducer responder policy 35件、core legacy held 10件、legacy V-fold回帰15件、metadata無しidentity conviction/producerと全5 Valid signer徴収・reveal回帰1件（332.88 s）もPASS、今回63 unique（以前の30/27/23件と重複加算しない）。node binary checkもPASS。shipping fresh integration harvestと同一core binaryの3 goldensの再読込で361 pin差分なし。初回compile、旧release期待値、disk不足の失敗を監査logに保存した。unit/answerの末尾へFpJobを追加し、既存tag/ordinalと有効化拒否は維持する。64 KiBを超えるdescriptor、binding/transport/profile適合、追加session予算は未解決で、最大jobへの不可能な義務を排除するまで有効化できない。initial/prefix-state、全family、scope/hiding、回復・最大負荷・包含期限を含むG14全域は未達。[実装と証拠](../../../audit/g14-review-2026-10-10/implementation.md#公開fp-job-preimageの取得court2026-10-11)。
 
 
-2026-10-11 public constrained-selection follow-up: the fresh service tests for forbidden token, premature stop and beaten admitted token all PASS (3 tests, 444.71 s), including producer and all five Valid signers' conviction, positive collection and reporter commit/offence/reveal. False-Valid preflight now reads the gate/fold's block-context session rule. The node tiled planner requests at most two selected public tiles and authenticates them through the existing court predicate; its builder/book/engine regressions PASS, while a registered tiled family's actual service remains unverified. This round's node checks total 62 unique PASS (30 filer, 16 LG14-B, 12 False-Valid, 1 history, 3 service); normal node check PASS. Fresh core filing (5), attribution (19), and decode-constraint (19) regressions add 43 unique PASS, for 105 unique PASS in this round. The initial core build failed for disk capacity; the retry reduced only core test debug symbols and passed. Shipping harvest was not rerun. Maximum terminal carriage, model/tokenizer/table association, remaining active families, initial/prefix state, network recovery and full resource/economic guarantees remain open. ADR-0177 D7 and shipping activation refusal are retained. See [evidence and remaining work](../../../audit/g14-review-2026-10-10/tiled-constraint-public-status.md).
+2026-10-11 public constrained-selection follow-up: the fresh service tests for forbidden token, premature stop and beaten admitted token all PASS (3 tests, 444.71 s), including producer and all five Valid signers' conviction, positive collection and reporter commit/offence/reveal. False-Valid preflight now reads the gate/fold's block-context session rule. The node tiled planner requests at most two selected public tiles and authenticates them through the existing court predicate; its builder/book/engine regressions PASS, while a registered tiled family's actual service remains unverified. This round's node checks total 62 unique PASS (30 filer, 16 LG14-B, 12 False-Valid, 1 history, 3 service); normal node check PASS. Fresh core filing (5), attribution (19), and decode-constraint (19) regressions add 43 unique PASS, for 105 unique PASS in this round. The initial core build failed for disk capacity; the retry reduced only core test debug symbols and passed. Shipping harvest was not rerun. Maximum terminal carriage, model/tokenizer/table association, remaining active families, initial/prefix state, network recovery and full resource/economic guarantees remain open. 旧ADR-0177 D7 and shipping activation refusal are retained. See [evidence and remaining work](../../../audit/g14-review-2026-10-10/tiled-constraint-public-status.md).
 * 2026-10-11 — G14-K (§2g): the kernel route's public verifier inside kaspad's `PalwPanelService` (`palw_kernel_verifier`, `--palw-kernel-model`), driving `misaka-palw-remote::pursuit` (extended: consumer ledger, program / segmented / typed checks, block material, step sends). V-node(svc) for K2-TIR-v2 Panel-licensed with every seat colluding: gather / MatMul / clamp convicted pre- and post-Final, honest twin Final, restart mid-pursuit without a second seal (kaspad 2 PASS); the class registered through the production onboarding path (no test hook). v4 segmented (demand + Respond → conviction; withheld → DA default) and typed memory at V-node(harness) through the same library functions. No consensus change, nothing armed.
 * 2026-10-11 — G14-L (§2h): parallel reserved sessions (lanes, ≤ 64 a session, ≤ 128 extra a reservation, a DA-6 price a lane, deadline + 1 DAA a lane) and the k-ary authenticated descent on the legacy held route, behind both dormant legacy fences (no wire change). Legacy held 8k (2^27 leaves) fits in 4 sessions `[1, 36, 16, 1]`, filed 4,906 of 5,400; height ≥ 30, 2^40 and 2M refused by name (`PARALLEL_SESSIONS`). V-fold: 8k-shaped pursuit on the t12 lattice convicts / defaults on the derived schedule; coalition bounded; restart mid-round. Nothing armed.
 * 2026-10-15 — `integ/g14-remaining` (§2k): Codex's original paid TIR frame merged onto integ; the common public conviction (tag 170

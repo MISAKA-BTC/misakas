@@ -1,0 +1,3502 @@
+{
+  "schema_version": 1,
+  "scope": "current ADR20 rationale / RFC20 design",
+  "old_bodies_retained": false,
+  "records": [
+    {
+      "old_path": "docs/adr/0001-network-isolation.md",
+      "old_number": 1,
+      "source_sha256": "ab76908a4cd34f8afaa2a882bcbc6b0a683084167720396d4fe3281f7fc9de93",
+      "source_bytes": 7099,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0002-mldsa65-p2pkh.md",
+      "old_number": 2,
+      "source_sha256": "2fb411b2c244da0f0afd14a20cd496f6f76121ef8052fd3a117b7a674eca51ac",
+      "source_bytes": 8710,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "old_number": 3,
+      "source_sha256": "144e9a60edc39adf88425f8665de07df6bd9d49556d80756ab9e47b942f0bc4a",
+      "source_bytes": 10061,
+      "primary_adr": "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0004-utxo-commitment64.md",
+      "old_number": 4,
+      "source_sha256": "6bb742c21837c372c328b8ad7734eb9cd787e21f1c691c93910d4816e99f4e1b",
+      "source_bytes": 8897,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0005-mass-policy.md",
+      "old_number": 5,
+      "source_sha256": "383d33818a3b9e32e6ed73ec24780ce679b37aaad06cf01f275fbbb22fd0beee",
+      "source_bytes": 12396,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "old_number": 6,
+      "source_sha256": "f7af10cae4abae7beae39f867aa4989f397fc508d4ba572b757ab80c6abdbae0",
+      "source_bytes": 12676,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0007-layered-pow.md",
+      "old_number": 7,
+      "source_sha256": "1df6fb471e87940e220fea9f38349cbe91efd9a63fd6861edba0d711a3b6b80e",
+      "source_bytes": 21456,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0008-hash64-consensus-identity.md",
+      "old_number": 8,
+      "source_sha256": "c5e361034c9f6a05f41a365214db3b73ab6d6cef644f6a1306e23d92e4d6e524",
+      "source_bytes": 15052,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0009-dns-probabilistic-finality.md",
+      "old_number": 9,
+      "source_sha256": "91f0d1c27323b95f845dc704b9411156ecdf58b35984c83b7f905eccf5c27ff8",
+      "source_bytes": 1003,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "DNS/BFT台帳finalityは不採用。モデル管理BFTと区別する。"
+    },
+    {
+      "old_path": "docs/adr/0010-validator-node-architecture.md",
+      "old_number": 10,
+      "source_sha256": "d0479e936474557c4916d9eb3adaf8e5f4be5a2779db5b5c41fc4a55e88dd2ad",
+      "source_bytes": 1025,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "旧DNS validatorの合意権限を廃止。必要な役務運用だけ分離する。"
+    },
+    {
+      "old_path": "docs/adr/0011-validator-deployment-and-equivocation-safety.md",
+      "old_number": 11,
+      "source_sha256": "34a90791f1e3bdb4a86c3507b1a1719f69a1324b46d7a35712eece004a66d0c0",
+      "source_bytes": 990,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "old_number": 12,
+      "source_sha256": "5afedcc54accc719b158584bf983da56045de7cf869cabd428f2801130f2644b",
+      "source_bytes": 1066,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "旧committee commit-revealをTB1の固定用途・公開規則へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0013-validator-reward-distribution.md",
+      "old_number": 13,
+      "source_sha256": "71ae5ae246b286c411053cd4f42913f513c273b34b02d2b1ea42b2dadd917398",
+      "source_bytes": 995,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "旧validator報酬配分は現行MOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0014-coordinated-failover-protocol.md",
+      "old_number": 14,
+      "source_sha256": "295078f5f43cc383b604866b6fcd4f600e7284ff2c868f596c387ef198245fd3",
+      "source_bytes": 942,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0015-remote-signer-hsm-protocol.md",
+      "old_number": 15,
+      "source_sha256": "aec8f2eeb6119ca560ea499a68320940a27a8632825a8e39ad103c0104a9e69e",
+      "source_bytes": 1044,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0016-stake-locked-bond-utxos.md",
+      "old_number": 16,
+      "source_sha256": "49641fe013f9e9625bdc50a2dc163ef55bedc2f9761e130e3d713459ce688321",
+      "source_bytes": 1028,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0017-all-active-staker-attestation.md",
+      "old_number": 17,
+      "source_sha256": "65ff91c4d963346d895e79f837a90e3237ef9b1f220761dfe80ba3f871b09776",
+      "source_bytes": 1015,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "旧all-staker attestationによる合意権限は使用しない。"
+    },
+    {
+      "old_path": "docs/adr/0018-quality-gated-stakescore-inclusion-economics.md",
+      "old_number": 18,
+      "source_sha256": "9aa2eb24c4b0e13480b0d0e8f210735a0530d64e51b7d7e36b8fc873287e5a2e",
+      "source_bytes": 1001,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "旧StakeScore・inclusion経済は現行仕事・資本・容量規則へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0019-mldsa87-migration.md",
+      "old_number": 19,
+      "source_sha256": "aedb7c944e0a1a8158a30d5d4bc407dce3785ceb8f6f33d2f8cfc4668ab6c27d",
+      "source_bytes": 19024,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0020-selected-parent-evm-lane.md",
+      "old_number": 20,
+      "source_sha256": "59737e2a1f086cd1f37db5b34b7f7f74aead609b8349f94738823c0f4f773ee7",
+      "source_bytes": 14519,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0021-palw-llm-pow.md",
+      "old_number": 21,
+      "source_sha256": "e9e931e5dfee47ec25b8f00e5e1291b0d9130fd6ac83a67b2f48076be319a752",
+      "source_bytes": 1037,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "初期PoW方式・時間値を新profileへ自動継承しない。"
+    },
+    {
+      "old_path": "docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md",
+      "old_number": 22,
+      "source_sha256": "648fff4153c1eac280cc0192bb3386d52d01d4457e91f84f2055e1da1de60b61",
+      "source_bytes": 15246,
+      "primary_adr": "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0023-base-three-lane-execution.md",
+      "old_number": 23,
+      "source_sha256": "bdb426e970bc001feaa00c02bc2ae6f117fde3eafb20b3b4249cccee18d45793",
+      "source_bytes": 996,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行native/EVM境界を保持。未採択の多lane構想を完成扱いにしない。"
+    },
+    {
+      "old_path": "docs/adr/0024-verified-llm-token-weighted-bft.md",
+      "old_number": 24,
+      "source_sha256": "ae9a19afd1265daca0414352c25bbb3f8c9007d24ecc45a1c430c3f2c7e682f9",
+      "source_bytes": 1035,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "LLM token量によるDNS/BFT finalityは使用しない。"
+    },
+    {
+      "old_path": "docs/adr/0025-chain-participation-and-ibd-candidate-selection.md",
+      "old_number": 25,
+      "source_sha256": "b1a14f76f42404175c2149c7bd6e06d57715c7a26ac45b622621a4922789418e",
+      "source_bytes": 7098,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "old_number": 26,
+      "source_sha256": "796ff4d58ef187c7cf4f093953a37e8c736ed62443983774a26eec3be9497b94",
+      "source_bytes": 5691,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "旧network実装状態は現行の完了証拠にしない。"
+    },
+    {
+      "old_path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "old_number": 26,
+      "source_sha256": "85da5cca34bda6a068ebbfaf9491f64888145779af46ad4d07276433f3899cac",
+      "source_bytes": 29727,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "旧network実装状態は現行の完了証拠にしない。"
+    },
+    {
+      "old_path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "old_number": 27,
+      "source_sha256": "da4fe8ffedc16bdff0fbbc8ef99ff2afdef83a72a8bb8332fa01190b0f7a0f69",
+      "source_bytes": 24495,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "単独反証を継承。旧無乱数・無認証経路は継承しない。"
+    },
+    {
+      "old_path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "old_number": 28,
+      "source_sha256": "333e257e0f8f80639578d679ad195982deb2ea196f55326c674e052e8edef095",
+      "source_bytes": 34601,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0029-palw-chain-carriage.md",
+      "old_number": 29,
+      "source_sha256": "ed0d69e29835aa5a426e73d8195cb38092f8d3177dee8b0e3461acdf04dcc13d",
+      "source_bytes": 20246,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "old_number": 30,
+      "source_sha256": "6f9b286cb04b9d85a476e7239850be80d51965e6e91e9d0c27ca44559fca3b45",
+      "source_bytes": 25828,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0031-palw-canonical-transcendentals.md",
+      "old_number": 31,
+      "source_sha256": "9feacbabda49b834017edb2fd8d66d7a538e552f0c79047e177fbcf4e32daecf",
+      "source_bytes": 7993,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "old_number": 32,
+      "source_sha256": "ac46bf38f2bccc6316b759fcd79c1d193669ab7176130c95425d4e179e013a92",
+      "source_bytes": 13281,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "old_number": 33,
+      "source_sha256": "6ea61e4270fcd458f23b14228300d72e04727797ada466d62f4125d3ac780857",
+      "source_bytes": 1125,
+      "primary_adr": "docs/adr/0011-independent-gate-c-certification.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "旧credit overlayは不採用。独立Gate Cを維持。"
+    },
+    {
+      "old_path": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "old_number": 34,
+      "source_sha256": "45e1ac3bdc22fc38f93b1d05bf183686be8a91e3dfb46dacc7c5473e15756622",
+      "source_bytes": 45645,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "旧family/bandによる検証免除は継承しない。"
+    },
+    {
+      "old_path": "docs/adr/0035-palw-public-testnet-strategy.md",
+      "old_number": 35,
+      "source_sha256": "935d37d8f224a1fdf40caa1a5c56b473eea1147ec17635aa33d7569916386187",
+      "source_bytes": 14496,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "old_number": 36,
+      "source_sha256": "1f2852b0c46ab74ee8006067b508fe6bac5427983e11f0a4a6ccc149be24715e",
+      "source_bytes": 17094,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0037-palw-async-job-state-machine.md",
+      "old_number": 37,
+      "source_sha256": "be91617618d1fe1365b6d066a140bbcc555b7be26b2c2ac3fd6e1f08c90ed368",
+      "source_bytes": 22484,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "旧hash-floor依存を採用しない。"
+    },
+    {
+      "old_path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "old_number": 38,
+      "source_sha256": "967e6d0f203832e1cda81095f58f710ce434e658aaaeaaeba87d7f332fefdb1c",
+      "source_bytes": 60928,
+      "primary_adr": "docs/adr/0011-independent-gate-c-certification.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0011-gate-c-and-consensus-credit.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "旧receiptだけのweight rampを成功根拠にしない。"
+    },
+    {
+      "old_path": "docs/adr/0039-palw-only-block-production.md",
+      "old_number": 39,
+      "source_sha256": "5fcd4a9860b39dd0ea73c645a4c98d27e5a5fe160201e6f28ab0150efb3eb0dc",
+      "source_bytes": 26448,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0040-palw-base-0-integer-arithmetic.md",
+      "old_number": 40,
+      "source_sha256": "7f2595f9d2d7da6d04f019fc57ac1d70b304feb940008ec8902e9e96bd3f87c2",
+      "source_bytes": 30172,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0005-qwen3-execution-and-readout.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0041-palw-pruning-proof-verification.md",
+      "old_number": 41,
+      "source_sha256": "7c4ab9319833113d2ccce230b32a9d6d6e09b1a7ced728688b07b8fc271ed7c0",
+      "source_bytes": 30973,
+      "primary_adr": "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "old_number": 42,
+      "source_sha256": "1afbfe21265c089d9f4008fbc80e78217cf673d73d2cb1ac637adf7c41117d5e",
+      "source_bytes": 43054,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0043-palw-v2-state-root-ordering.md",
+      "old_number": 43,
+      "source_sha256": "8c247d21863b8c1049d8c1577076e22835a640ddaf466e0f23ade5c9e17b1456",
+      "source_bytes": 15386,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "old_number": 44,
+      "source_sha256": "d54c21bf853eb83976bcd4d21c2665fb73523aa880e2e23c4a48557de5030a6c",
+      "source_bytes": 39486,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "実利用Jobを継承し、現行FOW1では実入力・四Root・Ticketへ束縛。"
+    },
+    {
+      "old_path": "docs/adr/0045-palw-class-economy-on-chain.md",
+      "old_number": 45,
+      "source_sha256": "0083267304808ee1675680a0f0018f4f54936a92b2a6b25a1dc61b2a07e6a758",
+      "source_bytes": 15853,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0046-palw-v2-consensus-object-carriage.md",
+      "old_number": 46,
+      "source_sha256": "344b0879798fc6b013c034cef12e177ec98ea62aeb5d1aed8a13cbea03205452",
+      "source_bytes": 14847,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0047-palw-a16-activation-tier.md",
+      "old_number": 47,
+      "source_sha256": "52d18a2379f9f843e00da5515051dc49048f9d851e69c975fbf2fb9be3bd97b6",
+      "source_bytes": 8569,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0005-qwen3-execution-and-readout.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0049-palw-adjudication-contract.md",
+      "old_number": 49,
+      "source_sha256": "4cf32bc1fec5faede97d3ebef6f30e5514f69773c5e6d49ab858567c86f8f7ec",
+      "source_bytes": 31896,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0050-palw-base0-residual-site.md",
+      "old_number": 50,
+      "source_sha256": "2af36eae6bd00d570bf6c0946d17a3ecc3d8c60e584a186ecf07f36a793d8f44",
+      "source_bytes": 12468,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "old_number": 51,
+      "source_sha256": "b8e9628183ce061c98d55bed537d6ae144945a2be42d7522a5977100dd045845",
+      "source_bytes": 998,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "旧Family Mの算術/Court免除は不採用。backend高速化だけ意味同値で許す。"
+    },
+    {
+      "old_path": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "old_number": 52,
+      "source_sha256": "8672dbc2142ca68b8a43d84e3aecf6db65d2c7ba68016d457a2e1b8d100efae1",
+      "source_bytes": 18658,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0005-qwen3-execution-and-readout.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0053-palw-one-execution-family.md",
+      "old_number": 53,
+      "source_sha256": "8924956a2bf10fa2d659151367c1a5b7648f7ae331bb8e4768e390260afa07c9",
+      "source_bytes": 24412,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0054-palw-share-follows-production.md",
+      "old_number": 54,
+      "source_sha256": "3e84fbd2a55709b4dc334360193618e144a64e94df408b084046695938814b7f",
+      "source_bytes": 10593,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "old_number": 55,
+      "source_sha256": "b8259a4b508ec0cfb93397cb564c79b82cfe74dc78c65d8a2f8c4ba021d03350",
+      "source_bytes": 9147,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "old_number": 56,
+      "source_sha256": "5aa8411ad77d53ad1289207480146c76caf46fd6ccbd6744fd0eae6f1bb4bca0",
+      "source_bytes": 22894,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "自動・permissionless採用をBFT YES/NOだけへ置換。"
+    },
+    {
+      "old_path": "docs/adr/0057-palw-base0-runtime-acceleration.md",
+      "old_number": 57,
+      "source_sha256": "aca6de0d189f6240d09a8c1c659086bbd3ebef9f2d353b53d2ac4e7cee8c4ef5",
+      "source_bytes": 11811,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "old_number": 58,
+      "source_sha256": "5d14b3e0b3c051abfa33e154eaa1f34daa0b4ed23ad732554e2b009030ab3a9b",
+      "source_bytes": 11243,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0059-the-10b-premine-cap.md",
+      "old_number": 59,
+      "source_sha256": "19364e3ad95242aed876c668cc42322e1066a11a1ffe49d8aea57f1dc3d02e41",
+      "source_bytes": 8255,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0060-the-liveness-doctrine.md",
+      "old_number": 60,
+      "source_sha256": "f5216e5143cda5c36b6f101bee284744eea2f787a7e24dc33c491c40ba292682",
+      "source_bytes": 25684,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "old_number": 61,
+      "source_sha256": "4af43174948335719d02c00f5baffe9b4bb1c4236156366a69554de876752f4d",
+      "source_bytes": 10979,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0062-data-availability-court.md",
+      "old_number": 62,
+      "source_sha256": "1f90053180f0cf7562bcd663e8467b4b166c64dabe8466a41db6045670a6cd52",
+      "source_bytes": 49680,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0063-operator-tooling-the-missing-half.md",
+      "old_number": 63,
+      "source_sha256": "6ea108e2135a0299c29851a7c2fa48f0cbf5ec5175de33fdec530ad8965a54f8",
+      "source_bytes": 16514,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0064-trustless-recovery-from-a-total-stop.md",
+      "old_number": 64,
+      "source_sha256": "28a47185ccdae1e37d86ad6dfb08812d95e753266061e0c5b723308a695fa769",
+      "source_bytes": 17683,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "old_number": 65,
+      "source_sha256": "f6e68d9d9369866cc05d8b717f09fb853ad15da8f64f712cfcc39593e3b018fd",
+      "source_bytes": 36446,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+      "old_number": 66,
+      "source_sha256": "9e018069923bc0c00646d3302432156df0cd0090693853d01c620d406b5c250c",
+      "source_bytes": 21534,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "old_number": 67,
+      "source_sha256": "a26c53b299a77759eb60cd7bd08334d13da7a4eb685aa035706e8c6fba10ab77",
+      "source_bytes": 62073,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "kernelは実行互換。モデル自動採用は廃止。"
+    },
+    {
+      "old_path": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "old_number": 68,
+      "source_sha256": "f486ed08499ee10e60f044e26cb466f5035eb97227b3c17da9054b00745e2ceb",
+      "source_bytes": 17285,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "old_number": 69,
+      "source_sha256": "bf4c171275b351885cc1c19306fba4f70255a4399cc583bc4b1ceaced709e226",
+      "source_bytes": 41273,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "old_number": 70,
+      "source_sha256": "f498694657c11fe3f68bcd276d72c9efc5ff119f5ab6a10d79f4f1f493e9a0c2",
+      "source_bytes": 18035,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "old_number": 71,
+      "source_sha256": "922d4dc95713015461a9599ace12fcab73c6e9fd4355403de31e72a4b6cbb994",
+      "source_bytes": 23305,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "old_number": 72,
+      "source_sha256": "7d4ea205cc6cfd0ace08bad09cca4d75c94b96f44c1d0914f75c6960b7480f9e",
+      "source_bytes": 29997,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "old_number": 73,
+      "source_sha256": "1525aa2e0153c2937f198cb2f193b0d5df7a41aa9ffc4ae04378b31a007cbb9b",
+      "source_bytes": 28598,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "実需要の価値と計算困難性を別評価とする。"
+    },
+    {
+      "old_path": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "old_number": 74,
+      "source_sha256": "471ce33a9bf13e6a245470b3727f5e14cc735e9c245f00945a5b953ffedcdcdf",
+      "source_bytes": 19628,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md",
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "old_number": 75,
+      "source_sha256": "fc4a9da6386a5250cb78ea9be74878eada936c2a903b82778299dbadebd81356",
+      "source_bytes": 31388,
+      "primary_adr": "docs/adr/0011-independent-gate-c-certification.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0011-gate-c-and-consensus-credit.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+      "old_number": 76,
+      "source_sha256": "40f6c5b02fc739aeb114377ccc3248a4a88230928975e30246cde2fdf3413ca4",
+      "source_bytes": 15761,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "old_number": 77,
+      "source_sha256": "15c7458d911ae749206bbb36f84976bf911fed7df6495cff76b181dbf6ef922d",
+      "source_bytes": 51114,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "old_number": 78,
+      "source_sha256": "ecab7f0119c1760d1359c5ee5f5be4ddb4223c603b1a1be77afde82166f3a5d9",
+      "source_bytes": 38616,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "old_number": 79,
+      "source_sha256": "cfbc9009739676f5b3a7a268aab1b49a0bf9021fcafe8b90b6d281f6cf823715",
+      "source_bytes": 41649,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "old_number": 80,
+      "source_sha256": "e4b15e05857e5e0448b0edadccefbca0cff1488647c650758c54782b41013311",
+      "source_bytes": 1029,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "old_number": 81,
+      "source_sha256": "53a3baaf9d7043406643f268eae3ef2710a220fb83e2ed5a14df8862a1277f2e",
+      "source_bytes": 1012,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "old_number": 82,
+      "source_sha256": "928fe066ec2f57a61722ff0fab1282d27571794e4403a6623d2a27607ebae2cd",
+      "source_bytes": 85868,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+      "old_number": 83,
+      "source_sha256": "a59943bca46b14cfb1026b13e9fb3b4a7b3e0a6af7f47b7efdfdd2268b0aadfc",
+      "source_bytes": 10004,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "old_number": 84,
+      "source_sha256": "bbbf17242e726a4c6dd8a922610a9e4280378ceec3246d7d06584eb1d9cdccb7",
+      "source_bytes": 39914,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "old_number": 85,
+      "source_sha256": "d4773c6bffa9d7bdf9318864942220262eda3376a125a98035ed65bfd761bc91",
+      "source_bytes": 21453,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "old_number": 86,
+      "source_sha256": "7dd3db30056f484837c3e2bfefd9fe70f7900e5cb901055b595e7c23675ad7e3",
+      "source_bytes": 26708,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "old_number": 87,
+      "source_sha256": "2d3d517a17248c36c4db5a1e9b41e94301b5658a7eee072fcab2e5c420db4d5d",
+      "source_bytes": 12692,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "追加モデル限定・旧fee・非譲渡を現行MOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "old_number": 88,
+      "source_sha256": "4b78f8ca0331fc77d92e3d614393b75ca66f718ceb83dea892237f91bc702529",
+      "source_bytes": 47573,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "old_number": 89,
+      "source_sha256": "c7e69101b682df51263060d1fc3496ec49b1bea737714aae3c87d3eded426892",
+      "source_bytes": 10657,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md",
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "old_number": 90,
+      "source_sha256": "ee628cc8c3c2d34bca767d024bb2fa516c43fe7cbaab3976c8a4e3036efbb8bd",
+      "source_bytes": 18809,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "whole数量・旧seed方針を小数8桁・virtual reserveへ置換。"
+    },
+    {
+      "old_path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "old_number": 91,
+      "source_sha256": "de763ebb4e57c519116d02a02eb0a11d59d6e9ec1b7eea7265def6e555f2e8f2",
+      "source_bytes": 10689,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "30/20/50と余剰POSITION burnを50/20/20/5/5へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "old_number": 92,
+      "source_sha256": "be9757752c9c6a9c5dd5441cf1b5f6a0d56e43bb1c5002f223f242ce5fa3a859",
+      "source_bytes": 22647,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "old_number": 93,
+      "source_sha256": "f605540cda38b7f8cecb1dbfa93d5bdaf683229443f42e3e17bf9cc51ddfd8a4",
+      "source_bytes": 32843,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+      "old_number": 94,
+      "source_sha256": "b9aa6add7214b65a8811964cd11a2283fccaa317c5d0b2659f61d9d30e59695c",
+      "source_bytes": 15797,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "old_number": 95,
+      "source_sha256": "a19d05a97074673c589b53b6da3835526f21b544f86e889185fa1513daf517c8",
+      "source_bytes": 8101,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "直接送受信と現在残高連動membershipを維持。"
+    },
+    {
+      "old_path": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "old_number": 96,
+      "source_sha256": "4f1e8131dd06dc680524d701c2d7d0d95581598c8e3bf7e5291b11094f4b39fc",
+      "source_bytes": 55709,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "old_number": 97,
+      "source_sha256": "19f6f32c82fdadd7e71a827881f1469f361700b93c292dc693add85eda4e69fc",
+      "source_bytes": 39074,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "old_number": 98,
+      "source_sha256": "c5d1d4b0f7d27396b89a64a9c4be6dc2d8546af404ca8531c56e0c4d4253df98",
+      "source_bytes": 25088,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "old_number": 99,
+      "source_sha256": "0127d8a21fc17664b5789624f953218787d6ec7b0c1c3cf717515ea2ce31bb06",
+      "source_bytes": 30776,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "自動計測をBFT採否や計算費用の数学的証明としない。"
+    },
+    {
+      "old_path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "old_number": 100,
+      "source_sha256": "74052299a501c21d01a80d49bd574d95c997836e4182dba50fe3e8cdea141b90",
+      "source_bytes": 37019,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md",
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "モデルは不変data。自動採用・旧shard資格は現行条件で置換。"
+    },
+    {
+      "old_path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "old_number": 101,
+      "source_sha256": "c27ba16665deb9cbcbd357e87c13a430647226d9a6690b3e2816f7d34432f9bc",
+      "source_bytes": 6917,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+      "old_number": 102,
+      "source_sha256": "1a7c70b37f91f6a84af94d99cfa1f7f04b7f4354b3920c5659fcdc29e6c1795d",
+      "source_bytes": 19364,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "old_number": 103,
+      "source_sha256": "e2bfc0fba2809a70eac37c3551d389b1a58b1806f24800aac206f44dd97a3b70",
+      "source_bytes": 75297,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "old_number": 105,
+      "source_sha256": "c07d44854c26df5e089a90c2f7bebfcbc1c3003a701fc7366b27c6d4599d5485",
+      "source_bytes": 46739,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "old_number": 106,
+      "source_sha256": "38e93c8a1f85852db1fa3944f0e93b5e18b0f0d784e18038644448162c27f60d",
+      "source_bytes": 19514,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "old_number": 107,
+      "source_sha256": "b206f1ca7de6d011eed78bb8d98a971aede5012c61fd1328a4545288c3eff099",
+      "source_bytes": 13261,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "old_number": 108,
+      "source_sha256": "7dc39937852a6b5b51211b839fe1f48f672b3b320df88ea4ae478e04428d1c47",
+      "source_bytes": 42493,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "manifestの技術検査はBFT YESを代替しない。"
+    },
+    {
+      "old_path": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "old_number": 109,
+      "source_sha256": "e61d53614c63180cdbab75fe5a45c9892d070fac1888c5bc4727e7b15bfc76b8",
+      "source_bytes": 23401,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "old_number": 110,
+      "source_sha256": "e5f0356c7e9d382126a6f48c2d14dc7580bc858f05a6e27337781bd91696614c",
+      "source_bytes": 31236,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "context上限の技術的再現性を保持。自動モデル採用にしない。"
+    },
+    {
+      "old_path": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "old_number": 111,
+      "source_sha256": "2d1f578a1bc78e30aa299abc6484bfa5a59c03cb3efd0dbdcae044415474be77",
+      "source_bytes": 27787,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "old_number": 112,
+      "source_sha256": "10baa5a3df2fb374489ea6dce38b24ebee297b15b385285619a4ce521b1006a3",
+      "source_bytes": 35229,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "old_number": 114,
+      "source_sha256": "f1dbfc9288d91d90f6b27deba84933170bfab3355597918f5b31b89aa4a1f5d7",
+      "source_bytes": 6281,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "旧owner3%等をMOE3の正規creator1%／不在0%へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md",
+      "old_number": 115,
+      "source_sha256": "1b36f39cb2cd0131463ea5763a069f5a30b2eab16264cb6e754556c91223820a",
+      "source_bytes": 7984,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "old_number": 116,
+      "source_sha256": "1e3add783b3eb049d758b9a8cc66e264c98acfd27708d789269e77bbd873919c",
+      "source_bytes": 15039,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0117-a-draw-is-one-forward.md",
+      "old_number": 117,
+      "source_sha256": "5a2ac8e3c06ff81b0b68b30c7b4cc7b1f1b9cd42596df5db5dee791d0bacacd0",
+      "source_bytes": 21170,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "old_number": 118,
+      "source_sha256": "e9609fcdd5434cb9c797033664c201721a9e965acfbed8f8d179ee6a557b429f",
+      "source_bytes": 25042,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "old_number": 119,
+      "source_sha256": "e9498b40222476d0f401536a02c492dcb86611fb9f6c3960a61120d4c7383e9a",
+      "source_bytes": 21598,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "old_number": 120,
+      "source_sha256": "42f51f870a398c8758076868d529f8b5f45ed54fd61f5f36035e96678bd9c4d0",
+      "source_bytes": 7748,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "旧最低seedを現行市場の初期条件にしない。"
+    },
+    {
+      "old_path": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "old_number": 121,
+      "source_sha256": "3239ebd2556d87fa9f378faa94af951715dad440a552cdfef82aef52f5ccd84c",
+      "source_bytes": 24504,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "old_number": 122,
+      "source_sha256": "1b4684993bf9de115173aea40a87e3adaa77fe37590406ab2205b6ec30bfaf4b",
+      "source_bytes": 69160,
+      "primary_adr": "docs/adr/0019-clients-and-cause-preserving-diagnostics.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md",
+      "old_number": 123,
+      "source_sha256": "26c3aba6e228b465c63aa1bbce95c4d485969859238e027a0a9a1fe5ee4230a1",
+      "source_bytes": 4884,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "old_number": 124,
+      "source_sha256": "f795cc8750cd86f3fc70bca42a5f8c74883b8f912e02f1292e70fd96b0024cd6",
+      "source_bytes": 8013,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "分類別報酬・旧Panel率をMOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "old_number": 125,
+      "source_sha256": "a2f4490d8d57f6a0d210b0804db17eb3cd3560ae65edc9623a181851c6c67efc",
+      "source_bytes": 39201,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "old_number": 126,
+      "source_sha256": "31854f5e998d47e87f1ab298c94820b7fe2d6505510e9fb64ac28f6dfe5c5b47",
+      "source_bytes": 1053,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "旧validator carve・stake reorg gateは使用しない。"
+    },
+    {
+      "old_path": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "old_number": 127,
+      "source_sha256": "ab6bd07c49a220bdcc5f0591a41c9a584d6f22a3b906209cdc4440ddb1b472f8",
+      "source_bytes": 9825,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "old_number": 128,
+      "source_sha256": "b164eab79f703f43b74fbbbab3499d7f7d22b4e3058713a3460db91e59cdd0f4",
+      "source_bytes": 1062,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "BFTのstake reorg vetoを使用しない。"
+    },
+    {
+      "old_path": "docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+      "old_number": 129,
+      "source_sha256": "69465a32fe03c9264e677b0d3aaea768eae89c5c9b66055a570dc399a0e8ab87",
+      "source_bytes": 12239,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "old_number": 130,
+      "source_sha256": "8bbb251ced069f424d6fe8a0c1a200c4107c216e8d78038c252a217e0defd49e",
+      "source_bytes": 25226,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "old_number": 131,
+      "source_sha256": "161df351942ced51928e4f8f24dbfef234d79bb9fa0524aaaefa43e4dfaf201d",
+      "source_bytes": 18192,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "old_number": 132,
+      "source_sha256": "77a42e53269476d1ed80b3a3c5c5680795698674026aac3dc06108b38a7dec3d",
+      "source_bytes": 37679,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "old_number": 133,
+      "source_sha256": "685e17b3ec3c4a3a4c926453b47d291fd0bda0b3fc4f9e14bdc31febf0762f67",
+      "source_bytes": 46425,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+      "old_number": 134,
+      "source_sha256": "83ac948e4aa9503c78395830e17d27dfd0cb6e46ff4ba9fc18eacae7706dcad5",
+      "source_bytes": 12541,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "旧committee beaconを復活させずTB1へ統一。"
+    },
+    {
+      "old_path": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "old_number": 135,
+      "source_sha256": "33b4057b0b72b70ac02b56bb9358240c2d05d0a1fe8861f120ba640383c671fe",
+      "source_bytes": 40052,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "自動登録・資格審査による採用を廃止。"
+    },
+    {
+      "old_path": "docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md",
+      "old_number": 136,
+      "source_sha256": "d6fa255d54a59d8f198e7ab9566c47e1ae34d1ad1da33ad4edf28bdbbd0e2024",
+      "source_bytes": 9832,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "old_number": 137,
+      "source_sha256": "2ccd5db1d534e38cd04bdee9d4248353c250d5b2a0c01c812fa7a9c84ef4e1c0",
+      "source_bytes": 56373,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "old_number": 138,
+      "source_sha256": "ea6e95b78c437a63fc56bf1f3ab506367268f3b21db289d6e4611b13f7394cb2",
+      "source_bytes": 11966,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+      "old_number": 139,
+      "source_sha256": "38412af19c961ea19d3763eecb07e70eef57de3f53c8fa53915184312e6b087a",
+      "source_bytes": 9281,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0140-the-heartbeat-is-the-emergency-generator.md",
+      "old_number": 140,
+      "source_sha256": "3edc37d1b71a99fa61988fb42efb73db7dcb9366603e0ce4863872952fad8b48",
+      "source_bytes": 16437,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "old_number": 141,
+      "source_sha256": "00c5013b423f16321b03626de2082f1ddf96cf5e1bdd7b6f2b8bd74681c1ca40",
+      "source_bytes": 10653,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md",
+      "old_number": 142,
+      "source_sha256": "179d22bee2f2bf931dfba42e4f316ef1de2db7b8a5150f545a9b3934b9b6a1ab",
+      "source_bytes": 24297,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "old_number": 143,
+      "source_sha256": "80c2172b5b0fadc5262083a38a6fb7303c98cf6ecb34b8695067486b25404372",
+      "source_bytes": 16797,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "old_number": 144,
+      "source_sha256": "febf023a0fa9f1ebbfc06408092bd92adb083d3f3996b5345c8df5bb5c6d0b00",
+      "source_bytes": 21406,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "old_number": 145,
+      "source_sha256": "394aec350f689c8935c37753639063149de21d924b15785c371197ce026ac637",
+      "source_bytes": 18573,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md",
+      "old_number": 146,
+      "source_sha256": "be159519a426da42e3ca55e166cfb875942f735f33ec2ed416030589a77cf32f",
+      "source_bytes": 18112,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "旧1.0/0.3係数を全モデル1.0へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "old_number": 147,
+      "source_sha256": "15adce496ef41f7f509e72f72bbfac042d614dbbf49039e6d88fb6bc63347ef5",
+      "source_bytes": 17625,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "old_number": 148,
+      "source_sha256": "ea6ef46225449f7437843a792aca7fa82a5283f4ffba08c8326ddec1270246b3",
+      "source_bytes": 18187,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "old_number": 149,
+      "source_sha256": "d248bf540b93c11cb9ef6ddd823cc30edfbd1b3f241f1e95c03a2c330f9cd05e",
+      "source_bytes": 13432,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+      "old_number": 150,
+      "source_sha256": "d6820ccb14f0e2e46eb211b96b063f76e2681f853690e74d8b5d97b3afad67c7",
+      "source_bytes": 13655,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0001-principles-and-authority.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0001-principles-and-governance.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "old_number": 151,
+      "source_sha256": "3dce109de05fea122cf5fb0c982618774519632bd97f7ebd4edcaeea9d5ad03f",
+      "source_bytes": 29717,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md",
+      "old_number": 152,
+      "source_sha256": "5470444792ec2e96ebe543289a7a4a66f95a6fd10f9c08dce1fd02a46c258309",
+      "source_bytes": 7364,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0153-2m-verification-sharding-plan.md",
+      "old_number": 153,
+      "source_sha256": "abae8a137f4c1cb2372056919fb3f998ed32cc42e571c41b5e4deb098dba6a16",
+      "source_bytes": 5851,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "未採択の大規模shard案は現行G14を置き換えない。"
+    },
+    {
+      "old_path": "docs/adr/0154-testnet-12-flag-day-daa-750.md",
+      "old_number": 154,
+      "source_sha256": "72eac22b2ce1a23bb9f73f76b588fc19f97c7887b9b02ea1fae59b5d034d577c",
+      "source_bytes": 5375,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0155-testnet-12-flag-day-daa-1300.md",
+      "old_number": 155,
+      "source_sha256": "b028766887c207e5b2de744005e83f7203c36d75795cebd4a0c5114d3b9aa2d4",
+      "source_bytes": 3485,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0160-claim-capacity-separation.md",
+      "old_number": 160,
+      "source_sha256": "2404c3c6a633d26a3111c58536a7660d3193514f93a0d4d7139251fa5c87538c",
+      "source_bytes": 124836,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0011-independent-gate-c-certification.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0161-a-claim-is-not-an-emission.md",
+      "old_number": 161,
+      "source_sha256": "d5ccdb9f026cf8d17d83e4bb53ca16281d6756b13ce90a5b9f86df7fd69ad244",
+      "source_bytes": 8137,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md",
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "old_number": 162,
+      "source_sha256": "2a81870627bb70672b1d9612881902f037594966682297e7a3658293048e42b6",
+      "source_bytes": 33672,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "old_number": 163,
+      "source_sha256": "7455aa2cbd3a1a1121ec9bf9fc0754156566acc82c2654eead08c40254ff97e7",
+      "source_bytes": 10370,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "adapterも別の不変instanceとしてBFT採用。"
+    },
+    {
+      "old_path": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "old_number": 165,
+      "source_sha256": "ec13577f6caee5fbea7a8a977c903b0c7fb3272c77ec0d9e78756491d218b4d9",
+      "source_bytes": 46073,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "old_number": 166,
+      "source_sha256": "2534c88e42762d73616d0e3229dc15c5fa6afc7c87a2e9ea57212a42bfcce3cf",
+      "source_bytes": 13409,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "old_number": 167,
+      "source_sha256": "3cb505f3bd3a655d1da3b6f4fbab44dfafefd6e5f834344bdb11aa9c1daaae72",
+      "source_bytes": 19119,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+      "old_number": 168,
+      "source_sha256": "b77449bc5eca9fc967d5134d388364481ec9e332d67c3d8f61258d252d3d34e7",
+      "source_bytes": 27211,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "old_number": 169,
+      "source_sha256": "ee19eeee622e4fa67d6b196f9edcfe6f369873bb084baa922bd9a0818d70b206",
+      "source_bytes": 4165,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "old_number": 170,
+      "source_sha256": "f360afabb1ee0c4a71390cec8c3a71b76f3e235d2ee337d0be56b0f827c566b1",
+      "source_bytes": 16639,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "old_number": 171,
+      "source_sha256": "ad78436188a9b2757f308f6ee21407454b683fe18b2e833e4f9939c29f4e2f47",
+      "source_bytes": 20677,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md",
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "暗号学的計算validityと再実行免除は不採用。直接検査と局所Courtだけを継承。"
+    },
+    {
+      "old_path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "old_number": 172,
+      "source_sha256": "a6744456c2e39cdb0e07ceb73648ee8204cbab1cfc0e49320b495543c962a989",
+      "source_bytes": 20333,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "kernel拡張を継承し、kernel-only採用は廃止。"
+    },
+    {
+      "old_path": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "old_number": 173,
+      "source_sha256": "6aba8221afb422f27bdc18f3ec1c97e1ceece42813910c04670e02680f9efad9",
+      "source_bytes": 17597,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md",
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "公開反証可能性を維持し、モデル取得認定による自動採用は廃止。"
+    },
+    {
+      "old_path": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "old_number": 173,
+      "source_sha256": "07519d77744b7464b6926c1370c7d09b322a7056454229811ac395a49508797a",
+      "source_bytes": 33510,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "公開反証可能性を維持し、モデル取得認定による自動採用は廃止。"
+    },
+    {
+      "old_path": "docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md",
+      "old_number": 174,
+      "source_sha256": "2a6431135be72d8627137a8c1b1ad32c5983cf526269c635f9d4db715a33876b",
+      "source_bytes": 5338,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "old_number": 175,
+      "source_sha256": "26bcec17de504716e9354845025dda099bd7fc4db4a0554f29e394bc5ad44649",
+      "source_bytes": 13238,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "不変登録を継承し、自由な自動採用はBFT限定へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+      "old_number": 176,
+      "source_sha256": "8f17b56db6863dccab169d4895ac61b3750a4f54a434471a7ecf64810b6b4349",
+      "source_bytes": 30226,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md",
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "old_number": 177,
+      "source_sha256": "8be6e9e2fe887a31240e1ed209a620f099d751074341e22b162e357e89cb78ec",
+      "source_bytes": 8518,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "旧model分類別配分とowner率をMOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md",
+      "old_number": 178,
+      "source_sha256": "fe615b0eefbfc54899c4be91322f903be3a30c8db31a452ec9769b8f27bf2e03",
+      "source_bytes": 28574,
+      "primary_adr": "docs/adr/0015-dag-awards-and-settlement.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0015-dag-blocks-and-settlement.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
+      "old_number": 179,
+      "source_sha256": "fec58f358b932cc4ea397a2f82af3d60066e656cbc2daa660afff922c5b75793",
+      "source_bytes": 7267,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+        "docs/adr/0017-model-control-and-retirement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "二階層・genesis市場免除は廃止。"
+    },
+    {
+      "old_path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
+      "old_number": 180,
+      "source_sha256": "e4a075ae7ac6fd68aa232ff742e043a58358b8659ca93741f34c3d2beea5bf0b",
+      "source_bytes": 2869,
+      "primary_adr": "docs/adr/0001-principles-and-authority.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md",
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0001-principles-and-governance.md",
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "BFT台帳合意を置かない。モデル採用・管理BFTは別権限として認める。"
+    },
+    {
+      "old_path": "docs/adr/0181-design-freeze-and-controlled-change.md",
+      "old_number": 181,
+      "source_sha256": "3003a46443cb4e7833c7dcf03ae447660357e23042d9a2f6a0e267823c25337c",
+      "source_bytes": 1985,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "文書凍結・旧番号固定は今回のユーザー指示で改定。"
+    },
+    {
+      "old_path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "old_number": 182,
+      "source_sha256": "6d4a7866fcddbce2d54a7a10777489ef8203cc3fd3e98c51f5cf1fdc6e3208c3",
+      "source_bytes": 3081,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "画像・動画採掘とモデル改善は延期・当面無効。"
+    },
+    {
+      "old_path": "docs/adr/0183-g14-court-capacity-panel-floor-retention-detection.md",
+      "old_number": 183,
+      "source_sha256": "937d43c153c3dd34dd61a67cc87da6757f1b4444cbdbd70907bc75ba5b3ed54e",
+      "source_bytes": 2767,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md",
+        "docs/adr/0010-public-materials-and-funded-service.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "old_number": 184,
+      "source_sha256": "c20b0a3a286b1788385f70e9ff5fb0f746211309adc4ec6b83ca6128b86006a0",
+      "source_bytes": 4415,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0011-independent-gate-c-certification.md",
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "old_number": 185,
+      "source_sha256": "557db4a34a407b8719fdd8339610a59473d8954eb9e56e2f098505477cbf9508",
+      "source_bytes": 4660,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
+      "old_number": 186,
+      "source_sha256": "b4d9e9bbf8eaf9569df0f54ae2fdc2246a8ac183a99cbb058c70f1434ac8e45b",
+      "source_bytes": 4144,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+      "old_number": 187,
+      "source_sha256": "5909d02d2760703ecb5a90c50fa4623a53ebf9e1eb06db470944a681876def59",
+      "source_bytes": 6767,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0188-d2-x3-arm-records-composition-and-pause-credit.md",
+      "old_number": 188,
+      "source_sha256": "8a2a94077f6783c7dc6446dfe10082787ea1b26390b6bf6bd151114c4cef8b62",
+      "source_bytes": 17721,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0189-tir-court-read-set-door-options.md",
+      "old_number": 189,
+      "source_sha256": "e53dae08ade23908516f2f6a8f19dad9c8969e1fa598d4bef1921c078f0862c8",
+      "source_bytes": 5008,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "未採択の選択肢を採択済みとせず、有界Courtの条件に統合。"
+    },
+    {
+      "old_path": "docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md",
+      "old_number": 190,
+      "source_sha256": "1b8a10f8b10f46c2b7e4c4fb643cb98a28f8fb4800084148d38022a23ccea783",
+      "source_bytes": 9554,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "提案部分の採否状態を維持。"
+    },
+    {
+      "old_path": "docs/adr/0191-tir-dispute-local-decomposition-long-context.md",
+      "old_number": 191,
+      "source_sha256": "21efe0c9b0dc3207656a5d6ce67086016415539e65c66e50c76b0d21f1aab804",
+      "source_bytes": 19528,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md"
+      ],
+      "disposition": "提案部分の採否状態を維持。"
+    },
+    {
+      "old_path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "old_number": 192,
+      "source_sha256": "0d50bb2a808a44b67c571b02c7c788c207d280cb1f4496235f03807af3f96bb3",
+      "source_bytes": 7414,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "old_number": 193,
+      "source_sha256": "9310c32e3d7b57f77121c69c42cc1c737cb1f747be21427046781678657a8367",
+      "source_bytes": 17698,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0193-sequential-witness-filing-clock.md",
+      "old_number": 193,
+      "source_sha256": "2f91680344e31c9c6a5d6c979c38e73815d9cb4d49e110bb1629d1025bf64191",
+      "source_bytes": 3751,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "old_number": 194,
+      "source_sha256": "84701bb67ed7009308068ffbf67d8c74837cb8a2c677562e7c6e1a2d0942d022",
+      "source_bytes": 7318,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0195-rooted-court-response-eligibility-history.md",
+      "old_number": 195,
+      "source_sha256": "b62c4e790b5d31c684cb7990fb622b77a14cd82c3ffe948ebcd93b17087de96d",
+      "source_bytes": 6647,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0196-owner-independent-shared-tir-query-data.md",
+      "old_number": 196,
+      "source_sha256": "707f8b30502b5559e3f119dd3bdfa7556f823e89de377a47ba19f37582200c39",
+      "source_bytes": 11527,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md",
+      "old_number": 197,
+      "source_sha256": "a773043380953e73a3689902e0ae2b771974d5781b6eff1404b7933933415635",
+      "source_bytes": 8017,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0198-shared-court-initial-notice-boundary.md",
+      "old_number": 198,
+      "source_sha256": "f585ad9d7fcf9cc9f2d77c7f89440c42fbf7fafc249009d737ebe68277993dfc",
+      "source_bytes": 2680,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "old_number": 199,
+      "source_sha256": "7bb13456730cf6261d5c8ac1b0e67ba036cee9f39ad41160a5160066515a8dd9",
+      "source_bytes": 2880,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0200-d2-readiness-root-opening-availability.md",
+      "old_number": 200,
+      "source_sha256": "d68616b361e03bd15d3d3608d0d563c37e12cb629030dd74165ec77409c62dd0",
+      "source_bytes": 2653,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0018-bounded-storage-pruning-and-ibd.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0018-storage-pruning-and-ibd.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0201-archived-close-qualified-financial-discharge.md",
+      "old_number": 201,
+      "source_sha256": "cbb39003233a462a685f42b5c73d42160584fbd6e84fc1a1d9dc9e580ebd8516",
+      "source_bytes": 5293,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0202-court-original-funded-contract-and-role-consent.md",
+      "old_number": 202,
+      "source_sha256": "b55898be934ff82d263c723f7cdd6034ec62806b82dbc80058eb4b2236a0cd71",
+      "source_bytes": 4441,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0203-authenticated-palw-state-map-and-row-access.md",
+      "old_number": 203,
+      "source_sha256": "8614fd33511cfcb62626a3f3c6f1d82c4579d8d1ffd6be00c56a08b05a7e4ee7",
+      "source_bytes": 4176,
+      "primary_adr": "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "新認証state mapは提案のまま。既存rootを変更しない。"
+    },
+    {
+      "old_path": "docs/adr/0204-ibd-bounded-row-stream-and-storage-generations.md",
+      "old_number": 204,
+      "source_sha256": "d07d4d9ffbec4496cd5200d1a23b161608851f56a1aafde8287e58c8567b211a",
+      "source_bytes": 4238,
+      "primary_adr": "docs/adr/0018-bounded-storage-pruning-and-ibd.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0018-storage-pruning-and-ibd.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "root不変のbounded row streamを継承。"
+    },
+    {
+      "old_path": "docs/adr/0205-a-decoded-answer-is-not-paid-twice.md",
+      "old_number": 205,
+      "source_sha256": "574e110d99c7a59954a92d672ad59fdf1b984e63698b5d380e720dbadce1461a",
+      "source_bytes": 2375,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md",
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0206-panel-da-mandatory-disclosure-g14-route.md",
+      "old_number": 206,
+      "source_sha256": "9629a81b62d2209c86908e228ba8053b80c4b4f9ec11e97ed71462c76c4a734b",
+      "source_bytes": 7836,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0207-finite-fee-consent-and-provider-payment-bounds.md",
+      "old_number": 207,
+      "source_sha256": "8ab7ea99ab08d0fc3a5b2db23a3e1858877e951968c0231238c34d288b924a04",
+      "source_bytes": 6290,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0208-authenticated-prefix-work-dependencies.md",
+      "old_number": 208,
+      "source_sha256": "af33625c0600df6ecdb15b9c649cef84029cf668e976441bbc391c8125655c6d",
+      "source_bytes": 2512,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "署名済みprefix exportと明示依存は採択済み設計としてRFCへ移す。実装・有効化を宣言しない。"
+    },
+    {
+      "old_path": "docs/adr/0209-genesis-bond-free-bootstrap.md",
+      "old_number": 209,
+      "source_sha256": "86c1cdf5a9c1bdcd3f0ab843f796af53201f0da1e52da1a29c2266283e8e54fa",
+      "source_bytes": 3149,
+      "primary_adr": "docs/adr/0012-role-bonds-budgets-and-slashing.md",
+      "related_adrs": [
+        "docs/adr/0020-devnet-activation-and-document-governance.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0012-bonds-budgets-and-slashing.md",
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "公開genesisに特別bondを付けず通常登録で起動。"
+    },
+    {
+      "old_path": "docs/adr/0210-all-model-g14-panel-one.md",
+      "old_number": 210,
+      "source_sha256": "ba4ff629988d92e86f2a98100565194e333df4cf0653c32b46c80e7be3b390fd",
+      "source_bytes": 3718,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0210-court-family-supplier-consent-and-native-reservation.md",
+      "old_number": 210,
+      "source_sha256": "466246234aed9bfad9417620811fc08ca0c72b48d6a45e91d150d2d79074ff07",
+      "source_bytes": 3982,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0211-wide-q24-llm-output.md",
+      "old_number": 211,
+      "source_sha256": "e70e6f0b54ca2f30d64237b52a8358c0b642357da70bd63eb371ef5250646237",
+      "source_bytes": 2918,
+      "primary_adr": "docs/adr/0002-deterministic-kernels-and-runtime.md",
+      "related_adrs": [
+        "docs/adr/0005-qwen3-execution-and-readout.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0212-positive-court-without-model-prepossession.md",
+      "old_number": 212,
+      "source_sha256": "a3d00c08ef7f471b60fee53288535d08c827a4579ca07c311c65f64c6d8b766d",
+      "source_bytes": 5826,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0009-court-and-claim-final.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0213-positive-court-canonical-assignment.md",
+      "old_number": 213,
+      "source_sha256": "b8cc17658181a2fb6b71a29492de987b751988328fdfeb8d466c0a6f9625eb35",
+      "source_bytes": 21750,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0214-positive-native-funded-relay.md",
+      "old_number": 214,
+      "source_sha256": "835b082fdf4c886ca7ae0d0e5782433e818019ab66dda3d0c7ba9be4169a9e48",
+      "source_bytes": 16857,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0019-clients-and-cause-preserving-diagnostics.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0019-clients-rpc-and-diagnostics.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+      "old_number": 215,
+      "source_sha256": "a476f9af62947572684920efd080b8ee3be42af751151fc002505ab0a7c959d2",
+      "source_bytes": 8190,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0008-one-panel-independent-reexecution.md",
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+      "old_number": 216,
+      "source_sha256": "0620b43636967cfe036fde61ae947e296eeb25be35337e6e6b7414434747307f",
+      "source_bytes": 6074,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0015-dag-awards-and-settlement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0015-dag-blocks-and-settlement.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "old_number": 217,
+      "source_sha256": "f2503db26afa583bbc43e424073f6bd04a38966bc7cc3326aeb25a4015456d7c",
+      "source_bytes": 4997,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "old_number": 218,
+      "source_sha256": "319c0ff032434b6261b443434ac4e0f4b1e641ab12689beed35569266fc53294",
+      "source_bytes": 6100,
+      "primary_adr": "docs/adr/0008-one-panel-independent-reexecution.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0008-g14-panel-and-verification.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0219-funded-preclaim-tokenizer-registration.md",
+      "old_number": 219,
+      "source_sha256": "8bc0bc3d6ba3d5585482f4ecdad379efcffcb59835ca48200b04a131afd63405",
+      "source_bytes": 4286,
+      "primary_adr": "docs/adr/0003-jobs-and-tokenizer-contract.md",
+      "related_adrs": [
+        "docs/adr/0010-public-materials-and-funded-service.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md",
+        "docs/rfc/0010-materials-and-funded-delivery.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0220-hugging-face-model-acquisition-and-claim-materials.md",
+      "old_number": 220,
+      "source_sha256": "083a8e9076bf63c66fd06e29c43e8b7aa2190ad6e6a50d51f8228f6c64bc850a",
+      "source_bytes": 4436,
+      "primary_adr": "docs/adr/0010-public-materials-and-funded-service.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0010-materials-and-funded-delivery.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0221-additional-model-burn-pause.md",
+      "old_number": 221,
+      "source_sha256": "bc1e9f83cd2703f6a9c46467f5ca525d3508f5c35074568b90edaefff5077c5b",
+      "source_bytes": 2949,
+      "primary_adr": "docs/adr/0017-model-control-and-retirement.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0017-model-stop-and-retirement.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "追加モデル限定・登録者だけの解除を現行全モデル管理へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "old_number": 222,
+      "source_sha256": "5b105f7e7247ffa87af07eafa4d44931e0f245bd0cdf5400dcaae484dc1aa99b",
+      "source_bytes": 4259,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md"
+      ],
+      "disposition": "公開profile候補と実有効化を分離。"
+    },
+    {
+      "old_path": "docs/adr/0223-global-admission-court-calendar-and-one-bps.md",
+      "old_number": 223,
+      "source_sha256": "baee691ffc9bb2cad261ca30492ed3e4355753257c7c513aea68af60d31b6949",
+      "source_bytes": 12638,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "old_number": 224,
+      "source_sha256": "e633dd81a50047a3f8c631bf6e456570acfa3825cc42e9bcdb720975094c3487",
+      "source_bytes": 14545,
+      "primary_adr": "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "old_number": 225,
+      "source_sha256": "702f2e0c6f48c2d01c0780f6e2faf4a774b56f027232c8281f1922c3cb397f03",
+      "source_bytes": 7924,
+      "primary_adr": "docs/adr/0009-bounded-court-and-verification-gated-final.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md",
+        "docs/adr/0008-one-panel-independent-reexecution.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0009-court-and-claim-final.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0008-g14-panel-and-verification.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "old_number": 226,
+      "source_sha256": "6d37ea6c8b7033e9a62c468c1d95e2e699b336c90621d57e8f5870ca532c9767",
+      "source_bytes": 7807,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0006-threshold-randomness-and-custody.md",
+        "docs/adr/0011-independent-gate-c-certification.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0011-gate-c-and-consensus-credit.md"
+      ],
+      "disposition": "提案・条件付き保証を勝手に採択済みへ昇格させない。"
+    },
+    {
+      "old_path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "old_number": 227,
+      "source_sha256": "d124311653a5ee1726e0af9b67bdfebd1c26ccc15ebf1d42bb31a8bc1d220713",
+      "source_bytes": 6997,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0003-jobs-and-tokenizer-contract.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0003-jobs-tokenizers-and-generation.md"
+      ],
+      "disposition": "実入力束縛を維持。識別子の非衝突性をLLM費用保証としない。"
+    },
+    {
+      "old_path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "old_number": 228,
+      "source_sha256": "b7eda80fa93177b0e53d0d3ecbe56f984599b41b9c01f2e6f358875364041da6",
+      "source_bytes": 14798,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "認証出力の一意性とReadoutの費用条件を分離。"
+    },
+    {
+      "old_path": "docs/adr/0229-palw-internal-threshold-beacon.md",
+      "old_number": 229,
+      "source_sha256": "5f56d164d2cd92e87178c31a61644d13557c2a83320a668202e7063b92fdff68",
+      "source_bytes": 7198,
+      "primary_adr": "docs/adr/0006-threshold-randomness-and-custody.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0006-tb1-randomness-and-release.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "現行仕様をRFCへ、判断理由をADRへ統合。旧本文・進捗記述を正本として残さない。"
+    },
+    {
+      "old_path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
+      "old_number": 230,
+      "source_sha256": "df6be697aa225b06017ba31807495f7e66d3bcc9e09b02e5a24e903436f91203",
+      "source_bytes": 7820,
+      "primary_adr": "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+      "related_adrs": [
+        "docs/adr/0013-model-work-accounting.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0013-model-work-accounting.md"
+      ],
+      "disposition": "自動G-COST gateを廃止。FOW1のUNKNOWNをBFT票で証明済みにしない。"
+    },
+    {
+      "old_path": "docs/adr/0231-additional-model-option-economics.md",
+      "old_number": 231,
+      "source_sha256": "f3b0b968b4673688a7224fb089eeee5c8e2193939a57f0425533386ce2e1127d",
+      "source_bytes": 6622,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0017-model-control-and-retirement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "追加モデル限定・core100%を現行全モデルMOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "old_number": 232,
+      "source_sha256": "bda0d78635a478b8d1adab689d2af7ebb785897c58cb89cf9511c217a0045896",
+      "source_bytes": 6810,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "30%購入・余剰burn・価格比LPを現行MOE3へ置換。"
+    },
+    {
+      "old_path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "old_number": 233,
+      "source_sha256": "9e7d8a0d923bb90dd041137f5d1650e81094c207d49e5a9cefe0d32d55e87d0b",
+      "source_bytes": 8454,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0017-model-control-and-retirement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "自動採用gateを廃止し、任意評価とBFT採否を分離。"
+    },
+    {
+      "old_path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "old_number": 234,
+      "source_sha256": "decf1536e3d09a072536eb19f458764076e6ef75a66fc501595093b1739f6ece",
+      "source_bytes": 5999,
+      "primary_adr": "docs/adr/0005-qwen3-execution-and-readout.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0005-qf1-qwen3-execution-profile.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md"
+      ],
+      "disposition": "QF1の数値・Readout・traceを保持。自動資格gateだけ置換。"
+    },
+    {
+      "old_path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "old_number": 235,
+      "source_sha256": "854c730191c3911d93bb0138a02c4a3dbaf5ab2836ca0e91be730b8931c362a5",
+      "source_bytes": 1013,
+      "primary_adr": "docs/adr/0007-bft-only-model-admission.md",
+      "related_adrs": [
+        "docs/adr/0002-deterministic-kernels-and-runtime.md",
+        "docs/adr/0017-model-control-and-retirement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0007-bft-model-admission.md",
+        "docs/rfc/0002-tensor-ir-kernels-and-runtime.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "二経路を廃止、BFTのみ。技術互換検査は維持。"
+    },
+    {
+      "old_path": "docs/adr/0236-fractional-position-miner-rewards.md",
+      "old_number": 236,
+      "source_sha256": "d852813672a1ea91031cd616567faff0d416003a3c44c025162752902585da90",
+      "source_bytes": 5627,
+      "primary_adr": "docs/adr/0016-position-economics-and-permanent-liquidity.md",
+      "related_adrs": [
+        "docs/adr/0017-model-control-and-retirement.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0016-position-market-and-rewards.md",
+        "docs/rfc/0017-model-stop-and-retirement.md"
+      ],
+      "disposition": "全モデル1.0・小数8桁・50/20/20/5/5を継承。"
+    },
+    {
+      "old_path": "docs/adr/0237-bft-model-retirement-and-role-bonds.md",
+      "old_number": 237,
+      "source_sha256": "3a2fd3397586f1b31fb35f77829cc9a3f95179776041ea4895db92d4067430dc",
+      "source_bytes": 4039,
+      "primary_adr": "docs/adr/0017-model-control-and-retirement.md",
+      "related_adrs": [
+        "docs/adr/0012-role-bonds-budgets-and-slashing.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0017-model-stop-and-retirement.md",
+        "docs/rfc/0012-bonds-budgets-and-slashing.md"
+      ],
+      "disposition": "役割別lot保護・個別Court49/51・モデル廃止100%burnを継承。"
+    },
+    {
+      "old_path": "docs/adr/0238-model-work-accounting-and-exec-credit.md",
+      "old_number": 238,
+      "source_sha256": "7b07aebafa412bca299b3df663166739b3a76009eddc887e7ac07418e5f3e932",
+      "source_bytes": 4110,
+      "primary_adr": "docs/adr/0013-model-work-accounting.md",
+      "related_adrs": [
+        "docs/adr/0004-execution-bound-ticket-and-work-identity.md",
+        "docs/adr/0014-exec-capacity-and-consensus-clock.md",
+        "docs/adr/0016-position-economics-and-permanent-liquidity.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0013-model-work-accounting.md",
+        "docs/rfc/0004-fow1-execution-and-ticket.md",
+        "docs/rfc/0014-exec-schedule-and-capacity.md",
+        "docs/rfc/0016-position-market-and-rewards.md"
+      ],
+      "disposition": "MWA1はPROPOSEDのまま。AUTO経路への言及は削除。"
+    },
+    {
+      "old_path": "docs/adr/0239-rfc-consolidation-and-bft-only-admission.md",
+      "old_number": 239,
+      "source_sha256": "221de28d6af9c4055da56a3d7e7b0c1ab78948f3c316280488a09ae86b46387d",
+      "source_bytes": 2087,
+      "primary_adr": "docs/adr/0020-devnet-activation-and-document-governance.md",
+      "related_adrs": [
+        "docs/adr/0007-bft-only-model-admission.md"
+      ],
+      "design_rfcs": [
+        "docs/rfc/0020-devnet-release-and-migration.md",
+        "docs/rfc/0007-bft-model-admission.md"
+      ],
+      "disposition": "RFC20とBFT一本化を維持し、ADRも20本へ再編。"
+    }
+  ]
+}

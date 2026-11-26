@@ -1,0 +1,47 @@
+{
+  "genesisHash": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+  "consensusParamsId": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+  "sink": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+  "selectedBlocksChecked": 18,
+  "acceptedReady": 18,
+  "execCloseTx": "a3b0737ca83e3930ca05ec0c3d3d16fb1c86e3cad7512b41caf90c3b0581cbc5e503b0b7fe7f5062650aa83a33b9cafbfb6bc5bd1ff3df28b2b799a0b2c7ff35",
+  "closeState": {
+    "parent": "f3ee08411c828f16bfe373968a4fda4284b39ebec14c3ab09d84f4d5660003eeb007eceff588ae69a1a696be738ab6b0798deb80b4b807b581c52070edf7e9e1",
+    "root": "0934e0a6d2632a8e2cc2daaaa6040724de1f8635655064641c66f7b444f3fec8ac861e16925c4a9e5eb3d5bb0c5e99d048368ba152d4d10190a22f6d9d630765",
+    "bytes": 45346,
+    "sha256": "db68d98d68763e6a1370bfcc9ee19e54a8fbacc6b7a043384d94443ae5ccc05e"
+  },
+  "nativeStop": "frontierNotCovered",
+  "finalized": null,
+  "panelCloseInput": "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:9",
+  "reservedPublicationInputs": [
+    "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:5",
+    "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:6",
+    "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:7",
+    "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:8",
+    "28a20b4e3cb6de27eb3c46cfc1483620fc3d4429c7209e4730d07417970e851cb00be980b42dbad9dbc13526dee75999cde15700ea01b884bf0b181af200e249:9"
+  ],
+  "observedPublicationSpends": 0,
+  "mempoolsCheckedBeforeStop": 4,
+  "mempoolsCheckedAfterRestart": 4,
+  "exits": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "coldReopen": {
+    "verifiedPeers": 4,
+    "sink": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+    "stateSha256": "db68d98d68763e6a1370bfcc9ee19e54a8fbacc6b7a043384d94443ae5ccc05e",
+    "releasePackets": 0,
+    "nodeExitCodes": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "runSeconds": 164.28,
+  "hostFreeBytesMinimum": 12993249280
+}

@@ -1,25 +1,17 @@
 # PALW ClassActivationGate — status ledger and the Stage ladder's decision records
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今後の新profileのStage昇格はFOW1適格性とTB1 activation gateを別途満たす必要がある。旧full-logits/hash-floorやchain-derived seedの状態を新方式の合格に使わない。以下の過去の実装状態・測定は保持する。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 **Normative:** `docs/palw-full-logits-trace-v2-design.md` §12 (the twelve gate items) + §13
-(the staged-rollout order) · ADR-0028 §6 additions (`P_check`, no-show telemetry) · ADR-0027
-§6 / ADR-0026 the four-stage ladder · **Date opened:** 2026-08-16 ·
+(the staged-rollout order) · 旧ADR-0028 §6 additions (`P_check`, no-show telemetry) · 旧ADR-0027
+§6 / 旧ADR-0026 the four-stage ladder · **Date opened:** 2026-08-16 ·
 **Revised 2026-08-17** after the mainnet-readiness audit (`palw-mainnet-readiness-audit-2026-08-16-ja.md`):
 a **Wired?** column added, rows 6/7/9/11/12 corrected, the through-line retracted, and §5 added.
 
@@ -43,7 +35,7 @@ activation ADR must be able to point at.
 | 3 | full 64-byte equality; no prefix compare in the decision | **met** | **yes** — live `Hash64` compares | Every root compare in `palw_slash`/`palw_legs`/`palw_step_leg` is `Hash64` equality; adversarial attack 8 searches for and rejects any domain bridge. Audit confirmed: zero tolerant/prefix compares reach any slash path. |
 | 4 | cold/warm/restart/concurrent/affinity/memory-pressure tests | **5 of 6 measured on aarch64; affinity is not measurable on this host** | n/a — measurement | `palw-aarch64-class-determinism-2026-08-20.md`: cold (process per run) MATCH ×5 per job, restart ×2 MATCH, concurrent ×4 (four cold workers at once) MATCH ×4, memory pressure (2 GB churned alongside) MATCH. **Affinity is NOT run and is not claimed:** macOS has no `sched_setaffinity`, and `thread_policy_set` affinity tags are a hint the OS ignores on Apple Silicon. That condition is meaningful on the Linux fleet and must be measured there. |
 | 5 | ≥ 10,000 chain-derived seeds entropy/cost report | **not started (measurement); the PREMISE is now true on the free-prompt lane** | **yes on the FP lane** — `palw_fp_execution_seed_v3` is the only source | The report itself is still a fleet run. What changed 2026-08-20 is the premise the report would have been about. H7 was right: `PalwJobEnvelopeV2::execution_seed` is a free field carriage never inspects, so an entropy report on it would have measured a value its own producer chose. On the free-prompt lane the seed is no longer a field — `palw_fp_job_context_v3` DERIVES it from the job's chain anchor (network domain, class, anchor block, anchor DAA), and `job_nonce` is deliberately excluded because it is the one value a producer varies at will. `the_execution_seed_is_chain_bound_and_not_grindable` measures both halves: grinding the nonce (or the prompt, or the ceiling) does not move the seed, every chain fact does, and the binding reaches the execution root. **Corrected while closing it:** the free field is on `PalwJobEnvelopeV2` — the SUPERVISOR's job object for the replay/legs paths — not on the V2 attempt lane's own commitment. `PalwAttemptUnsignedV2` has no `execution_seed` at all; its chain binding is `challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, class, bond)`, which the finalizer recomputes from the header's own position and refuses on mismatch (`PalwV2ChallengeMismatch`), so that lane was never the one H7 was about. **Still open:** the supervisor path's envelope, wherever a replay job's seed reaches `PalwJobContextV2::from_envelope`. |
-| 6 | negative controls produce mismatch or a different class ID | **met at trace layer (unit); class-gate consensus-inert** | trace separation measured; the class-ID *gate* (ADR-0034 routing) is consensus-inert | Adversarial attacks 1-3, 5, 9-10 are these negative controls at the unit level. Cross-**class** separation IS measured: `gemm_trace_root` **0/61 matching** (x86 vs Metal, complete separation) — `palw-algo4-crosshost-determinism-2026-08-16.md:41`. **Correction (2026-08-17):** the earlier "cross-class divergence 47/61" citation was inverted — 47/61 is output-text *agreement*, 14/61 diverges; the trace layer (0/61), not the output text, is what binds the class. |
+| 6 | negative controls produce mismatch or a different class ID | **met at trace layer (unit); class-gate consensus-inert** | trace separation measured; the class-ID *gate* (旧ADR-0034 routing) is consensus-inert | Adversarial attacks 1-3, 5, 9-10 are these negative controls at the unit level. Cross-**class** separation IS measured: `gemm_trace_root` **0/61 matching** (x86 vs Metal, complete separation) — `palw-algo4-crosshost-determinism-2026-08-16.md:41`. **Correction (2026-08-17):** the earlier "cross-class divergence 47/61" citation was inverted — 47/61 is output-text *agreement*, 14/61 diverges; the trace layer (0/61), not the output text, is what binds the class. |
 | 7 | exact artifacts and FP environment launch-verified | **met (mechanism)** — B8/B15 closed 2026-08-17 | **yes** — FP probes (8 sites, fail-closed), artifact pin always-recomputed, libm in the class id | FP env probes (MXCSR/FPCR RNE/FTZ=0/DAZ=0) real and fail-closed. **B15 closed:** the bypassable v1 gate (a `.palw-gguf-sha.json` in CWD, keyed on `path\|size\|mtime`, reached from `--mode verify` = the block-validation path) was folded into the always-recompute v2 gate — one policy, no cache. **B8 closed:** `PalwRuntimeManifestV2` v3 adds `libm_identity` + `libm_arithmetic_digest` (behavioural probe of the resolved `expf`/`logf`), so a libm change is now a different class id instead of a silent PoW-tag change. Consensus fingerprint unmoved; 663/663. Per-class launch verification remains a registration step. |
 | 8 | minimum independent bonded credentials continuously available | **partial** | n/a — operational | A/B/C bonded 20k MSK, active (`t10-bond-registered-2026-08-15`); *continuity* unproven (a soak fact). **Independence** is the unstated gap: the bonded set is four VPSes under one administrator (audit low) — 1-of-N-honest with N = 1 trust domain. |
 | 9 | measured replay capacity fits the challenge window at p99 | **partial** (window fits; ceiling not enforced) | **no** — the gate reads `credited_ceiling_tokens` only as `== 0`, never as a cap | Worst fleet κ·p99 = 272 s vs `w_replay` 1 h — ≥ 13× margin (measured, solid). But the credited ceiling is a 0/non-zero *switch*, not a cap: `exact_decode_tokens` is never compared to it (audit H4), `max_context_tokens` is self-referentially validated, and the registered p99 is not cross-checked against the ceiling (audit medium). |
@@ -51,7 +43,7 @@ activation ADR must be able to point at.
 | 11 | adversarial test **and external review** completed | **partial (unit harness only)** | unit tests, **not a consensus path**; mint-path attacks absent | `palw_adversarial` (10 named attacks, permanent harness) covers the trace/step layer at the unit level — real and good. It does **not** cover the credit-gate consumer path (forged signature B1, duplicate commitment B2, off-class panel member H1, unadjudicated refutation B9). External review: not started. |
 | 12 | emergency zero-credit rollback exercised | **mechanism MET on the V2 lineage, 2026-08-20; the EXERCISE is still a fleet run** | **yes on V2** — `PalwClassStatusV2::Frozen` is read by admission, the retarget and production; V1's per-block `class_frozen_before_close_v1` is separately live | The row's finding was right about the V1 lineage and is now superseded by the V2 one. `ClassFrozen` is a consensus object whose evidence is a `PalwClassContradictionCertificateV1` — two attestations on one job context disagreeing about what that job produced — so the freeze is OBJECTIVE (nobody decides it) and unforgeable against a class that is behaving. `check_class_contradiction_shape_v2` refuses evidence about another class (the liveness-floor attack: manufacture a contradiction in a disposable class, quote it at BASE-0), evidence whose attestations agree, and evidence binding a different job context; signatures are the acceptance layer's, the same split `BondRegistered` uses. **It is one-way by design:** the `ClassUnfrozen` variant is DELETED, because a chain-level unfreeze turns an objective permanent consequence into a temporary one — re-activation means a NEW class id with its own catalog entry and registration, which is the audit trail §2 asks for expressed as chain state. Measured by `a_class_freezes_only_on_a_contradiction_about_itself`. **What remains is §2's exercise**, on the fleet: induce a contradiction, confirm nothing is credited and no bond moved. |
 
-### ADR-0028 §6 additions
+### 旧ADR-0028 §6 additions
 
 | item | status |
 | --- | --- |
@@ -61,7 +53,7 @@ activation ADR must be able to point at.
 ### The through-line (corrected 2026-08-17 — the prior claim was false)
 
 **Retracted:** *"Every unmet item is a fleet measurement or soak, not a design gap."* The
-2026-08-16/17 mainnet-readiness audit (ADR-0028 baseline) refuted it with **9 blockers, all in
+2026-08-16/17 mainnet-readiness audit (旧ADR-0028 baseline) refuted it with **9 blockers, all in
 the credit-gate consumer layer** — the code that reads carriage into the coinbase. The honest
 through-line:
 
@@ -80,7 +72,7 @@ through-line:
 
 ## 2. Emergency zero-credit rollback — the mechanism (gate item 12)
 
-The rollback must (ADR-0027 §5, v0.1 §19): stop new credit from a class instantly, never
+The rollback must (旧ADR-0027 §5, v0.1 §19): stop new credit from a class instantly, never
 release a bond through the emergency exit (an attacker must not escape), never touch block
 validity, fork choice, or any past block, and be reversible only by an explicit re-activation
 from zero-credit.
@@ -121,7 +113,7 @@ binary's induced-negative flags (`--noshow-nth`, mismatch namespace) are the sub
 
 ## 3. Stage ladder — promotion decision records (B16)
 
-The ladder is ADR-0026 §/ADR-0027 §6's four stages. Each promotion is an explicit record here;
+The ladder is 旧ADR-0026 §/旧ADR-0027 §6's four stages. Each promotion is an explicit record here;
 promotion N requires every gate item its stage depends on to be **met** in §1.
 
 ### Stage 0 — Shadow / zero-credit (current)
@@ -145,9 +137,9 @@ not yet gate credit. **This promotion cannot be signed until item 10's soak exis
 ### Stage 2 — Bounded (blocked)
 
 **Status: BLOCKED, by design — and further from ready than this row claimed.** Requires
-(ADR-0028 §6): `ExecutionStepRefutationV1` landed, the §4 registration inequality enforced,
+(旧ADR-0028 §6): `ExecutionStepRefutationV1` landed, the §4 registration inequality enforced,
 `q ≥ 2`, AND — for any **bare-v2** class — chunked logits-evidence carriage landed **and drilled**
-(ADR-0029 §6). Composite-v2 classes are not bare-v2-blocked.
+(旧ADR-0029 §6). Composite-v2 classes are not bare-v2-blocked.
 
 > **⚠ Correction (2026-08-17 audit):**
 > * `ExecutionStepRefutationV1` exists as a struct but is **unreachable end-to-end** — no Borsh
@@ -180,9 +172,9 @@ Stage-2 bare-v2 carriage prerequisite. Re-derived the credited ceiling (item 9) 
 measured fleet numbers. *(This section's closing claim — "the arithmetic is done; the empiricism
 is not" — was the through-line §1 now retracts. See §5.)*
 
-## 5. The 2026-08-16/17 mainnet-readiness audit and the ADR-0041/0028 resolution
+## 5. The 2026-08-16/17 mainnet-readiness audit and the 旧ADR-0041/0028 resolution
 
-**Report:** `docs/palw-mainnet-readiness-audit-2026-08-16-ja.md` (ADR-0028 baseline, 15-agent
+**Report:** `docs/palw-mainnet-readiness-audit-2026-08-16-ja.md` (旧ADR-0028 baseline, 15-agent
 audit, refuted 0). **Verdict: NO-GO** — and, crucially, not merely because the staged ladder is
 unfinished. The ladder *as written* does not schedule several of the defects found. **9 blockers,
 all in the consumer layer** (the credit gate reading carriage into the coinbase); the format and
@@ -194,34 +186,34 @@ arithmetic layers are sound and were credited as such. The blockers, one line ea
 4. **B4** — `min_credit_interval_daa` (§4e's rate lever) is enforced nowhere; the 11,655× leverage violation returns on activation.
 5. **B5** — payee resolved by a non-unique `validator_pubkey_hash` over an unordered `HashMap`; nondeterministic coinbase = permanent partition.
 6. **B6** — the gate's inputs are not a pure function of the block's own chain (pruned acceptance reads as "nothing", the E2 spend gate reads virtual state).
-7. **B7** — `algo_id=4` is the exclusive PoW with no hash floor, and header validation `panic!`s when the runtime is unavailable (contradicts the v2 design's principle 1/2). *Live on TN11/devnet.* → **DECIDED 2026-08-17, then REVERSED the same day.** ADR-0036 Decision 4 first made a permanent hash floor a hard gate on the mainnet identity; **ADR-0039 Decisions 1/2 (W6′) supersede that** — there is no hash floor on any network, mainnet included. Block production is PALW work everywhere, and the liveness floor is `PALW-BASE-0`: a portable integer-only class held permanently Active, whose catalog closes so it can be audited and convicted on any CPU. Total PALW unavailability halts the network **loudly, by design**, rather than degrading to hash ordering — the trade being that a hash lane which can always produce blocks is a permanent incentive to mine the lane instead of the work. Transient `PalwWorkerFailed` no longer panics (bounded retry); a persistent fault still does, and that is now the intended terminal behaviour rather than a gap awaiting a floor. **Remaining deliverable:** register `PALW-BASE-0` and hold it Active (its artifacts, its second implementation and its difficulty-domain share), NOT "implement the hash floor". The v2 design's principle 1/2 is superseded on this point.
-8. **B8** — the class identity never pins `libm`, though ADR-0031 makes glibc `expf`/`logf` normative arithmetic inside the PoW tag. *Live divergence vector.* → **CLOSED 2026-08-17:** manifest v3 adds `libm_identity` + `libm_arithmetic_digest`. (B15's GGUF-pin bypass closed the same day — see row 7.)
+7. **B7** — `algo_id=4` is the exclusive PoW with no hash floor, and header validation `panic!`s when the runtime is unavailable (contradicts the v2 design's principle 1/2). *Live on TN11/devnet.* → **DECIDED 2026-08-17, then REVERSED the same day.** 旧ADR-0036 Decision 4 first made a permanent hash floor a hard gate on the mainnet identity; **旧ADR-0039 Decisions 1/2 (W6′) supersede that** — there is no hash floor on any network, mainnet included. Block production is PALW work everywhere, and the liveness floor is `PALW-BASE-0`: a portable integer-only class held permanently Active, whose catalog closes so it can be audited and convicted on any CPU. Total PALW unavailability halts the network **loudly, by design**, rather than degrading to hash ordering — the trade being that a hash lane which can always produce blocks is a permanent incentive to mine the lane instead of the work. Transient `PalwWorkerFailed` no longer panics (bounded retry); a persistent fault still does, and that is now the intended terminal behaviour rather than a gap awaiting a floor. **Remaining deliverable:** register `PALW-BASE-0` and hold it Active (its artifacts, its second implementation and its difficulty-domain share), NOT "implement the hash floor". The v2 design's principle 1/2 is superseded on this point.
+8. **B8** — the class identity never pins `libm`, though 旧ADR-0031 makes glibc `expf`/`logf` normative arithmetic inside the PoW tag. *Live divergence vector.* → **CLOSED 2026-08-17:** manifest v3 adds `libm_identity` + `libm_arithmetic_digest`. (B15's GGUF-pin bypass closed the same day — see row 7.)
 9. **B9** — any well-formed refutation voids credit with no bond, no signature and no adjudication; a dust-tx griefing primitive.
 
 Every ledger row above now carries a **Wired?** column so no future promotion mistakes a landed
 struct for a live consensus path — the exact failure mode that let the old through-line be false.
 
-### Mainnet activation model — ADR-0041 vs ADR-0028, resolved (ADR-0036, 2026-08-17)
+### Mainnet activation model — 旧ADR-0041 vs 旧ADR-0028, resolved (旧ADR-0036, 2026-08-17)
 
-The audit (H12) found two **Accepted, non-ancestral** ADRs describing mainnet PALW: **ADR-0028**
-(this lineage, `palw_credit` staged gate) and **ADR-0041** (the `main-backup-8107bfb-20260807`
+The audit (H12) found two **Accepted, non-ancestral** ADRs describing mainnet PALW: **旧ADR-0028**
+(this lineage, `palw_credit` staged gate) and **旧ADR-0041** (the `main-backup-8107bfb-20260807`
 snapshot, `palw_spam` / `palw_algo4_accept` mechanism; merge-base `2dd863c`, 2026-07-16, not an
-ancestor of `origin/main` or any live branch). **ADR-0036 settles it:**
+ancestor of `origin/main` or any live branch). **旧ADR-0036 settles it:**
 
 * The live **`palw_credit` lineage governs**; the snapshot's ADRs 0039–0048 are historical and
-  reserve no numbers here (this line is at ADR-0034; 0035+ are free).
-* **ADR-0041's mechanism is superseded** (it does not exist on the live tree — porting it would
-  *replace* ADR-0026/0027/0028/0033, not merge).
-* **ADR-0041's two surviving conclusions are adopted** into the future parameterized mainnet ADR:
+  reserve no numbers here (this line is at 旧ADR-0034; 0035+ are free).
+* **旧ADR-0041's mechanism is superseded** (it does not exist on the live tree — porting it would
+  *replace* 旧ADR-0026/0027/0028/0033, not merge).
+* **旧ADR-0041's two surviving conclusions are adopted** into the future parameterized mainnet ADR:
   (a) mainnet PALW needs a **new network identity** — the current `MAINNET_PARAMS` can never carry
   it (audit H13: both window presets fail `finality_depth < W_challenge` at 10 BPS), a conclusion
-  ADR-0041 reached independently from the v4 anti-spam fence; and (b) the **land → accept → mint**
+  旧ADR-0041 reached independently from the v4 anti-spam fence; and (b) the **land → accept → mint**
   separation, which maps onto this lineage's Stage 0 → 2 → 3 ladder.
 * The **hash-floor question (B7) is a hard precondition** of any PALW-active mainnet and is flagged
-  in ADR-0036 for that ADR to resolve (implement the floor, or amend the v2 design to delete the
+  in 旧ADR-0036 for that ADR to resolve (implement the floor, or amend the v2 design to delete the
   claim and register PALW as an unrecoverable liveness dependency — a decision, not a silent state).
 
-ADR-0028's mainnet clause now carries a pointer to this resolution, so "after Stage 3" and
-ADR-0041's "genesis-active" no longer read as a contradiction. The parameterized mainnet ADR
+旧ADR-0028's mainnet clause now carries a pointer to this resolution, so "after Stage 3" and
+旧ADR-0041's "genesis-active" no longer read as a contradiction. The parameterized mainnet ADR
 (identity, genesis, windows, `base(C)` fraction, bonds) still comes after the soak, and may not be
 signed while any of the 9 blockers is open.

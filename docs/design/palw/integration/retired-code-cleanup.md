@@ -2,7 +2,7 @@
 
 作業ブランチは `codex/docs-retired-designs`、`pre` の `c20fca1d8` を基点とする。docs 短縮の `64578ff89` と VM fallback 削除の `c502feae9` を含む。最新 `pre` への merge は後続担当が行う。
 
-- 公開 gateway: 利用者自身のローカル推論という ADR-0144 の範囲から外れるため、公開待受・公開 opt-in を削除。gateway は loopback 限定。ローカル claim の予算オプションは `--claim-budget-permille`。
+- 公開 gateway: 利用者自身のローカル推論という 旧ADR-0144 の範囲から外れるため、公開待受・公開 opt-in を削除。gateway は loopback 限定。ローカル claim の予算オプションは `--claim-budget-permille`。
 - V1 credit: PALW V2 の credit に移行したため、旧判定・class resolver・processor の旧設定保持を削除。
 - HA takeover: RFC-0012 で専用 DNS validator 役を廃止する方針で、validator 側にも利用経路がないため、token 生成・署名・CLI purpose を削除。
 - inactivity leak: 対象の DNS validator lineage を廃止する方針で、設定検証も拒否するため、設定候補ツールの setter を削除。

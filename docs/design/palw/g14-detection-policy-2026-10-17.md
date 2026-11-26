@@ -21,7 +21,7 @@ node 側: `kaspad/src/palw_fp_seat.rs`(`palw_fp_seat_draw_under_policy_v2`)、`k
 
 | field | 意味 |
 |---|---|
-| `method` | `IntervalReplay`(seat の区間再実行、ADR-0077 D8 / ADR-0082 D9)または `FullReexecution`(claim 全体の再実行と root 比較) |
+| `method` | `IntervalReplay`(seat の区間再実行、旧ADR-0077 D8 / 旧ADR-0082 D9)または `FullReexecution`(claim 全体の再実行と root 比較) |
 | `n_rule` | N の導出規則。chain の数だけを使う(§2) |
 | `n_max` | claim が持てる N の上限。上限を超える claim は拒否する |
 | `fault_model` | `D_min(N) = max(d_min_abs, ⌈N·d_min_ppm/10^6⌉) ∧ N`。ε を約束する不正集合は「検出可能な不正区間が D_min 以上の claim」 |
@@ -149,7 +149,7 @@ node 側の `pool_interval_opening` は、上限を `palw_detection_retention_pa
 ## 8. 不正 corpus(fixture model、実経路)
 
 `g14_detection_corpus.rs` は決定論的な整数モデルを使う。8 幅の持続 cache(token embedding の累積で、後のすべての row が読む。KV cache と同じ働き)、量子化 hidden(round-half-up shift、i16 飽和)、16 logits である。
-seat は実際の seam(`PalwExecutionBackendV1::verify_fp_interval_opening`)を ADR-0082 D9 の手順で実装する。prompt と commit 済み id から checkpoint を自分で再計算して比べ、区間の全 row と decode 関係を厳密に再実行する。
+seat は実際の seam(`PalwExecutionBackendV1::verify_fp_interval_opening`)を 旧ADR-0082 D9 の手順で実装する。prompt と commit 済み id から checkpoint を自分で再計算して比べ、区間の全 row と decode 関係を厳密に再実行する。
 draw は v2、k は policy の plan(N = 64、D_min = 7、k = 30、D_min での miss ≤ 8,660 ppm)、検査ループは `palw_detection_inspect_v2` である。
 各不正で ground-truth の D を数え、600 個の独立な post-commit anchor で検出率を測り、厳密な超幾何値と比べた(許容 4σ + 1/T)。
 

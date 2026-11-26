@@ -1,19 +1,9 @@
 # PALW公開裁定の方針 v0.6 — MAS1の採掘適格性と限定BFT停止
 
-<!-- BMR1-COURT-SLASH-20261126-BEGIN -->
-## 2026-11-26 後続採択 — Court実回収の49%検証報酬・51%burn
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../../../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../../../adr/0237-bft-model-retirement-and-role-bonds.md)を新profileの個別Court slash配分の正本とする。個別offenceから実際に回収したMISAKA Sについて、Panel/Gate C合計報酬E=floor(490S/1000)、残差T=S−Eをburnする。49%は両役割合計であり、各49%ではない。未回収額・架空予約・BFT廃止資産をSへ加えない。
-
-認証済みの不正発見/立証資格planで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFT恒久廃止は当該scopeの100%burn、BFT没収受取/廃止bountyは0のまま。全Panel/Gate C検証用途bondをBFT一律burnから保護するが、本人の個別Court責任を免除しない。正当に成立した検証報酬はMISAKA支払を維持する。
-
-通常coinbaseは別会計で最新50/20/20/5/5（Miner用POSITION50%、LP用POSITION20%、MISAKA LP20%、Panel/Gate C MISAKA5%、BFT MISAKA5%）とする。旧受取先・旧cap・旧profile・実測/署名は元版の履歴として保持し、同日途中の40/15等を新規受理へ使わない。BMR1 native接続・移行・公開有効化の完了ではない。
-<!-- BMR1-COURT-SLASH-20261126-END -->
-
 - 日付: 2026-11-20（Asia/Tokyo）
 - 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**
-- 正本: [RFC0065](../../../rfc/0065-model-admission-screening-and-bft-stop.md) / [ADR0233](../../../adr/0233-model-admission-screening-and-bft-stop.md)
-- 継承: [v0.5](public-adjudication-policy-v0.5.md)のFOW1/TB1、[MOE2](../../../rfc/0064-reward-buy-and-permanent-liquidity.md)、[MAS1移行](../../../governance/model-admission-safety-transition.md)
+- 正本: [RFC0065](../../../rfc/0007-bft-model-admission.md) / [ADR0233](../../../rfc/0007-bft-model-admission.md)
+- 継承: [v0.5](public-adjudication-policy-v0.5.md)のFOW1/TB1、[MOE2](../../../rfc/0016-position-market-and-rewards.md)、[MAS1移行](../../../governance/model-admission-safety-transition.md)
 
 ## 1. モデル登録から採掘まで
 

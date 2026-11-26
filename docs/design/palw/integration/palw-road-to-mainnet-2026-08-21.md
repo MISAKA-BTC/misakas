@@ -53,11 +53,11 @@ time. Adding classes before it closes makes unconnected parts more impressive, n
 
 | # | item | why it blocks | size |
 |---|---|---|---|
-| 0.1 | **ADR-0050 A — the residual site gains its declared narrowing** | `palw_base0_profile.rs:246` is a bare `AddElem`; node 11 consumes it via `as_i8`, and an `AddElem` of two int8 codes ranges over `[-256, 254]`. The declared graph does not adjudicate at its residual sites the moment the residual carries signal. The FFN residual is worse — both operands are raw i32. | small |
-| 0.2 | **ADR-0049 F — one canonical execution IR** — **CLOSED 2026-08-26** | 0.1 exists because engine, profile, court and inventory are four hand-written descriptions of one computation. Fixing the residual by hand leaves the next divergence to be found the same way. Interim rule until the generator exists: **no worker may commit a step leg for a profile that omits a narrowing the engine performs.** | medium |
-| 0.3 | **ADR-0049 E — adjudicable decode** | `palw_step_refute.rs:394` refuses embedding at `call_index != 0`, and BASE-0's own canonical job is prefill 8 / **decode 4**. Commit the logits root per decode position; a challenger opens ONE index to refute the argmax. O(1) in vocabulary. Required, not optional: on the free-prompt lane the generated text is the product. | medium |
-| 0.4 | **ADR-0049 D — coverage over coordinates** | 0.3 is invisible to the current gate, which compares kernel ids. Every kernel BASE-0 reaches is catalogued and a whole call class still refuses. | small |
-| 0.5 | **ADR-0049 G — the canonical artifact inventory** | A real opening needs a real inventory: one leaf per operand row, every byte covered exactly once, duplicates/overlaps/gaps refused. Also settles the two things called "class id" — `execution_class_id` is the shape profile id, `artifact_root` is the Merkle root over the manifest. | medium |
+| 0.1 | **旧ADR-0050 A — the residual site gains its declared narrowing** | `palw_base0_profile.rs:246` is a bare `AddElem`; node 11 consumes it via `as_i8`, and an `AddElem` of two int8 codes ranges over `[-256, 254]`. The declared graph does not adjudicate at its residual sites the moment the residual carries signal. The FFN residual is worse — both operands are raw i32. | small |
+| 0.2 | **旧ADR-0049 F — one canonical execution IR** — **CLOSED 2026-08-26** | 0.1 exists because engine, profile, court and inventory are four hand-written descriptions of one computation. Fixing the residual by hand leaves the next divergence to be found the same way. Interim rule until the generator exists: **no worker may commit a step leg for a profile that omits a narrowing the engine performs.** | medium |
+| 0.3 | **旧ADR-0049 E — adjudicable decode** | `palw_step_refute.rs:394` refuses embedding at `call_index != 0`, and BASE-0's own canonical job is prefill 8 / **decode 4**. Commit the logits root per decode position; a challenger opens ONE index to refute the argmax. O(1) in vocabulary. Required, not optional: on the free-prompt lane the generated text is the product. | medium |
+| 0.4 | **旧ADR-0049 D — coverage over coordinates** | 0.3 is invisible to the current gate, which compares kernel ids. Every kernel BASE-0 reaches is catalogued and a whole call class still refuses. | small |
+| 0.5 | **旧ADR-0049 G — the canonical artifact inventory** | A real opening needs a real inventory: one leaf per operand row, every byte covered exactly once, duplicates/overlaps/gaps refused. Also settles the two things called "class id" — `execution_class_id` is the shape profile id, `artifact_root` is the Merkle root over the manifest. | medium |
 | 0.6 | **C-01 — the worker emits step legs** | The audit's largest finding, and the worker's own comments say it: no per-kernel tile capture, no path from an execution to `execution_root`. Depends on 0.2 (the IR defines what a tile is) and 0.5 (what an operand opening addresses). | large |
 
 **Gate 0 passes when**: a worker runs one BASE-0 inference, commits a step leg, a block carries the
@@ -112,7 +112,7 @@ nothing observable, which is why they belong in one gate.
 > artifact-less node is refused at the handshake rather than joining silently.
 >
 > **A fourth wiring break was found beside them** (audit lane #3): the epoch budget could stop the
-> chain, and the epoch could not end. Three causes, all real — the census denominator ADR-0045
+> chain, and the epoch could not end. Three causes, all real — the census denominator 旧ADR-0045
 > specifies was hard-wired to 1000‰, the liveness floor was subject to the cap, and the floor could
 > be FROZEN by one accepted object with no path back.
 
@@ -120,17 +120,17 @@ nothing observable, which is why they belong in one gate.
 
 | # | item | why |
 |---|---|---|
-| 2.1 | **ADR-0049 C — admission derives four cost bounds** | 0049-B made the opening small; C makes it *guaranteed*. Max opening bytes, terminal MACs, operand count, Merkle paths — each from the class's own geometry, each checked against a ruleset ceiling that joins `palw_ruleset_id_v2`. **Expires at genesis**, like the ladder. |
+| 2.1 | **旧ADR-0049 C — admission derives four cost bounds** | 0049-B made the opening small; C makes it *guaranteed*. Max opening bytes, terminal MACs, operand count, Merkle paths — each from the class's own geometry, each checked against a ruleset ceiling that joins `palw_ruleset_id_v2`. **Expires at genesis**, like the ladder. |
 | 2.2 | **the bond is a locked UTXO** | `slash_bond` (`palw_state_v2.rs:1908`) decrements a `u64` and touches no output. `BondRegistered` is genesis-only *because* nothing locks collateral — the carriage says so. Until this lands, slashing a liar costs nothing spendable and every exposure ceiling and Sybil bound is denominated in an unenforced number. |
 | 2.3 | **settle the escrow/subsidy question** | **Unverified.** `coinbase.rs` contains zero PALW arithmetic and the V2 escrow releases are appended to `validator_reward_outputs` (`utxo_validation.rs:835`) alongside a carve. Whether that rides the existing carve budget or adds to it decides between "the payout is wired" and "every finalized claim mints above the emission schedule". Settle it before anything carries value. |
-| 2.4 | **re-decide ADR-0042 Decision 3c** | Its deferral rested on "only the bond holder can mint valid-signature siblings" — a statement about a signature somebody checks. P0 removed the exploit; the design question is open. |
+| 2.4 | **re-decide 旧ADR-0042 Decision 3c** | Its deferral rested on "only the bond holder can mint valid-signature siblings" — a statement about a signature somebody checks. P0 removed the exploit; the design question is open. |
 
 > **Closed.** 2.2 landed in three parts — the genesis bond must SHOW its collateral, nobody may
 > MOVE it while the bond lives, and a released bond's spend must DESTROY what the bond lost (with
 > the block's fee pool losing it too, or the burn would be a redirection to the miner).
 >
 > 2.3 was the unverified one and it was **real**: the escrow was an ADDITION to the emission
-> schedule, which ADR-0042 Decision 10 forbids in as many words. Measured on a live chain — subsidy
+> schedule, which 旧ADR-0042 Decision 10 forbids in as many words. Measured on a live chain — subsidy
 > 370,468,345 → worker share 229,690,375 → escrow 229,690,373 — and the carve now comes out of the
 > block that earned it.
 >
@@ -151,7 +151,7 @@ Only after Gates 0–2. Qwen2.5-1.5B is the proving ground and the plan for it i
   court, measuring **1.5B at `(64, 125)` and 3B at `(64, 79)`** under the shipped ceilings;
 * post-genesis registration was **deliberately refused** by `palw_lifecycle_objects_v2`, and the
   reason given ("moves the share table, brings its own pwu rule") is exactly what
-  `verify_class_admission_v2` checks. ADR-0049 H replaced the refusal with the gate, and it has
+  `verify_class_admission_v2` checks. 旧ADR-0049 H replaced the refusal with the gate, and it has
   landed: the object carries its shape profile and canonical job, acceptance runs the four checks,
   and an entrant joins at `min_grantable_share_permille` and no more;
 * 0‰ is impossible by construction (`min_grantable_share_permille` ≥ 1). "Weightless" is the
@@ -162,7 +162,7 @@ Only after Gates 0–2. Qwen2.5-1.5B is the proving ground and the plan for it i
 
 Operational, not consensus. Genesis artifact (the one input code cannot mint is `artifact_root`),
 seeds, public entry, the calibration-gated binary fleet-wide, and a soak whose clock survives
-redeployment. ADR-0035 §6 owns this list; the t11 experience says budget 1.5–2 days for a first sync
+redeployment. 旧ADR-0035 §6 owns this list; the t11 experience says budget 1.5–2 days for a first sync
 on a mature chain and expect the switch-counter and remote-panic fixes to be the thing nobody
 deployed.
 
@@ -194,7 +194,7 @@ therefore inside the network's identity. **Both are closed as of 2026-08-26** �
    bytes against a derived 32,768, the difference being the KV history and the generated-token pin.
    And **the floor could not pass it**: at `vocab_size` 4,096 / `n_ctx` 512 the network's own liveness
    class was unprosecutable at its longest jobs, so the geometry is 1,024 / 12 now, at 75% of the
-   ceiling. See ADR-0049 Decision C's 2026-08-26 amendment for the arithmetic and for what it
+   ceiling. See 旧ADR-0049 Decision C's 2026-08-26 amendment for the arithmetic and for what it
    forecloses (nothing that was ever carriable: Qwen2.5's cheapest close is 1.2 MB at every tile,
    because one logits row is four times a transaction).
 
@@ -220,7 +220,7 @@ Gates 0, 1 and 2 are closed in code and covered by tests that fail when the prop
 What remains is not implementation:
 
 * **Gate 3** — the second class needs calibrated numbers, which need the real checkpoint. The site
-  and the plumbing exist (ADR-0050: the residual may amplify, and the gain is a committed tensor);
+  and the plumbing exist (旧ADR-0050: the residual may amplify, and the gain is a committed tensor);
   the gains that make Qwen worth carrying weight are a converter output, and the class stays
   weightless until they justify activation.
 * **Gate 4** — **the code half closed after this was written; what is left is operational.** See

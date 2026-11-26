@@ -58,4 +58,4 @@ sampler). No consensus behaviour, wire id, fence, parameter or golden vector of 
 * "bits" means `−log2` of an error probability; "effective" means after retries, grinding, multiple relations and statements.
 * The fork-choice safety analysis is internal (agent FINX) and is referenced only by that name; this dossier describes no fork-choice
   mechanism.
-* Amounts are BILI (ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI = 10^8 sompi).
+* Amounts are BILI (旧ADR-0174; `SOMPI_PER_KASPA` is the legacy name of 1 BILI = 10^8 sompi).

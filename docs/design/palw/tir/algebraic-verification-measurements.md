@@ -166,7 +166,7 @@ How to read it:
 
 - **A decode recompute is memory-bound.** Qwen2.5-1.5B computes in 14 ms but reads 1.82 GB. The
   "in RAM" column assumes the seat keeps the whole class resident: 80.7 GB for Qwen3-Next and
-  674 GB for DeepSeek-V3. That is not a real seat. ADR-0112's budget is a fifth of the artifact, so
+  674 GB for DeepSeek-V3. That is not a real seat. 旧ADR-0112's budget is a fifth of the artifact, so
   for the large classes the NVMe column is the realistic one.
 - Qwen3-Next's check time is mostly the GDN recurrence's elementwise state update: 226 M elements
   per token, shared with the recompute. A fused kernel (`fused/gdn_step.rs`) shrinks both paths

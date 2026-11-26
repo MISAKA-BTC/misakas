@@ -1,0 +1,108 @@
+{
+  "mode": "--cold-award-settlement",
+  "scope": "Native lifecycle projection and offline private-runner decision on retained covering attempts",
+  "common": {
+    "claimId": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+    "provisionalClaim": "9540b648cfbc7386bc705a8c8f6c6fa89d5a8d3dcc97621c3f193b360177631d3dcb39a819554ac2b17dff4d4d678758889ed9ef28ae52f416fee8b28e34894d",
+    "acceptedDaa": 8247,
+    "committedDaa": 8527,
+    "committedSpan": 8402,
+    "currentAnchorSpan": 8402,
+    "requiredAnchorSpan": 8403,
+    "certifyByDaa": 10687,
+    "certificationCode": "pending",
+    "settlementAttemptDue": true
+  },
+  "observations": [
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peer": 0,
+      "sinkDaa": 8602,
+      "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8603,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    },
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peer": 1,
+      "sinkDaa": 8601,
+      "sink": "a490f215aaadaf2843503f75fc1a10dc2825a3c9db15d960fa365b61d051709caef3d032b05cbd2d3f9cbc0d849e49ae370fe83a136300bb7b1df6fbf0b1cfae",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8602,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    },
+    {
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peer": 2,
+      "sinkDaa": 8602,
+      "sink": "76f6765de188b75eb889cf02d9daf913a8686f5b0e8d2d9ee6da42fce76f28f64eafe31f5012ccd7a4437e4f850ef0feb39c3eefd00244aea9ba5ac27bbad44f",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8603,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peer": 0,
+      "sinkDaa": 8667,
+      "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8668,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peer": 1,
+      "sinkDaa": 8667,
+      "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8668,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    },
+    {
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peer": 2,
+      "sinkDaa": 8667,
+      "sink": "a550fbf1100ddef70d6ca622df3e6adc6eb3a46558789f1561cf75066801f2005cfa789b3dd27cffad4db8da0ccdfd1041c62a6843bb266f3e1d711749f88ec8",
+      "provisionalSeed": {
+        "anchorBlock": "cbc34761fc23fce7d5995d2fded5300535636ace1523245b230c5eb37d94e2ee0860da6c5b30d6dc4f3b78fc9ad5d1683bbfd0cf5356d589fcd88af6dc0c837b",
+        "anchorSpan": 8402,
+        "bindBaseDaa": 8402,
+        "canSupplyPostCommitAnchor": true,
+        "currentSpan": 8668,
+        "hasPostCommitSeed": false,
+        "spanDaa": 1
+      }
+    }
+  ]
+}

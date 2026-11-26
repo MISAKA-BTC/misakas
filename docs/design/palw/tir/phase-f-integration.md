@@ -1,11 +1,11 @@
 # PALW-TIR Phase F — consensus integration design (Gate F1)
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 > **Design record, Gate F1 (design only; nothing here is implemented).** How PALW-TIR v1 classes
 > become real on chain behind the dormant fence `palw_tir_v1` (RFC-0002 Phase F), and the
 > independent Phase 0(a) fix for the live GDN `k_heads ≠ v_heads` defect. Inputs: RFC-0002
-> (`docs/rfc/0002-palw-tensor-ir.md`, branch `rfc/0002-tensor-ir`), spec
+> (`docs/rfc/0002-tensor-ir-kernels-and-runtime.md`, branch `rfc/0002-tensor-ir`), spec
 > [04b](../../../spec/palw/04b-tensor-ir.md) (Gate 1), [corpus-v1](corpus-v1.md), and the
 > `misaka-palw-tir` crate at `b7492d601`. The integration target is `rcore/int-6` (the live
 > testnet-12 line); every `file:line` below is read at `tir/phase-f` = int-6 + tir/core Gate 1.
@@ -32,7 +32,7 @@ Contents: §0 decisions at a glance · §1 integration map · §2 designs · §3
 | D6 | Admission | `verify_class_admission_v10` = decode_canonical → prim set → `tir_admit_v1` → layout/ladder/close/window checks → class id → weight gate; called from a NEW appended object `ClassRegisteredTirV1` | legacy v9 and `ClassRegistered` stay byte-identical; older builds skip the appended variant (A-2) exactly as the new build drops it before the fence |
 | D7 | Step leaves | one tree: commit-point tiles (slots = spec 04b §3.3), **plus Fixed-state checkpoint leaves every `C` positions and Hist tile leaves every `h_tile` positions**, in position order; no separate checkpoint leg for IR classes | the ladder's first-divergent leaf is then always adjudicable from leaves that precede it — checkpoint replay and history anchoring need no second tree and no second court |
 | D8 | Court | one appended arm `TirCone`: authenticate → PALW-TIR-33 on every opened committed value → element-demand ("pull") evaluation of the disputed tile's cone → compare | one interpreter of 25 primitives replaces per-kernel arms; demand slicing is what keeps a GDN head or a matmul tile inside 16 Mi MACs |
-| D9 | Generic H dissection | root claim = the totals of every H-reduction in the tile's cone; rounds fold by exact sum/max; bottom evaluates the H-local subgraph over one `h_tile` | ADR-0082's protocol stated over PALW-TIR-32, with no attention-specific triple |
+| D9 | Generic H dissection | root claim = the totals of every H-reduction in the tile's cone; rounds fold by exact sum/max; bottom evaluates the H-local subgraph over one `h_tile` | 旧ADR-0082's protocol stated over PALW-TIR-32, with no attention-specific triple |
 | D10 | Work vector | structural classification of nodes (§2.9); normalization = reductions feeding `IntRsqrt`; name heuristics retired for IR classes | G7/PALW-TIR-16; representation-neutral by construction |
 | D11 | Node side | SDK `TirLineageV1` + a generic typed evaluator backend (byte-identical to the reference) first; legacy fused engines as fused patterns later (Phase G) | the drill needs a real 1.5B model at usable speed; fused kernels last |
 | D12 | Phase 0(a) | the live head mapping is **correct** for the artifact (V heads are tiled at GGUF conversion); the live defect is the state-map conv geometry — fix by profile version 3 + new map names + fence `palw_gdn_key_heads` | §3 |
@@ -49,7 +49,7 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | Where | What | Phase F change |
 | --- | --- | --- |
 | `consensus/core/src/config/params.rs:961` | `pub struct Params` | add `palw_tir_v1: Option<PalwTirFenceV1>` (and `palw_gdn_key_heads: Option<ForkActivation>` for §3) |
-| `params.rs:2806-2817` | `palw_token_lift` — the template (ADR-0102 fenced kernel) | model the doc and every site below on it |
+| `params.rs:2806-2817` | `palw_token_lift` — the template (旧ADR-0102 fenced kernel) | model the doc and every site below on it |
 | `params.rs:3726` (genesis gates ≈`5021-5028`) | `validate_palw_v2` | refuse: fence value ≠ this build's `prim_set_id`/`court_version`; ceilings above the format caps; arming without `palw_audit_2026_09_11` declared (A-2 tolerance, §2.2) or without `palw_kary_court` at or below; a genesis IR row unless armed at 0 |
 | `params.rs:5556-5566` | `consensus_identity_id` (visitor → normaliser → params id) | unchanged; covered by the two sites below |
 | `params.rs:5592` (token-lift arm `5992`) | `normalize_values_a_scheduled_fence_drags_with_it` | collapse the WHOLE `palw_tir_v1` option on `activation == never()` (the D1 rule, as `palw_heartbeat` at `5680`) |
@@ -78,12 +78,12 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | `consensus/core/src/palw_model_registry_v1.rs:29-37` | `PalwModelManifestV1.graph_ir_root` (placeholder) | becomes the IR class's `graph_ir_root`; `runtime_version` = the court version |
 | `palw_model_registry_v1.rs:140-152, 770-798` | `palw_manifest_verdict_v1`; `palw_model_work_from_carriage_v1` with `ops_supported: verification_ccu > 0` (`:792`) | IR: `tir_model_work_v1(program, layout, canonical)`; "unsupported op" is a decode refusal (unknown prim tag → `NEEDS_PRIMITIVE`), never a proxy |
 | `consensus/core/src/palw_model_registration_v1.rs:322-362` | processor-same preflight (SDK's gate) | IR twin calling v10 |
-| `consensus/core/src/palw_registry.rs` | ADR-0026…0033 class registration object (measured windows) | unchanged |
+| `consensus/core/src/palw_registry.rs` | 旧ADR-0026…0033 class registration object (measured windows) | unchanged |
 | `consensus/core/src/palw_activation_pool_v1.rs` | listing rules (R1/R2/P2, pool) | unchanged — class-agnostic; IR classes list, audit and activate like any bought class |
 | `consensus/core/src/palw_catalog_coverage.rs:181` | `palw_court_catalog_root_v1` (identity, from `catalogued_kernel_ids_v1`) | unchanged (D2) |
 | `palw_catalog_coverage.rs:≈205` | `catalog_covered_kernels_v1` (strips fenced ids) | also strips the TIR primitive namespace (§2.7) |
 | `consensus/core/src/palw_mode_v2.rs:1054, 1595-1640` | bundle `court_catalog_root`, `verify_against_catalog` | unchanged; IR genesis rows (Phase H only) verified by the IR gate |
-| `consensus/core/src/palw_e2e_adjudicability.rs:174, 625, 693` | `PalwE2eFamilyV1`, `family_certified_for_weight_v2`, `palw_rc_certified_families_v1` | an IR family is a family whose `kernel_ids` are TIR primitive ids; certified on chain (`FamilyCertified`, ADR-0075) so `court_e2e_root` never moves (§5 Q6) |
+| `consensus/core/src/palw_e2e_adjudicability.rs:174, 625, 693` | `PalwE2eFamilyV1`, `family_certified_for_weight_v2`, `palw_rc_certified_families_v1` | an IR family is a family whose `kernel_ids` are TIR primitive ids; certified on chain (`FamilyCertified`, 旧ADR-0075) so `court_e2e_root` never moves (§5 Q6) |
 
 ### 1.3 Registration carriage, objects, state
 
@@ -95,7 +95,7 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | `palw_state_v2.rs:7394-7410, 7426` | 4 bought registrations per block; 1 BILI burn | the IR variant counts in `palw_class_registration_buyer_v1` and pays the same burn |
 | `palw_state_v2.rs:7453-7469, 7667` | ObjectChunk (100 KB × 16, 8 groups; FamilyCertified only) | unchanged (D3 does not use it) |
 | `palw_state_v2.rs:4940-4987` | `PalwClassStateV2` (hashed whole in `classes`) | unchanged; IR sets `fused_attention = true` iff some commit point is dissected (reuses the Terminal clock at `26740-26776`) |
-| `palw_state_v2.rs:11648` | `state_root` (collections in frozen order; late tables enter once non-empty, ADR-0087 M7) | new `tir_classes` and `tir_dissections` tables, rooted only once written (impossible before the fence) |
+| `palw_state_v2.rs:11648` | `state_root` (collections in frozen order; late tables enter once non-empty, 旧ADR-0087 M7) | new `tir_classes` and `tir_dissections` tables, rooted only once written (impossible before the fence) |
 | `palw_state_v2.rs:20919-20960` | `open_model_lifecycle` derives registry work from the carriage profile | IR arm derives `tir_model_work_v1` |
 | `consensus/core/src/palw_lifecycle_objects_v2.rs:99-248` | `palw_lifecycle_object_may_ride_v2` (stateless) | `ClassRegisteredTirV1 => Ok(())` at every height (a block carrying it must be valid on both builds) |
 | `palw_lifecycle_objects_v2.rs:679-716, 747-790` | extraction; `validate_palw_lifecycle_tx` + A-2 tolerance of undecodable payloads | unchanged; A-2 is what makes appending safe (§2.2) |
@@ -132,7 +132,7 @@ for byte; IR behaviour is added beside it and reachable only through the fence.
 | `consensus/core/src/palw_attn_court_v1.rs:456, 1135, 1241, 1262` | the dissection phase, bottom check, window admission | the protocol skeleton and window rule reused by the generic phase (§2.8) |
 | `consensus/core/src/palw_attn_dissect.rs:1-80` | range claims (A16 triple), fold, pinned cut, round bound | cut/round arithmetic reused; claims generalised |
 | `consensus/core/src/palw_bisect.rs:39-41, 242, 662-760` | binary and k-ary ladders over step leaves (≤ 48 rounds) | unchanged — the IR step space is a step-leaf space |
-| `consensus/core/src/palw_checkpoint_court_v1.rs` | ADR-0103 D1 row-vs-chunk court | not used by IR classes (Hist tiles are step leaves, §2.6) |
+| `consensus/core/src/palw_checkpoint_court_v1.rs` | 旧ADR-0103 D1 row-vs-chunk court | not used by IR classes (Hist tiles are step leaves, §2.6) |
 | `processor.rs:4391, 9141, 9464` | where `adjudicate_court_close_v3` runs (tip preview, split close, one-carrier close) | unchanged call sites; the new arms live inside the court function |
 | `palw_state_v2.rs:26733-26776` | Terminal-turn clock (`court_session_class_is_fused_v2`) | also consults `tir_dissections` |
 
@@ -205,7 +205,7 @@ fence is:
 * normaliser: the whole option collapses on `activation == never()` (a scheduled future height is
   normalised to `never()` by the identity visitor first), so builds that differ only in a future
   height share an identity and peer through the rollout; `always()` survives and separates.
-* `consensus_schedule_id`: name, height and `H(value)` — reported, never gated (ADR-0066 SA-4).
+* `consensus_schedule_id`: name, height and `H(value)` — reported, never gated (旧ADR-0066 SA-4).
 * `palw_fences_v1` → the fork-id gate names it automatically (`fork_id_v1.rs:267`): past the
   height an un-upgraded node is refused. The memory rule "a fence at a scheduled height is invisible
   to the fork id" is enforced by choosing an unused height and by the drill mover's refusal.
@@ -213,7 +213,7 @@ fence is:
 **What the fence arms.** Past it: `ClassRegisteredTirV1` is admitted by v10; the IR court arms and
 the three dissection moves are admissible; `tir_classes`/`tir_dissections` can be written. Before
 it every one of those objects is dropped by name with the block standing, and nothing an IR object
-could write exists — the property the ADR-0102 fence has for its fenced kernel.
+could write exists — the property the 旧ADR-0102 fence has for its fenced kernel.
 
 **`court_catalog_root` and `prim_set_id` (D2).** `palw_court_catalog_root_v1()`
 (`palw_catalog_coverage.rs:181`) is copied into every V2 bundle at assembly (`params.rs:14165`,
@@ -240,7 +240,7 @@ artifact leaf.**
 
 1. **Admission is a consensus check.** `verify_class_admission_*` runs on every validating node in
    the acceptance walk (`processor.rs:9758`). With only `graph_ir_root` on chain, block validity
-   would depend on fetching an off-chain artifact — the failure mode ADR-0049 Decision H answered by
+   would depend on fetching an off-chain artifact — the failure mode 旧ADR-0049 Decision H answered by
    carrying the profile ("it has to carry them anyway — nothing else on a running chain can tell the
    court what the class computes", `palw_state_v2.rs:6258-6280`).
 2. **A withheld program is an unadjudicable class.** If the registrant can withhold the program,
@@ -255,8 +255,8 @@ artifact leaf.**
    is the only way to approach 100 KB. One carrier (100,000 less ≈5 KB of signature and fields, less
    the layout) is enough for every corpus program; the network ceiling says so explicitly and a
    program above it is `EXCEEDS(program_bytes)`.
-4. **No new lane.** The ADR-0075 chunk lane (`pending_chunks`, 8 global content-keyed groups) is
-   shared with certification and squattable; a bond-keyed publication lane in the ADR-0080 style
+4. **No new lane.** The 旧ADR-0075 chunk lane (`pending_chunks`, 8 global content-keyed groups) is
+   shared with certification and squattable; a bond-keyed publication lane in the 旧ADR-0080 style
    would be new state machinery. If a real program ever needs more than one carrier, that lane is
    a separate, later fence.
 
@@ -295,7 +295,7 @@ tir_class_id_v1 = H64(key "misaka-palw/tir/class-id/v1",
   through `graph_ir_root` (PALW-TIR-7). `n_threads`, `repack_on` and every other node-local knob do
   not exist in an IR class (they are inside the legacy id, `palw_step.rs:466,478`).
 * `artifact_root` is the TIR inventory root (§2.10), a function of the program's param declarations
-  and the tensors — so "one root, one owner" (ADR-0143) holds by construction.
+  and the tensors — so "one root, one owner" (旧ADR-0143) holds by construction.
 * The job context's existing `shape_profile_id` field carries the IR class id (it is an opaque
   `Hash64` everywhere it is read), so every step leaf, leg root and execution root binds the class
   exactly as it binds a legacy profile, with no new job-context field. The key is distinct from
@@ -305,7 +305,7 @@ tir_class_id_v1 = H64(key "misaka-palw/tir/class-id/v1",
   is the legacy discipline (`tile_len` is inside the profile today). Deriving them instead would make
   a class id a function of court ceilings that a later fence may change. Several layouts of one
   program are several classes; each costs a registration burn and earns weight separately
-  (ADR-0145 §7), and the work vector ignores the layout (PALW-TIR-16), so re-tiling buys nothing.
+  (旧ADR-0145 §7), and the work vector ignores the layout (PALW-TIR-16), so re-tiling buys nothing.
 
 ### 2.4 Admission v10
 
@@ -317,7 +317,7 @@ registration, certified, chain_certified, court: PalwKaryCourtV1, held: PalwHeld
 1. `program.len() ≤ fence.ceilings.max_program_bytes`; `TirProgramV1::decode_canonical` (strict
    Borsh, re-encode identity, NF-1…22) — an unknown primitive tag is `NEEDS_PRIMITIVE`.
 2. `program.prim_set_id == fence.prim_set_id`; `logits_scheme_id` ∈ {flat, tiled} (as v9
-   `2262-2268`); `history_bound = 2^21` requires `held.armed` (the held regime, ADR-0103).
+   `2262-2268`); `history_bound = 2^21` requires `held.armed` (the held regime, 旧ADR-0103).
 3. Layout well-formed: `commit_tiles` has one entry per committed node, each in
    `[PALW_STEP_MIN_TILE_LEN, PALW_STEP_MAX_TILE_LEN]`; `max_context ≤ min(history_bound,
    ceilings.max_context)`; `h_tile` a power of two in `[16, 4096]`; `C ≥ 1`; `state_tiles` divide
@@ -339,7 +339,7 @@ registration, certified, chain_certified, court: PalwKaryCourtV1, held: PalwHeld
    for a class with a dissected commit point, as v9 `2585-2625`.
 9. `class_id == tir_class_id_v1(...)` (`TirClassIdIsNotDerived`).
 10. Weight: `share_permille > 0` needs a certified family covering the class's reachable primitive
-    ids (§2.7, §5 Q6) — registration stays permissionless at 0‰ (ADR-0069 D5).
+    ids (§2.7, §5 Q6) — registration stays permissionless at 0‰ (旧ADR-0069 D5).
 11. Past `palw_offence_attribution`: the IR twin of `palw_attributable_class_v1` and
     `palw_held_class_is_attributable_v1` (every dissected site answerable within the compute turn).
 
@@ -461,9 +461,9 @@ ctx_hash ‖ full_logits_trace_root ‖ step_leg_root_v1(ctx_hash, class_id, lea
   `h_tile` blocks are opened as one Hist tile leaf per sub-row; the partial block since the last tile
   as per-position rows (each a `HistAppend` input, a commit point by NF-20). The dissection bottom
   (§2.8) opens exactly one tile.
-* **No separate checkpoint leg for IR classes.** Seats resume (ADR-0133) from state leaves and
+* **No separate checkpoint leg for IR classes.** Seats resume (旧ADR-0133) from state leaves and
   tiles, which are openable against the step root. The legacy checkpoint leg, chunk maps and
-  ADR-0103 D1 court remain for legacy classes only.
+  旧ADR-0103 D1 court remain for legacy classes only.
 * Cost: a 35B-scale hybrid commits ≈16 M state lanes per checkpoint (≈245 leaves at 64 Ki tiles);
   KV tiles of a 1.5B dense model ≈112 leaves per 64 positions. Both are far below the ladder at the
   contexts the ceilings admit; the held regime's `2^40` ladder applies at `history_bound = 2^21`.
@@ -544,7 +544,7 @@ rung clock runs on.
 A commit point is **dissected** when its tile cone contains a reduction over `H` (`ReduceSum`/
 `ReduceMax` along `H`, or `MatMul` contracting `H`) and its direct cost at `H = min(W, max_context)`
 exceeds the terminal ceiling; admission lists the dissected slots (`PalwTirClassRecordV1`). Every such
-reduction reduces an H-local tensor (PALW-TIR-32), and every sum and maximum is exact, so ADR-0082's
+reduction reduces an H-local tensor (PALW-TIR-32), and every sum and maximum is exact, so 旧ADR-0082's
 argument transfers verbatim:
 
 * **Root claim** (`CourtTirRootClaimed`, responder, the Terminal move on a dissected leaf): for each
@@ -886,7 +886,7 @@ both counts (`:727-735`, `Conv = 2·k_dim + v_dim`). Two different things then r
    covered position (the `fp_recompute.rs:1308` test shape, now green on k≠v); (b) the anchored
    GdnStep refutation convicts a one-lane fault and acquits the honest tile, for a head `< 16` and a
    head `≥ 16`; (c) the SsmConv arm (`qwen36_conv_slice_v1`, geometry-agnostic) likewise; (d) the
-   ADR-0103 checkpoint court on the hybrid's attention rows; (e) a processor test: registration below
+   旧ADR-0103 checkpoint court on the hybrid's attention rows; (e) a processor test: registration below
    the fence refused by name with the block standing, above it admitted, produced, disputed and
    closed; (f) a salted t12 drill crossing the fence on the shipping binary. The fleet's 512 artifact
    then registers `graph-v8@512` by transaction (its inventory root re-derived for the new profile).
@@ -979,7 +979,7 @@ From the lead (design) or the user (network):
 6. **(user)** RFC OQ5 — weight for IR classes: recommended = a TIR family certified once for the
    primitive set (drilled end to end, including a dissection and a state replay; certified on chain
    by `FamilyCertified`, so `court_e2e_root` never moves) + the registry's existing per-class
-   readiness (which is what proves responders exist, ADR-0093's gap). No per-program drill.
+   readiness (which is what proves responders exist, 旧ADR-0093's gap). No per-program drill.
 7. **(user)** RFC OQ6 — generic-backend throughput floor: recommended not a consensus condition in
    v1; D-F1 measures generic vs legacy throughput and the number is published.
 8. **(user)** RFC OQ7 — normalization: recommended = reductions feeding `IntRsqrt` (structural);
@@ -995,10 +995,10 @@ From the lead (design) or the user (network):
     24.1 G MACs a position at `H = W`, 7.5 GB state, 549 MB peak live, 838 work; 3B: 9,970 nodes,
     41.7 G MACs, 9.7 GB): 88,000 B; `2^16` nodes; context `2^18`; `2^37` MACs; `2^35` state bytes;
     `2^32` peak live bytes; `2^16` admission work (`PALW_T12_TIR_CEILINGS_V1`).
-12. **(lead)** the free-prompt lane and ADR-0133 segment claims for IR classes stay closed (refused
+12. **(lead)** the free-prompt lane and 旧ADR-0133 segment claims for IR classes stay closed (refused
     by name) until Phase H; Phase F certifies the attempt lane, panels and the court.
     **Free-prompt half superseded by §6 (RFC-0002 Phase H, 2026-10-16):** the IR free-prompt lane opens with the TIR public
-    frame. ADR-0133 segment claims for IR classes stay closed.
+    frame. 旧ADR-0133 segment claims for IR classes stay closed.
 
 ---
 

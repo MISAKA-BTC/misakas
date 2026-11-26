@@ -1,0 +1,45 @@
+{
+  "codec": "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***",
+  "level": 3,
+  "scope": "Sealed numeric RocksDB WAL files in the saved generation manifests",
+  "generations": [
+    {
+      "daa": 8602,
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "filePrivateBytes": 153427968,
+      "files": 9,
+      "logicalBytes": 153421225,
+      "allocatedBytes": 153427968,
+      "newPayloads": 9,
+      "newLogicalBytes": 153421225,
+      "newFrameBytes": 60461471,
+      "independentFrameBytes": 60461471
+    },
+    {
+      "daa": 8667,
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "filePrivateBytes": 38838272,
+      "files": 9,
+      "logicalBytes": 38822176,
+      "allocatedBytes": 38838272,
+      "newPayloads": 9,
+      "newLogicalBytes": 38822176,
+      "newFrameBytes": 15317386,
+      "independentFrameBytes": 15317386
+    },
+    {
+      "daa": 8703,
+      "generation": "bda15b77344d4277b7a1a63c690da3a1",
+      "filePrivateBytes": 0,
+      "files": 12,
+      "logicalBytes": 777453639,
+      "allocatedBytes": 777482240,
+      "newPayloads": 12,
+      "newLogicalBytes": 777453639,
+      "newFrameBytes": 308718956,
+      "independentFrameBytes": 308718956
+    }
+  ],
+  "uniqueFrames": 30,
+  "uniqueFrameBytes": 384497813
+}

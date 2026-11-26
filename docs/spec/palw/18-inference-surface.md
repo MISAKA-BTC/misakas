@@ -19,7 +19,7 @@ Each version has its own `fp_job_id` domain. The isolation door admits a version
 the header-context door refuses it below its height; the extraction walk judges it on its stand-in (version 6: the V3 job, version
 11: the V4 job) and skips by name otherwise.
 
-## 18.2 The constrained job (ADR-0096 D6-8, [§2.5])
+## 18.2 The constrained job (旧ADR-0096 D6-8, [§2.5])
 
 1. The job is a V3 job (`decode = None`, greedy) whose tail is a decode constraint: the byte automaton of
    `palw_decode_constraint_v1`, header version 1 (`PALW_CONSTRAINT_MAX_BYTES_V1`) or, past `palw_fp_constraint_v2`, version 2
@@ -32,7 +32,7 @@ the header-context door refuses it below its height; the extraction walk judges 
    ends there with `EndOfGeneration`. A seat replays through the same function (`PalwFpReplayRuleV1`); a host without the table
    files `Unverifiable`.
 4. The court's third arm — the committed token at `p` is not admitted from `s`, proven from the ids, the constraint and the table —
-   is `check_tiled_decode_token_refutation_v3`. (Not yet a proof kind on the wire; see ADR-0096's note.)
+   is `check_tiled_decode_token_refutation_v3`. (Not yet a proof kind on the wire; see 旧ADR-0096's note.)
 
 ## 18.3 The prefix-state job ([§2.6] stage 2)
 
@@ -44,7 +44,7 @@ leaves) is not specified here**: leaves are bound to the whole job context, so i
 job-independent prefix context for the first `k` positions in every leaf-binding function and a segment-aware court binding; caching
 the per-position rows instead costs gigabytes per position at model sizes.
 
-## 18.4 Tokenizer match ([§2.9]) and the adapter class listing ([§2.10], ADR-0163)
+## 18.4 Tokenizer match ([§2.9]) and the adapter class listing ([§2.10], 旧ADR-0163)
 
 `palw_fp_tokenizer_match`: a commitment's job `tokenizer_id` must equal the class's listed one (a class listing none is not asked).
 `palw_adapter_class_v1`: object tag 94 lists a registered composite IR class in the composite registry; its acceptance is RFC-0004's

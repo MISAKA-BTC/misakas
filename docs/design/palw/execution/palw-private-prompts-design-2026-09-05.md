@@ -1,8 +1,8 @@
 # Private prompts: the data-availability court made real, the Merkle prompt ids, and `PanelDa`
 
 Design record for the 2026-09-05 implementation. The three decisions this implements are already
-made — ADR-0062 (the data-availability court, as amended), ADR-0081 Decision 3 (Merkle prompt ids)
-and ADR-0077 Decision 16 (`PanelDa`) — and nothing here changes one. What this records is what the
+made — 旧ADR-0062 (the data-availability court, as amended), 旧ADR-0081 Decision 3 (Merkle prompt ids)
+and 旧ADR-0077 Decision 16 (`PanelDa`) — and nothing here changes one. What this records is what the
 tree actually did against those decisions before this pass, what it does after, and the reasoning
 that had to be done to make the verification sound rather than merely present.
 
@@ -21,10 +21,10 @@ which equals neither root for any preimage. The fold's own tests passed because 
 with the arithmetic.
 
 Consequence: had the fence been armed, with or without a responder, **every accusation would have
-won by silence**, because no producer could have produced an object the fold accepts. ADR-0062's
+won by silence**, because no producer could have produced an object the fold accepts. 旧ADR-0062's
 own security amendment names the harm exactly ("armed with no responder, every accusation succeeds
 and every producer is slashable for the price of one bond"); the responder was one precondition,
-and the arithmetic was the other, unnamed one. ADR-0062 SA-2's text already says what the object
+and the arithmetic was the other, unnamed one. 旧ADR-0062 SA-2's text already says what the object
 must be — "the event's own bytes in whatever form the class's `logits_scheme_id` names" — so this
 is the decision implemented, not a new one.
 
@@ -67,11 +67,11 @@ carries two tiles; a disclosure carries one).
 
 **What the DA court proves, stated plainly.** A refuted accusation proves the producer *holds* the
 event it committed — possession, not correctness (the arithmetic court's business) and not that it
-served any seat (ADR-0065 D4's abstention remains a licence, not a punishment: a producer that
+served any seat (旧ADR-0065 D4's abstention remains a licence, not a punishment: a producer that
 executed but withheld from its panel is voided, never slashed). A confirmed default proves the
 producer could not open a piece of its own commitment inside a window twice the finality depth —
 which a producer that never executed cannot do for any `(row, tile)` an accuser chooses. That is
-the harm ADR-0062 was written for.
+the harm 旧ADR-0062 was written for.
 
 **What a disclosure reveals.** On the tiled scheme the outer root is keyed over the generated ids,
 so any disclosure publishes the claim's **output** token ids; on the flat scheme, every row and
@@ -86,13 +86,13 @@ already flags as low on the shipped registry; the number is the operator's, not 
 
 A duty: every claim in `DefaultDisputed` whose producing bond this node holds
 (`palw_da_duties_v2`). The panel opens the accused event out of the capture it already retains
-(ADR-0084 D7 keeps it home), through one backend verb `PalwBackend::disclose_trace_event` (the
+(旧ADR-0084 D7 keeps it home), through one backend verb `PalwBackend::disclose_trace_event` (the
 floor and both model tiers implement it), signs the object's keyed digest under the bond key, and
 files `MaterialDisclosed` as a lifecycle carrier through the same queue and funding the court moves
 use. It answers only inside the disclose window and never re-executes anything.
 
 There is no automatic accuser: a seat that received nothing cannot distinguish withholding from
-transport loss, and ADR-0065 D4 (armed on every shipped V2 network) already turns "I never got it"
+transport loss, and 旧ADR-0065 D4 (armed on every shipped V2 network) already turns "I never got it"
 into a slash-free abstention. Accusing is an operator's act: `misaka palw da-accuse --claim <id>
 --row <r> [--tile <t>] --bond <txid:index> --key-file <seed> --out <file>` builds and signs a
 `DefaultAccused` (after checking the key is the bond's registered one, so the carrier's fee is not
@@ -185,9 +185,9 @@ withdrawal-delay interlock (§7).
 ## 7. Limits, stated
 
 * **Private from the public, not from the panel.** Five seats read the prompt to verify the work
-  (ADR-0077 D16's own sentence), and an arithmetic dispute publishes one tile of it; a
+  (旧ADR-0077 D16's own sentence), and an arithmetic dispute publishes one tile of it; a
   data-availability dispute publishes the answer's ids (§2). Withholding from the panel voids the
-  claim and slashes nobody (ADR-0065 D4).
+  claim and slashes nobody (旧ADR-0065 D4).
 * **Availability is the executor's.** A mode-2 claim's material exists on the executor's node and
   the readers it served; a node that goes dark before its seats pulled is voided at the receipt
   timeout, exactly as a public claim whose material was never delivered.
@@ -234,12 +234,12 @@ refused and logged rather than silent. The horizon change is invisible in substa
 score 6,602 — a depth this chain has never reached — so no header's pruning point differs under
 either build.
 
-**The state version does not move.** ADR-0062 asks for it in the release that arms the fence; that
+**The state version does not move.** 旧ADR-0062 asks for it in the release that arms the fence; that
 sentence was written for a re-mint, and on a live chain the bump IS the re-mint (the version is
-hashed into `state_root`, which every header commits). The rule as it now stands is in ADR-0062's
+hashed into `state_root`, which every header commits). The rule as it now stands is in 旧ADR-0062's
 own arming section and pinned by
 `a_scheduled_da_court_needs_no_state_version_move_and_a_genesis_one_would`.
 
-**The model market rides the same height.** ADR-0090 §7 item 6 asks for three lines in the
+**The model market rides the same height.** 旧ADR-0090 §7 item 6 asks for three lines in the
 testnet-11 preset; they are `Some(ForkActivation::new(1900))` beside the court's, because the
 fork-id gate keys on heights and three flag days would cost three fleet restarts.

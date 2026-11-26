@@ -1,0 +1,5455 @@
+{
+  "reason": "user requested RFC20 design / ADR20 rationale with no old-body archive",
+  "removed_file_count": 1362,
+  "removed_uncompressed_bytes": 66488759,
+  "records": [
+    {
+      "path": "docs/adr/0001-network-isolation.md",
+      "bytes": 7099
+    },
+    {
+      "path": "docs/adr/0002-mldsa65-p2pkh.md",
+      "bytes": 8710
+    },
+    {
+      "path": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "bytes": 10061
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "bytes": 8897
+    },
+    {
+      "path": "docs/adr/0005-mass-policy.md",
+      "bytes": 12396
+    },
+    {
+      "path": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "bytes": 12676
+    },
+    {
+      "path": "docs/adr/0007-layered-pow.md",
+      "bytes": 21456
+    },
+    {
+      "path": "docs/adr/0008-hash64-consensus-identity.md",
+      "bytes": 15052
+    },
+    {
+      "path": "docs/adr/0009-dns-probabilistic-finality.md",
+      "bytes": 1003
+    },
+    {
+      "path": "docs/adr/0010-validator-node-architecture.md",
+      "bytes": 1025
+    },
+    {
+      "path": "docs/adr/0011-validator-deployment-and-equivocation-safety.md",
+      "bytes": 990
+    },
+    {
+      "path": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "bytes": 1066
+    },
+    {
+      "path": "docs/adr/0013-validator-reward-distribution.md",
+      "bytes": 995
+    },
+    {
+      "path": "docs/adr/0014-coordinated-failover-protocol.md",
+      "bytes": 942
+    },
+    {
+      "path": "docs/adr/0015-remote-signer-hsm-protocol.md",
+      "bytes": 1044
+    },
+    {
+      "path": "docs/adr/0016-stake-locked-bond-utxos.md",
+      "bytes": 1028
+    },
+    {
+      "path": "docs/adr/0017-all-active-staker-attestation.md",
+      "bytes": 1015
+    },
+    {
+      "path": "docs/adr/0018-quality-gated-stakescore-inclusion-economics.md",
+      "bytes": 1001
+    },
+    {
+      "path": "docs/adr/0019-mldsa87-migration.md",
+      "bytes": 19024
+    },
+    {
+      "path": "docs/adr/0020-selected-parent-evm-lane.md",
+      "bytes": 14519
+    },
+    {
+      "path": "docs/adr/0021-palw-llm-pow.md",
+      "bytes": 1037
+    },
+    {
+      "path": "docs/adr/0022-pruned-ibd-evm-overlay-snapshot.md",
+      "bytes": 15246
+    },
+    {
+      "path": "docs/adr/0023-base-three-lane-execution.md",
+      "bytes": 996
+    },
+    {
+      "path": "docs/adr/0024-verified-llm-token-weighted-bft.md",
+      "bytes": 1035
+    },
+    {
+      "path": "docs/adr/0025-chain-participation-and-ibd-candidate-selection.md",
+      "bytes": 7098
+    },
+    {
+      "path": "docs/adr/0026-current-palw-testnet11-architecture.md",
+      "bytes": 5691
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "bytes": 29727
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "bytes": 24495
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "bytes": 34601
+    },
+    {
+      "path": "docs/adr/0029-palw-chain-carriage.md",
+      "bytes": 20246
+    },
+    {
+      "path": "docs/adr/0030-palw-step-function-shape-profile.md",
+      "bytes": 25828
+    },
+    {
+      "path": "docs/adr/0031-palw-canonical-transcendentals.md",
+      "bytes": 7993
+    },
+    {
+      "path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "bytes": 13281
+    },
+    {
+      "path": "docs/adr/0033-palw-credit-gate-wiring.md",
+      "bytes": 1125
+    },
+    {
+      "path": "docs/adr/0034-palw-execution-class-model-band-routing.md",
+      "bytes": 45645
+    },
+    {
+      "path": "docs/adr/0035-palw-public-testnet-strategy.md",
+      "bytes": 14496
+    },
+    {
+      "path": "docs/adr/0036-palw-mainnet-activation-model.md",
+      "bytes": 17094
+    },
+    {
+      "path": "docs/adr/0037-palw-async-job-state-machine.md",
+      "bytes": 22484
+    },
+    {
+      "path": "docs/adr/0038-palw-is-the-consensus-work.md",
+      "bytes": 60928
+    },
+    {
+      "path": "docs/adr/0039-palw-only-block-production.md",
+      "bytes": 26448
+    },
+    {
+      "path": "docs/adr/0040-palw-base-0-integer-arithmetic.md",
+      "bytes": 30172
+    },
+    {
+      "path": "docs/adr/0041-palw-pruning-proof-verification.md",
+      "bytes": 30973
+    },
+    {
+      "path": "docs/adr/0042-palw-mainnet-candidate-ruleset.md",
+      "bytes": 43054
+    },
+    {
+      "path": "docs/adr/0043-palw-v2-state-root-ordering.md",
+      "bytes": 15386
+    },
+    {
+      "path": "docs/adr/0044-palw-free-prompt-receipts.md",
+      "bytes": 39486
+    },
+    {
+      "path": "docs/adr/0045-palw-class-economy-on-chain.md",
+      "bytes": 15853
+    },
+    {
+      "path": "docs/adr/0046-palw-v2-consensus-object-carriage.md",
+      "bytes": 14847
+    },
+    {
+      "path": "docs/adr/0047-palw-a16-activation-tier.md",
+      "bytes": 8569
+    },
+    {
+      "path": "docs/adr/0049-palw-adjudication-contract.md",
+      "bytes": 31896
+    },
+    {
+      "path": "docs/adr/0050-palw-base0-residual-site.md",
+      "bytes": 12468
+    },
+    {
+      "path": "docs/adr/0051-palw-metal-gguf-execution-family.md",
+      "bytes": 998
+    },
+    {
+      "path": "docs/adr/0052-palw-qwen36-hybrid-class.md",
+      "bytes": 18658
+    },
+    {
+      "path": "docs/adr/0053-palw-one-execution-family.md",
+      "bytes": 24412
+    },
+    {
+      "path": "docs/adr/0054-palw-share-follows-production.md",
+      "bytes": 10593
+    },
+    {
+      "path": "docs/adr/0055-palw-position-is-earned-not-declared.md",
+      "bytes": 9147
+    },
+    {
+      "path": "docs/adr/0056-palw-permissionless-class-admission-and-share-economy.md",
+      "bytes": 22894
+    },
+    {
+      "path": "docs/adr/0057-palw-base0-runtime-acceleration.md",
+      "bytes": 11811
+    },
+    {
+      "path": "docs/adr/0058-palw-merged-work-is-counted.md",
+      "bytes": 11243
+    },
+    {
+      "path": "docs/adr/0059-the-10b-premine-cap.md",
+      "bytes": 8255
+    },
+    {
+      "path": "docs/adr/0060-the-liveness-doctrine.md",
+      "bytes": 25684
+    },
+    {
+      "path": "docs/adr/0061-zero-seat-genesis-and-right-sized-collateral.md",
+      "bytes": 10979
+    },
+    {
+      "path": "docs/adr/0062-data-availability-court.md",
+      "bytes": 49680
+    },
+    {
+      "path": "docs/adr/0063-operator-tooling-the-missing-half.md",
+      "bytes": 16514
+    },
+    {
+      "path": "docs/adr/0064-trustless-recovery-from-a-total-stop.md",
+      "bytes": 17683
+    },
+    {
+      "path": "docs/adr/0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+      "bytes": 36446
+    },
+    {
+      "path": "docs/adr/0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+      "bytes": 21534
+    },
+    {
+      "path": "docs/adr/0067-classes-are-chain-data-kernels-are-the-build.md",
+      "bytes": 62073
+    },
+    {
+      "path": "docs/adr/0068-the-llm-primary-economy-and-the-floors-minimum.md",
+      "bytes": 17285
+    },
+    {
+      "path": "docs/adr/0069-e2e-adjudicability-is-the-price-of-weight.md",
+      "bytes": 41273
+    },
+    {
+      "path": "docs/adr/0070-the-model-tiers-step-spaces-are-adjudicable.md",
+      "bytes": 18035
+    },
+    {
+      "path": "docs/adr/0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+      "bytes": 23305
+    },
+    {
+      "path": "docs/adr/0072-the-ticket-is-the-execution.md",
+      "bytes": 29997
+    },
+    {
+      "path": "docs/adr/0073-real-demand-work-bears-the-weight.md",
+      "bytes": 28598
+    },
+    {
+      "path": "docs/adr/0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+      "bytes": 19628
+    },
+    {
+      "path": "docs/adr/0075-certification-is-a-consensus-object.md",
+      "bytes": 31388
+    },
+    {
+      "path": "docs/adr/0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+      "bytes": 15761
+    },
+    {
+      "path": "docs/adr/0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+      "bytes": 51114
+    },
+    {
+      "path": "docs/adr/0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+      "bytes": 38616
+    },
+    {
+      "path": "docs/adr/0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+      "bytes": 41649
+    },
+    {
+      "path": "docs/adr/0080-the-answer-is-long-the-verified-unit-is-short.md",
+      "bytes": 1029
+    },
+    {
+      "path": "docs/adr/0081-long-context-the-input-is-a-state-chain.md",
+      "bytes": 1012
+    },
+    {
+      "path": "docs/adr/0082-the-close-is-flat-in-the-context.md",
+      "bytes": 85868
+    },
+    {
+      "path": "docs/adr/0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+      "bytes": 10004
+    },
+    {
+      "path": "docs/adr/0084-the-ids-ride-the-capture-stays-home.md",
+      "bytes": 39914
+    },
+    {
+      "path": "docs/adr/0085-the-close-is-assembled-from-what-was-served.md",
+      "bytes": 21453
+    },
+    {
+      "path": "docs/adr/0086-the-opening-carries-the-fold-not-the-leaves.md",
+      "bytes": 26708
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "bytes": 12692
+    },
+    {
+      "path": "docs/adr/0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+      "bytes": 47573
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "bytes": 10657
+    },
+    {
+      "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "bytes": 18809
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "bytes": 10689
+    },
+    {
+      "path": "docs/adr/0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+      "bytes": 22647
+    },
+    {
+      "path": "docs/adr/0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md",
+      "bytes": 32843
+    },
+    {
+      "path": "docs/adr/0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+      "bytes": 15797
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "bytes": 8101
+    },
+    {
+      "path": "docs/adr/0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md",
+      "bytes": 55709
+    },
+    {
+      "path": "docs/adr/0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+      "bytes": 39074
+    },
+    {
+      "path": "docs/adr/0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+      "bytes": 25088
+    },
+    {
+      "path": "docs/adr/0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+      "bytes": 30776
+    },
+    {
+      "path": "docs/adr/0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+      "bytes": 37019
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "bytes": 6917
+    },
+    {
+      "path": "docs/adr/0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+      "bytes": 19364
+    },
+    {
+      "path": "docs/adr/0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md",
+      "bytes": 75297
+    },
+    {
+      "path": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "bytes": 46739
+    },
+    {
+      "path": "docs/adr/0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+      "bytes": 19514
+    },
+    {
+      "path": "docs/adr/0107-a-share-grows-on-work-that-reached-final.md",
+      "bytes": 13261
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "bytes": 42493
+    },
+    {
+      "path": "docs/adr/0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+      "bytes": 23401
+    },
+    {
+      "path": "docs/adr/0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+      "bytes": 31236
+    },
+    {
+      "path": "docs/adr/0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+      "bytes": 27787
+    },
+    {
+      "path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "bytes": 35229
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "bytes": 6281
+    },
+    {
+      "path": "docs/adr/0115-a-pending-transaction-is-announced-until-it-lands.md",
+      "bytes": 7984
+    },
+    {
+      "path": "docs/adr/0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md",
+      "bytes": 15039
+    },
+    {
+      "path": "docs/adr/0117-a-draw-is-one-forward.md",
+      "bytes": 21170
+    },
+    {
+      "path": "docs/adr/0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+      "bytes": 25042
+    },
+    {
+      "path": "docs/adr/0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md",
+      "bytes": 21598
+    },
+    {
+      "path": "docs/adr/0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+      "bytes": 7748
+    },
+    {
+      "path": "docs/adr/0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+      "bytes": 24504
+    },
+    {
+      "path": "docs/adr/0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md",
+      "bytes": 69160
+    },
+    {
+      "path": "docs/adr/0123-the-epoch-progressively-releases-unused-class-budget.md",
+      "bytes": 4884
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "bytes": 8013
+    },
+    {
+      "path": "docs/adr/0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+      "bytes": 39201
+    },
+    {
+      "path": "docs/adr/0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+      "bytes": 1053
+    },
+    {
+      "path": "docs/adr/0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+      "bytes": 9825
+    },
+    {
+      "path": "docs/adr/0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+      "bytes": 1062
+    },
+    {
+      "path": "docs/adr/0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+      "bytes": 12239
+    },
+    {
+      "path": "docs/adr/0130-bps1-is-hardened-before-it-is-widened.md",
+      "bytes": 25226
+    },
+    {
+      "path": "docs/adr/0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+      "bytes": 18192
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "bytes": 37679
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "bytes": 46425
+    },
+    {
+      "path": "docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+      "bytes": 12541
+    },
+    {
+      "path": "docs/adr/0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+      "bytes": 40052
+    },
+    {
+      "path": "docs/adr/0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md",
+      "bytes": 9832
+    },
+    {
+      "path": "docs/adr/0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+      "bytes": 56373
+    },
+    {
+      "path": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "bytes": 11966
+    },
+    {
+      "path": "docs/adr/0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+      "bytes": 9281
+    },
+    {
+      "path": "docs/adr/0140-the-heartbeat-is-the-emergency-generator.md",
+      "bytes": 16437
+    },
+    {
+      "path": "docs/adr/0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+      "bytes": 10653
+    },
+    {
+      "path": "docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md",
+      "bytes": 24297
+    },
+    {
+      "path": "docs/adr/0143-an-artifact-root-has-one-owner-on-the-chain.md",
+      "bytes": 16797
+    },
+    {
+      "path": "docs/adr/0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+      "bytes": 21406
+    },
+    {
+      "path": "docs/adr/0145-canonical-work-is-derived-and-admission-is-earned.md",
+      "bytes": 18573
+    },
+    {
+      "path": "docs/adr/0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md",
+      "bytes": 18112
+    },
+    {
+      "path": "docs/adr/0147-independence-is-drawn-not-declared.md",
+      "bytes": 17625
+    },
+    {
+      "path": "docs/adr/0148-the-free-prompt-lane-prices-compute.md",
+      "bytes": 18187
+    },
+    {
+      "path": "docs/adr/0149-an-attempts-pwu-is-the-derivation.md",
+      "bytes": 13432
+    },
+    {
+      "path": "docs/adr/0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+      "bytes": 13655
+    },
+    {
+      "path": "docs/adr/0151-liveness-is-structural-collateral-covers-fraud.md",
+      "bytes": 29717
+    },
+    {
+      "path": "docs/adr/0152-account-stake-staged-reserve-and-vested-rewards.md",
+      "bytes": 7364
+    },
+    {
+      "path": "docs/adr/0153-2m-verification-sharding-plan.md",
+      "bytes": 5851
+    },
+    {
+      "path": "docs/adr/0154-testnet-12-flag-day-daa-750.md",
+      "bytes": 5375
+    },
+    {
+      "path": "docs/adr/0155-testnet-12-flag-day-daa-1300.md",
+      "bytes": 3485
+    },
+    {
+      "path": "docs/adr/0160-claim-capacity-separation.md",
+      "bytes": 124836
+    },
+    {
+      "path": "docs/adr/0161-a-claim-is-not-an-emission.md",
+      "bytes": 8137
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "bytes": 33672
+    },
+    {
+      "path": "docs/adr/0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md",
+      "bytes": 10370
+    },
+    {
+      "path": "docs/adr/0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md",
+      "bytes": 46073
+    },
+    {
+      "path": "docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md",
+      "bytes": 13409
+    },
+    {
+      "path": "docs/adr/0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md",
+      "bytes": 19119
+    },
+    {
+      "path": "docs/adr/0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+      "bytes": 27211
+    },
+    {
+      "path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "bytes": 4165
+    },
+    {
+      "path": "docs/adr/0170-the-seed-anchor-is-a-window-not-a-span.md",
+      "bytes": 16639
+    },
+    {
+      "path": "docs/adr/0171-probabilistic-constraint-checks-and-court-on-dispute.md",
+      "bytes": 20677
+    },
+    {
+      "path": "docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md",
+      "bytes": 20333
+    },
+    {
+      "path": "docs/adr/0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+      "bytes": 17597
+    },
+    {
+      "path": "docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+      "bytes": 33510
+    },
+    {
+      "path": "docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md",
+      "bytes": 5338
+    },
+    {
+      "path": "docs/adr/0175-registered-models-are-permanently-immutable.md",
+      "bytes": 13238
+    },
+    {
+      "path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+      "bytes": 30226
+    },
+    {
+      "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "bytes": 8518
+    },
+    {
+      "path": "docs/adr/0178-fork-choice-heals-a-partition-on-bonded-participation.md",
+      "bytes": 28574
+    },
+    {
+      "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
+      "bytes": 7267
+    },
+    {
+      "path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
+      "bytes": 2869
+    },
+    {
+      "path": "docs/adr/0181-design-freeze-and-controlled-change.md",
+      "bytes": 1985
+    },
+    {
+      "path": "docs/adr/0182-defer-media-and-model-improvement-until-post-mainnet.md",
+      "bytes": 3081
+    },
+    {
+      "path": "docs/adr/0183-g14-court-capacity-panel-floor-retention-detection.md",
+      "bytes": 2767
+    },
+    {
+      "path": "docs/adr/0184-native-liability-horizon-panel-record-and-single-certified-leg.md",
+      "bytes": 4415
+    },
+    {
+      "path": "docs/adr/0185-paid-lock-randomness-bootstrap-and-paid-sources.md",
+      "bytes": 4660
+    },
+    {
+      "path": "docs/adr/0186-hold-unresolved-liability-advance-independent-claims.md",
+      "bytes": 4144
+    },
+    {
+      "path": "docs/adr/0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+      "bytes": 6767
+    },
+    {
+      "path": "docs/adr/0188-d2-x3-arm-records-composition-and-pause-credit.md",
+      "bytes": 17721
+    },
+    {
+      "path": "docs/adr/0189-tir-court-read-set-door-options.md",
+      "bytes": 5008
+    },
+    {
+      "path": "docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md",
+      "bytes": 9554
+    },
+    {
+      "path": "docs/adr/0191-tir-dispute-local-decomposition-long-context.md",
+      "bytes": 19528
+    },
+    {
+      "path": "docs/adr/0192-court-service-opportunity-and-shared-pursuit.md",
+      "bytes": 7414
+    },
+    {
+      "path": "docs/adr/0193-miner-account-bond-for-panel-incentives.md",
+      "bytes": 17698
+    },
+    {
+      "path": "docs/adr/0193-sequential-witness-filing-clock.md",
+      "bytes": 3751
+    },
+    {
+      "path": "docs/adr/0194-dormant-g14-integration-and-service-schema.md",
+      "bytes": 7318
+    },
+    {
+      "path": "docs/adr/0195-rooted-court-response-eligibility-history.md",
+      "bytes": 6647
+    },
+    {
+      "path": "docs/adr/0196-owner-independent-shared-tir-query-data.md",
+      "bytes": 11527
+    },
+    {
+      "path": "docs/adr/0197-court-end-effects-and-pending-liability-archive.md",
+      "bytes": 8017
+    },
+    {
+      "path": "docs/adr/0198-shared-court-initial-notice-boundary.md",
+      "bytes": 2680
+    },
+    {
+      "path": "docs/adr/0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "bytes": 2880
+    },
+    {
+      "path": "docs/adr/0200-d2-readiness-root-opening-availability.md",
+      "bytes": 2653
+    },
+    {
+      "path": "docs/adr/0201-archived-close-qualified-financial-discharge.md",
+      "bytes": 5293
+    },
+    {
+      "path": "docs/adr/0202-court-original-funded-contract-and-role-consent.md",
+      "bytes": 4441
+    },
+    {
+      "path": "docs/adr/0203-authenticated-palw-state-map-and-row-access.md",
+      "bytes": 4176
+    },
+    {
+      "path": "docs/adr/0204-ibd-bounded-row-stream-and-storage-generations.md",
+      "bytes": 4238
+    },
+    {
+      "path": "docs/adr/0205-a-decoded-answer-is-not-paid-twice.md",
+      "bytes": 2375
+    },
+    {
+      "path": "docs/adr/0206-panel-da-mandatory-disclosure-g14-route.md",
+      "bytes": 7836
+    },
+    {
+      "path": "docs/adr/0207-finite-fee-consent-and-provider-payment-bounds.md",
+      "bytes": 6290
+    },
+    {
+      "path": "docs/adr/0208-authenticated-prefix-work-dependencies.md",
+      "bytes": 2512
+    },
+    {
+      "path": "docs/adr/0209-genesis-bond-free-bootstrap.md",
+      "bytes": 3149
+    },
+    {
+      "path": "docs/adr/0210-all-model-g14-panel-one.md",
+      "bytes": 3718
+    },
+    {
+      "path": "docs/adr/0210-court-family-supplier-consent-and-native-reservation.md",
+      "bytes": 3982
+    },
+    {
+      "path": "docs/adr/0211-wide-q24-llm-output.md",
+      "bytes": 2918
+    },
+    {
+      "path": "docs/adr/0212-positive-court-without-model-prepossession.md",
+      "bytes": 5826
+    },
+    {
+      "path": "docs/adr/0213-positive-court-canonical-assignment.md",
+      "bytes": 21750
+    },
+    {
+      "path": "docs/adr/0214-positive-native-funded-relay.md",
+      "bytes": 16857
+    },
+    {
+      "path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+      "bytes": 8190
+    },
+    {
+      "path": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+      "bytes": 6074
+    },
+    {
+      "path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "bytes": 4997
+    },
+    {
+      "path": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "bytes": 6100
+    },
+    {
+      "path": "docs/adr/0219-funded-preclaim-tokenizer-registration.md",
+      "bytes": 4286
+    },
+    {
+      "path": "docs/adr/0220-hugging-face-model-acquisition-and-claim-materials.md",
+      "bytes": 4436
+    },
+    {
+      "path": "docs/adr/0221-additional-model-burn-pause.md",
+      "bytes": 2949
+    },
+    {
+      "path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "bytes": 4259
+    },
+    {
+      "path": "docs/adr/0223-global-admission-court-calendar-and-one-bps.md",
+      "bytes": 12638
+    },
+    {
+      "path": "docs/adr/0224-global-claim-admission-difficulty.md",
+      "bytes": 14545
+    },
+    {
+      "path": "docs/adr/0225-court-nonce-and-panel-challenges.md",
+      "bytes": 7924
+    },
+    {
+      "path": "docs/adr/0226-staged-work-commitments-and-consensus-eligibility.md",
+      "bytes": 7807
+    },
+    {
+      "path": "docs/adr/0227-palw-an1-input-binding-and-panel-court.md",
+      "bytes": 6997
+    },
+    {
+      "path": "docs/adr/0228-model-registration-and-attempt-output-binding.md",
+      "bytes": 14798
+    },
+    {
+      "path": "docs/adr/0229-palw-internal-threshold-beacon.md",
+      "bytes": 7198
+    },
+    {
+      "path": "docs/adr/0230-palw-function-output-and-work-admissibility.md",
+      "bytes": 7820
+    },
+    {
+      "path": "docs/adr/0231-additional-model-option-economics.md",
+      "bytes": 6622
+    },
+    {
+      "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "bytes": 6810
+    },
+    {
+      "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "bytes": 8454
+    },
+    {
+      "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "bytes": 5999
+    },
+    {
+      "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "bytes": 1013
+    },
+    {
+      "path": "docs/adr/0236-fractional-position-miner-rewards.md",
+      "bytes": 5627
+    },
+    {
+      "path": "docs/adr/0237-bft-model-retirement-and-role-bonds.md",
+      "bytes": 4039
+    },
+    {
+      "path": "docs/adr/0238-model-work-accounting-and-exec-credit.md",
+      "bytes": 4110
+    },
+    {
+      "path": "docs/adr/0239-rfc-consolidation-and-bft-only-admission.md",
+      "bytes": 2087
+    },
+    {
+      "path": "docs/design/palw/integration/positive-native-assignment-adr-draft-2026-10-31.md",
+      "bytes": 20901
+    },
+    {
+      "path": "docs/design/palw/integration/positive-native-assignment-rfc-draft-2026-10-31.md",
+      "bytes": 40515
+    },
+    {
+      "path": "docs/design/palw/integration/positive-native-relay-adr-draft-2026-11-03.md",
+      "bytes": 16311
+    },
+    {
+      "path": "docs/design/palw/integration/positive-native-relay-rfc-draft-2026-11-03.md",
+      "bytes": 37096
+    },
+    {
+      "path": "docs/design/palw/integration/wide-q24-adr-draft-2026-10-31.md",
+      "bytes": 306
+    },
+    {
+      "path": "docs/design/palw/integration/wide-q24-rfc-draft-2026-10-31.md",
+      "bytes": 300
+    },
+    {
+      "path": "docs/governance/model-admission-dual-route-transition.md",
+      "bytes": 11871
+    },
+    {
+      "path": "docs/history/README-2026-10-12.md",
+      "bytes": 48735
+    },
+    {
+      "path": "docs/history/README.md",
+      "bytes": 1006
+    },
+    {
+      "path": "docs/history/decisions/2026-10/README.md",
+      "bytes": 561
+    },
+    {
+      "path": "docs/history/decisions/2026-10/adr-0162-0178-user-decisions-2026-10-15.md",
+      "bytes": 10969
+    },
+    {
+      "path": "docs/history/decisions/2026-10/rfc-0006-0012-user-decisions-2026-10-15.md",
+      "bytes": 21436
+    },
+    {
+      "path": "docs/history/decisions/2026-10/user-decisions-2026-10-15-adr-rfc16-rfc17.md",
+      "bytes": 21782
+    },
+    {
+      "path": "docs/history/decisions/README.md",
+      "bytes": 291
+    },
+    {
+      "path": "docs/history/design/README.md",
+      "bytes": 282
+    },
+    {
+      "path": "docs/history/design/palw/0152/00-header-and-changelogs.md",
+      "bytes": 81560
+    },
+    {
+      "path": "docs/history/design/palw/0152/01-operator-summary-ja.md",
+      "bytes": 22107
+    },
+    {
+      "path": "docs/history/design/palw/0152/02-motivation-and-overview.md",
+      "bytes": 18066
+    },
+    {
+      "path": "docs/history/design/palw/0152/03-rules-b-sr-v-l-a.md",
+      "bytes": 65185
+    },
+    {
+      "path": "docs/history/design/palw/0152/04-rules-s-t-w-p0-10.md",
+      "bytes": 50648
+    },
+    {
+      "path": "docs/history/design/palw/0152/05-rules-j-da.md",
+      "bytes": 48105
+    },
+    {
+      "path": "docs/history/design/palw/0152/06-rules-q-dl-sw.md",
+      "bytes": 52669
+    },
+    {
+      "path": "docs/history/design/palw/0152/07-invariant-and-comparison.md",
+      "bytes": 30923
+    },
+    {
+      "path": "docs/history/design/palw/0152/08-fences-schema-phasing.md",
+      "bytes": 44420
+    },
+    {
+      "path": "docs/history/design/palw/0152/09-tests-and-launch-gate.md",
+      "bytes": 45417
+    },
+    {
+      "path": "docs/history/design/palw/0152/10-questions-traceability-reviews.md",
+      "bytes": 26258
+    },
+    {
+      "path": "docs/history/design/palw/0152/README.md",
+      "bytes": 5099
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/README.md",
+      "bytes": 7991
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/adr/README.md",
+      "bytes": 170736
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/architecture/consensus.md",
+      "bytes": 1623
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/architecture/overview.md",
+      "bytes": 33907
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/architecture/palw.md",
+      "bytes": 1896
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/getting-started/build.md",
+      "bytes": 8716
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/getting-started/mining.md",
+      "bytes": 1689
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/getting-started/run-node.md",
+      "bytes": 4417
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/getting-started/validator.md",
+      "bytes": 7659
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/history/README.md",
+      "bytes": 2822
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/operations/README.md",
+      "bytes": 2056
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/reference/README.md",
+      "bytes": 1154
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/rfc/README.md",
+      "bytes": 23998
+    },
+    {
+      "path": "docs/history/documentation/2026-10-17/spec/README.md",
+      "bytes": 3596
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/README.md.txt",
+      "bytes": 2755
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/maintenance/numbering.md.txt",
+      "bytes": 3361
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/INDEX.md.txt",
+      "bytes": 7821
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/README.md.txt",
+      "bytes": 3232
+    },
+    {
+      "path": "docs/history/documentation/2026-10-29-rfc-v2/rfc/TOPICS.md.txt",
+      "bytes": 6377
+    },
+    {
+      "path": "docs/history/documentation/2026-10-30-adr-consolidation/legacy-adr-INDEX.md.txt",
+      "bytes": 36370
+    },
+    {
+      "path": "docs/history/documentation/2026-10-30-adr-consolidation/legacy-adr-README.md.txt",
+      "bytes": 2534
+    },
+    {
+      "path": "docs/history/documentation/2026-10-30-adr-consolidation/legacy-adr-TOPICS.md.txt",
+      "bytes": 29769
+    },
+    {
+      "path": "docs/history/documentation/2026-10-30-adr-consolidation/previous-rfc-package-PACKAGE-MANIFEST.json",
+      "bytes": 77981
+    },
+    {
+      "path": "docs/history/documentation/2026-10-30-adr-consolidation/previous-rfc-package-README.md.txt",
+      "bytes": 994
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-positive-court-r2/MANIFEST.json",
+      "bytes": 5712
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-positive-court-r2/README.md",
+      "bytes": 982
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/adr-INDEX.md.txt",
+      "bytes": 36370
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/adr-README.md.txt",
+      "bytes": 2534
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/adr-TOPICS.md.txt",
+      "bytes": 29769
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/adr-source-manifest.json",
+      "bytes": 559418
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/package-PACKAGE-MANIFEST.json",
+      "bytes": 91259
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/package-README.md.txt",
+      "bytes": 1312
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/rfc-INDEX.md.txt",
+      "bytes": 7821
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/rfc-README.md.txt",
+      "bytes": 3232
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/rfc-TOPICS.md.txt",
+      "bytes": 6377
+    },
+    {
+      "path": "docs/history/documentation/2026-10-31-v2-import/rfc-source-map.json",
+      "bytes": 48351
+    },
+    {
+      "path": "docs/history/documentation/README.md",
+      "bytes": 584
+    },
+    {
+      "path": "docs/history/networks/README.md",
+      "bytes": 354
+    },
+    {
+      "path": "docs/history/networks/testnet-10/README.md",
+      "bytes": 487
+    },
+    {
+      "path": "docs/history/networks/testnet-10/testnet10-palw-rollout-runbook.md",
+      "bytes": 497
+    },
+    {
+      "path": "docs/history/networks/testnet-10/testnet10-shadow-release-DEPLOY.md",
+      "bytes": 6623
+    },
+    {
+      "path": "docs/history/networks/testnet-10/testnet10-transition.md",
+      "bytes": 4014
+    },
+    {
+      "path": "docs/history/networks/testnet-11/README.md",
+      "bytes": 1716
+    },
+    {
+      "path": "docs/history/networks/testnet-11/palw-model-fit-testnet11-2026-09-10.md",
+      "bytes": 16344
+    },
+    {
+      "path": "docs/history/networks/testnet-11/palw-rc-testnet11-launch-record.md",
+      "bytes": 14307
+    },
+    {
+      "path": "docs/history/networks/testnet-11/palw-rc-testnet11-launch-runbook.md",
+      "bytes": 45891
+    },
+    {
+      "path": "docs/history/networks/testnet-11/palw-testnet11-soak-2026-08-16.md",
+      "bytes": 4708
+    },
+    {
+      "path": "docs/history/networks/testnet-11/palw-testnet11-two-lane-design.md",
+      "bytes": 6808
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet-11.md",
+      "bytes": 20138
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-7101-upgrade-announcement.md",
+      "bytes": 11397
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-ask-for-a-file.md",
+      "bytes": 23710
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-free-prompt-mining.md",
+      "bytes": 18087
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-join-mining.md",
+      "bytes": 6564
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-node-operator.md",
+      "bytes": 5241
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-regenesis-2026-08-30.md",
+      "bytes": 6232
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch-5f-announcement-draft.md",
+      "bytes": 14350
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch-5f-announcement.md",
+      "bytes": 6128
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch-5f-genesis-card.md",
+      "bytes": 459197
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch2-genesis.md",
+      "bytes": 5524
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch5-runbook.md",
+      "bytes": 28670
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-relaunch5e-runbook.md",
+      "bytes": 5588
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-remint-2026-08-29.md",
+      "bytes": 10686
+    },
+    {
+      "path": "docs/history/networks/testnet-11/testnet11-verification-participation-ja.md",
+      "bytes": 14084
+    },
+    {
+      "path": "docs/history/networks/testnet-12/README.md",
+      "bytes": 629
+    },
+    {
+      "path": "docs/history/networks/testnet-12/palw-release-6001-verdict-2026-09-18.md",
+      "bytes": 16008
+    },
+    {
+      "path": "docs/history/networks/testnet-12/t12-launch-2026-09-25.md",
+      "bytes": 24237
+    },
+    {
+      "path": "docs/history/networks/testnet-12/t12-panel-seed-2026-09-25.md",
+      "bytes": 39673
+    },
+    {
+      "path": "docs/history/networks/testnet-12/t12-rcore-launch-checklist.md",
+      "bytes": 118797
+    },
+    {
+      "path": "docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md",
+      "bytes": 43822
+    },
+    {
+      "path": "docs/history/operations/README.md",
+      "bytes": 380
+    },
+    {
+      "path": "docs/history/operations/deployment/README.md",
+      "bytes": 442
+    },
+    {
+      "path": "docs/history/operations/deployment/palw-stage0-shadow-drill-runbook.md",
+      "bytes": 8475
+    },
+    {
+      "path": "docs/history/operations/deployment/palw-step-space-deployment-notes.md",
+      "bytes": 3203
+    },
+    {
+      "path": "docs/history/operations/dns-validator/validator-runbook.md",
+      "bytes": 5259
+    },
+    {
+      "path": "docs/history/operations/model-certification/README.md",
+      "bytes": 522
+    },
+    {
+      "path": "docs/history/operations/model-certification/mainnet-palw-certification-runbook.md",
+      "bytes": 9550
+    },
+    {
+      "path": "docs/history/operations/model-certification/palw-certify-a-new-model.md",
+      "bytes": 9624
+    },
+    {
+      "path": "docs/history/operations/model-certification/palw-public-testnet-classes-runbook.md",
+      "bytes": 3232
+    },
+    {
+      "path": "docs/history/rfc/0017-model-eligibility-retired-2026-10-15.md",
+      "bytes": 49865
+    },
+    {
+      "path": "docs/history/rfc/README.md",
+      "bytes": 453
+    },
+    {
+      "path": "docs/history/upstream/README.md",
+      "bytes": 310
+    },
+    {
+      "path": "docs/history/upstream/crescendo-guide.md",
+      "bytes": 4705
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Adding-a-Model-JA.md",
+      "bytes": 8151
+    },
+    {
+      "path": "docs/history/wiki-snapshot/EVM-Pruned-Node.md",
+      "bytes": 2006
+    },
+    {
+      "path": "docs/history/wiki-snapshot/FAQ-Troubleshooting.md",
+      "bytes": 8141
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Home.md",
+      "bytes": 6924
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Operations-Notes.md",
+      "bytes": 7010
+    },
+    {
+      "path": "docs/history/wiki-snapshot/PALW-Participation-JA.md",
+      "bytes": 6629
+    },
+    {
+      "path": "docs/history/wiki-snapshot/PALW-Roles-and-Network-Scope-JA.md",
+      "bytes": 3408
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Privacy-What-PALW-Sees.md",
+      "bytes": 2434
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Quick-Start.md",
+      "bytes": 8170
+    },
+    {
+      "path": "docs/history/wiki-snapshot/README.md",
+      "bytes": 3192
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Testnet-11-Operator-UI-JA.md",
+      "bytes": 3844
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Testnet-11-Verification-Participation-JA.md",
+      "bytes": 14678
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Testnet-12-Operator-UI-JA.md",
+      "bytes": 7987
+    },
+    {
+      "path": "docs/history/wiki-snapshot/Testnet-12-Verification-Participation-JA.md",
+      "bytes": 13406
+    },
+    {
+      "path": "docs/history/wiki-snapshot/wiki-t12-sync.patch",
+      "bytes": 86512
+    },
+    {
+      "path": "docs/history/withdrawn-designs/README.md",
+      "bytes": 838
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-audit-emission-v0.2-design.md",
+      "bytes": 570
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-base-3lane-execution-design-v0.1.md",
+      "bytes": 670
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-compute-token-program-design-v0.1.md",
+      "bytes": 668
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-palw-ota-secure-update-design-v0.1-ja.md",
+      "bytes": 535
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-palw-pow-detailed-design-v0.1-ja.md",
+      "bytes": 598
+    },
+    {
+      "path": "docs/history/withdrawn-designs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md",
+      "bytes": 543
+    },
+    {
+      "path": "docs/maintenance/REORGANIZATION.md",
+      "bytes": 3917
+    },
+    {
+      "path": "docs/maintenance/ci-green-2026-10-26.md",
+      "bytes": 7696
+    },
+    {
+      "path": "docs/maintenance/link-rewrites.json",
+      "bytes": 420456
+    },
+    {
+      "path": "docs/maintenance/migration-manifest.json",
+      "bytes": 1353073
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/README.md",
+      "bytes": 9609
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md",
+      "bytes": 7490
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/changes.json",
+      "bytes": 16297
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/audit-comparison.json",
+      "bytes": 1445
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-adr.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-revision.json",
+      "bytes": 15639
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-revision.txt",
+      "bytes": 647
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check-results/current-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/check_revision.py",
+      "bytes": 24486
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/input-link-issues.json",
+      "bytes": 319422
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/input-manifest.json",
+      "bytes": 259402
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/sources/README.md",
+      "bytes": 496
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08-exec-1bps/sources/provided-court-budget-analysis.txt",
+      "bytes": 21527
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/README.md",
+      "bytes": 9805
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/VALIDATION.md",
+      "bytes": 7813
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/changes.json",
+      "bytes": 21114
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-adr.json",
+      "bytes": 8731
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-adr.txt",
+      "bytes": 8731
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-revision.json",
+      "bytes": 15473
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-revision.txt",
+      "bytes": 575
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-adr-original.txt",
+      "bytes": 1280
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-adr-with-overlay-support.json",
+      "bytes": 5502
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-docs.json",
+      "bytes": 242732
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-docs.txt",
+      "bytes": 5565
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-rfc.txt",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/revision-fault-injection.json",
+      "bytes": 645
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check_revision.py",
+      "bytes": 25606
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/input-link-issues.json",
+      "bytes": 489280
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/input-manifest.json",
+      "bytes": 255754
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/README.md",
+      "bytes": 5047
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/REVIEW-CRITERIA.md",
+      "bytes": 3567
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/REVIEW.md",
+      "bytes": 6203
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/VALIDATION.md",
+      "bytes": 5370
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-adr.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-latest-revision.json",
+      "bytes": 15636
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-latest_revision.txt",
+      "bytes": 584
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-adr.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-revision.json",
+      "bytes": 14632
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-revision.txt",
+      "bytes": 399
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check_protocol_model.py",
+      "bytes": 56179
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check_revision.py",
+      "bytes": 15790
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/input-link-issues.json",
+      "bytes": 319423
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/input-manifest.json",
+      "bytes": 403727
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/model-results.json",
+      "bytes": 6880
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/README.md",
+      "bytes": 6502
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/REVIEW-CRITERIA.md",
+      "bytes": 4729
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/REVIEW.md",
+      "bytes": 4306
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/VALIDATION.md",
+      "bytes": 6225
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-adr.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-prior-revision.json",
+      "bytes": 14632
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-prior-revision.txt",
+      "bytes": 399
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/baseline-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-adr.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-docs.json",
+      "bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-docs.txt",
+      "bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-revision.json",
+      "bytes": 14873
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-revision.txt",
+      "bytes": 387
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check-results/final-rfc.txt",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check_public_panel_model.py",
+      "bytes": 43799
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/check_revision.py",
+      "bytes": 17176
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/input-link-issues.json",
+      "bytes": 319423
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/input-manifest.json",
+      "bytes": 411415
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-09-public-panel/public-panel-model-results.json",
+      "bytes": 12025
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/README.md",
+      "bytes": 4232
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/REVIEW.md",
+      "bytes": 12817
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/SOURCE_AUDIT.md",
+      "bytes": 16809
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/VALIDATION.md",
+      "bytes": 4351
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/changes.json",
+      "bytes": 16857
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/check_difficulty_model.py",
+      "bytes": 81722
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/check_revision.py",
+      "bytes": 30539
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/model-results.json",
+      "bytes": 12627
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/revision-results.json",
+      "bytes": 2256
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/source-baseline.json",
+      "bytes": 362515
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/source-provenance.json",
+      "bytes": 776
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-admission-difficulty/validation-results.json",
+      "bytes": 20549
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/README.md",
+      "bytes": 3892
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/REVIEW.md",
+      "bytes": 8689
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md",
+      "bytes": 19873
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/VALIDATION.md",
+      "bytes": 4633
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/changes.json",
+      "bytes": 11102
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/check_nonce_model.py",
+      "bytes": 71465
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/check_revision.py",
+      "bytes": 37555
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/integration-baseline.json",
+      "bytes": 118684
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/model-results.json",
+      "bytes": 13007
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/revision-results.json",
+      "bytes": 2584
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/source-baseline.json",
+      "bytes": 523679
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/source-provenance.json",
+      "bytes": 2525
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-court-nonce/validation-results.json",
+      "bytes": 20982
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/README.md",
+      "bytes": 4079
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/REVIEW.md",
+      "bytes": 15788
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/VALIDATION.md",
+      "bytes": 4765
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/changes.json",
+      "bytes": 14719
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/check_protocol_model.py",
+      "bytes": 64871
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/check_revision.py",
+      "bytes": 30300
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/model-results.json",
+      "bytes": 9979
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/revision-results.json",
+      "bytes": 5541
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/source-baseline.json",
+      "bytes": 219860
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-global-admission-one-bps/validation-results.json",
+      "bytes": 2606
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/README.md",
+      "bytes": 8376
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/REVIEW.md",
+      "bytes": 18342
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/SOURCE_AUDIT.md",
+      "bytes": 26480
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/THREAT_MATRIX.md",
+      "bytes": 21203
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/VALIDATION.md",
+      "bytes": 5363
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/baseline-checks.json",
+      "bytes": 28518
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/changes.json",
+      "bytes": 13106
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/check_revision.py",
+      "bytes": 23919
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/check_work_model.py",
+      "bytes": 72851
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/legacy-adr.log",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/legacy-docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/legacy-rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/model-results.json",
+      "bytes": 10583
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0056.source.txt",
+      "bytes": 37482
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/prior-rfc-0057.source.txt",
+      "bytes": 32789
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/revision-results.json",
+      "bytes": 7240
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/source-baseline.json",
+      "bytes": 888284
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/source-provenance.json",
+      "bytes": 1279
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-17-work-binding/validation-results.json",
+      "bytes": 4716
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/CHANGES.md",
+      "bytes": 2290
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/README.md",
+      "bytes": 4339
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/REVIEW.md",
+      "bytes": 3548
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/SOURCE_AUDIT.md",
+      "bytes": 2687
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/THREAT_MATRIX.md",
+      "bytes": 3551
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/VALIDATION.md",
+      "bytes": 13670
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/check_revision.py",
+      "bytes": 3097
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/edit-scope.json",
+      "bytes": 2170
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/README.md",
+      "bytes": 8085
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/an1_reference.py",
+      "bytes": 44246
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/check_an1.py",
+      "bytes": 30379
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/profile.json",
+      "bytes": 1134
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/results.json",
+      "bytes": 39133
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/reference_impl/test_vectors.json",
+      "bytes": 3852
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/initial_counterexamples.py",
+      "bytes": 1965
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/initial_counterexamples_results.json",
+      "bytes": 882
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/manifest.json",
+      "bytes": 4135
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/original_postfix_check.py",
+      "bytes": 9907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/original_postfix_results.json",
+      "bytes": 8588
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/portable_postfix_results.json",
+      "bytes": 8588
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/postfix_check.py",
+      "bytes": 9884
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/review_evidence/review_report.txt",
+      "bytes": 8350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/revision-results.json",
+      "bytes": 2486
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/source-baseline.json",
+      "bytes": 663569
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/0056-global-claim-admission-difficulty.prior.txt",
+      "bytes": 41338
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/0057-court-nonce-and-panel-challenges.prior.txt",
+      "bytes": 37629
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/0058-staged-work-commitments-and-consensus-eligibility.prior.txt",
+      "bytes": 47796
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/attached_conversation_20261118_062512.txt",
+      "bytes": 27118
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/user_an1_design_record.txt",
+      "bytes": 3537
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/sources/whitepaper_supplement_v03_prior.txt",
+      "bytes": 84065
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline-copy-manifest.json",
+      "bytes": 1093
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/adr_v2_integrity.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/adr_v2_integrity.log",
+      "bytes": 9221
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/check_docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/check_docs.log",
+      "bytes": 5876
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/rfc_v2_integrity.log",
+      "bytes": 722
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/baseline/summary.json",
+      "bytes": 1804
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/compare_checks.py",
+      "bytes": 7135
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/document_check_delta.json",
+      "bytes": 4542
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/independent_code_review.txt",
+      "bytes": 8350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/independent_code_review_results.json",
+      "bytes": 8588
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/independent_code_review_script.source.txt",
+      "bytes": 9907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/adr_v2_integrity.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/adr_v2_integrity.log",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/check_docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/check_docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/check_revision.log",
+      "bytes": 2486
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/validation/post/rfc_v2_integrity.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/PALW_AN1_whitepaper_revision_v04_20261118.html",
+      "bytes": 68849
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/PALW_AN1_whitepaper_revision_v04_20261118.pdf",
+      "bytes": 443074
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/PALW_AN1_whitepaper_revision_v04_20261118.tex",
+      "bytes": 44032
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/an1_manuscript_source.txt",
+      "bytes": 36477
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/build_an1_report.py",
+      "bytes": 13635
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/build_summary.json",
+      "bytes": 259
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-18-an1/whitepaper/pdf_qa.json",
+      "bytes": 1179
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/CHANGES.md",
+      "bytes": 12043
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/DESIGN_REVIEW.md",
+      "bytes": 3905
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/README.md",
+      "bytes": 2443
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/VALIDATION.md",
+      "bytes": 3176
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/READ_ME_FIRST.txt.txt",
+      "bytes": 1627
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/AGENTS.md.txt",
+      "bytes": 6845
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/INDEX.md.txt",
+      "bytes": 11262
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/PRINCIPLES.md.txt",
+      "bytes": 68151
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/README.md.txt",
+      "bytes": 13536
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/STATUS.md.txt",
+      "bytes": 15542
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0005-palw-consensus-architecture.md.txt",
+      "bytes": 245191
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0006-fork-choice-participation-and-settlement.md.txt",
+      "bytes": 85601
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0014-versioned-kernels-and-backends.md.txt",
+      "bytes": 120297
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0015-permissionless-model-registration.md.txt",
+      "bytes": 169955
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0016-artifact-ownership-and-model-lineage.md.txt",
+      "bytes": 80593
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0018-long-context-measurement-and-admission.md.txt",
+      "bytes": 166676
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0019-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 61169
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt",
+      "bytes": 49906
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0033-probabilistic-checks-and-exact-court.md.txt",
+      "bytes": 25116
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0039-data-availability-court-and-panel-da.md.txt",
+      "bytes": 90900
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0042-court-service-and-versioned-clock.md.txt",
+      "bytes": 23956
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/0046-court-close-and-liability-archive.md.txt",
+      "bytes": 19003
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/README.md.txt",
+      "bytes": 28806
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr-v2/registry.json.txt",
+      "bytes": 55296
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/0221-additional-model-burn-pause.md.txt",
+      "bytes": 2750
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/0229-palw-internal-threshold-beacon.md.txt",
+      "bytes": 7037
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/0230-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 7247
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/INDEX.md.txt",
+      "bytes": 42433
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/README.md.txt",
+      "bytes": 6343
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/adr/TOPICS.md.txt",
+      "bytes": 33929
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/design/palw/consensus/public-adjudication-policy-v0.5.md.txt",
+      "bytes": 3688
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/design/palw/consensus/tb1-beacon-consumers.json.txt",
+      "bytes": 7696
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/design/palw/models/README.md.txt",
+      "bytes": 870
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/governance/design-freeze.md.txt",
+      "bytes": 8515
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/governance/model-option-economics-transition.md.txt",
+      "bytes": 8338
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/governance/palw-tb1-fow1-transition.md.txt",
+      "bytes": 12042
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/maintenance/catalog.md.txt",
+      "bytes": 124782
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/maintenance/decision-catalog.json.txt",
+      "bytes": 99243
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/maintenance/generate_indexes.py.txt",
+      "bytes": 9018
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/maintenance/number-registry.json.txt",
+      "bytes": 10350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/reference/palw/palw-registry-map.md.txt",
+      "bytes": 18478
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md.txt",
+      "bytes": 292719
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+      "bytes": 293215
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0005-bounded-resources-and-long-context.md.txt",
+      "bytes": 57643
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+      "bytes": 296538
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+      "bytes": 87644
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0009-remote-client-and-sdk.md.txt",
+      "bytes": 60463
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt",
+      "bytes": 154757
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt",
+      "bytes": 141410
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+      "bytes": 43042
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+      "bytes": 37684
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+      "bytes": 63776
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+      "bytes": 49270
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+      "bytes": 62422
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/README.md.txt",
+      "bytes": 23519
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc-v2/registry.json.txt",
+      "bytes": 25135
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/0053-additional-model-burn-pause.md.txt",
+      "bytes": 12682
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/0059-palw-an1-input-binding-and-panel-court.md.txt",
+      "bytes": 30644
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/0060-model-registration-and-attempt-output-binding.md.txt",
+      "bytes": 32848
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/0061-palw-internal-threshold-beacon.md.txt",
+      "bytes": 30033
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/0062-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 29062
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/INDEX.md.txt",
+      "bytes": 13225
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/README.md.txt",
+      "bytes": 7446
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/before/docs/rfc/TOPICS.md.txt",
+      "bytes": 10396
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/change-manifest.json",
+      "bytes": 27671
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/check_revision.py",
+      "bytes": 4586
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/source-manifest.json",
+      "bytes": 428308
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/baseline/adr.log",
+      "bytes": 16879
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/baseline/docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/baseline/results.json",
+      "bytes": 1590
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/baseline/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/input-relative-delta.json",
+      "bytes": 328
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/post/adr.log",
+      "bytes": 16626
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/post/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/post/docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/post/results.json",
+      "bytes": 184
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/post/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-admission-safety/validation/revision-check.json",
+      "bytes": 477
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/CHANGES.md",
+      "bytes": 2174
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/README.md",
+      "bytes": 2656
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/SOURCE_AUDIT.md",
+      "bytes": 1769
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/VALIDATION.md",
+      "bytes": 4451
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/check_mor1_reference.py",
+      "bytes": 11812
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/adr.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/adr.stdout.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/counts.json",
+      "bytes": 395
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/docs.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/docs.stdout.txt",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/rfc.stderr.txt",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/rfc.stdout.txt",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-baseline/summary.json",
+      "bytes": 746
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/adr.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/adr.stdout.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/docs.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/docs.stdout.txt",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/document_check_delta.json",
+      "bytes": 1132
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/rfc.stderr.txt",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/rfc.stdout.txt",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-final/summary.json",
+      "bytes": 750
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/adr.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/adr.stdout.txt",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/docs.json",
+      "bytes": 160460
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/docs.stderr.txt",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/docs.stdout.txt",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/document_check_delta.json",
+      "bytes": 1504
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/rfc.stderr.txt",
+      "bytes": 571
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/rfc.stdout.txt",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/checker-post-initial/summary.json",
+      "bytes": 738
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/document_check_delta.json",
+      "bytes": 1132
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/mor1_reference_results.json",
+      "bytes": 3285
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-model-output-binding/source_preservation.json",
+      "bytes": 1131
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/README.md",
+      "bytes": 7726
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/SUPERSESSION.md",
+      "bytes": 21406
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/VALIDATION.md",
+      "bytes": 5578
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/accounting-check.json",
+      "bytes": 3128
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/baseline-manifest.json",
+      "bytes": 511155
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/AGENTS.md.txt",
+      "bytes": 5275
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/INDEX.md.txt",
+      "bytes": 8729
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/PRINCIPLES.md.txt",
+      "bytes": 64253
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/README.md.txt",
+      "bytes": 11003
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/STATUS.md.txt",
+      "bytes": 13009
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0007-evm-exec-lane-and-anchors.md.txt",
+      "bytes": 162677
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0015-permissionless-model-registration.md.txt",
+      "bytes": 167394
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0019-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 58501
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0021-positions-and-membership.md.txt",
+      "bytes": 84687
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md.txt",
+      "bytes": 82290
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt",
+      "bytes": 42639
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0026-canonical-work-and-answer-accounting.md.txt",
+      "bytes": 189043
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0035-bond-budget-and-shared-reservations.md.txt",
+      "bytes": 168058
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0036-capacity-scaling-and-emission-budget.md.txt",
+      "bytes": 32550
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0037-fee-escrow-and-role-consent.md.txt",
+      "bytes": 63239
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0047-funded-original-and-role-authorization.md.txt",
+      "bytes": 9306
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0049-authenticated-state-map-and-row-stream.md.txt",
+      "bytes": 12781
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/0050-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 100742
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/PRECEDENCE.md.txt",
+      "bytes": 11911
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/README.md.txt",
+      "bytes": 26224
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr-v2/registry.json.txt",
+      "bytes": 51430
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt",
+      "bytes": 37144
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt",
+      "bytes": 59487
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt",
+      "bytes": 26298
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0095-a-position-is-a-membership-not-an-income.md.txt",
+      "bytes": 25661
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt",
+      "bytes": 15357
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt",
+      "bytes": 10756
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt",
+      "bytes": 37286
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt",
+      "bytes": 33468
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0177-model-bond-allocation-without-availability-consensus.md.txt",
+      "bytes": 39469
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt",
+      "bytes": 12902
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/INDEX.md.txt",
+      "bytes": 40794
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/README.md.txt",
+      "bytes": 3806
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/adr/TOPICS.md.txt",
+      "bytes": 33049
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/architecture/palw-specification.md.txt",
+      "bytes": 66830
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/economics/bond-budget-and-model-allocation.md.txt",
+      "bytes": 58636
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/design/palw/integration/activation-readiness-matrix.md.txt",
+      "bytes": 50465
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/design-freeze.md.txt",
+      "bytes": 5992
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/document-lifecycle.md.txt",
+      "bytes": 3576
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/governance/parameter-register.md.txt",
+      "bytes": 59605
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/catalog.md.txt",
+      "bytes": 122855
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/decision-catalog.json.txt",
+      "bytes": 97288
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/generate_indexes.py.txt",
+      "bytes": 7560
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/number-registry.json.txt",
+      "bytes": 9567
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/maintenance/numbering.md.txt",
+      "bytes": 11697
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/model-requests.md.txt",
+      "bytes": 13625
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/operations/models/palw-add-a-model-runbook.md.txt",
+      "bytes": 31964
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/reference/palw/palw-registry-map.md.txt",
+      "bytes": 15886
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+      "bytes": 290615
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0004-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 75307
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+      "bytes": 293919
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+      "bytes": 85063
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0009-remote-client-and-sdk.md.txt",
+      "bytes": 57850
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt",
+      "bytes": 152160
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt",
+      "bytes": 124327
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0012-authenticated-state-storage-and-ibd.md.txt",
+      "bytes": 35949
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0013-permissionless-bootstrap-and-release.md.txt",
+      "bytes": 15644
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0014-court-master-contract.md.txt",
+      "bytes": 393999
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0015-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 299638
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+      "bytes": 40458
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+      "bytes": 35083
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+      "bytes": 61190
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+      "bytes": 46697
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+      "bytes": 59775
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/MIGRATION.md.txt",
+      "bytes": 13598
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/README.md.txt",
+      "bytes": 20968
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc-v2/registry.json.txt",
+      "bytes": 21985
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/INDEX.md.txt",
+      "bytes": 12109
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/README.md.txt",
+      "bytes": 4909
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/rfc/TOPICS.md.txt",
+      "bytes": 9448
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/before/spec/palw/model-tiers.md.txt",
+      "bytes": 1544
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/changes.json",
+      "bytes": 44057
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/check_accounting.py",
+      "bytes": 3384
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/check_preservation.py",
+      "bytes": 12219
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/check_revision.py",
+      "bytes": 2830
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.json",
+      "bytes": 15642
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.run.json",
+      "bytes": 505
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/adr.stdout.log",
+      "bytes": 15642
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.run.json",
+      "bytes": 511
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/docs.stdout.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.json",
+      "bytes": 444
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.run.json",
+      "bytes": 265
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.stderr.log",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-after/rfc.stdout.log",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.json",
+      "bytes": 9462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.run.json",
+      "bytes": 352
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/adr.stdout.log",
+      "bytes": 9462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.run.json",
+      "bytes": 358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/docs.stdout.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.json",
+      "bytes": 444
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.run.json",
+      "bytes": 110
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.stderr.log",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/rfc.stdout.log",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-baseline/summary.json",
+      "bytes": 70
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/checker-comparison.json",
+      "bytes": 20274
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/economic-final-independent-review.json",
+      "bytes": 2852
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/economic-legacy-inventory.json",
+      "bytes": 187724
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/economic-scope-audit.json",
+      "bytes": 10031
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/preservation-check.json",
+      "bytes": 739648
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-option-economics/revision-check.json",
+      "bytes": 542
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/MATH_PROOF.md",
+      "bytes": 13367
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/README.md",
+      "bytes": 3465
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/VALIDATION.md",
+      "bytes": 5578
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/baseline-manifest.json",
+      "bytes": 536090
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/AGENTS.md.txt",
+      "bytes": 6010
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/INDEX.md.txt",
+      "bytes": 9965
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/PRINCIPLES.md.txt",
+      "bytes": 66854
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/README.md.txt",
+      "bytes": 12239
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/STATUS.md.txt",
+      "bytes": 14245
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0007-evm-exec-lane-and-anchors.md.txt",
+      "bytes": 163988
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0015-permissionless-model-registration.md.txt",
+      "bytes": 168649
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0019-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 59863
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0021-positions-and-membership.md.txt",
+      "bytes": 89270
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md.txt",
+      "bytes": 83639
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt",
+      "bytes": 48108
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0026-canonical-work-and-answer-accounting.md.txt",
+      "bytes": 190310
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0035-bond-budget-and-shared-reservations.md.txt",
+      "bytes": 169306
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0036-capacity-scaling-and-emission-budget.md.txt",
+      "bytes": 33793
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0037-fee-escrow-and-role-consent.md.txt",
+      "bytes": 64585
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0047-funded-original-and-role-authorization.md.txt",
+      "bytes": 10530
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0049-authenticated-state-map-and-row-stream.md.txt",
+      "bytes": 14013
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/0050-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 101960
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/PRECEDENCE.md.txt",
+      "bytes": 13156
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/README.md.txt",
+      "bytes": 27472
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr-v2/registry.json.txt",
+      "bytes": 53085
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt",
+      "bytes": 10250
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt",
+      "bytes": 9173
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md.txt",
+      "bytes": 18611
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt",
+      "bytes": 7801
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0095-a-position-is-a-membership-not-an-income.md.txt",
+      "bytes": 7084
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt",
+      "bytes": 6024
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt",
+      "bytes": 5389
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt",
+      "bytes": 7000
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt",
+      "bytes": 34785
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0177-model-bond-allocation-without-availability-consensus.md.txt",
+      "bytes": 7538
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt",
+      "bytes": 6048
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/0231-additional-model-option-economics.md.txt",
+      "bytes": 5725
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/INDEX.md.txt",
+      "bytes": 42101
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/README.md.txt",
+      "bytes": 5044
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/adr/TOPICS.md.txt",
+      "bytes": 33700
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/architecture/palw-specification.md.txt",
+      "bytes": 68806
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/design/palw/economics/bond-budget-and-model-allocation.md.txt",
+      "bytes": 59957
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/design/palw/integration/activation-readiness-matrix.md.txt",
+      "bytes": 51748
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/governance/design-freeze.md.txt",
+      "bytes": 7223
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/governance/document-lifecycle.md.txt",
+      "bytes": 4807
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/governance/model-option-economics-transition.md.txt",
+      "bytes": 7702
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/governance/parameter-register.md.txt",
+      "bytes": 60860
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/maintenance/catalog.md.txt",
+      "bytes": 124093
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/maintenance/decision-catalog.json.txt",
+      "bytes": 98531
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/maintenance/generate_indexes.py.txt",
+      "bytes": 8687
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/maintenance/number-registry.json.txt",
+      "bytes": 9926
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/maintenance/numbering.md.txt",
+      "bytes": 12024
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/operations/models/model-requests.md.txt",
+      "bytes": 14767
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/operations/models/palw-add-a-model-runbook.md.txt",
+      "bytes": 33264
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/reference/palw/palw-registry-map.md.txt",
+      "bytes": 17163
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+      "bytes": 291909
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0004-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 76642
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+      "bytes": 295232
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+      "bytes": 86338
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0009-remote-client-and-sdk.md.txt",
+      "bytes": 59157
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt",
+      "bytes": 153451
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt",
+      "bytes": 135452
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0012-authenticated-state-storage-and-ibd.md.txt",
+      "bytes": 37246
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0013-permissionless-bootstrap-and-release.md.txt",
+      "bytes": 16946
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0014-court-master-contract.md.txt",
+      "bytes": 395291
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0015-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 300938
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+      "bytes": 41736
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+      "bytes": 36378
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+      "bytes": 62470
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+      "bytes": 47964
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+      "bytes": 61116
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/MIGRATION.md.txt",
+      "bytes": 14843
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/README.md.txt",
+      "bytes": 22213
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc-v2/registry.json.txt",
+      "bytes": 23320
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc/0063-additional-model-option-economics.md.txt",
+      "bytes": 23855
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc/INDEX.md.txt",
+      "bytes": 12923
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc/README.md.txt",
+      "bytes": 6147
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/rfc/TOPICS.md.txt",
+      "bytes": 10164
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/before/spec/palw/model-tiers.md.txt",
+      "bytes": 2777
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/changes.json",
+      "bytes": 46197
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/check_liquidity_math.py",
+      "bytes": 16147
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/check_preservation.py",
+      "bytes": 13731
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/adr.json",
+      "bytes": 16879
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/adr.log",
+      "bytes": 16879
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/adr.run.json",
+      "bytes": 502
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/docs.run.json",
+      "bytes": 508
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/rfc.json",
+      "bytes": 444
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-after/rfc.run.json",
+      "bytes": 263
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/adr.json",
+      "bytes": 15642
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/adr.run.json",
+      "bytes": 505
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/adr.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/adr.stdout.log",
+      "bytes": 15642
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/docs.run.json",
+      "bytes": 511
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/docs.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/docs.stdout.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/rfc.json",
+      "bytes": 444
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/rfc.run.json",
+      "bytes": 265
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/rfc.stderr.log",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-baseline/rfc.stdout.log",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/checker-comparison.json",
+      "bytes": 4619
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/liquidity-math-check.json",
+      "bytes": 4936
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/preservation-check.json",
+      "bytes": 820756
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-permanent-liquidity/revision-check.json",
+      "bytes": 558
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/CHANGES.md",
+      "bytes": 2355
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/DESIGN_REVIEW.md",
+      "bytes": 3639
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/README.md",
+      "bytes": 1304
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/VALIDATION.md",
+      "bytes": 3251
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/READ_ME_FIRST.txt.txt",
+      "bytes": 3057
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/AGENTS.md.txt",
+      "bytes": 7828
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/INDEX.md.txt",
+      "bytes": 12752
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/PRINCIPLES.md.txt",
+      "bytes": 69713
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/README.md.txt",
+      "bytes": 15043
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/STATUS.md.txt",
+      "bytes": 17059
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0013-tir-arithmetic-and-determinism.md.txt",
+      "bytes": 126077
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0014-versioned-kernels-and-backends.md.txt",
+      "bytes": 121817
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0015-permissionless-model-registration.md.txt",
+      "bytes": 171441
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0024-inference-input-output-contract.md.txt",
+      "bytes": 113387
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0025-context-and-input-commitments.md.txt",
+      "bytes": 159989
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0026-canonical-work-and-answer-accounting.md.txt",
+      "bytes": 191616
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0028-attempt-ticket-and-seed-anchor.md.txt",
+      "bytes": 106977
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0033-probabilistic-checks-and-exact-court.md.txt",
+      "bytes": 26611
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0040-tir-terminal-proof-and-local-opening.md.txt",
+      "bytes": 173494
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/0049-authenticated-state-map-and-row-stream.md.txt",
+      "bytes": 15319
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/README.md.txt",
+      "bytes": 30314
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr-v2/registry.json.txt",
+      "bytes": 56780
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr/0230-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 9018
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr/0233-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 8156
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr/INDEX.md.txt",
+      "bytes": 43055
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr/README.md.txt",
+      "bytes": 7821
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/adr/TOPICS.md.txt",
+      "bytes": 34438
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/design/palw/integration/model-onboarding-implementation-matrix.md.txt",
+      "bytes": 21902
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/design/palw/models/README.md.txt",
+      "bytes": 2414
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/design/palw/models/mas1-admission-policy.json.txt",
+      "bytes": 5013
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/governance/model-admission-safety-transition.md.txt",
+      "bytes": 5256
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/governance/palw-tb1-fow1-transition.md.txt",
+      "bytes": 13568
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/maintenance/catalog.md.txt",
+      "bytes": 126117
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/maintenance/decision-catalog.json.txt",
+      "bytes": 100042
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/maintenance/generate_indexes.py.txt",
+      "bytes": 9733
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/maintenance/number-registry.json.txt",
+      "bytes": 10832
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/operations/models/palw-model-onboarding-sdk.md.txt",
+      "bytes": 11656
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0001-inference-and-generative-jobs.md.txt",
+      "bytes": 211047
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md.txt",
+      "bytes": 294239
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+      "bytes": 294718
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0005-bounded-resources-and-long-context.md.txt",
+      "bytes": 59173
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+      "bytes": 298093
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+      "bytes": 89176
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+      "bytes": 44549
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+      "bytes": 39184
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+      "bytes": 65309
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+      "bytes": 50804
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+      "bytes": 63993
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/README.md.txt",
+      "bytes": 25034
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc-v2/registry.json.txt",
+      "bytes": 26225
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc/0062-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 32206
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc/0065-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 32939
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc/INDEX.md.txt",
+      "bytes": 13806
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc/README.md.txt",
+      "bytes": 8909
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/before/docs/rfc/TOPICS.md.txt",
+      "bytes": 10897
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/change-manifest.json",
+      "bytes": 23319
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/check_revision.py",
+      "bytes": 5321
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/integration-points.json",
+      "bytes": 1966
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/source-manifest.json",
+      "bytes": 443394
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/baseline/adr.log",
+      "bytes": 16626
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/baseline/docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/baseline/results.json",
+      "bytes": 172
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/baseline/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/input-relative-delta.json",
+      "bytes": 904
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/adr.json",
+      "bytes": 16448
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/adr.log",
+      "bytes": 16448
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/docs.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/results.json",
+      "bytes": 166
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/post/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/reference-check.json",
+      "bytes": 2569
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-qwen-fow1/validation/revision-check.json",
+      "bytes": 546
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md",
+      "bytes": 159724
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/README.md",
+      "bytes": 6405
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/SOURCE_PROVENANCE.md",
+      "bytes": 2104
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/VALIDATION.md",
+      "bytes": 5802
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/adoption-integrity.json",
+      "bytes": 369158
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/beacon-and-policy-coverage.json",
+      "bytes": 4452781
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/changed-files.json",
+      "bytes": 48622
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/check_revision.py",
+      "bytes": 8946
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/adr.json",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/adr.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/adr.stdout.log",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/docs.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/docs.stdout.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/rfc.json",
+      "bytes": 551
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/rfc.stderr.log",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/rfc.stdout.log",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/checker-baseline/summary.json",
+      "bytes": 1322
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/coverage-summary.json",
+      "bytes": 672
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/followup-scope-audit.json",
+      "bytes": 8830
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/randomness-before.json",
+      "bytes": 2876413
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/upstream/Misaka_PALW_TB1_Design_Bundle.zip",
+      "bytes": 543307
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/adr.json",
+      "bytes": 9462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/adr.run.json",
+      "bytes": 334
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/adr.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/adr.stdout.log",
+      "bytes": 9462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/arithmetic.run.json",
+      "bytes": 108
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/arithmetic.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/arithmetic.stdout.log",
+      "bytes": 392
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/docs.json",
+      "bytes": 160358
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/docs.run.json",
+      "bytes": 340
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/docs.stderr.log",
+      "bytes": 0
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/docs.stdout.log",
+      "bytes": 5564
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/fixture.run.json",
+      "bytes": 101
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/fixture.stderr.log",
+      "bytes": 4156
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/fixture.stdout.log",
+      "bytes": 73
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/revision-check.json",
+      "bytes": 958
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/rfc.json",
+      "bytes": 479
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/rfc.run.json",
+      "bytes": 107
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/rfc.stderr.log",
+      "bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-20-tb1-fow1/validation/rfc.stdout.log",
+      "bytes": 178
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/README.md",
+      "bytes": 4115
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/adoption.json",
+      "bytes": 1120
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/AGENTS.md.txt",
+      "bytes": 9075
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/CLAUDE.md.txt",
+      "bytes": 4668
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/AGENTS.md.txt",
+      "bytes": 8415
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/INDEX.md.txt",
+      "bytes": 13522
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/PRINCIPLES.md.txt",
+      "bytes": 70616
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/README.md.txt",
+      "bytes": 15829
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/STATUS.md.txt",
+      "bytes": 17885
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0013-tir-arithmetic-and-determinism.md.txt",
+      "bytes": 126889
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0014-versioned-kernels-and-backends.md.txt",
+      "bytes": 122632
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0015-permissionless-model-registration.md.txt",
+      "bytes": 172248
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0016-artifact-ownership-and-model-lineage.md.txt",
+      "bytes": 82091
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0019-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 62668
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0020-class-share-and-allocation-evolution.md.txt",
+      "bytes": 144536
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0021-positions-and-membership.md.txt",
+      "bytes": 91455
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0022-liquidity-seeding-and-virtual-reserves.md.txt",
+      "bytes": 89827
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0023-model-reward-routing-and-owner-leg.md.txt",
+      "bytes": 51411
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0027-claim-lifecycle-and-liability.md.txt",
+      "bytes": 72987
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0028-attempt-ticket-and-seed-anchor.md.txt",
+      "bytes": 107798
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0030-sharded-verification-and-model-measurement.md.txt",
+      "bytes": 41809
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0031-panel-independence-and-unavailability.md.txt",
+      "bytes": 99180
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0032-sampling-beacon-and-receipts.md.txt",
+      "bytes": 119696
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0033-probabilistic-checks-and-exact-court.md.txt",
+      "bytes": 27404
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/0050-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 103266
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/README.md.txt",
+      "bytes": 31090
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr-v2/registry.json.txt",
+      "bytes": 58247
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0229-palw-internal-threshold-beacon.md.txt",
+      "bytes": 8570
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0230-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 10027
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0231-additional-model-option-economics.md.txt",
+      "bytes": 7147
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0232-reward-buy-and-permanent-liquidity.md.txt",
+      "bytes": 6074
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0233-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 8963
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/0234-qwen3-fow1-execution-and-readout.md.txt",
+      "bytes": 5840
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/INDEX.md.txt",
+      "bytes": 43578
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/README.md.txt",
+      "bytes": 8600
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/adr/TOPICS.md.txt",
+      "bytes": 34877
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/design/palw/economics/moe1-economic-policy.json.txt",
+      "bytes": 4973
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/design/palw/economics/moe2-economic-policy.json.txt",
+      "bytes": 2770
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/design/palw/models/mas1-admission-policy.json.txt",
+      "bytes": 5799
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/design/palw/models/qf1-qwen3-8b-profile.json.txt",
+      "bytes": 7494
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/governance/model-admission-safety-transition.md.txt",
+      "bytes": 6524
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/governance/model-option-economics-transition.md.txt",
+      "bytes": 9890
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/governance/palw-tb1-fow1-transition.md.txt",
+      "bytes": 14742
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/governance/qwen-fow1-profile-transition.md.txt",
+      "bytes": 4277
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/maintenance/catalog.md.txt",
+      "bytes": 127270
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/maintenance/decision-catalog.json.txt",
+      "bytes": 100781
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/maintenance/generate_indexes.py.txt",
+      "bytes": 10272
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/maintenance/number-registry.json.txt",
+      "bytes": 11254
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0001-inference-and-generative-jobs.md.txt",
+      "bytes": 211897
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md.txt",
+      "bytes": 295112
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0003-model-onboarding-and-artifacts.md.txt",
+      "bytes": 295599
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0004-model-tiers-and-annual-catalog.md.txt",
+      "bytes": 77948
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0005-bounded-resources-and-long-context.md.txt",
+      "bytes": 60059
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0006-panels-and-probabilistic-verification.md.txt",
+      "bytes": 298927
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0007-claims-exec-and-answer-accounting.md.txt",
+      "bytes": 90040
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0008-claim-dependencies-and-liability.md.txt",
+      "bytes": 69134
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0009-remote-client-and-sdk.md.txt",
+      "bytes": 62003
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0010-dag-consensus-and-native-settlement.md.txt",
+      "bytes": 156302
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0011-bond-budgets-fees-and-payments.md.txt",
+      "bytes": 142967
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md.txt",
+      "bytes": 38552
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0013-permissionless-bootstrap-and-release.md.txt",
+      "bytes": 18252
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0014-court-master-contract.md.txt",
+      "bytes": 396597
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md.txt",
+      "bytes": 302244
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md.txt",
+      "bytes": 45427
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0017-noninteractive-positive-verification.md.txt",
+      "bytes": 40140
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0018-interactive-negative-court-and-defaults.md.txt",
+      "bytes": 66628
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md.txt",
+      "bytes": 51685
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md.txt",
+      "bytes": 64853
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/README.md.txt",
+      "bytes": 26287
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc-v2/registry.json.txt",
+      "bytes": 27226
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0061-palw-internal-threshold-beacon.md.txt",
+      "bytes": 32693
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0062-palw-function-output-and-work-admissibility.md.txt",
+      "bytes": 36137
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0063-additional-model-option-economics.md.txt",
+      "bytes": 25283
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0064-reward-buy-and-permanent-liquidity.md.txt",
+      "bytes": 21808
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0065-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 35336
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/0066-qwen3-fow1-execution-and-readout.md.txt",
+      "bytes": 51770
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/INDEX.md.txt",
+      "bytes": 14288
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/README.md.txt",
+      "bytes": 9690
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/before/docs/rfc/TOPICS.md.txt",
+      "bytes": 11304
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/change-manifest.json",
+      "bytes": 3148033
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/check_revision.py",
+      "bytes": 7643
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/editorial-checksum-updates.json",
+      "bytes": 7231
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/adr.json",
+      "bytes": 18664
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/adr.log",
+      "bytes": 18664
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/adr.run.json",
+      "bytes": 170
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/docs.json",
+      "bytes": 243478
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/docs.log",
+      "bytes": 6411
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/docs.run.json",
+      "bytes": 175
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/integrated-book-preservation.json",
+      "bytes": 4669
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/revision.json",
+      "bytes": 558
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/revision.log",
+      "bytes": 558
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/revision.run.json",
+      "bytes": 225
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/after/rfc.run.json",
+      "bytes": 72
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/before/adr.log",
+      "bytes": 18921
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/before/docs.json",
+      "bytes": 243478
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/before/docs.log",
+      "bytes": 6411
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/before/rfc.log",
+      "bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-23-dual-route-admission/validation/summary.json",
+      "bytes": 6993
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/MATH.md",
+      "bytes": 10311
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/README.md",
+      "bytes": 4141
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/RETIREMENT_MATH.md",
+      "bytes": 7185
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/VALIDATION.md",
+      "bytes": 4858
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/AGENTS.md.txt",
+      "bytes": 10422
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/READ_ME_FIRST.txt.txt",
+      "bytes": 3911
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/AGENTS.md.txt",
+      "bytes": 9064
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/PRINCIPLES.md.txt",
+      "bytes": 73199
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/README.md.txt",
+      "bytes": 16808
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/STATUS.md.txt",
+      "bytes": 19124
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0027-palw-slash-unilateral-fraud-proofs.md.txt",
+      "bytes": 24326
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0032-palw-fee-bond-escrow.md.txt",
+      "bytes": 13112
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt",
+      "bytes": 12670
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt",
+      "bytes": 10640
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md.txt",
+      "bytes": 20033
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt",
+      "bytes": 10658
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0095-a-position-is-a-membership-not-an-income.md.txt",
+      "bytes": 8064
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt",
+      "bytes": 6923
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt",
+      "bytes": 6261
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt",
+      "bytes": 8049
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt",
+      "bytes": 36084
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0177-model-bond-allocation-without-availability-consensus.md.txt",
+      "bytes": 8608
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt",
+      "bytes": 7250
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0180-palw-only-consensus-no-bft-validators.md.txt",
+      "bytes": 2679
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0221-additional-model-burn-pause.md.txt",
+      "bytes": 4258
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0231-additional-model-option-economics.md.txt",
+      "bytes": 9034
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0232-reward-buy-and-permanent-liquidity.md.txt",
+      "bytes": 7807
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0233-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 10865
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0234-qwen3-fow1-execution-and-readout.md.txt",
+      "bytes": 7624
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md.txt",
+      "bytes": 5484
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/INDEX.md.txt",
+      "bytes": 44126
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/README.md.txt",
+      "bytes": 10213
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/TOPICS.md.txt",
+      "bytes": 35481
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/README.md.txt",
+      "bytes": 2294
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/consensus/public-adjudication-policy-v0.6.md.txt",
+      "bytes": 4014
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/consensus/verification-responsibilities-and-simplification-2026-11-23.md.txt",
+      "bytes": 11074
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/economics/bond-budget-and-model-allocation.md.txt",
+      "bytes": 61281
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/economics/econ-verifier-incentive-and-allocation.md.txt",
+      "bytes": 83764
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/integration/additional-model-burn-pause-2026-11-11.md.txt",
+      "bytes": 3848
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/design-freeze.md.txt",
+      "bytes": 10105
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/document-lifecycle.md.txt",
+      "bytes": 6099
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-admission-dual-route-transition.md.txt",
+      "bytes": 4659
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-admission-safety-transition.md.txt",
+      "bytes": 8196
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-option-economics-transition.md.txt",
+      "bytes": 11490
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/palw-tb1-fow1-transition.md.txt",
+      "bytes": 16546
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/parameter-register.md.txt",
+      "bytes": 62934
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/parameters.json.txt",
+      "bytes": 49952
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/qwen-fow1-profile-transition.md.txt",
+      "bytes": 6038
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/catalog.md.txt",
+      "bytes": 121205
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/decision-catalog.json.txt",
+      "bytes": 101509
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/generate_indexes.py.txt",
+      "bytes": 10952
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/number-registry.json.txt",
+      "bytes": 11668
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/numbering.md.txt",
+      "bytes": 12702
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/reference/palw/palw-registry-map.md.txt",
+      "bytes": 20023
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0014-panel-independent-fraud-prosecution.md.txt",
+      "bytes": 92013
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0015-panel-free-permissionless-verification.md.txt",
+      "bytes": 81978
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md.txt",
+      "bytes": 61265
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0017-model-eligibility-examination-and-renewal.md.txt",
+      "bytes": 5637
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0019-annual-model-upgrade.md.txt",
+      "bytes": 60831
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0053-additional-model-burn-pause.md.txt",
+      "bytes": 14349
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0063-additional-model-option-economics.md.txt",
+      "bytes": 27130
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0064-reward-buy-and-permanent-liquidity.md.txt",
+      "bytes": 23324
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0065-model-admission-screening-and-bft-stop.md.txt",
+      "bytes": 38092
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0066-qwen3-fow1-execution-and-readout.md.txt",
+      "bytes": 54188
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md.txt",
+      "bytes": 24020
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/INDEX.md.txt",
+      "bytes": 14854
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/README.md.txt",
+      "bytes": 10837
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/TOPICS.md.txt",
+      "bytes": 11909
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/spec/palw/model-tiers.md.txt",
+      "bytes": 4092
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/changed-existing-files.json",
+      "bytes": 26090
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/check_moe3.py",
+      "bytes": 3459
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/check_retirement.py",
+      "bytes": 2979
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/docs-check-final.json",
+      "bytes": 233740
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/docs-check-input.json",
+      "bytes": 233740
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/integration-changes.json",
+      "bytes": 22136
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/math-check.json",
+      "bytes": 8514
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/moe3_reference.py",
+      "bytes": 20558
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/new-files.json",
+      "bytes": 22171
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/retirement-check.json",
+      "bytes": 6351
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/retirement_reference.py",
+      "bytes": 21941
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/revision-validation.json",
+      "bytes": 1926
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/test_moe3_reference.py",
+      "bytes": 28483
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-fractional-position/test_retirement_reference.py",
+      "bytes": 23803
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-mwa1/README.md",
+      "bytes": 2016
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-26-mwa1/check_reference.py",
+      "bytes": 4142
+    },
+    {
+      "path": "docs/maintenance/rfc20-change-summary.md",
+      "bytes": 4004
+    },
+    {
+      "path": "docs/maintenance/tool-test-results.json",
+      "bytes": 693
+    },
+    {
+      "path": "docs/maintenance/v2-integration-2026-10-31.md",
+      "bytes": 2380
+    },
+    {
+      "path": "docs/maintenance/validation-report.md",
+      "bytes": 5071
+    },
+    {
+      "path": "docs/maintenance/validation-summary.json",
+      "bytes": 634
+    },
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "bytes": 49564
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "bytes": 383102
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "bytes": 210123
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "bytes": 95917
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "bytes": 2996
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "bytes": 96980
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "bytes": 143742
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "bytes": 52096
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "bytes": 46990
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "bytes": 42156
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "bytes": 124903
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "bytes": 57041
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "bytes": 36800
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "bytes": 93432
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "bytes": 87436
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "bytes": 66723
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "bytes": 8589
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "bytes": 56675
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "bytes": 63783
+    },
+    {
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "bytes": 22702
+    },
+    {
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "bytes": 1628
+    },
+    {
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "bytes": 2195
+    },
+    {
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "bytes": 57996
+    },
+    {
+      "path": "docs/rfc/0024-assets/ADR-DRAFT-palw-court-door-3200.md",
+      "bytes": 6333
+    },
+    {
+      "path": "docs/rfc/0024-assets/PACKAGE-MANIFEST.json",
+      "bytes": 1966
+    },
+    {
+      "path": "docs/rfc/0024-assets/budget-self-test.txt",
+      "bytes": 734
+    },
+    {
+      "path": "docs/rfc/0024-assets/budget-template-report.json",
+      "bytes": 12577
+    },
+    {
+      "path": "docs/rfc/0024-assets/delta-plan-report.json",
+      "bytes": 1021
+    },
+    {
+      "path": "docs/rfc/0024-assets/door-budget.template.json",
+      "bytes": 9236
+    },
+    {
+      "path": "docs/rfc/0024-assets/door_budget.py",
+      "bytes": 15361
+    },
+    {
+      "path": "docs/rfc/0024-assets/geometry-report.json",
+      "bytes": 843
+    },
+    {
+      "path": "docs/rfc/0024-assets/repository-scan.json",
+      "bytes": 787
+    },
+    {
+      "path": "docs/rfc/0024-assets/source-audit.md",
+      "bytes": 67732
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "bytes": 51926
+    },
+    {
+      "path": "docs/rfc/0025-assets/ADR-DRAFT-scalable-court-v2.md",
+      "bytes": 5561
+    },
+    {
+      "path": "docs/rfc/0025-assets/PACKAGE-MANIFEST.json",
+      "bytes": 3931
+    },
+    {
+      "path": "docs/rfc/0025-assets/README.md",
+      "bytes": 4152
+    },
+    {
+      "path": "docs/rfc/0025-assets/arithmetic-test-results.txt",
+      "bytes": 2588
+    },
+    {
+      "path": "docs/rfc/0025-assets/arming-record.template.json",
+      "bytes": 1896
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity-report.json",
+      "bytes": 3264
+    },
+    {
+      "path": "docs/rfc/0025-assets/capacity_planner.py",
+      "bytes": 9473
+    },
+    {
+      "path": "docs/rfc/0025-assets/package-checks.txt",
+      "bytes": 323
+    },
+    {
+      "path": "docs/rfc/0025-assets/source-audit-v2.md",
+      "bytes": 26719
+    },
+    {
+      "path": "docs/rfc/0025-assets/test_capacity_planner.py",
+      "bytes": 4866
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "bytes": 57889
+    },
+    {
+      "path": "docs/rfc/0026-assets/MANIFEST.json",
+      "bytes": 1672
+    },
+    {
+      "path": "docs/rfc/0026-assets/README.md",
+      "bytes": 1756
+    },
+    {
+      "path": "docs/rfc/0026-assets/audit-report.md",
+      "bytes": 37408
+    },
+    {
+      "path": "docs/rfc/0026-assets/checks.json",
+      "bytes": 12923
+    },
+    {
+      "path": "docs/rfc/0026-assets/coverage.md",
+      "bytes": 8102
+    },
+    {
+      "path": "docs/rfc/0026-assets/cross-rfc-normative-scan.json",
+      "bytes": 273944
+    },
+    {
+      "path": "docs/rfc/0026-assets/findings.json",
+      "bytes": 11936
+    },
+    {
+      "path": "docs/rfc/0026-assets/inventory.json",
+      "bytes": 105253
+    },
+    {
+      "path": "docs/rfc/0026-assets/reproduce_checks.py",
+      "bytes": 7471
+    },
+    {
+      "path": "docs/rfc/0026-assets/source-evidence.md",
+      "bytes": 184546
+    },
+    {
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "bytes": 52522
+    },
+    {
+      "path": "docs/rfc/0027-assets/README.md",
+      "bytes": 1216
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.json",
+      "bytes": 1466
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-after.log",
+      "bytes": 1237
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.json",
+      "bytes": 1517
+    },
+    {
+      "path": "docs/rfc/0027-assets/docs-before.log",
+      "bytes": 1283
+    },
+    {
+      "path": "docs/rfc/0027-assets/economic-examples.md",
+      "bytes": 4988
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples-results.json",
+      "bytes": 2531
+    },
+    {
+      "path": "docs/rfc/0027-assets/examples.log",
+      "bytes": 1837
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/MANIFEST.json",
+      "bytes": 10103
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/PATCH_APPLY_CHECK.json",
+      "bytes": 1343
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/README.md",
+      "bytes": 2804
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/README_JA.md.txt",
+      "bytes": 5533
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/comparison.json",
+      "bytes": 847
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-source-check.json",
+      "bytes": 3214
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-claim-summary.json",
+      "bytes": 24285
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-panel-samples.json",
+      "bytes": 92677
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/archive-panel-summary.json",
+      "bytes": 13369
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/capital-envelope.csv",
+      "bytes": 19319
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/environment.json",
+      "bytes": 1223
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/examples.json",
+      "bytes": 2531
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/examples.log",
+      "bytes": 1216
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/panel-cost-sensitivity.csv",
+      "bytes": 26923
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/reaggregation-checks.json",
+      "bytes": 129743
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/reaggregation.log",
+      "bytes": 1088
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/source-manifest.json",
+      "bytes": 5500
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/summary.json",
+      "bytes": 1088
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/synthetic-admission.csv",
+      "bytes": 116554
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/synthetic-special-cases.json",
+      "bytes": 2285
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/tests.log",
+      "bytes": 2127
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/local-validation/trace-shadow.csv",
+      "bytes": 76510
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/panel-sample-differences.json",
+      "bytes": 1805
+    },
+    {
+      "path": "docs/rfc/0027-assets/import-record/source-package.zip",
+      "bytes": 369641
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.json",
+      "bytes": 1466
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/docs-update-check.log",
+      "bytes": 1237
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/index-generation.log",
+      "bytes": 41
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measure.py",
+      "bytes": 25209
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/measurement-report.md",
+      "bytes": 22334
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/plan.json",
+      "bytes": 3261
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.json",
+      "bytes": 2531
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/rechecked-examples.log",
+      "bytes": 1837
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-claim-summary.json",
+      "bytes": 24285
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-samples.json",
+      "bytes": 92677
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/archive-panel-summary.json",
+      "bytes": 13369
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/capital-envelope.csv",
+      "bytes": 19319
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/environment.json",
+      "bytes": 1302
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/panel-cost-sensitivity.csv",
+      "bytes": 26923
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/reaggregation-checks.json",
+      "bytes": 129743
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/source-manifest.json",
+      "bytes": 5500
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/summary.json",
+      "bytes": 1094
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-admission.csv",
+      "bytes": 116554
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/synthetic-special-cases.json",
+      "bytes": 2285
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/results/trace-shadow.csv",
+      "bytes": 76510
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run-initial-failed.log",
+      "bytes": 1035
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/run.log",
+      "bytes": 1094
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/stage1-collector-selftest.log",
+      "bytes": 13
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/test_measure.py",
+      "bytes": 8060
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/tests.log",
+      "bytes": 3154
+    },
+    {
+      "path": "docs/rfc/0027-assets/measurement/validation-update.json",
+      "bytes": 2672
+    },
+    {
+      "path": "docs/rfc/0027-assets/reproduce_examples.py",
+      "bytes": 11726
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-manifest.json",
+      "bytes": 6378
+    },
+    {
+      "path": "docs/rfc/0027-assets/source-review.md",
+      "bytes": 5950
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation-results.json",
+      "bytes": 698
+    },
+    {
+      "path": "docs/rfc/0027-assets/validation.md",
+      "bytes": 5239
+    },
+    {
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "bytes": 49014
+    },
+    {
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "bytes": 13221
+    },
+    {
+      "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "bytes": 55657
+    },
+    {
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "bytes": 30534
+    },
+    {
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "bytes": 4469
+    },
+    {
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "bytes": 10680
+    },
+    {
+      "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "bytes": 4087
+    },
+    {
+      "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "bytes": 15659
+    },
+    {
+      "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "bytes": 24380
+    },
+    {
+      "path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "bytes": 11418
+    },
+    {
+      "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "bytes": 10279
+    },
+    {
+      "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "bytes": 3770
+    },
+    {
+      "path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "bytes": 16635
+    },
+    {
+      "path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "bytes": 6115
+    },
+    {
+      "path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "bytes": 5968
+    },
+    {
+      "path": "docs/rfc/0042-all-model-g14-panel-one.md",
+      "bytes": 7603
+    },
+    {
+      "path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md",
+      "bytes": 16440
+    },
+    {
+      "path": "docs/rfc/0043-wide-q24-llm-output.md",
+      "bytes": 6591
+    },
+    {
+      "path": "docs/rfc/0044-positive-court-full-coverage.md",
+      "bytes": 67629
+    },
+    {
+      "path": "docs/rfc/0045-positive-court-canonical-assignment.md",
+      "bytes": 42579
+    },
+    {
+      "path": "docs/rfc/0046-positive-native-funded-relay.md",
+      "bytes": 37487
+    },
+    {
+      "path": "docs/rfc/0047-batch-court-time-contract.md",
+      "bytes": 10618
+    },
+    {
+      "path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "bytes": 9997
+    },
+    {
+      "path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "bytes": 8433
+    },
+    {
+      "path": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "bytes": 11091
+    },
+    {
+      "path": "docs/rfc/0051-funded-preclaim-tokenizer-registration.md",
+      "bytes": 19906
+    },
+    {
+      "path": "docs/rfc/0052-hugging-face-model-acquisition-and-claim-materials.md",
+      "bytes": 16065
+    },
+    {
+      "path": "docs/rfc/0053-additional-model-burn-pause.md",
+      "bytes": 18910
+    },
+    {
+      "path": "docs/rfc/0054-public-t12-original-admission-profile.md",
+      "bytes": 12073
+    },
+    {
+      "path": "docs/rfc/0055-global-admission-court-calendar-and-one-bps.md",
+      "bytes": 37967
+    },
+    {
+      "path": "docs/rfc/0056-global-claim-admission-difficulty.md",
+      "bytes": 56730
+    },
+    {
+      "path": "docs/rfc/0057-court-nonce-and-panel-challenges.md",
+      "bytes": 54828
+    },
+    {
+      "path": "docs/rfc/0058-staged-work-commitments-and-consensus-eligibility.md",
+      "bytes": 65403
+    },
+    {
+      "path": "docs/rfc/0059-palw-an1-input-binding-and-panel-court.md",
+      "bytes": 32117
+    },
+    {
+      "path": "docs/rfc/0060-model-registration-and-attempt-output-binding.md",
+      "bytes": 34707
+    },
+    {
+      "path": "docs/rfc/0061-palw-internal-threshold-beacon.md",
+      "bytes": 34821
+    },
+    {
+      "path": "docs/rfc/0062-palw-function-output-and-work-admissibility.md",
+      "bytes": 38568
+    },
+    {
+      "path": "docs/rfc/0063-additional-model-option-economics.md",
+      "bytes": 32588
+    },
+    {
+      "path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "bytes": 29972
+    },
+    {
+      "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "bytes": 43550
+    },
+    {
+      "path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "bytes": 57140
+    },
+    {
+      "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "bytes": 31891
+    },
+    {
+      "path": "docs/rfc/0068-fractional-position-miner-rewards.md",
+      "bytes": 19398
+    },
+    {
+      "path": "docs/rfc/0069-bft-model-retirement-and-role-bonds.md",
+      "bytes": 16367
+    },
+    {
+      "path": "docs/rfc/0070-model-work-accounting-and-exec-credit.md",
+      "bytes": 30345
+    }
+  ]
+}

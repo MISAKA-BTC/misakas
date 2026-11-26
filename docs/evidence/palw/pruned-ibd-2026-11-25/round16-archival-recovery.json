@@ -1,0 +1,32 @@
+{
+  "test": "verify_recovery_pruning_snapshot_at_selected_successor",
+  "source": "private Round 16 archival checkpoint",
+  "sourceManifestSha256": "17697d9bf0ce11702519dcd2ed2b0fe0a7a27674dae075a34a6d4c5dd3fc621a",
+  "sourceFilesVerifiedBeforeAndAfter": 118,
+  "previousCapture": "5909d1692867bb800057bf5867058d1c00424ed0c59a561187d8a5865f4bc8a72a3c9804056c79a0abc1cdc5d7750f2e732b4e3ceb569241a7ee59ed2db1971c",
+  "establishedPoint": "0e210616d5fec9c179d51c0630e3f2e7306617add03fb83c3782f3cfd63445cef884c1560595fc9d475d8268c292ac8e3334733335d17561f696e0c2360a2d37",
+  "pruningPointIndex": 46,
+  "pruningPointDaa": 13798,
+  "selectedSuccessor": "3f580c94443d3d468c62c4ff0d459616b4b1f0ad9d5d509619233950a1d35682463a00e670ffb2a2bd79331f070e4e000114324973443607dc5728a6a322f87b",
+  "recoveredAndCommittedStateRoot": "e818ba7fd0ec19e48dbedc6de7d34d1b2486cd81668482513da8f5fbe280156902b8443403f01e89dde4122d08fadf9d7e59bf89d61fcf1b41cc96f6480e7a68",
+  "testSeconds": 10.05,
+  "donorChecks": {
+    "utxoPageLimit": 32,
+    "utxosMatchingHeaderCommitment": 73,
+    "evmHeaderCommitment": "17ed29345428e4dccd02eb851a4ae6d216c0ed48f3ce625a79b79c35bfd8b0850742509e135a038ae09309c5590cc7205133ac0e86f64543e0f4c196d7d391e4",
+    "verifiedEvmStateRoot": true,
+    "overlayPointMatches": true,
+    "validatedClassDeclarations": 2,
+    "prunedRecentRecoveryRefusesCorruptEvmCheckpoint": true,
+    "elapsedTestSeconds": 10.21
+  },
+  "indexedAnchorSelection": {
+    "test": "verify_recovery_pruning_snapshot_at_selected_successor",
+    "previousLiveTipPathHops": 74920,
+    "checkpointReplayHops": 600,
+    "elapsedTestSeconds": 1.07,
+    "previousElapsedTestSeconds": 10.21,
+    "sourceManifestMatchingFilesBeforeAndAfter": 118,
+    "recoveredRootMatchesSelectedSuccessor": true
+  }
+}

@@ -1,13 +1,5 @@
 # FP Job V4 — migration guide
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。以下は旧V3からV4へのflag day移行であり、TB1/FOW1の移行手順ではない。新規採掘は共通移行契約のactivation境界を用い、旧受理claimのdrain以外にV4や旧beaconへのfallbackを認めない。旧リリースのbyte・手順は改変しない。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 For gateway operators, free-prompt (FP) producers and API clients of the MINING lane
 (`misaka-palw-gateway`'s FP lane). Normative spec: RFC-0001 §A; bytes: `job-v4-wire-spec.md`.
 
@@ -18,9 +10,9 @@ release; dormant on every preset until then). At `H`, three rules move together 
 
 1. **Only FP Job V4 is admitted for new jobs.** A new V3 commitment at or past `H` is refused
    (header context and extraction walk). V3 claims accepted before `H` finish under the V3 verifier.
-2. **ADR-0082 D11 — sampling.** A V4 job may carry `temperature_q` and `sampling_seed`; the committed
+2. **旧ADR-0082 D11 — sampling.** A V4 job may carry `temperature_q` and `sampling_seed`; the committed
    token is the seeded argmax (Gumbel-max) of the processed logits. `temperature 0` is greedy.
-3. **ADR-0082 D10 — pay for decode.** A claim's quanta are counted on its executed DECODE work; the
+3. **旧ADR-0082 D10 — pay for decode.** A claim's quanta are counted on its executed DECODE work; the
    prefill of the prompt is priced at zero; an answer a stop sequence ended early earns for what it
    decoded.
 

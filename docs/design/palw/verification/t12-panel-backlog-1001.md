@@ -1,6 +1,6 @@
 # testnet-12 panel backlog, 2026-10-01 — root cause, fixes (int-10.1), verification
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Status: analysis done on the live fleet (read-only); fixes F1–F4 on `rcore/int-10-p1` (node-only, the
 t12 identity does not move); consensus proposal for int-11 below. Written by lane P.

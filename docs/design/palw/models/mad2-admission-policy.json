@@ -2,17 +2,13 @@
   "schema": "MISAKA-MAD2-admission-contract/1",
   "logical_profile": "MAD2",
   "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
-  "date": "2026-11-23",
+  "date": "2026-11-26",
   "timezone": "Asia/Tokyo",
-  "normative_rfc": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
-  "decision_record": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+  "normative_rfc": "docs/rfc/0007-bft-model-admission.md",
+  "decision_record": "docs/rfc/0020-devnet-release-and-migration.md",
   "runtime_enabled": false,
   "wire_ids_assigned": false,
-  "native_implemented_here": false,
-  "actual_bft_vote_performed": false,
-  "qwen_approved_here": false,
   "routes": [
-    "KERNEL_AUTO",
     "BFT_DECISION"
   ],
   "shared_conditions": [
@@ -23,20 +19,8 @@
     "current_policy_and_generation",
     "no_applicable_technical_failure_or_stop"
   ],
-  "effective_model_admission": "execution_active AND base_compatible AND (immutable_genesis_bootstrap_match OR (MAD2_active AND current_context AND ((ADDITIONAL AND (valid_auto OR valid_bft_yes)) OR (FORK_DESIGNATED AND valid_bft_fork_yes)) AND no_applicable_stop))",
+  "effective_model_admission": "profile_active AND base_compatible AND valid_current_bft_yes AND current_policy_and_generation AND no_applicable_stop AND NOT retired",
   "claim_effect": "effective_model_admission AND existing_claim_verification_and_gate_c AND ticket_and_one_use_accounting",
-  "automatic": {
-    "mathematical_collision_rule_required": true,
-    "universal_cost_lower_bound_required": false,
-    "repeated_cost_review_required": true,
-    "practical_suite_required": true,
-    "structural_analysis_required": true,
-    "all_applicable_conditions_pass_required": true,
-    "unknown_to_auto_approved": false,
-    "individual_bft_vote_required": false,
-    "generated_kernel_requires_known_primitive_semantics": true,
-    "arbitrary_native_binary_loading": false
-  },
   "bft": {
     "decisions": [
       "YES",
@@ -78,7 +62,6 @@
       "roster_root",
       "deadline",
       "decision",
-      "requested_model_class",
       "immutable_origin"
     ],
     "vote_lock_persists_across_restart_and_reorg": true,
@@ -90,12 +73,10 @@
     "creates_randomness": false,
     "canonical_inclusion_required": true,
     "requested_model_classes": [
-      "ADDITIONAL",
-      "FORK_DESIGNATED"
+      "COMMON_MODEL"
     ]
   },
   "assurance": {
-    "automatic": "KERNEL_RULES_VERIFIED",
     "bft": "BFT_POLICY_APPROVAL",
     "unknown_assessments_rewritten_pass": false,
     "claims_bypass_panel_court_or_gate_c": false,
@@ -106,19 +87,19 @@
     "yes_clears_stop": false,
     "bft_resolution_requires_formal_collision_proof": false,
     "bft_resolution_requires_current_yes_and_exact_stop_set": true,
-    "technical_checker_disable_blocks_both": true,
     "no_vote_revokes_other_existing_admission": false,
     "cheap_correct_computation_automatically_slashable": false,
     "past_assets_confiscated_by_vote": false,
-    "only_original_genesis_exempt_from_bft_management": true,
     "fork_designation_clears_stop": false,
-    "shared_rule_stop_excludes_original_genesis": true,
-    "permanent_lp_core_promotion_allowed": false
+    "permanent_lp_core_promotion_allowed": false,
+    "technical_checker_disable_blocks_mining": true,
+    "all_models_bft_managed": true,
+    "genesis_bft_management_exempt": false,
+    "permanent_retirement_scope": "BMR1 limited lots and actual reserve; no verification lot blanket burn"
   },
   "compatibility": {
     "legacy_mas1_record_reinterpreted": false,
     "old_claim_deadlines_changed": false,
-    "moe2_changed": false,
     "registration_market_atomic": true,
     "permanent_lp_unlock": false,
     "tb1_changed": false,
@@ -126,7 +107,7 @@
   },
   "state_api": [
     "technical_compatibility",
-    "automatic_assessments",
+    "optional_assessments",
     "admission_basis",
     "approval_state",
     "proposal_id",
@@ -135,50 +116,10 @@
     "stop_set",
     "claim_certification"
   ],
-  "parameter_defaults": null,
-  "validation_scope": "Document contract and source-preservation checks only; no native signatures, vote execution, deployment, Qwen safety or economic guarantee.",
-  "model_classes": {
-    "GENESIS": {
-      "origin": "GENESIS_ORIGINAL",
-      "admission": "immutable genesis manifest at chain creation",
-      "bft_add": false,
-      "bft_modify": false,
-      "bft_remove": false,
-      "bft_stop": false,
-      "bft_resolve": false,
-      "bft_rule_stop_applies": false,
-      "option_market": false,
-      "miner_permille_of_worker_R": 1000,
-      "claim_validation_exempt": false
-    },
-    "ADDITIONAL": {
-      "origin": "ADDITIONAL_REGISTERED",
-      "admission": [
-        "KERNEL_AUTO",
-        "BFT_DECISION"
-      ],
-      "bft_stop": true,
-      "bft_resolve": true,
-      "automatic_origin_is_bft_managed": true,
-      "option_market": true,
-      "economics": "MOE2"
-    },
-    "FORK_DESIGNATED": {
-      "origin": "FORK_BFT_DESIGNATED",
-      "admission": [
-        "BFT_DECISION"
-      ],
-      "bft_add": true,
-      "automatic_fork_designation": false,
-      "bft_stop": true,
-      "bft_resolve": true,
-      "option_market": false,
-      "miner_permille_of_worker_R": 1000,
-      "claim_validation_exempt": false,
-      "prior_additional_registration_required": false,
-      "atomic_registration_catalog_and_approval": true
-    }
-  },
   "genesis_origin_immutable": true,
-  "genesis_origin_assignable_after_chain_creation": false
+  "genesis_origin_assignable_after_chain_creation": false,
+  "genesis_bootstrap": "immutable initial manifest; no post-launch genesis-admission route; common BFT management applies",
+  "economics": "MOE3 all models coefficient 1.0 and one market",
+  "model_root_mutation_allowed": false,
+  "design_only": true
 }

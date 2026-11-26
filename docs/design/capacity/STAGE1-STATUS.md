@@ -1,6 +1,6 @@
-# ADR-0160 stage 1 (rcore/cap-s1) — status: gate PASS
+# 旧ADR-0160 stage 1 (rcore/cap-s1) — status: gate PASS
 
-> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([ADR-0174](../../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
+> **Token identity (2026-10-07):** The token name is **Misaka** and its ticker is **BILI** ([旧ADR-0174](../../rfc/0001-principles-and-governance.md)). MSK in retained measurements, quotations, command/output examples, identifiers or chain-ID mnemonics is a legacy label for the same coin; it does not change amounts, units, protocol IDs or address prefixes.
 
 Branch `rcore/cap-s1` off the shipped DAA-750 release `c3dbaee3c` (worktree `~/Downloads/MISAKA-wt-b/wt-cap-s1`,
 shared target `wt-int4-target`, `nice -n 15`, `-j 4`). Nothing armed anywhere; t12 as shipped pins

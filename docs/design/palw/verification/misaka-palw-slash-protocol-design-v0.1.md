@@ -1,9 +1,9 @@
 # MISAKA PALW-Slash Protocol Design Specification
 
-> **PALW共通前提 — 2026-10-10:** [ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+> **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
-> **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../../../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+> **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
 
@@ -14,17 +14,17 @@
 **状態:** 実装・計測・監査前の設計案  
 
 > [!IMPORTANT]
-> **本書は入力仕様であり、判定層は ADR-0027 で置き換えられている。** 後から加わった2前提
+> **本書は入力仕様であり、判定層は 旧ADR-0027 で置き換えられている。** 後から加わった2前提
 > —— **BFT非依存**（honest-majority committeeを真理の源にしない）と
 > **challenge乱数非依存**（hash由来challenge位置の予測不能性にslash判定を依存させない）——
 > により、本書の quorum 判定（§12.3）、appeal jury（§16.3）、
 > `ComputationFaultCertificateV1` の quorum bitmap（§15.2）、
 > future-anchor challenge を安全性の根拠とする構成（§8）、および
 > sampling由来の `P_detect = 1-(1-f)^q`（§9）は、**そのまま実装してはならない**。
-> 置換規範は [`ADR-0027`](../../../adr/0027-palw-slash-unilateral-fraud-proofs.md) の §4 対応表。
+> 置換規範は [`旧ADR-0027`](../../../rfc/0009-court-and-claim-final.md) の §4 対応表。
 > bond模型（§4）、offense taxonomy（§17）、DA規則（§10）、circuit breaker（§19）、
 > 段階導入（§21）、timing（§23）、禁止事項（§27）、試験計画（§28）は
-> ADR-0027 の修正を適用したうえで**そのまま採用する**。
+> 旧ADR-0027 の修正を適用したうえで**そのまま採用する**。
 
 ---
 
@@ -1056,7 +1056,7 @@ strikeは一定期間で減衰できるが、完全消去ではなく長期履�
 
 self-challenge bounty farmingを防ぐため、slashed amountの大半をchallengerへ渡してはならない。
 
-現行PALWの摘発報酬率は[ADR-0032の2026-10-10改定](../../../adr/0032-palw-fee-bond-escrow.md#palw-challenger-share-amendment--2026-10-10)
+現行PALWの摘発報酬率は[旧ADR-0032の2026-10-10改定](../../../rfc/0012-bonds-budgets-and-slashing.md)
 により49%とする。旧credit-overlayの配分は`min(⌊49% × 実回収Slash額⌋, B_cap)`をchallengerへ払い、
 残額をburnする。`B_cap`は据え置く。現行V2 R-coreでは既払利益控除後の実徴収額の49%を用い、
 旧capを持ち込まない。以下は改定前v0.1の歴史的な初期配分であり、49%へ単純に置換して合計139%にしてはならない:
@@ -1069,7 +1069,7 @@ self-challenge bounty farmingを防ぐため、slashed amountの大半をchallen
 reward forfeitureは別枠で、verification cost補填とPALW reserveへ配分する。
 
 bountyは実回収額の49%以下であり、minerが別identityで自分をchallengeしてもSlash分の会計は純損失となる。
-既払利益を含めたR-coreの自己摘発条件はADR-0032の改定に従う。
+既払利益を含めたR-coreの自己摘発条件は旧ADR-0032の改定に従う。
 
 ---
 
@@ -1692,7 +1692,7 @@ struct SlashDecisionV1 {
 
 ## Bond予算・総影響保存の改定 — 2026-10-10
 
-[ADR-0176](../../../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)と[RFC15 §8](../../../rfc/0015-panel-free-permissionless-verification.md)を適用する。
+[旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md#8-claim予約の分解と期間上限)と[RFC15 §8](../../../rfc/0008-g14-panel-and-verification.md)を適用する。
 
 bondを事後slashの財源だけでなく、時間内のclaim発行能力とblock/reward/Final weight上限の資本として扱う。早期void・取消で枠を回復せず、未解決責任の担保を別に保持する。
 確率的検出・全constraint coverage・exact裁定と実徴収可能net損失をANDで評価する。過去のsampling/quorum模型を本追加前提の完成証拠にせず、現在の客観証拠と49%還流を含む経済評価へ接続する。

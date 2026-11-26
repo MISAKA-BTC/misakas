@@ -1,0 +1,24 @@
+{
+  "source_zip": "docs(6).zip",
+  "source_sha256": "2ab7cec33e0ffa015b5186e99c9d44449e1aaa125069fe6be11d811b8db69106",
+  "rfc_before": 71,
+  "rfc_after": 20,
+  "old_rfc_archive": false,
+  "markdown_target_rewrites": 1200,
+  "removed_document_links_redirected_to_explicit_removal_note": 357,
+  "runtime_changes": false,
+  "public_activation_changes": false,
+  "adr_before": 235,
+  "adr_after": 20,
+  "old_adr_archive": false,
+  "content_roles": {
+    "RFC": "design",
+    "ADR": "rationale"
+  },
+  "adr_reorganization": {
+    "markdown_links": 407,
+    "inline_paths": 31,
+    "files": 247,
+    "json_files": 5
+  }
+}

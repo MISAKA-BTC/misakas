@@ -8,7 +8,7 @@
 
 ## S01 — RFC01: 受入条件・実装済みprefix・残る最適化・seed提案
 
-### `docs/rfc/0001-palw-inference-surface-gaps.md:370–377`
+### `docs/rfc/0003-jobs-tokenizers-and-generation.md:370–377`
 
 ```text
 370: ## 6. テスト・ドリル計画
@@ -21,7 +21,7 @@
 377: 6. **公開チェーン**:flag day 後、fence 越えの FP claim の Final と、反証 0 件を監視する。
 ```
 
-### `docs/rfc/0001-palw-inference-surface-gaps.md:408–429`
+### `docs/rfc/0003-jobs-tokenizers-and-generation.md:408–429`
 
 ```text
 408: ### 7.3 追記(2026-10-03 夜、lane U 第 3 弾)— 段階 2b と運用
@@ -36,7 +36,7 @@
 417: 
 418: §Aと§2のdecode、artifact、KV reuse、adapter、multimodal拡張は、それぞれ公開の入力・state境界・version・outputと裁定証拠を拘束する。ローカルChatの非claim機能や将来profileのsource fidelityは、公開訴追可能性の代わりにならない。新しい報酬profileの受入にRFC14の外部public-bond試験を追加する。
 419: 
-420: 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
+420: 本節は、衝突する将来の実装指示・受入条件を改定する。本文中の既存実装、過去の測定、旧claimの規則はその時点の記録である。新しい合意規則はversioned specification・実装・独立試験・明示的activationを経て初めて適用する。[ADR173](../../../rfc/0009-court-and-claim-final.md)、[RFC14](0014-panel-independent-fraud-prosecution.md)、[RFC15](0015-panel-free-permissionless-verification.md)を参照する。
 421: 
 422: ## 改定 — 2026-10-12（W1・W2・X4・N4：提案）
 423: 
@@ -55,7 +55,7 @@
 121:     pub require_committed_format: bool,
 122: }
 123: 
-124: /// OpenAI's `seed` is an integer; this lane's (ADR-0082 Decision 11) is 64 hex characters. An
+124: /// OpenAI's `seed` is an integer; this lane's (旧ADR-0082 Decision 11) is 64 hex characters. An
 125: /// integer is read as its decimal text so that it reaches `sampling_from_request`'s own rule and
 126: /// is refused THERE, by that rule's sentence, rather than by a serde type error that names no
 127: /// field.
@@ -95,7 +95,7 @@
 1185:         }
 1186:     };
 1187:     if !facts.fp_decode_rules_armed && (temperature_q != PALW_DECODE_TEMPERATURE_GREEDY || sampling_seed != PALW_DECODE_SEED_GREEDY) {
-1188:         return Err("this network has not armed ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) — a job with a \
+1188:         return Err("this network has not armed 旧ADR-0082 Decision 11's sampler (Params::palw_fp_decode_rules) — a job with a \
 1189:              temperature or a seed would be refused by the transition as SamplingNotArmed, after the inference had \
 1190:              already been paid for. Omit `temperature` and `seed`, or send temperature 0."
 1191:             .to_string());
@@ -366,7 +366,7 @@
 35: use misaka_palw_tir::demand::{DemandContext, history_length_v1};
 ```
 
-### `docs/rfc/0003-palw-generative-model-classes.md:2214–2282`
+### `docs/rfc/0003-jobs-tokenizers-and-generation.md:2214–2282`
 
 ```text
 2214: ## II.5 Audio — generation and understanding
@@ -806,7 +806,7 @@
 2740:         // RFC-0008 RFC08-2 (dormant `palw_settlement_once_v1`): no signed hard deadline or material TTL to source for this type.
 2741:         self.refuse_unsourced_admission_v1(ctx.daa_score, "a native mining claim carries no signed hard deadline")?;
 2742:         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
-2743:             return Err(bad("native39 mining requires the ADR-0176 bond budget in force"));
+2743:             return Err(bad("native39 mining requires the 旧ADR-0176 bond budget in force"));
 2744:         }
 2745:         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
 2746:         let block_units = PALW_BUDGET_BLOCK_UNIT_V1.checked_mul(quanta).ok_or_else(|| bad("native39 block units overflow"))?;
@@ -1100,7 +1100,7 @@
 939:     // A comparator the v1 leaf cannot feed decides here: the openings do not carry its inputs.
 940:     if daas.iter().any(|d| ForkChoiceRulesV1::active(input.rules.rule_e, *d)) {
 941:         return Err(L2StopV1::LeafV1Insufficient(
-942:             "ADR-0178 rule E reads inputs the v1 leaf does not carry; its leaf (v2) ships under its fence",
+942:             "旧ADR-0178 rule E reads inputs the v1 leaf does not carry; its leaf (v2) ships under its fence",
 943:         ));
 944:     }
 945: 
@@ -1201,7 +1201,7 @@
 
 ## S13 — RFC11 full-task/full-contextの分母と未完了分類
 
-### `docs/rfc/0011-permissionless-model-and-long-context-onboarding.md:684–719`
+### `docs/rfc/0007-bft-model-admission.md:684–719`
 
 ```text
 684: ## 18. Coverage target restated — 2026-10-08 (user decision)
@@ -1683,11 +1683,11 @@
 ### `consensus/core/src/palw_fp_interval_v1.rs:1–82`
 
 ```text
-1: //! **The seat's interval draw** (ADR-0077 Decision 8).
+1: //! **The seat's interval draw** (旧ADR-0077 Decision 8).
 2: //!
 3: //! A free-prompt seat no longer fetches the whole capture and hashes it. It draws `k` checkpoint
 4: //! intervals from the claim's beacon and its own seat index — unpredictable when the commitment
-5: //! was fixed (the beacon does not exist yet, ADR-0044 F4/F5), different per seat — asks the
+5: //! was fixed (the beacon does not exist yet, 旧ADR-0044 F4/F5), different per seat — asks the
 6: //! executor for each interval's opening, replays it with the class's own kernels and compares
 7: //! every row exactly. This module is the draw alone: a pure function of chain facts, pinned by a
 8: //! golden vector, so that "which intervals did seat 3 have to check" is a question anyone can
@@ -2460,7 +2460,7 @@
 19: //! kernel claim's own `liability_until` — the same horizon the EXEC reward / native-settlement maturity already folds in
 20: //! (`palw_exec_v2_rewards_v1::horizon`) — so no reader can become "safe" earlier than the route can stop convicting.
 21: //!
-22: //! **Weight.** Kernel-route claims reserve no reward block and no Final weight in the ADR-0176 budget (`B = F = 0`): an OPV `Final`
+22: //! **Weight.** Kernel-route claims reserve no reward block and no Final weight in the 旧ADR-0176 budget (`B = F = 0`): an OPV `Final`
 23: //! adds no consensus weight and no native-settlement work of its own; work-slice credit reaches settlement only through the V2 root it
 24: //! verifies, whose maturity already includes this horizon. Nothing here writes state.
 25: 
@@ -2880,12 +2880,12 @@
 
 ## S30 — RFC17現行tierと旧審査の無効化・係数適用
 
-### `docs/rfc/0017-model-eligibility-examination-and-renewal.md:1–42`
+### `docs/rfc/0007-bft-model-admission.md:1–42`
 
 ```text
 1: # RFC-0017 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)
 2: 
-3: > **統治する前提 — [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提、2026-10-15 ユーザー決定):** モデルの二階層と、モデル単位の検証の不採用。本 RFC は §9 に従い、§9 を再審しない。規則は [ADR-0179](../adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md) が定める。
+3: > **統治する前提 — [PRINCIPLES §9](../PRINCIPLES.md)(凍結前提、2026-10-15 ユーザー決定):** モデルの二階層と、モデル単位の検証の不採用。本 RFC は §9 に従い、§9 を再審しない。規則は [旧ADR-0179](../../../rfc/0007-bft-model-admission.md) が定める。
 4: >
 5: > **モデル単位の検証を行わない理由(ユーザー):** モデルに対して検証を行うと、その検証において何を信頼するか(誰が・何を根拠に「正しく共有・運用されている」と判断するか)という問題が新たに発生し、それは解決しない。チェーンは、モデルの公開状況・保持者数・取得可能性・共有状況を審査しない。
 6: 
@@ -2896,7 +2896,7 @@
 11: ユーザー判断(原文、第 5 回):「genesis/fork モデルは 1 倍で有効、後から追加されるモデルは 0.3 倍で、そこから検証などはなく 0.3 倍のまま固定。つまりモデルに対しての検証がなくなった。」
 12: 
 13: 1. **1.0 の階層。** `ApprovedModels(h)` に含まれるモデルである。`ApprovedModels(h)` は、genesis のモデルと、高さ `h` までに有効化された年次フォーク(ソフト / ハード)が指定した「モデル ID + 固定 artifact root」の集合である。
-14:    * 年次フォークは追加するだけで、既存モデルを上書きしない(ADR-0175)。
+14:    * 年次フォークは追加するだけで、既存モデルを上書きしない(旧ADR-0175)。
 15:    * 指定は政策的決定であり、公開性・独立検証可能性の技術的証明ではない。
 16: 2. **0.3 の階層。** 後から登録したモデルは、登録した時点から審査なしで 0.3 に固定する。
 17:    * 昇格・更新・失効・試行手数料・試行上限はない。
@@ -2904,7 +2904,7 @@
 19:    * registry の `Active` などの状態は、運用状態として階層とは別に残る。
 20: 3. **モデル単位の検証・審査は、すべてのモデルについて廃止した。** 下記「廃止した審査」の段階(Registered / Probation / Eligible / Lapsed)、抽選審査、更新、失効、試行手数料、試行上限、公平な待ち行列は適用しない。
 21: 4. **係数は一度だけ掛ける。**
-22:    * `A_m = c_m · S̄_m^1.5`(ADR-0177)。その `P_m` を RFC-0016 V+ の物理ブロック権利と coinbase 配分の両方が使う。
+22:    * `A_m = c_m · S̄_m^1.5`(旧ADR-0177)。その `P_m` を RFC-0016 V+ の物理ブロック権利と coinbase 配分の両方が使う。
 23:    * 受理ブロックの報酬に重ねて掛けない。
 24:    * 登録 tier 全体の発行上限 `κ` により、多数登録で 0.3 の枠を増やせない。
 25:    * RFC-0016 の entrant reserve と旧 Probation 予算は審査の廃止で無意味になる。`ε = 0` とし、`κ` だけを上限とする。
@@ -2915,11 +2915,11 @@
 30: 
 31: **実装(休眠、未 build、未試験):**
 32: 
-33: * fence は `palw_model_tier_v1` で、module は `consensus/core/src/palw_model_tier_v1.rs`(ADR-0179 §実装)。
+33: * fence は `palw_model_tier_v1` で、module は `consensus/core/src/palw_model_tier_v1.rs`(旧ADR-0179 §実装)。
 34: * fence `palw_model_eligibility_v1` は、tier fence が同じ高さ以下にあるときだけ arm できる。この fence は RFC-0018 の認証 attestation が通る inner 74/75 の A-2 gate として残る。
 35: * tier fence の下では、審査の code はすべて到達しない。全ての資格 read は「対象外」になり、inner 74/75 の審査 object は拒否され、sweep は何もしない。
 36: * 審査の code は、休眠のまま履歴として残す。審査は一度も live になっていない。
-37: * 試験の対応は ADR-0179 §試験 source にある。
+37: * 試験の対応は 旧ADR-0179 §試験 source にある。
 38: 
 39: ---
 40: 
@@ -2930,7 +2930,7 @@
 ### `consensus/core/src/palw_model_eligibility_fold_v1.rs:34–42`
 
 ```text
-34: /// **Round 5 (user decision 2026-10-15): model-level review is ABOLISHED for every model.** Past `palw_model_tier_v1` (ADR-0179) this
+34: /// **Round 5 (user decision 2026-10-15): model-level review is ABOLISHED for every model.** Past `palw_model_tier_v1` (旧ADR-0179) this
 35: /// whole review — the stages Registered → Probation → Eligible → Lapsed, the exam (inner 74/75), the draws, the attempt fee, the attempt
 36: /// caps and the fair queue, renewal and lapse, the probation grant and pin — is unreachable: every read answers "not governed" (the
 37: /// old rule), exam objects are refused and the sweep does nothing. A registered model is the tier system's fixed 0.3 from its
@@ -2996,7 +2996,7 @@
 291:         for model in stale {
 292:             put(&mut self.models, PALW_BUDGET_TABLE_MODELS_V1, &model, None, j);
 293:         }
-294:         // ADR-0179: `A_m = c_m · S̄_m^α`, once; then the registered tier's aggregate cap.
+294:         // 旧ADR-0179: `A_m = c_m · S̄_m^α`, once; then the registered tier's aggregate cap.
 295:         let mut sum_a = PalwAllocationWeightV1::ZERO;
 296:         let mut registered_sum = PalwAllocationWeightV1::ZERO;
 297:         let mut rows: Vec<(Hash64, u128, PalwAllocationWeightV1, bool)> = Vec::with_capacity(averages.len());
@@ -3033,10 +3033,10 @@
 132:     }
 133:     // V3 (user decision 2026-10-15): `S_entry` is the network's ELIGIBLE minimum producer bond — never below the bond floor — and
 134:     // an entrant's capital is its allocation capital, which counts only eligible capital (RFC-0017 GAP-E1: Registered / Lapsed 0;
-135:     // ADR-0177 C5: verifier capital only with a defined liability).
+135:     // 旧ADR-0177 C5: verifier capital only with a defined liability).
 136:     let mut values = *values;
 137:     values.entrant_min_capital_sompi = values.entrant_min_capital_sompi.max(params.min_collateral_sompi());
-138:     // ADR-0179 / round 5 (user decisions 2026-10-15): past `palw_model_tier_v1` there is no model review — no Probation and no
+138:     // 旧ADR-0179 / round 5 (user decisions 2026-10-15): past `palw_model_tier_v1` there is no model review — no Probation and no
 139:     // promotion, hence no entrant — so the entrant reserve is MOOT and is not deducted (ε = 0): the registered tier's aggregate cap κ in
 140:     // the allocation weights is the one tier-level bound.
 141:     if params.model_tier_v1().is_some_and(|mirror| mirror.active_at(start)) {
@@ -3100,13 +3100,13 @@
 19483:     }
 19484:     // **2026-09-24 DoS audit #5, the forfeiture half.** A free-prompt `Final` licenses receipt
 19485:     // blocks, each paid the unescrowed worker base at the coinbase — the audit measured one W₀ of
-19486:     // fabricated compute at ~3,200 MSK of such blocks against a seat lock of ~7 MSK. ADR-0151
+19486:     // fabricated compute at ~3,200 MSK of such blocks against a seat lock of ~7 MSK. 旧ADR-0151
 19487:     // forfeits a convicted execution's rights at every stage of the EXECUTION lane (snapshot,
 19488:     // mint, and since #7 the minted schedule), but this lane checked only the phase, and a
 19489:     // `PanelFalseValid` conviction never moved it: spends went on after the conviction exactly as
 19490:     // before it (`dos_repro_1`). Past the fence the conviction's root closes the lane too.
 19491:     //
-19492:     // By ROOT, as ADR-0151 forfeits: a sibling claim that carries the same execution certified
+19492:     // By ROOT, as 旧ADR-0151 forfeits: a sibling claim that carries the same execution certified
 19493:     // the same convicted work. The named claim itself no longer reaches here past the fence — the
 19494:     // conviction voids it (`reverse_convicted_final`, #8) and the phase check above refuses it —
 19495:     // so this arm is what reaches the copies. Below the fence nothing is read, so a dormant
@@ -3119,7 +3119,7 @@
 ### `consensus/core/src/palw_state_v2.rs:19574–19586`
 
 ```text
-19574:     // **Lane BUDGET (ADR-0176 D3, design §2.6): the spend draws on its commitment's reservation** — one block and this block's carve,
+19574:     // **Lane BUDGET (旧ADR-0176 D3, design §2.6): the spend draws on its commitment's reservation** — one block and this block's carve,
 19575:     // strict (the coinbase pays the worker share whole, so a short reservation refuses the spend), and the quantum's weight, clipped:
 19576:     // `safe_weight` takes the grant. The receipt census below still counts the work done (it measures production, never reward).
 19577:     let last_quantum = spent.len() as u64 + 1 >= *quanta as u64;
@@ -3169,7 +3169,7 @@
 10071:             &beacon,
 10072:             &envelope,
 10073:             |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
-10074:             // ADR-0148: a compute-era claim draws against the lane's pooled target.
+10074:             // 旧ADR-0148: a compute-era claim draws against the lane's pooled target.
 10075:             self.palw_fp_pricing().as_ref(),
 10076:         )
 10077:         .map_err(|e| e.to_string())?;
@@ -3300,7 +3300,7 @@
 
 ## S33 — RFC19 R7/R8未実装とdriver choices
 
-### `docs/rfc/0019-annual-model-upgrade.md:310–330`
+### `docs/rfc/0007-bft-model-admission.md:310–330`
 
 ```text
 310: | D-1 | 再起動・IBD・reorg で同じ読み | `the_catalog_status_is_a_pure_function_of_params_and_tip_across_restart_and_reorg`、`the_tiered_roll_is_the_same_after_reorg_ibd_and_restart`、driver `restart` |
@@ -3359,7 +3359,7 @@
 
 ## S34 — RFC20現行スコープと必要な計測
 
-### `docs/rfc/0020-long-context-calibration-memory.md:53–70`
+### `docs/rfc/0002-tensor-ir-kernels-and-runtime.md:53–70`
 
 ```text
 53: ## 2. 計測を先にする — RAM 計上モード(実装済み・未検証)
@@ -3382,7 +3382,7 @@
 70: * **ビット同一性:** `misaka/palw/tir/lower/tests/position_blocks.rs::consumed_and_spilled_carries_are_the_two_sequence_run_bit_for_bit` が、旧アルゴリズム(2 系列保持・1 位置ずつ・系列順 merge)をそのまま写した参照と、統計の digest(`stats_digest_hex`)・正準 JSON・全 logits のビットを 7 つのアーキテクチャの toy checkpoint で比較する。
 ```
 
-### `docs/rfc/0020-long-context-calibration-memory.md:85–97`
+### `docs/rfc/0002-tensor-ir-kernels-and-runtime.md:85–97`
 
 ```text
 85: ### 5.1 監査: 全系列のスコア行列はどこにあるか(実施済み)
@@ -3400,7 +3400,7 @@
 97: 結論: genesis のテキスト経路(較正・変換・忠実度 `--exec`・実行器・court)に 32K × 32K のスコア行列は存在しない。§5.2–§5.4 のタイル化は**実装しない**(ユーザー方針 5: 全行列経路が実在する所だけ)。全行列経路(双方向・vision・diffusion)を将来 genesis に入れる場合の仕様として残す。
 ```
 
-### `docs/rfc/0020-long-context-calibration-memory.md:128–157`
+### `docs/rfc/0002-tensor-ir-kernels-and-runtime.md:128–157`
 
 ```text
 128: ### 5.5 位置の run 評価(実装済み・未検証)は chunk attention ではない
@@ -3610,7 +3610,7 @@
 1250:     ids.iter().filter_map(|id| tokenizer.token_bytes(*id)).flatten().collect()
 1251: }
 1252: 
-1253: /// **`render_answer_v2` (ADR-0096 Decision 6): the answer cut at the first committed end-of-generation id** — the ids up to and
+1253: /// **`render_answer_v2` (旧ADR-0096 Decision 6): the answer cut at the first committed end-of-generation id** — the ids up to and
 1254: /// excluding the first id in `eog_token_ids`, rendered as `render_answer_v1` renders them. The ids after it stay executed,
 1255: /// committed and priced, but are not the answer. Applies to a constrained job (version 6); every other job keeps `render_answer_v1`.
 1256: pub fn render_answer_v2(tokenizer: &QwenTokenizer, ids: &[u32], eog_token_ids: &[u32]) -> Vec<u8> {

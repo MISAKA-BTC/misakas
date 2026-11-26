@@ -1,7 +1,9 @@
-# 詳細設計・統合計画
+# 設計補助資料
 
-[PALW](palw/README.md)、[EVM](evm/README.md)、[PQ](pq/README.md)、[capacity](capacity/README.md)、[serving](serving/README.md)、[tools](tools/README.md)。
+現行の規範入口は[設計原則](../PRINCIPLES.md)と[RFC20本](../rfc/README.md)です。本ディレクトリは具体的なcodec、データ構造、参照計算、統合上の説明を補います。
 
-採用済み設計は凍結、未採択Draftは採用扱いにしません。画像・動画・モデル改善はmainnet後に延期し、当面の必須実装にしません。共通部分の安全性・整合性は維持します。[変更管理](../governance/design-freeze.md) / [延期範囲](../governance/post-mainnet-scope.md)。
+[PALW](palw/README.md) · [EVM](evm/README.md) · [PQ](pq/README.md) · [capacity](capacity/README.md) · [serving](serving/README.md) · [tools](tools/README.md)
 
-観測は[audit](../audit/README.md)/[evidence](../evidence/README.md)、当時の判断は[history](../history/README.md)へ分類しました。配置は技術的な採択・撤回を意味しません。
+古いprofile・commit・RFC番号を含む実装メモは、その構成の技術資料として読みます。新規設計に対して、古いモデル二階層・genesis免除・自動モデル採用・旧比率を復活させません。旧71RFC本文・その改訂複製は保存せず、[対応表](../rfc/MAPPING.md)だけを使用します。
+
+採択・提案・実装・実測・公開有効化を区別します。生の試験記録は[audit](../audit/README.md)・[evidence](../evidence/)を参照し、現在の完成状態と同一視しません。

@@ -12,8 +12,8 @@ sections from the bottom for the current shape, and
 **What is still narrow, and what a reader should not conclude from "implemented":** a registered
 class's context is 8–16 tokens for prompt and answer TOGETHER, so the lane runs end to end at a
 size no product would ship. That is a width problem, not a wiring problem, and it is stated where
-a person meets it in [testnet11-join-mining.md](../../history/networks/testnet-11/testnet11-join-mining.md) §7.2a and
-[testnet11-ask-for-a-file.md](../../history/networks/testnet-11/testnet11-ask-for-a-file.md) §0.
+a person meets it in [testnet11-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-join-mining.md) §7.2a and
+[testnet11-ask-for-a-file.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-ask-for-a-file.md) §0.
 
 ## The finding
 
@@ -26,7 +26,7 @@ What works today, measured rather than assumed:
 * `misaka-palw-gateway` takes an OpenAI-style request, runs ONE inference through `palw-worker
   --mode v3-job`, and returns the answer with `cu`, `fp_job_id` and the trace/output/schedule
   roots in-band. A prompt through it returned `cu 8221` over 29 prompt / 128 completion tokens.
-  (`palw-worker` and its `v3` arms are gone — ADR-0077 Decision 5. The runtime is a family worker
+  (`palw-worker` and its `v3` arms are gone — 旧ADR-0077 Decision 5. The runtime is a family worker
   and the mode is `v3-serve`; see the last section.)
 * `calculate_l1_tag` has its algo-7 arm; `SUBNETWORK_ID_PALW_FP_COMMITMENT` (0x4a) is validated in
   `tx_validation_in_isolation`; `palw_fp_admission_v3` implements all eight items.
@@ -172,8 +172,8 @@ Step 1 is not code. It is the one that has to be made first, and by whoever owns
 > the free-prompt lane; see the dated sections at the bottom of this page. What did NOT change is
 > the WIDTH: a registered class is 8–16 tokens for prompt and answer together, which is why
 > "meaningful" is still doing work in that heading. The measured version of that sentence lives in
-> [testnet11-join-mining.md](../../history/networks/testnet-11/testnet11-join-mining.md) §7.2a and
-> [testnet11-ask-for-a-file.md](../../history/networks/testnet-11/testnet11-ask-for-a-file.md) §0.
+> [testnet11-join-mining.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-join-mining.md) §7.2a and
+> [testnet11-ask-for-a-file.md](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/networks/testnet-11/testnet11-ask-for-a-file.md) §0.
 
 The A16 finding above is not one class's accident. testnet-11 registers three, and the property
 the free-prompt lane needs — runs a language model AND is adjudicable — belongs to none of them:
@@ -202,7 +202,7 @@ exists for that), the checkpoint capture against it, and `disclose`/`bisect_pref
 ## The second A16 defect: its registered graph omits a narrowing
 
 Implementing the capture found a defect the map problem was hiding, and this one is smaller and
-sharper. ADR-0049 Decision F:
+sharper. 旧ADR-0049 Decision F:
 
 > No worker may commit a step leg for a class whose profile does not name every narrowing the
 > engine performs.
@@ -348,7 +348,7 @@ gate should run:
    gateway's `to_commitment` and the canonical assembly agree byte for byte.
 
 3. **Offline, against the live identity.** Gateway + worker under seat-0's real bond, the
-   Relaunch 4 network domain (genesis-bound, ADR-0042) and a fresh anchor from the synced chain:
+   Relaunch 4 network domain (genesis-bound, 旧ADR-0042) and a fresh anchor from the synced chain:
    a browser-shaped chat request returned an answer and a commitment that passes every stateless
    `FreePromptCommitted` condition — non-null execution root included — at 2 quanta.
 
@@ -360,13 +360,13 @@ predates the converter learning to stamp one), which nothing on the chain checks
 job's `tokenizer_id` carries the same zero consistently. Re-converting with the commitment moves
 the artifact digest and is a follow-up, not a blocker.
 
-## 2026-09-02 — certification is a consensus object (ADR-0075), and both model tiers drill the lane
+## 2026-09-02 — certification is a consensus object (旧ADR-0075), and both model tiers drill the lane
 
 Two of the findings above are now closed, and one premise has moved:
 
 * **The A16 refusal was the legacy class, not the graph.** `a16_execute_for_attempt_v1`'s
   Decision-F probe fires only for a DIRECT caller that passes no plan (`Qwen25A16Backend::new`
-  compiled none until ADR-0082's fix E; both constructors compile the plan now) on the
+  compiled none until 旧ADR-0082's fix E; both constructors compile the plan now) on the
   v1 profile whose `pre` table declares one node against the two the engine records. The
   registered class on testnet-11 since Relaunch 5 is `Qwen/Qwen2.5-1.5B/graph-v2`
   (`qwen25_a16_class_id_v2`), served through `from_registered_profile`, and `execute_free_prompt`
@@ -378,7 +378,7 @@ Two of the findings above are now closed, and one premise has moved:
   the caller's prompt into the prover (the split A16 made), so a court can try a Qwen3.6
   free-prompt claim. The fixture graph drills its free-prompt lane (`rc_free_prompt_evidence_v1`),
   as does the A16 fixture.
-* **The certified sets are on the chain.** ADR-0075 (`docs/adr/0075-…`) adds two lifecycle
+* **The certified sets are on the chain.** 旧ADR-0075 (`docs/adr/0075-…`) adds two lifecycle
   objects: `FamilyCertified` carries a drill's evidence and the transition grades it with the
   shipped court; `ClassLaneCertified` binds a registered class to a lane by its own profile hash
   and kernel coverage — free-prompt lane: its commitments are admitted; attempt lane: a
@@ -394,7 +394,7 @@ gateway's two-mode contract for the hybrid tier (`MISAKA_PALW_ARTIFACT` = the co
 `MISAKA_PALW_NETWORK_ID`, optional `MISAKA_PALW_MODEL_ID` for another graph-v3 row), so the
 gateway can point `--worker` at it and a browser prompt reaches a Qwen3.6 free-prompt claim.
 
-## 2026-09-03 — one runtime, three modes: `v3-serve` (ADR-0077 Decision 1)
+## 2026-09-03 — one runtime, three modes: `v3-serve` (旧ADR-0077 Decision 1)
 
 The "two-mode contract" named twice above is a three-mode contract now, and the third mode is the
 one an operator actually runs.
@@ -418,7 +418,7 @@ Three things did not change, and each is the answer to a way this could have gon
   (invariant W6). Residency is a cost decision; it is not allowed to be a semantics decision.
 * **The served width is the CLASS's registered `n_ctx`**, read from the catalog row and never from
   the artifact's rotary span. A runtime that answered wider than the court admits would be the
-  two-products split ADR-0077 R0 exists to close.
+  two-products split 旧ADR-0077 R0 exists to close.
 * **Every job is captured.** `misaka-palw-serve` is retired and the two un-captured chat drivers
   (`base0-chat`, `qwen36-chat`) are deleted, so `court_capable: false` is no longer a state a
   runtime in this tree can be in.

@@ -1,6 +1,6 @@
 # Ambient PoL binary audit — `llama.cpp-ambient-bin`, 2026-08-15
 
-Status: **measurement record** (evidence for ADR-0026). Reproducible; no reverse engineering of
+Status: **measurement record** (evidence for 旧ADR-0026). Reproducible; no reverse engineering of
 proprietary logic beyond reading exported symbols and static strings.
 Method: the four `ambient-xyz/llama.cpp-ambient-bin` tarballs are Git-LFS objects (the repo blobs
 are 132–134-byte pointers). The `macos-arm64` object was fetched through the LFS batch API and
@@ -40,7 +40,7 @@ handler-remote-verify-start / handler-remote-verify-finished
 
 The verification logic is source-unreleased (binary-only) but **not** architecturally separated
 from the runtime — a verifier must run Ambient's llama.cpp build. This is exactly the
-runtime/consensus coupling ADR-0026 §1 refuses.
+runtime/consensus coupling 旧ADR-0026 §1 refuses.
 
 **2. The comparison rule is statistical/tolerant, NOT bit-exact.** Four tunable knobs, exposed as
 CLI flags and a settings JSON, govern acceptance:
@@ -124,10 +124,10 @@ is the verdict the chain layer consumes.
   sampling, bond/slash amounts, and LStake accounting — none are in the runtime; they live in the
   unreleased Solana programs.
 
-## Consequences for MISAKA / PALW (feeds ADR-0026)
+## Consequences for MISAKA / PALW (feeds 旧ADR-0026)
 
 - The earlier survey's open question — "do they compare with a tolerance?" — is **answered: yes**
-  (RBO + p95 band + failure threshold). ADR-0026 must state this as fact and take a position on
+  (RBO + p95 band + failure threshold). 旧ADR-0026 must state this as fact and take a position on
   it, not leave it as an inferred maybe.
 - Ambient and MISAKA give **opposite answers to the same hardware-divergence problem**: Ambient
   absorbs it in a *fuzzy comparison* (viable because their verification is asynchronous/optimistic
@@ -139,5 +139,5 @@ is the verdict the chain layer consumes.
   challenge (with fresh-validator prefill cost measured, per the KV-cache caveat), and a
   runtime-portable capture format so a vLLM/SGLang miner and a llama.cpp verifier interoperate.
 - One anti-pattern is **confirmed by their build**: the verification computation is compiled into
-  the inference runtime. That is the coupling ADR-0026 §1 keeps out of the runtime by single-
+  the inference runtime. That is the coupling 旧ADR-0026 §1 keeps out of the runtime by single-
   sourcing the scheme kernel in consensus-core.

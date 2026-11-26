@@ -1,17 +1,9 @@
 # RFC-0057 Court nonce — 実装接続表
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。新規positive nonce/challengeのsourceは認証済みTB1-PANELと元claim・actor・義務である。旧WorkBeacon branch-relative lockの接続を新profileへそのまま継承しない。negative・資料case・Court継続・終端へ新beacon待ちを追加しない。
-
-[TB1](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../../../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-日付: 2026-11-17（Asia/Tokyo）  
-状態: **PROPOSED_DESIGN_NOT_ACTIVATED**  
-規範案: [RFC-0057](../../../rfc/0057-court-nonce-and-panel-challenges.md) / [ADR-0225](../../../adr/0225-court-nonce-and-panel-challenges.md)  
-監査基準: `main@2d8212b634880b0967fbf24b00b41936c2322c14` / [ソース監査](../../../maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md)
+日付: 2026-11-17（Asia/Tokyo）
+状態: **PROPOSED_DESIGN_NOT_ACTIVATED**
+規範案: [RFC-0057](../../../rfc/0008-g14-panel-and-verification.md) / [旧ADR-0225](../../../rfc/0009-court-and-claim-final.md)
+監査基準: `main@2d8212b634880b0967fbf24b00b41936c2322c14` / [ソース監査](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md)
 
 ## 1. 接続の目的
 
@@ -35,7 +27,7 @@
 | native受理・決済 | accepted-prefix、checkpoint、once engine、false-Valid offence | nonce scope、accepted marker、coverage、支払、実lock/費用を同じatomic境界へ接続 | 途中失敗・再送・同batchでpartialな効果を残さない |
 | restart/reorg/IBD | journal、source/row復元、既存nonce counterの先例 | nonce根拠、draw/seed、承認、case、効果の一回性と残予約を認証付きで復元 | 孤立枝の結果を混ぜず、欠損を空集合・未使用nonceと推定しない |
 
-実在する足場の限界・行番号・固定commitリンクは[ソース監査](../../../maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md)を参照する。旧ExactStream positive contractの存在を新版の完全承認native接続と数えない。
+実在する足場の限界・行番号・固定commitリンクは[ソース監査](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/maintenance/revisions/2026-11-17-court-nonce/SOURCE_AUDIT.md)を参照する。旧ExactStream positive contractの存在を新版の完全承認native接続と数えない。
 
 ## 3. P0 — 型・scope・profile契約を確定する
 
@@ -90,7 +82,7 @@ PublicOneHonestについて、全Panelの個別challenge完了を新しいFinal�
 
 nonce追加は新しい無償のCourt送信枠を作らない。原claimの予約へ、全選出主体の合法な個別challenge、必要な共有資料、署名/nonce検査、再送・復旧、反証、終端、保持を計上する。
 
-[RFC-0055](../../../rfc/0055-global-admission-court-calendar-and-one-bps.md)のglobal資源上限と、[RFC-0056](../../../rfc/0056-global-claim-admission-difficulty.md)の新規受付Dを使う。既受理caseの正規反証・応答に新しい受付Dを要求しない。model・Panel別nonce数の増加でglobal budgetを増やさない。
+[RFC-0055](../../../rfc/0014-exec-schedule-and-capacity.md)のglobal資源上限と、[RFC-0056](../../../rfc/0014-exec-schedule-and-capacity.md)の新規受付Dを使う。既受理caseの正規反証・応答に新しい受付Dを要求しない。model・Panel別nonce数の増加でglobal budgetを増やさない。
 
 必要なsample数・Panel数・round数・byte/work/stock上界は共通profileから導く。便宜的な1/3/5件を新しい固定仕様へ置換しない。Nodeはモデル本体や全traceを取得せず、有界なopeningと局所演算を検査する。profileを満たせない場合は新規受付/activationを拒否し、Nodeの全モデル再実行へfallbackしない。
 

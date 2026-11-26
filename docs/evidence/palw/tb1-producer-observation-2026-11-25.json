@@ -1,0 +1,131 @@
+{
+  "genesisHash": "69cdbdf36a1a0c93fc20b969d3cc5159f270b96fd524acd5971842f5f07eb5737deb1c0d16a7b5156119862b2760e7dd837eaff696b5b542bce1939eb524c5b5",
+  "consensusParamsId": "d90a45794af6970370e146826643ca738389593d4c2b458e8abfd6a784d8c1d6",
+  "source": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+  "bond": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:4",
+  "fee": "ca8a497e1cbaa6254c7b6a7db1bb4bfa6b541f6632145f4977ac02fcb974c482e3150515fcff2ebb26e99a39ca7dad204d5110481c1c449a97bbd0892633c184:45",
+  "feeObserved": true,
+  "facts": {
+    "classId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+    "chainPoint": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+    "pwu": 6042506112,
+    "epochBudgetBlocks": 998,
+    "notReadyReason": ""
+  },
+  "observations": [
+    {
+      "sink": "490a398dbcb00ac6371f0cd3020db70fb7c9d0073668accf64e9f33536c4436df226ef14dae092eff7727d4e9f8ccd87af6cdbe74a4e54b059ffb2bed898671a",
+      "daa": 9,
+      "claims": [],
+      "producerState": "holding",
+      "producerReason": "the mining rule engine says this node should not mine [enable_unsynced_mining=true peers=false participation_allowed=true]",
+      "draws": 0,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "4efa0add66395bcaf3c4cde9eeb080af91efce802632491489b2cfa0c415a0cec27eab6c0ecfe11aa981dfa479aaf9193ecb5bcd8aed04acb7ad6e0212e11cf9",
+      "daa": 9,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 9,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "6bf5b498a3656d3f337171161b368b35713525b076f5d55b5f2d5a9f46286e16eea24b3c7149d78e7e56f156425e074fdd1da261a522a03deff737439ec0fe3e",
+      "daa": 10,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 12,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "97d643100611b3d8f0a41a1cb394941fc9a74779e2b880a62b82bb8fd8a28ea93589f4bddfbd6f8926959c5dd5701b6452938c38fd6d50babb6e93f623012ce9",
+      "daa": 10,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 15,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "1513401e3c5c18fc6f3b06efa36c80cf85eeaa95f68757404792a41a69f9e7e78dcef0078faf67d4cabe971fad72af82bf0fd229b34a6a0fe465a958e34612a8",
+      "daa": 11,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 20,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "040eecd259b4d45e0f716ccd9c1cbd71041f6968fc507a8ccb56c3d95a2147b1936b27152ef64ebffe4698557d0e49dfa7c19df0ffd7b89e97366ea1d5b7aeaa",
+      "daa": 11,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 23,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "a17277d18bec7744f6dc7adb049161a1292624f5866604d5a1793082578b0c0661cdde633af5c6e5d24da27510f2d325137a50fdb94308a23479d9827442c275",
+      "daa": 12,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 25,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "1fe8c469cd5687c8aff20eddba21f6cb44a913f31c09237d79a2f933097116ba6a2d31f41842f21e61ad12606bc43a24c9c854c20416d41481f6f934449e0c16",
+      "daa": 12,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 28,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "cd0bc47c1af1dbbba481b39208ceae97b5e650c636828ee0d97ebb53b42e608f8be87a79cadcd8072a0c5a8a0502e385037a1065cfc4167df2d0d17702516748",
+      "daa": 13,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 30,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "6dd4e7f637f38c9d61baba9f66f7b9b1f3d571ed47003af4f0353bf44d31655844e99e9e37eb35c728a03ef5922949e748aac69ce16e29cc08689f788c7852a8",
+      "daa": 13,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 33,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "8bf451929d4baf113a37be4e05e990326fd3277a1c4ee8e0736b300dea39f3c801ebab651b46596312f481dffa7e1d06e055219171b3f7d69b64f48c8be339f4",
+      "daa": 14,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 37,
+      "producedBlocks": 0
+    },
+    {
+      "sink": "69b0e13480aca3083e03acfeb54c34bbdcf59bd795db1822c1fcea0ec161ef6622615580c4744ffcba7c8ad45adb7cd5324372be71ae49aa21c4825cd63b3589",
+      "daa": 14,
+      "claims": [],
+      "producerState": "drawing",
+      "producerReason": "",
+      "draws": 41,
+      "producedBlocks": 0
+    }
+  ],
+  "nodeExitCodes": [
+    0,
+    0,
+    0,
+    0
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "measuredAtUtc": "2026-11-25T23:14:04.521241+00:00",
+  "scope": "Stopped network-s3 home and every directory in its adjacent snapshot store. Regular files only. Read-only APFS metadata scan.",
+  "method": "palw_devnet_storage.storage_report; allocatedBytes includes cloned extents, scopePrivateBytes excludes shared extents and external hardlinks. Neither is an exact aggregate of shared physical extents.",
+  "volumeFreeBytes": 4884262912,
+  "requiredFreeBytes": 12884901888,
+  "initialSyncLoadAllowed": false,
+  "uniqueFiles": {
+    "files": 142483,
+    "logicalBytes": 270484801065,
+    "allocatedBytes": 270798884864,
+    "filePrivateBytes": 40815775744,
+    "scopePrivateBytes": 40815775744,
+    "externallyLinkedFiles": 0
+  },
+  "home": {
+    "files": 19228,
+    "logicalBytes": 38448681327,
+    "allocatedBytes": 38490841088,
+    "scopePrivateBytes": 0
+  },
+  "directories": {
+    "539994e02c9f40e6b134822d02a69cb5": {
+      "files": 1201,
+      "logicalBytes": 630962294,
+      "allocatedBytes": 634155008,
+      "scopePrivateBytes": 437080064,
+      "rollingMarker": false
+    },
+    "72e6a8b458184ee6ab3b67ac939f918b": {
+      "files": 19103,
+      "logicalBytes": 37284186632,
+      "allocatedBytes": 37326061568,
+      "scopePrivateBytes": 212680704,
+      "rollingMarker": false
+    },
+    "796e4905b2a7451d8f87de43aae5d685": {
+      "files": 7471,
+      "logicalBytes": 10983300506,
+      "allocatedBytes": 10999894016,
+      "scopePrivateBytes": 10434117632,
+      "rollingMarker": false
+    },
+    "9e327e58d2e04f2599b17b337e5a644b": {
+      "files": 18241,
+      "logicalBytes": 36009750546,
+      "allocatedBytes": 36049723392,
+      "scopePrivateBytes": 10300932096,
+      "rollingMarker": false
+    },
+    "a836285ca70141d2aa35d7505f3cbcef": {
+      "files": 10409,
+      "logicalBytes": 17572403768,
+      "allocatedBytes": 17595432960,
+      "scopePrivateBytes": 314417152,
+      "rollingMarker": false
+    },
+    "bda15b77344d4277b7a1a63c690da3a1": {
+      "files": 19229,
+      "logicalBytes": 38451165953,
+      "allocatedBytes": 38493327360,
+      "scopePrivateBytes": 2486272,
+      "rollingMarker": false
+    },
+    "before-restore-1ab82838d21b4e85b9cf483651209c3a": {
+      "files": 1271,
+      "logicalBytes": 442286603,
+      "allocatedBytes": 445616128,
+      "scopePrivateBytes": 248541184,
+      "rollingMarker": false
+    },
+    "df2ead9da6da4b5e9004f72a80d97bf2": {
+      "files": 13060,
+      "logicalBytes": 26254198501,
+      "allocatedBytes": 26282954752,
+      "scopePrivateBytes": 8410533888,
+      "rollingMarker": false
+    },
+    "eb54edd4f11d485594811d5e45b58a66": {
+      "files": 14316,
+      "logicalBytes": 27066691457,
+      "allocatedBytes": 27098193920,
+      "scopePrivateBytes": 9027096576,
+      "rollingMarker": false
+    },
+    "ef7c7a37e92c440fa3ef4f487455f1b8": {
+      "files": 18954,
+      "logicalBytes": 37341173478,
+      "allocatedBytes": 37382684672,
+      "scopePrivateBytes": 1427890176,
+      "rollingMarker": false
+    }
+  },
+  "retainedClaimFilesAt8602": {
+    "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+    "method": "Regular named claim files below each peer retention directory. All listed contents hashed against the saved generation manifest. Empty peer maps mean no matching named files; these totals exclude shared consensus and journal costs.",
+    "records": {
+      "awardedClaim": {
+        "claim": "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448",
+        "gateC": "certified",
+        "peers": {
+          "0": {
+            "foreign/70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448.replay": {
+              "bytes": 3238,
+              "allocatedBytes": 4096,
+              "filePrivateBytes": 0,
+              "sha256": "bd7eec048de056fcfade7bf63d40f7c1d4b3d937b91da117c5a22ae0eff5f339"
+            }
+          },
+          "1": {
+            "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448.answer": {
+              "bytes": 3246,
+              "allocatedBytes": 4096,
+              "filePrivateBytes": 0,
+              "sha256": "0f79d9d80634a5a316382d76f2544c08e461126f3e23fba2977fcbb606a2e9c7"
+            },
+            "70894ea93a9428de8ea6335ea9cc1dbb70b341e2a8a2808b82185b7bb41179e9c7583f814725a5ccf3b4d3a0b40d644aee1aa793266960302ee65d4354684448.material": {
+              "bytes": 24621472,
+              "allocatedBytes": 24625152,
+              "filePrivateBytes": 0,
+              "sha256": "ba2ce87fb3622b5ff440ef7b61065add3b5a5501250a796a5a648cf407830c81"
+            }
+          },
+          "2": {}
+        },
+        "allocatedAcrossPeers": 24633344
+      },
+      "coveringClaim": {
+        "claim": "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e",
+        "gateC": "pending",
+        "peers": {
+          "0": {},
+          "1": {
+            "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e.answer": {
+              "bytes": 112,
+              "allocatedBytes": 4096,
+              "filePrivateBytes": 0,
+              "sha256": "fa94245af703b7ffc60019a3e49515f42015b74134bcdce6f3bc450e9676597d"
+            },
+            "4501e672586bf6c9d7833296e53c4f2592f17e879ecfe44d55a4d6d3c74ceb197f9b2aee2bc0ec76f3d36f40e19cf6293f76521c4884f6c2bfd928d2dfa3456e.material": {
+              "bytes": 1599245,
+              "allocatedBytes": 1601536,
+              "filePrivateBytes": 0,
+              "sha256": "543afb3cd66d7935338132083486da45c703b659df5a869c0e6268247fc648c9"
+            }
+          },
+          "2": {}
+        },
+        "allocatedAcrossPeers": 1605632
+      }
+    }
+  },
+  "shortCopyFixture": {
+    "scope": "RAM volume, native clone explicitly unavailable, a checkpoint hardlink created only in the fixture; excludes database and directory metadata",
+    "materialSha256": "543afb3cd66d7935338132083486da45c703b659df5a869c0e6268247fc648c9",
+    "independentCopyAllocatedBytes": 3203072,
+    "linkedSnapshotAllocatedBytes": 1601536,
+    "reductionBytes": 1601536,
+    "restoreContentVerified": true,
+    "restoredWritesIsolated": true
+  }
+}

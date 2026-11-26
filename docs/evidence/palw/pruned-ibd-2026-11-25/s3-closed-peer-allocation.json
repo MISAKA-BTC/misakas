@@ -1,0 +1,81 @@
+{
+  "method": "du -sk for each closed peer directory, multiplied by 1024; allocated bytes may include APFS shared extents. No cross-generation physical reclamation inferred.",
+  "peerCapBytes": 30000000000,
+  "threePeerCapBytes": 90000000000,
+  "dataRun": "run-1795508221092963000",
+  "generations": [
+    {
+      "daa": 8602,
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peerAllocatedBytes": {
+        "peer-0": 11131277312,
+        "peer-1": 11605815296,
+        "peer-2": 11181854720
+      },
+      "threePeerAllocatedBytes": 33918947328,
+      "regularFileAllocatedBytesByCategory": {
+        "consensusBlob": 15431081984,
+        "consensusSst": 18185936896,
+        "logs": 47656960,
+        "other": 90112,
+        "otherDbFiles": 2465792,
+        "retainedMaterial": 97394688,
+        "utxoIndex": 892928,
+        "wal": 153427968
+      }
+    },
+    {
+      "daa": 8667,
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peerAllocatedBytes": {
+        "peer-0": 11288141824,
+        "peer-1": 11334184960,
+        "peer-2": 11237789696
+      },
+      "threePeerAllocatedBytes": 33860116480,
+      "regularFileAllocatedBytesByCategory": {
+        "consensusBlob": 15431081984,
+        "consensusSst": 18246963200,
+        "logs": 48447488,
+        "other": 90112,
+        "otherDbFiles": 1232896,
+        "retainedMaterial": 92577792,
+        "utxoIndex": 884736,
+        "wal": 38838272
+      },
+      "deltaFromPrevious": {
+        "daa": 65,
+        "regularFileAllocatedBytes": -58830848,
+        "walAllocatedBytes": -114589696,
+        "consensusSstAllocatedBytes": 61026304
+      }
+    },
+    {
+      "daa": 8703,
+      "generation": "bda15b77344d4277b7a1a63c690da3a1",
+      "peerAllocatedBytes": {
+        "peer-0": 11578036224,
+        "peer-1": 11781742592,
+        "peer-2": 11665780736
+      },
+      "threePeerAllocatedBytes": 35025559552,
+      "regularFileAllocatedBytesByCategory": {
+        "consensusBlob": 15431081984,
+        "consensusSst": 18671611904,
+        "logs": 49033216,
+        "other": 90112,
+        "otherDbFiles": 1179648,
+        "retainedMaterial": 94183424,
+        "utxoIndex": 897024,
+        "wal": 777482240
+      },
+      "deltaFromPrevious": {
+        "daa": 36,
+        "regularFileAllocatedBytes": 1165443072,
+        "walAllocatedBytes": 738643968,
+        "consensusSstAllocatedBytes": 424648704
+      }
+    }
+  ],
+  "categoryMethod": "Sum per-peer measure_tree allocatedBytes for regular files (st_blocks * 512). Directory allocation is excluded. Snapshot clones may share extents with other generations. Differences are endpoint allocation changes, not transient peaks or released volume space."
+}

@@ -1,7 +1,7 @@
 # RFC completion audit 2026-10-17 — status of the six assigned items (integ/validation-r2)
 
 Checked against the code at `ca5e75080` (the audit read older code). All six are still open in code. Each needs values or a
-design choice that ADR-0181 reserves to the user; those are listed. No fence is armed; t12 identity unchanged.
+design choice that 旧ADR-0181 reserves to the user; those are listed. No fence is armed; t12 identity unchanged.
 
 | item | still present | what a real fix needs | user decision needed |
 | --- | --- | --- | --- |
@@ -30,8 +30,8 @@ signing seat.
 
 ## Progress 2026-10-18 (integ/validation-r2)
 
-User decisions recorded since: ADR-0185 (fixed-seed beacon bootstrap, seal-commitment lock randomness, paid sources, onboarding
-window 1,024 DAA) and ADR-0184 (RFC08 native liability horizon, RFC07 record-only event, RFC18 single certified leg). RFC07's
+User decisions recorded since: 旧ADR-0185 (fixed-seed beacon bootstrap, seal-commitment lock randomness, paid sources, onboarding
+window 1,024 DAA) and 旧ADR-0184 (RFC08 native liability horizon, RFC07 record-only event, RFC18 single certified leg). RFC07's
 record-only event is implemented (`KernelFinalReadV1::panel_record`); RFC18 needs no change.
 
 **Item 1 — conformance / opv_bootstrap migration to the real paid path:** see the validation record §8
@@ -40,14 +40,14 @@ covenant lookup); 37 / 54 in the last full group run, more passing in targeted r
 v4/v5 opt-in (and the Panel v5 beacon) cannot reach their `final_by` with approved paid sources by construction, and the
 onboarding binding's 200-DAA liability ends before a paid-source conformance can pass.
 
-**Item 2 — RFC08 (ADR-0184), not implemented yet. Implementation plan** (read-only design pass, file:function targets):
+**Item 2 — RFC08 (旧ADR-0184), not implemented yet. Implementation plan** (read-only design pass, file:function targets):
 
 - New dormant fence `palw_native_liability_horizon_v1`; only claims committed at or past it take the new rule.
 - Horizon derived, not a new wire field: `final_floor + window_court`, where the Final floor is already a deterministic function
   of the producer-signed commit body and the ruleset at commit (funded v11: commit + `ExecutionHorizonsV11.challenge_window`;
   text v29: `NativeTextClaimV29::challenge_end`; job v39: `NativeAcceptedClaimV39::final_after`; mining v39: the Master Final DAA).
   The producer's signature covers every input of the formula — no wire or object-kind change, so nothing new has to ride
-  unjudged below the fence. (If ADR-0184's "署名" must be a literal signed number, a versioned field on each of the four wires is
+  unjudged below the fence. (If 旧ADR-0184's "署名" must be a literal signed number, a versioned field on each of the four wires is
   the alternative.)
 - Admission: replace the four `refuse_unsourced_admission_v1` calls (`palw_bond_budget_fold_v1.rs` funded v11, text v29, job v39,
   mining v39) with `admit_claim_liability_v1(.., NativeClaim { family })` past the fence, hard deadline = acceptance + the policy's
@@ -56,7 +56,7 @@ onboarding binding's 200-DAA liability ends before a paid-source conformance can
   derivation); at Final the payee's fee is held (no `write_payout`), released by a sweep past the horizon through
   `settle_once_liable_v1`; a conviction before it refunds the requester and slashes (`slash_bond`); a default refunds the held fee to
   the requester; the native mining receipt vests at the horizon.
-- Out of scope of ADR-0184 (stay `Unsourced`): the material provider fee (event-relative covenant), a drawn verifier fee outside a
+- Out of scope of 旧ADR-0184 (stay `Unsourced`): the material provider fee (event-relative covenant), a drawn verifier fee outside a
   paid V2 claim (RFC07-5), the EXEC kernel fee without a reward row, the beacon source fee, mesh audit pay.
 - 08-C (EXEC without `exec_v2_test_admit_class_v1`): a fixture with normal class registration, family certification, seat readiness
   (the native-Final suite's `ready_native_seats` already proves inventory readiness) and bond share; the native paid-material test
@@ -78,7 +78,7 @@ timeout rule (`EvmDepositLockNotRefundableYet`) and an ML-DSA P2PKH signature sc
 
 ## Progress 2026-10-18, second pass (`8be23fcdf`)
 
-User decisions of 10-18 implemented behind dormant fences (ADR-0185 / ADR-0184 notes): v4/v5 and Panel v5 beacons read opted-in
+User decisions of 10-18 implemented behind dormant fences (旧ADR-0185 / 旧ADR-0184 notes): v4/v5 and Panel v5 beacons read opted-in
 sources by seal-reveal (`collect_opt_in_seal_reveal_beacon_v6`, node / Panel history / SDK read the same rule); the onboarding binding
 liability is derived (1,208 DAA); RFC08 08-A — the four native admissions are sourced with the derived horizon bound (signed
 deadline + `window_court`), `refuse_unsourced_admission_v1` is gone. Verified: `opv_bootstrap` 20/20 (was 13/20, including v4, v5 ×2,
@@ -105,9 +105,9 @@ the anchor-slot attempt), and a re-run of the six rewritten tests.
   (`palw_native_protected_fold_v39.rs`, `palw_native_public_fold_v39.rs`); Master waits for held components
   (`palw_native_master_fold_v39.rs`); sweep hooked in `palw_kernel_route_fold_v1.rs` closing tick. Core unit tests only. Remaining:
   text v29 (`palw_native_text_fold_v29.rs` `settle` ~1268) and funded v11 holds and post-Final accusation; mining receipt vesting;
-  node E2E. ADR-0184 note added.
+  node E2E. 旧ADR-0184 note added.
 - **RFC08 08-C (fixture written, failing):** `Cw::no_seam`, `admit_class_without_seam` (exec_slices.rs), two tests in
-  `exec_slices/native_final.rs`. The class never leaves `Candidate` in 12,000 DAA: ADR-0147's network-drawn admission jury
+  `exec_slices/native_final.rs`. The class never leaves `Candidate` in 12,000 DAA: 旧ADR-0147's network-drawn admission jury
   (`transition_builder.rs` `admission_jury_v1` ~6487; audit period, seed anchor of the span before), then Prefetching → Probation.
   Observation: this jury is a model-level review in the legacy registry path, which PRINCIPLES §9 says is not adopted — flagged, not
   changed.

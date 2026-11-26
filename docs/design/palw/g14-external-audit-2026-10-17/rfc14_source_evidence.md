@@ -10,7 +10,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ## 索引
 
-- **E01** — RFC14の条件付き保証・対象範囲: `docs/rfc/0014-panel-independent-fraud-prosecution.md` / L30–L68, L93–L150
+- **E01** — RFC14の条件付き保証・対象範囲: `docs/rfc/0009-court-and-claim-final.md` / L30–L68, L93–L150
 
 - **E02** — 既存FP区間抽出: k=4、同一入力の決定性: `consensus/core/src/palw_fp_interval_v1.rs` / L1–L70, L95–L110
 
@@ -44,7 +44,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 - **E17** — TIR価格・時計のリポジトリ内計算記録。今回の実測ではない: `docs/design/palw/g14-completeness-proof-2026-10-16.md` / L1050–L1096
 
-- **E18** — RFC20: 実装未検証と設計のみの項目: `docs/rfc/0020-long-context-calibration-memory.md` / L1–L26
+- **E18** — RFC20: 実装未検証と設計のみの項目: `docs/rfc/0002-tensor-ir-kernels-and-runtime.md` / L1–L26
 
 - **E19** — 共有challengeの偏り除去とround拘束: `misaka/palw/challenge/src/seed.rs` / L129–L156, L189–L209
 
@@ -58,7 +58,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 - **E24** — TIR service: seatで発見したclaimの優先追及とowner admission: `kaspad/src/palw_tir_public_owner.rs` / L334–L385
 
-- **E25** — RFC5のVMは不採用。未実装欠陥として数えない: `docs/rfc/0005-palw-ml-vm.md` / L1–L13
+- **E25** — RFC5のVMは不採用。未実装欠陥として数えない: `docs/rfc/0001-principles-and-governance.md` / L1–L13
 
 - **E26** — 32K向けTIR frame見積りのテストコード（実ノード測定ではない）: `misaka/palw/tir/exec/tests/free_prompt.rs` / L263–L338
 
@@ -68,14 +68,14 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 - **E29** — ネットワークcourt同時実行上限の算式: `consensus/core/src/palw_state_v2.rs` / L8716–L8731
 
-- **E30** — RFC07の直接検査・全関係の被覆と裁定への接続: `docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md` / L1–L4, L36–L45, L101–L103
+- **E30** — RFC07の直接検査・全関係の被覆と裁定への接続: `docs/rfc/0008-g14-panel-and-verification.md` / L1–L4, L36–L45, L101–L103
 
 - **E31** — 既存の検査誤差・反復・grinding会計（基礎仮定の証明ではない）: `misaka/palw/challenge/src/soundness.rs` / L1–L29, L94–L109
 
 
 ## E01 — RFC14の条件付き保証・対象範囲
 
-ファイル: `docs/rfc/0014-panel-independent-fraud-prosecution.md`
+ファイル: `docs/rfc/0009-court-and-claim-final.md`
 
 ファイル SHA-256: `aa1d19eb2d255c362db45532c9b83ba11807160e8ca0a096c359648234318237`
 
@@ -299,7 +299,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ````text
 
-     1 | //! **The seat's interval draw** (ADR-0077 Decision 8).
+     1 | //! **The seat's interval draw** (旧ADR-0077 Decision 8).
 
      2 | //!
 
@@ -307,7 +307,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
      4 | //! intervals from the claim's beacon and its own seat index — unpredictable when the commitment
 
-     5 | //! was fixed (the beacon does not exist yet, ADR-0044 F4/F5), different per seat — asks the
+     5 | //! was fixed (the beacon does not exist yet, 旧ADR-0044 F4/F5), different per seat — asks the
 
      6 | //! executor for each interval's opening, replays it with the class's own kernels and compares
 
@@ -522,7 +522,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    238 |         // The beacon: the block at the claim's anchor slot, which did not exist when the
 
-   239 |         // commitment was fixed (ADR-0044 F4/F5). This is what the executor cannot predict.
+   239 |         // commitment was fixed (旧ADR-0044 F4/F5). This is what the executor cannot predict.
 
    240 |         &duty.panel_anchor,
 
@@ -544,7 +544,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    249 | /// **The two counts a seat is allowed to build, and the ONE place they are built**
 
-   250 | /// (ADR-0077 Decision 8, ADR-0084 Decision 1).
+   250 | /// (旧ADR-0077 Decision 8, 旧ADR-0084 Decision 1).
 
    251 | ///
 
@@ -558,7 +558,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    256 | /// deliberately NOT `job.decode_token_limit`: the ceiling is what the producer asked for, the
 
-   257 | /// answer is what happened, and a claim that stopped early (`EndOfGeneration`, ADR-0074
+   257 | /// answer is what happened, and a claim that stopped early (`EndOfGeneration`, 旧ADR-0074
 
    258 | /// Decision 7) is chain-legal.
 
@@ -570,9 +570,9 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    262 | 
 
-   263 | /// **The draw a seat is entitled to make, at the price the CHAIN paid** (ADR-0074 Decision 5,
+   263 | /// **The draw a seat is entitled to make, at the price the CHAIN paid** (旧ADR-0074 Decision 5,
 
-   264 | /// ADR-0077 Decision 8).
+   264 | /// 旧ADR-0077 Decision 8).
 
    265 | ///
 
@@ -715,7 +715,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    348 |     Fault { interval_index: u32, leaf_index: u64 },
 
-   349 |     /// ADR-0086 Decision 3: a V4 opening's fault has a range for an address, not a leaf.
+   349 |     /// 旧ADR-0086 Decision 3: a V4 opening's fault has a range for an address, not a leaf.
 
    350 |     FaultInRange { interval_index: u32, first_leaf_index: u64, leaf_count: u64 },
 
@@ -726,7 +726,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ````text
 
-   381 | /// **Replay the drawn intervals and compare every row exactly** (ADR-0077 Decision 8, W10).
+   381 | /// **Replay the drawn intervals and compare every row exactly** (旧ADR-0077 Decision 8, W10).
 
    382 | ///
 
@@ -1048,7 +1048,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
     10 | //!    `palw_provider_court_v1`, the verifier-pay terms), so every dry run judges as the next block will.
 
-    11 | //! 2. **Re-execute independently** with the operator's own copy of the registered model (ADR-0177 D7: a verifier holds the registered
+    11 | //! 2. **Re-execute independently** with the operator's own copy of the registered model (旧ADR-0177 D7: a verifier holds the registered
 
     12 | //!    model; `--palw-kernel-model`, one file a model, matched to a class only by its registered parameter commitments — a model that
 
@@ -1262,7 +1262,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   2628 |         self.proof_open(row).map_err(rule)?;
 
-  2629 |         // ADR-0177 D2 (`crate::court_scope`): within the accuser's dismissed filings and units of this claim — refused free, before any
+  2629 |         // 旧ADR-0177 D2 (`crate::court_scope`): within the accuser's dismissed filings and units of this claim — refused free, before any
 
   2630 |         // court runs (per accuser: no other bond can spend an honest prosecutor's allowance).
 
@@ -1487,7 +1487,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   2797 |         }
 
-  2798 |         // **One reporter pool per claim** (C4 F-C4R4-15, ADR-0032): the bounty is the accuser's share of what THIS conviction
+  2798 |         // **One reporter pool per claim** (C4 F-C4R4-15, 旧ADR-0032): the bounty is the accuser's share of what THIS conviction
 
   2799 |         // collected, rounded down. A pre-Final default before it already paid its demanders at most the same share of the penalty,
 
@@ -1499,7 +1499,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   2803 |         // paid the penalty's share twice; the honest accuser's residual dilution is the Sybil demanders' part of the default's
 
-  2804 |         // share — recorded for ECON.) ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance, but it counts
+  2804 |         // share — recorded for ECON.) 旧ADR-0176 HOOK `budget-bounty`: the bounty is a slash split, not issuance, but it counts
 
   2805 |         // against the claim's R reservation made at `budget-accept`.
 
@@ -2090,7 +2090,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   3625 |         }
 
-  3626 |         // ADR-0160 (D-5): a proven verdict is intent-class; a held dissection's verdict proves the
+  3626 |         // 旧ADR-0160 (D-5): a proven verdict is intent-class; a held dissection's verdict proves the
 
   3627 |         // producer's filings false, not the committed execution, and keeps the tier.
 
@@ -2204,7 +2204,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  21479 |     }
 
- 21480 |     // **ADR-0152 U2 (B-4, S-SPEC §10a): producing needs the producer floor posted.** Checked before
+ 21480 |     // **旧ADR-0152 U2 (B-4, S-SPEC §10a): producing needs the producer floor posted.** Checked before
 
  21481 |     // any write, so step 4 skips a refused own attempt without restoring anything (non-fatal, like
 
@@ -2218,7 +2218,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  21486 |     }
 
- 21487 |     // **ADR-0160 lane liab (AG-3): a frozen bond produces nothing** — checked before any write, like
+ 21487 |     // **旧ADR-0160 lane liab (AG-3): a frozen bond produces nothing** — checked before any write, like
 
  21488 |     // the floor, so step 4 skips a refused own attempt (a conviction among this block's own objects
 
@@ -2594,7 +2594,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
    907 | ///    or reverse a `Final` one — which revokes its RFC-0018 Gate C weight and frontier/settlement credit by the one predicate —
 
-   908 | ///    and record `CourtConviction` once, the filer's reporter reward, by-claim round-right forfeiture and ADR-0160's intent-class
+   908 | ///    and record `CourtConviction` once, the filer's reporter reward, by-claim round-right forfeiture and 旧ADR-0160's intent-class
 
    909 | ///    funnel). An execution-proving fault also forfeits every minted right by ROOT, so a sibling claim sharing the convicted
 
@@ -3235,7 +3235,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ## E18 — RFC20: 実装未検証と設計のみの項目
 
-ファイル: `docs/rfc/0020-long-context-calibration-memory.md`
+ファイル: `docs/rfc/0002-tensor-ir-kernels-and-runtime.md`
 
 ファイル SHA-256: `6a6e4f677e68fb4d956a7f46942a059d8b4cfdae7f5dbbe96128f670ccfe03ad`
 
@@ -3471,7 +3471,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   1624 |     ///
 
-  1625 |     /// **ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
+  1625 |     /// **旧ADR-0176 HOOK `budget-final` (lane BUDGET; not built here):** the reward is paid only within the R / F reservation the claim
 
   1626 |     /// made at acceptance (`budget-accept`), re-checked here; the budget is not recovered before `d + W`, whatever the claim's fate.
 
@@ -3568,7 +3568,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
   3284 |                     });
 
-  3285 |                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. ADR-0176 hook
+  3285 |                     // GAP-5: the reward is paid out of the job's escrow (the poster pays), once — never issued. 旧ADR-0176 hook
 
   3286 |                     // (`palw_bond_budget_v1`, not built): this payout also re-checks and consumes the producer bond's reservation.
 
@@ -3771,13 +3771,13 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ````text
 
- 11738 |                     // **ADR-0098 Decision 2: a seat that found a fault in this claim files NOTHING
+ 11738 |                     // **旧ADR-0098 Decision 2: a seat that found a fault in this claim files NOTHING
 
  11739 |                     // about it** — in this round or any later one. Not a `Valid` from an arm whose
 
  11740 |                     // samples missed the lie, and not the half-window `Unavailable`, which accuses a
 
- 11741 |                     // producer that served the data (and, without ADR-0065 D4, is charged when the
+ 11741 |                     // producer that served the data (and, without 旧ADR-0065 D4, is charged when the
 
  11742 |                     // rest of the panel licenses). Silence is never charged; the fault goes to the
 
@@ -3789,9 +3789,9 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  11746 |                         service.note_served(duty.claim_id);
 
- 11747 |                         // **A fault still addressed at a BLOCK is not finished with** (ADR-0086
+ 11747 |                         // **A fault still addressed at a BLOCK is not finished with** (旧ADR-0086
 
- 11748 |                         // Decision 6, found by ADR-0111's drill): only the interval arm below names
+ 11748 |                         // Decision 6, found by 旧ADR-0111's drill): only the interval arm below names
 
  11749 |                         // the leaf from the block's served leaves, and this gate used to stop it for
 
@@ -3809,7 +3809,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  11756 |                         if !fault_is_a_block {
 
- 11757 |                             // **ADR-0111 Decision 6: a NAMED leaf this seat could not accuse from a
+ 11757 |                             // **旧ADR-0111 Decision 6: a NAMED leaf this seat could not accuse from a
 
  11758 |                             // capture is pursued, not dropped** — the executor's evidence if it has
 
@@ -3876,7 +3876,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ````text
 
- 16393 |     /// ADR-0085 Decision 4: remember a fault this seat found, for the challenger's half. A leaf
+ 16393 |     /// 旧ADR-0085 Decision 4: remember a fault this seat found, for the challenger's half. A leaf
 
  16394 |     /// once named replaces the block it was found in (`PalwSeatFaultLedgerV1` orders the addresses).
 
@@ -3912,7 +3912,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  16410 | 
 
- 16411 |     /// **ADR-0098 Decision 2: has this seat found a fault in `claim`?** When it has, the verdict
+ 16411 |     /// **旧ADR-0098 Decision 2: has this seat found a fault in `claim`?** When it has, the verdict
 
  16412 |     /// block files nothing about the claim — neither a later arm's `Valid` nor the half-window
 
@@ -3929,7 +3929,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ````text
 
- 16418 |     /// **Hold one served opening, bounded** (ADR-0077 Decision 8).
+ 16418 |     /// **Hold one served opening, bounded** (旧ADR-0077 Decision 8).
 
  16419 |     ///
 
@@ -4022,7 +4022,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  17042 |                             "[{PALW_PANEL}] claim {}: interval {index} does not replay in leaves [{first_leaf_index}, +{leaf_count}) — \
 
- 17043 |                              filing nothing; a sampled verdict never slashes, and the block is the court's address (ADR-0086 D3)",
+ 17043 |                              filing nothing; a sampled verdict never slashes, and the block is the court's address (旧ADR-0086 D3)",
 
  17044 |                             duty.claim_id
 
@@ -4030,7 +4030,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  17046 |                         self.note_seat_fault_v1(duty.claim_id, first_leaf_index, leaf_count);
 
- 17047 |                         // ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
+ 17047 |                         // 旧ADR-0086 Decision 6: ask for the block's leaves on the same lane, and name
 
  17048 |                         // the leaf from them once they are held — the fault at leaf granularity is
 
@@ -4038,7 +4038,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  17050 |                         // verified folds at, read off it, never derived here: a held class's is
 
- 17051 |                         // pinned at 12 whatever its ladder (ADR-0121 Decision 3), and the request
+ 17051 |                         // pinned at 12 whatever its ladder (旧ADR-0121 Decision 3), and the request
 
  17052 |                         // names the block by the number that class counts in.
 
@@ -4121,7 +4121,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  17677 |         );
 
- 17678 |         // ADR-0152 §4-ter: the CLASS's ladder past the fence (see `seat_refutation_ladder_v1`).
+ 17678 |         // 旧ADR-0152 §4-ter: the CLASS's ladder past the fence (see `seat_refutation_ladder_v1`).
 
  17679 |         let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);
 
@@ -4182,7 +4182,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
  17725 |                         "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court on the executor's own evidence \
 
- 17726 |                          (session {session_id}) — ADR-0111's fast path",
+ 17726 |                          (session {session_id}) — 旧ADR-0111's fast path",
 
  17727 |                         duty.claim_id
 
@@ -4367,7 +4367,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ## E25 — RFC5のVMは不採用。未実装欠陥として数えない
 
-ファイル: `docs/rfc/0005-palw-ml-vm.md`
+ファイル: `docs/rfc/0001-principles-and-governance.md`
 
 ファイル SHA-256: `46c4429aedd57da116500ffb2213de74da91d690e42609a221c8fb058f53f5f6`
 
@@ -4380,13 +4380,13 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
      2 | 
 
-     3 | > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
+     3 | > **PALW共通前提 — 2026-10-10:** [旧ADR-0176](../../../rfc/0012-bonds-budgets-and-slashing.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。
 
      4 | > モデル計算はその枠を使用するための正当な仕事であり、同額bond・同期間・同倍率なら計算省略や高速偽造で枠は増えない。有罪なら報酬失効と適用規則上の担保損失を負う。claim容量の倍率を上げてもbond当たりの総経済・consensus creditは増やさない。
 
      5 | > 将来のPALW設計・受入条件に適用し、過去の実測・実装記録・旧claim規則は保持する。上限は検出能力の証明ではなく、公開検証・徴収可能担保・責任保持・独立試験と明示的upgrade/activationを要する。
 
-     6 | > **モデル入手への不介入 — 2026-10-10後続改定:** [ADR-0177](../adr/0177-model-bond-allocation-without-availability-consensus.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
+     6 | > **モデル入手への不介入 — 2026-10-10後続改定:** [旧ADR-0177](../../../rfc/0013-model-work-accounting.md)を優先する。MISAKA Torrent・専用Seeder・Seeder報酬の概念を廃止する。モデル配布・取得可否を合意で管理せず、PoR/全量取得監査/TRDC/FPRによる資格・weight停止も撤回する。モデル別coinbaseは重複のない拘束miner bond元本に連動し、総発行予算と個別bond上限を維持する。
 
      7 | > 固定モデル同一性とclaim固有証拠の裁定は維持する。外部検証は正しいモデルを入手できた条件で成立し、公開参加の経済優位は倍率式・敵対的評価で立証する未完の目標である。過去の実装/試験/旧規則は保持し、新配分は未実装・未有効化である。
 
@@ -4394,7 +4394,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
      9 | 
 
-    10 | > **2026-10-07 中核目標・設計の優先規則:** [ADR-0173](../adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
+    10 | > **2026-10-07 中核目標・設計の優先規則:** [旧ADR-0173](../../../rfc/0009-court-and-claim-final.md)を適用する。普通の非Panel public bondが、producer秘密状態なしにpublic authenticated materialから不正をlocalizeしobjective convictionまで完結できることを目指す。衝突する将来設計は末尾のmission alignment amendmentで改定する。既存Status・実装記録・fenceは履歴として保持し、この追記は実装完了やactivationを意味しない。
 
     11 | 
 
@@ -4733,7 +4733,7 @@ ZIP SHA-256: `c13be519c006ac707d2c3f2ae1dcb468b50695844121f1e4c6e0321b92e9f22e`
 
 ## E30 — RFC07の直接検査・全関係の被覆と裁定への接続
 
-ファイル: `docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md`
+ファイル: `docs/rfc/0008-g14-panel-and-verification.md`
 
 ファイル SHA-256: `ca0580bcfb23650ca07b322f55094597fb41c695bd55861ab8cb4f5bf2255494`
 

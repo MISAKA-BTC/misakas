@@ -1,15 +1,5 @@
 # K2 at real scale — segmented commitments, element courts, per-segment DA, prompt tiles (lane K2S, 2026-10-08)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Branch `k2/real-scale` (base `86dbc1fc2`). Goal: RFC-0011's K2 route (`palw_probabilistic_constraints_v1`, dormant) must work for real
 models at their declared tasks and contexts — the measured 9B-8k and SmolVLM refusals of `coverage-p1p2-record.md` §1.2/§2.1 — **without
 weakening G14**: one ordinary bond outside any Panel, public material only, bounded bytes and time, reaches a conviction or a correctly
@@ -202,9 +192,9 @@ two tiny encoders, and each relation's price within the registered plan's worst 
   convicted within the grace** (refunded on conviction, moot or default), sized so `positions × bond` exceeds the producer's carriage cost;
   and the court deadline sized to the chain's object bandwidth (`parts per position / parts per DAA`). G14 does not rest on it.
 
-### 4.1 Court scope under ADR-0177 D2: claim-specific demands, the model from the verifier's own copy
+### 4.1 Court scope under 旧ADR-0177 D2: claim-specific demands, the model from the verifier's own copy
 
-ADR-0177 D2 limits a court's demands to the claim's own evidence (state, trace, output, witness). A demand must never ask the producer
+旧ADR-0177 D2 limits a court's demands to the claim's own evidence (state, trace, output, witness). A demand must never ask the producer
 for weight rows or file ranges, and repeated demands must never add up to the model. A model operand the court needs comes from the
 verifier's own copy, authenticated against the registered root. Every K2-TIR-v4/v5 unit, against that rule:
 
@@ -227,7 +217,7 @@ predicate as a cumulative disclosure scope. When DA16 lands the predicate, K2 wi
 claim. (The predicate is not on its branch yet.)
 
 **A second flag: the gate's `weights_public` input.** The v4 gate takes `ProfileMaterialV1::kernel_route(weights_public)`, and the route
-passes `true` for a class whose artifact root is attested (an onboarding binding that is Matured or Final). Under ADR-0177 that flag can
+passes `true` for a class whose artifact root is attested (an onboarding binding that is Matured or Final). Under 旧ADR-0177 that flag can
 only mean that the registered root is bound. It cannot mean the bytes are obtainable, because the chain guarantees no acquisition (D1).
 The gate's G14 verdict is therefore **conditional on the verifier holding the model** (D7). The Lead decides whether to rename the
 input, or to have the read API state the condition next to each G14-complete class.
@@ -284,7 +274,7 @@ The change, in order. Each step is one milestone, and none of them touches a liv
    (re-execute, compare roots, descend to the first divergent position, then to the first divergent node commitment, then to the
    first divergent leaf hash) is the detector. It already holds every value it needs.
 
-Until then, a K2-TIR-v4/v5 class must not be reward-bearing on the ADR-0177 D2 ground as well: a demand of a v4 position compels
+Until then, a K2-TIR-v4/v5 class must not be reward-bearing on the 旧ADR-0177 D2 ground as well: a demand of a v4 position compels
 model-dependent and model-copy values in the clear.
 
 ## 5. Authenticated prompt tiles (behind the K2 fence)
@@ -428,11 +418,11 @@ refuses, by name, a value whose single row leaf and overhead exceed a part, wher
 caps the rank at 4, but no longer a hang). Re-measured on the 9B-8k fixture (debug): the v4 gate takes **11.3 ms** (was 14.9 s), with the
 same 2,294 parts and the same bounds.
 
-### 8.2 Rewards and weight: the ADR-0176 hook (named, not built)
+### 8.2 Rewards and weight: the 旧ADR-0176 hook (named, not built)
 
 A K2-TIR-v4/v5 claim can give its producer exactly two things: the Final reward (`LedgerPolicyV1::claim_reward`, settled as
 `SettlementKindV1::FinalReward` in the ledger tick's `Final` transition) and the OPV work credit the consumer releases at Final
-(`OpvEconomicsV1::work_credit_per_claim`). Both are INTERIM and dormant. Under ADR-0176 they draw from the producer bond's Q/B/R/F
+(`OpvEconomicsV1::work_credit_per_claim`). Both are INTERIM and dormant. Under 旧ADR-0176 they draw from the producer bond's Q/B/R/F
 budget of lane BUDGET (`palw_bond_budget_v1`). The hook is:
 
 | Point | Call |
@@ -440,7 +430,7 @@ budget of lane BUDGET (`palw_bond_budget_v1`). The hook is:
 | `CommitSegmentedClaim` accepted (`seg_ledger.rs`, at `d` = the claim's DAA) | reserve `Q` = 1 claim and the claim's maximum `R` (its Final reward) and `F` (its work credit) against the producer bond over the window `W`. A refusal refuses the claim (`B` = 0: a kernel-route claim mints no block) |
 | the tick's `Final` transition (`ledger.rs`, `FinalReward`) and the consumer's work-credit release | re-check the reservation and consume it; pay nothing that was not reserved |
 | conviction, Unavailable, TimedOut, void | the reservation is spent, not returned: `reuse_not_before = d + W` (no early recovery) |
-| the accuser's reward | not issuance: a share of the producer's slash. Outside Q/B/R/F. The route's INTERIM policy (`palw_kernel_route_policy_v1`) sets `accuser_reward_permille` = 500, so a self-reporting producer recovers 50% and loses a net 50% of the collected slash. That is above ADR-0032's 4,900 bps (the R-core reporter share, behind `palw_reporter_share_v2`); whether the kernel route adopts 4,900 bps is the Lead's decision |
+| the accuser's reward | not issuance: a share of the producer's slash. Outside Q/B/R/F. The route's INTERIM policy (`palw_kernel_route_policy_v1`) sets `accuser_reward_permille` = 500, so a self-reporting producer recovers 50% and loses a net 50% of the collected slash. That is above 旧ADR-0032's 4,900 bps (the R-core reporter share, behind `palw_reporter_share_v2`); whether the kernel route adopts 4,900 bps is the Lead's decision |
 
 Until BUDGET's engine exists, every reward or weight fence on this route stays refused. Nothing here is armed.
 
@@ -546,7 +536,7 @@ out. The form that fits the principle runs route B on a post-commit sample of cl
    runs the check and files in time (A-HV). Route B re-executes from the artifact, so it needs the model;
 3. the collateral follows SOUND's P-ECON: `reservation ≥ ⌈max(gain + default_penalty, ⌈gain / P_dc⌉) / (1 − a)⌉`.
 
-**`P_run` includes acquisition (ADR-0177 D7).** The chain does not interfere with model acquisition and guarantees none (D1). A watcher
+**`P_run` includes acquisition (旧ADR-0177 D7).** The chain does not interfere with model acquisition and guarantees none (D1). A watcher
 holds the model only if it obtains it off-chain. For a closed model whose holders all refuse to distribute it, every drawn watcher fails
 for the same reason, and `P_run` (so `P_dc`) is **0**. Then no finite reservation deters: `gain / P_dc` is unbounded. Two consequences
 for this design:
@@ -555,7 +545,7 @@ for this design:
   all of them at once;
 * every `P_run` below is an illustrative input, not a property the chain provides. A class whose `P_run` cannot be shown positive (a
   closed model with no outside holder) stays registered and judgeable, but has no detection, so it earns no reward and no consensus
-  weight (PRINCIPLES §6, ADR-0177 D7: "unproven" is reported as unproven).
+  weight (PRINCIPLES §6, 旧ADR-0177 D7: "unproven" is reported as unproven).
 
 At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½):
 
@@ -579,7 +569,7 @@ but earns no reward and no consensus work weight (PRINCIPLES §6):
 | a fee for a drawn check, from the user's escrow | ECON | G14-R4 |
 | `q`, and a derivation of `P_run` (today `assumed_detection_permille` is an input, SG-13) | POLICY | Lead / user |
 | the lazy watcher: a drawn watcher can report "clean" without running, and `P_run` cannot be read from the chain (forced-error audit claims, redundant watchers) | DESIGN | reviewer question |
-| a drawn watcher's acquisition of the model: off-chain, guaranteed by nothing (ADR-0177 D1/D7); `P_run` = 0 for a closed model with no outside holder, and watchers fail together | ECON / POLICY | Lead / user (ADR-0177 D6/D7) |
+| a drawn watcher's acquisition of the model: off-chain, guaranteed by nothing (旧ADR-0177 D1/D7); `P_run` = 0 for a closed model with no outside holder, and watchers fail together | ECON / POLICY | Lead / user (旧ADR-0177 D6/D7) |
 | an OPV window that contains a route-B check of the class (`T_check` measured per class) | MEASUREMENT | MEAS |
 | a part-0-only demand (a cheap probe under withholding) | proposal, needs an allocation | Lead |
 
@@ -701,7 +691,7 @@ the lying value and convicted, filed in 1,136–3,831 B.
   `q = 1` is affordable and `P_dc = P_run`. At the interim terms (gain 20 BILI, default penalty 100 BILI, `a` = ½, `P_run` = ½) the
   reservation is **240 BILI**, against 40,960 BILI for sampling a 9B-8k claim (§11.3). The detection cost is one job's compute, not a
   fraction of a terabyte-scale claim. `P_run` = ½ is an input, not a guarantee: it includes the watcher holding the model (§11.3,
-  ADR-0177 D7), and it is 0 for a closed encoder nobody outside its holders can obtain.
+  旧ADR-0177 D7), and it is 0 for a closed encoder nobody outside its holders can obtain.
 * **Condition 6 (the verifier's resources).** A check costs the forward pass plus hashing the position's values (the material
   column). It reads the artifact and the job's ids. Only when the roots differ does it also read one position of material and file one
   element court, whose size is the table's worst-court column, far under the carrier. The per-prosecution bound is the gate's column.
@@ -804,7 +794,7 @@ This section supersedes §13's untested `own()` plumbing proposal. The review br
 [`docs/audit/g14-review-2026-10-10/implementation.md`](../../../audit/g14-review-2026-10-10/implementation.md).
 
 * `SegMaterialV1` supplies public material and commitments only. It cannot supply trusted verifier-owned values. The checker derives
-  those internally from the authenticated job and the verifier's registered model (ADR-0177 D7). A source cannot make a fraudulent
+  those internally from the authenticated job and the verifier's registered model (旧ADR-0177 D7). A source cannot make a fraudulent
   claim appear clean by supplying the same fraudulent tensor as both public and supposedly independent material.
 * The root descent locates the first differing position. Its court authenticates the public positions before a second prefix replay;
   missing or partial DA responses do not trigger repeated model execution. This replay retains only the selected withheld values.

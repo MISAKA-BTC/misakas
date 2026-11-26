@@ -15,7 +15,7 @@
 
 ## 1. 最上位の設計原則
 
-### ADR-0176 §1の正本を維持し、RFC索引と関連RFCから参照する追記案
+### 旧ADR-0176 §1の正本を維持し、RFC索引と関連RFCから参照する追記案
 
 MISAKAは確率的検証と経済的拘束によってPALWを実現する。Miner bondと共通の合意時間が、その元本から発生できるclaim、報酬付きブロック、報酬総額、Final weightの上限を決定する。正当なモデル計算は、その枠を使用するために必要な仕事である。
 
@@ -97,7 +97,7 @@ p_effectiveは検査器の検出率だけでなく、実際の検査、局所化
 
 ## 3A. 追加 — モデル別Miner・Panel claim bondと1.3〜2倍の配分係数
 
-> **2026-10-14決定:** 本節のうち、Miner＋検証者の元本合算（Panel=0に合わせてclaim拘束のpermissionless verifier元本へ一般化）とブロック生成機会への接続を採用した。配分曲線は`μ`案ではなく`α = 1.5`、平均期間は30日相当DAA、`W`は7日相当DAAとした。マイナー報酬はモデル登録者へ直接分配しない。§3A.8の`p_effective`不等式は、[PRINCIPLES §0](../../../PRINCIPLES.md)により有効化gateではなく評価指標として読む。正本は[RFC-0015 §8.5.5](../../../rfc/0015-panel-free-permissionless-verification.md)。
+> **2026-10-14決定:** 本節のうち、Miner＋検証者の元本合算（Panel=0に合わせてclaim拘束のpermissionless verifier元本へ一般化）とブロック生成機会への接続を採用した。配分曲線は`μ`案ではなく`α = 1.5`、平均期間は30日相当DAA、`W`は7日相当DAAとした。マイナー報酬はモデル登録者へ直接分配しない。§3A.8の`p_effective`不等式は、[PRINCIPLES §0](../../../PRINCIPLES.md)により有効化gateではなく評価指標として読む。正本は[RFC-0015 §8.5.5](../../../rfc/0008-g14-panel-and-verification.md)。
 
 ### 3A.1 採用したい設計方針と対象攻撃
 
@@ -464,15 +464,15 @@ checkerの試験は、単一不正tile、低rank差分、丸め境界、routing�
 
 ## 9. 参照した正本（上記commit）
 
-- `docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md` §1、D1–D6
-- `docs/adr/0166-verifier-unavailability-is-not-producer-fraud.md` §§2–3、mission alignment
-- `docs/adr/0177-model-bond-allocation-without-availability-consensus.md` D1–D2
-- `docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md` §§0、3–9
-- `docs/rfc/0014-panel-independent-fraud-prosecution.md` §§7.2–7.4
-- `docs/rfc/0003-palw-generative-model-classes.md` §I.4.7
-- `docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md` §VI.3
-- `docs/rfc/0011-permissionless-model-and-long-context-onboarding.md` §17
-- `docs/rfc/0015-panel-free-permissionless-verification.md` §§7–8
+- `docs/rfc/0012-bonds-budgets-and-slashing.md` §1、D1–D6
+- `docs/rfc/0009-court-and-claim-final.md` §§2–3、mission alignment
+- `docs/rfc/0013-model-work-accounting.md` D1–D2
+- `docs/rfc/0008-g14-panel-and-verification.md` §§0、3–9
+- `docs/rfc/0009-court-and-claim-final.md` §§7.2–7.4
+- `docs/rfc/0003-jobs-tokenizers-and-generation.md` §I.4.7
+- `docs/rfc/0008-g14-panel-and-verification.md` §VI.3
+- `docs/rfc/0007-bft-model-admission.md` §17
+- `docs/rfc/0008-g14-panel-and-verification.md` §§7–8
 
 
 ## 10. 第2版の追加方針と確認範囲

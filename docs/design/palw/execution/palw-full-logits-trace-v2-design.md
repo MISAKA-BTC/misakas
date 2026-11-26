@@ -2,13 +2,13 @@
 
 Status: **旧 trace format・測定記録。float class と恒久 hash floor の導入案は撤回済み。**
 Date: 2026-08-12
-Relates to: ADR-0007, ADR-0008, ADR-0021, ADR-0024, `misaka-palw-worker`
+Relates to: 旧ADR-0007, 旧ADR-0008, 旧ADR-0021, 旧ADR-0024, `misaka-palw-worker`
 
 Companion documents:
 
-- [`MISAKA PALW VPS Canonical Worker 経路設計書 v0.1`](../../../history/withdrawn-designs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md)
-- [`MISAKA PALW側PoW 詳細設計書 v0.1`](../../../history/withdrawn-designs/misaka-palw-pow-detailed-design-v0.1-ja.md)
-- [`MISAKA PALW セキュアOTA設計書 v0.1`](../../../history/withdrawn-designs/misaka-palw-ota-secure-update-design-v0.1-ja.md)
+- [`MISAKA PALW VPS Canonical Worker 経路設計書 v0.1`](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/withdrawn-designs/misaka-palw-vps-canonical-worker-design-v0.1-ja.md)
+- [`MISAKA PALW側PoW 詳細設計書 v0.1`](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/withdrawn-designs/misaka-palw-pow-detailed-design-v0.1-ja.md)
+- [`MISAKA PALW セキュアOTA設計書 v0.1`](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/withdrawn-designs/misaka-palw-ota-secure-update-design-v0.1-ja.md)
 
 > [!IMPORTANT]
 > 本書の `v2` は **PALW内部のtrace scheme version** であり、block headerの
@@ -17,7 +17,7 @@ Companion documents:
 
 ## 1. 判定と適用範囲
 
-本書は既存 trace format と測定根拠の記録であり、旧 float worker・VLT overlay を新規採用する計画ではない。float class は異種 CPU の厳密一致と客観的裁定を保証できず、[ADR-0053](../../../adr/0053-palw-one-execution-family.md) の整数 runtime に置き換えた。恒久 hash floor は有用計算を迂回する誘因と混合 difficulty の負担があるため撤回した。現在の activation 判断は [ADR-0042](../../../adr/0042-palw-mainnet-candidate-ruleset.md) と後続 ADR に従う。
+本書は既存 trace format と測定根拠の記録であり、旧 float worker・VLT overlay を新規採用する計画ではない。float class は異種 CPU の厳密一致と客観的裁定を保証できず、[旧ADR-0053](../../../rfc/0002-tensor-ir-kernels-and-runtime.md) の整数 runtime に置き換えた。恒久 hash floor は有用計算を迂回する誘因と混合 difficulty の負担があるため撤回した。現在の activation 判断は [旧ADR-0042](../../../rfc/0020-devnet-release-and-migration.md) と後続 ADR に従う。
 
 ## 2. 識別子と上位アーキテクチャ
 
@@ -38,7 +38,7 @@ trace_commitment_version       = 2
 
 ### 2.2 推奨ブロック条件
 
-hash PoW の上に任意の PALW certificate を載せる旧構成は採用しない。有用計算が block production を担わず hash mining に迂回できるため。[ADR-0038](../../../adr/0038-palw-is-the-consensus-work.md)・[ADR-0039](../../../adr/0039-palw-only-block-production.md) が置き換える。
+hash PoW の上に任意の PALW certificate を載せる旧構成は採用しない。有用計算が block production を担わず hash mining に迂回できるため。[旧ADR-0038](../../../rfc/0011-gate-c-and-consensus-credit.md)・[旧ADR-0039](../../../rfc/0015-dag-blocks-and-settlement.md) が置き換える。
 
 ## 3. 旧Ollama方式を廃止した測定根拠
 
@@ -216,7 +216,7 @@ root再利用は、root不一致として検出されなければならない。
 
 ## 7. RuntimeManifestV2とdeterminism class
 
-build・ISA・CPU ごとの float class を新規採用する計画は撤回した。manifest の固定では異種 CPU の reduction 差と客観的裁定の問題を解決できないため。既存 format の履歴は Git に残し、現在の実行方針は [ADR-0053](../../../adr/0053-palw-one-execution-family.md) に従う。
+build・ISA・CPU ごとの float class を新規採用する計画は撤回した。manifest の固定では異種 CPU の reduction 差と客観的裁定の問題を解決できないため。既存 format の履歴は Git に残し、現在の実行方針は [旧ADR-0053](../../../rfc/0002-tensor-ir-kernels-and-runtime.md) に従う。
 
 ## 8. 浮動小数点のcanonical policy
 
@@ -439,10 +439,10 @@ entropy/cost試験、`"unpinned"` fieldの解消、独立bonded credential条件
 - 「full replayは軽い」
 - 「promptが短いのでtoken budgetは固定できる」
 - 「cacheを禁止すれば同じ計算量を強制できる」
-- 「1 tokenの検証だから1 token分のFLOPsで済む」（ADR-0026 §4: KV cacheを持たないfresh
+- 「1 tokenの検証だから1 token分のFLOPsで済む」（旧ADR-0026 §4: KV cacheを持たないfresh
   verifierは challenged positionまでのprefillを払う。replay costは必ず cold/no-KV で
   class毎にp99実測する）
-- 「1点challengeで十分」（ADR-0026 §5: `P_detect = 1-(1-f)^q`。局所的不正では
+- 「1点challengeで十分」（旧ADR-0026 §5: `P_detect = 1-(1-f)^q`。局所的不正では
   `q` を bond/期待利得から動的に決める）
 
 許容する表現:

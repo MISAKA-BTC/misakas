@@ -44,12 +44,12 @@ Claude 側の 3 本の lane(drill、TIR frame と genesis、native と DAG)を�
 **最終段(上がすべて終わってから)**
 7. 統合する。4 本の G14 lane に加えて、Codex の branch(`codex/rfc23-stage2`、`codex/rfc18-dag-width`、`codex/red-tests`、`codex/acceptance-rfc`、`codex/rfc08-09-10-12`)を 1 本の release 用 branch にまとめ、全 lane の対象試験と t12 の指紋の試験を流す。
 8. live の t12 の DAA を読み取り専用で確認したうえで、新しい fence をすべて DAA 16,000 に設定する。測定記録を出荷用の release binary で実測して pin する。測れない値は作らずに報告する。
-9. 出荷 binary で 16,000 を跨ぐ drill を行う。D-01〜D-18、A〜G、RFC18、RFC19 R-7/R-8、正直な claim が支払われること、不正な claim が slash されること、restart・reorg・IBD・pruned import。画像・動画・モデル改善が開かないこと(ADR-0182)も確かめる。
+9. 出荷 binary で 16,000 を跨ぐ drill を行う。D-01〜D-18、A〜G、RFC18、RFC19 R-7/R-8、正直な claim が支払われること、不正な claim が slash されること、restart・reorg・IBD・pruned import。画像・動画・モデル改善が開かないこと(旧ADR-0182)も確かめる。
 10. すべて通ったら、main(fast-forward のみ)・pre・integ に push する。**t12 のノードと VPS への配備は、ユーザーの承認を得てから。**
 
 ## 3. 決定済みのこと(変えない)
 
-ADR-0183〜0187、RFC-0023 / ADR-0186 に記録済みです。
+旧ADR-0183〜0187、RFC-0023 / 旧ADR-0186 に記録済みです。
 
 - Panel floor 240,000 MSK
 - court class の保持期間 ≥ 4W + 開示窓

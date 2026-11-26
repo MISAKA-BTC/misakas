@@ -107,7 +107,7 @@ A static web front-end for the MISAKA chain's **model store** (ADR-0087, ADR-008
 **ADR-0090**, **ADR-0095**), served at https://misakaoptions.com. What a model sells is a
 **membership**: access its owner declares on chain, and that the fold enforces where it can.
 
-**The site's words and the chain's words.** [ADR-0095](../../docs/adr/0095-a-position-is-a-membership-not-an-income.md)
+**The site's words and the chain's words.** [ADR-0095](../../docs/adr/0016-position-economics-and-permanent-liquidity.md)
 settled what a position is — a membership, never an income — and the front-end says so, in one
 mapping used everywhere:
 
@@ -126,7 +126,7 @@ prints the facade's event name in its tooltip: the site never becomes a second v
 cannot trace back to the explorer.
 
 **A model's store is open from the moment the model is added**
-([ADR-0162](../../docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md), past the
+([ADR-0162](../../docs/adr/0016-position-economics-and-permanent-liquidity.md), past the
 `palw_model_virtual_v1` fence): the class's registration adds its founding line and founding a line
 adds the others, and each store opens on a **virtual reserve** of 10,000,000 MSK — a number the
 curve prices with, which no object ever pays to anyone — so nobody has to lock MSK for a store to

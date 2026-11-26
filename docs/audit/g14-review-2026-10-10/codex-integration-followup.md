@@ -37,7 +37,7 @@ Source14c3c6f9: integrated core build PASS and30 focused tests PASS, including t
 
 The actual Q36 host fixture on d6a578b8e failed0/1 because normal retention is folded; production tiles_from_material_v1 now constructs authenticated published rows and verifies the regenerated execution root (780e2fce1). Rerun pending. BASE0 i8 native fixture and one-pruned-input automatic producer/reacquisition fixtures are also unexecuted.
 
-Tokenizer actual operand length is now independent of signed declaredL and is authenticated at the original whole-preimage EOF before judging a length misstatement. A small signedL cannot be allowed to prevent authenticating a longer held preimage. The current immutable funding/hold envelope can still refuse that larger operand, so a timely fully paid prospective contract extension is being implemented. No tokenizer/model bytes are compelled from the producer under ADR-0177 D2/D7. Arbitrarily large historical preimages and the quantitative economic bound remain unresolved.
+Tokenizer actual operand length is now independent of signed declaredL and is authenticated at the original whole-preimage EOF before judging a length misstatement. A small signedL cannot be allowed to prevent authenticating a longer held preimage. The current immutable funding/hold envelope can still refuse that larger operand, so a timely fully paid prospective contract extension is being implemented. No tokenizer/model bytes are compelled from the producer under 旧ADR-0177 D2/D7. Arbitrarily large historical preimages and the quantitative economic bound remain unresolved.
 
 ## Executed public family and recovery checkpoint
 
@@ -61,7 +61,7 @@ The source-only registered A16 staged tokenizer fixture is queued: ordinary clas
 
 ## Completion estimate against the human guarantee
 
-Approximately50–60% is an engineering estimate of implemented **and demonstrated guarantee conditions**, not a calculation from commit counts, tests or lines of code. The scope retains ADR-0177 D7: the outside bonded verifier already holds the correctly registered model, tokenizer and configuration. Public authenticated acquisition, rooted objective computation/semantic proofs, bounded source streams and several restart primitives have source-qualified evidence.
+Approximately50–60% is an engineering estimate of implemented **and demonstrated guarantee conditions**, not a calculation from commit counts, tests or lines of code. The scope retains 旧ADR-0177 D7: the outside bonded verifier already holds the correctly registered model, tokenizer and configuration. Public authenticated acquisition, rooted objective computation/semantic proofs, bounded source streams and several restart primitives have source-qualified evidence.
 
 The remaining completion obligations are substantial: maximum-profile source/evidence transport within actual carrier, session, time and RAM limits; producer plus every qualified Panel custodian DA/default and actual collection; full active-family and job/input/output/state coverage; quantitative funding, inclusion and resistance to reservations/junk under collusion; real restart/reorg/pruning/RPC/P2P endpoint evidence; and a final integrated audit before activation. Local passing tests or a finite source planner do not discharge these obligations. Keep activation refused.
 

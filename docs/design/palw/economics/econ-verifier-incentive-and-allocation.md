@@ -1,53 +1,15 @@
 # The verifier's incentive, self-dealing at 49%, the seal deposit, and model-bond allocation (lane ECON, 2026-10-10)
 
-<!-- BMR1-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — BFT継続5%・モデル恒久廃止と用途別bond
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../../../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../../../adr/0237-bft-model-retirement-and-role-bonds.md)／[BMR1移行](../../../governance/model-retirement-transition.md)をBFTの継続報酬・恒久廃止・用途別bond処理の正本とする。最新配分は同一coinbase原資Cの50/20/20/5/5であり、BFTの通常継続報酬は**`F=floor(50C/1000)`（5%）**、Panel/Gate CのMISAKA枠は**`P=floor(50C/1000)`（5%）**。同日途中の10%と可変W/P前段を撤回する。残るPOSITION購入70%とMISAKA LP20%はRFC0068の同じ一回分割・残差規則に従い、5%をさらに二重控除しない。検証者5%内の役割配分は既存の正規planで決める。
-
-正規BFTのモデル恒久廃止で、当該永久LP内actual MISAKA・登録者責任bond・MINING用途bond・未確定mining報酬を100%burn/失効させる。**全Panel/Gate C検証用途bondは、不正者も含め一律にBFT廃止burnから保護**し、個人不正はCourtの個別slashへ分離する。正当に成立した検証報酬の支払を維持し、他モデル資産へ影響させない。兼任は用途別lot（MINING6,000だけburn、PANEL4,000は保護）とし、重複担保・責任中の用途変更は禁止する。
-
-通常のLP撤去禁止を維持し、canonical廃止のactual reserve burnだけを限定例外にする。BFTの没収受取・廃止bountyは0。継続5%報酬を没収額に連動させない。可逆Pause/Resumeと区別し、旧停止専用・LP絶対不処分の記述をこのscopeだけ置換する。旧profile/native/履歴を保持し、BMR1実装・移行・有効化は別工程とする。
-
-**個別Court slashの実回収額は別会計。** 対象offenceから実際に回収したMISAKAをSとし、Panel/Gate C合計の報酬を`E=floor(490S/1000)`、残り`T=S-E`をburnとする（名目49%/51%、端数はburn）。49%は両役割の合計であり、それぞれ49%ではない。不正発見・立証の資格を認証したplanで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFTモデル廃止の100%burn資産をSへ加えず、BFTの没収受取・廃止bountyは0のまま。検証bondがBFT一律burnから保護されることは、本人のCourt個別slash免除ではない。
-<!-- BMR1-ADOPTED-20261126-END -->
-
-<!-- MOE3-ADOPTED-20261126-BEGIN -->
-## 2026-11-26 最終訂正 — 全モデル統一・小数POSITION・50/20/20/5/5
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0068](../../../rfc/0068-fractional-position-miner-rewards.md)／[ADR0236](../../../adr/0236-fractional-position-miner-rewards.md)／[MOE3適用・移行](../../../governance/fractional-position-economics-transition.md)を新経済の正本とする。ユーザーの最新指定は、対象coinbase原資Cの**50%をMiner用POSITION購入、20%をLP用POSITION購入、20%をMISAKAのLP、5%をPanel/Gate CへMISAKA、5%をBFTへMISAKA**である。Minerと検証者の受取資産を分け、5%枠内のPanel/Gate C配分は認証済みplanに従う。新しい半々配分等を暗黙設定しない。
-
-整数分割は`F=floor(50C/1000)`、`P=floor(50C/1000)`、`A=floor(200C/1000)`、`J=floor(200C/1000)`、`D=C-F-P-A-J`、`B=D+J`。FがBFT、Pが検証者、AがLP用MISAKA、JがLP用POSITION購入原価、DがMiner用購入原価であり、**通貨の全丸め残差はD**へ置く。B（名目70%）を一括購入し、購入qから`ell=floor(q*J/B)`をLP、`m=q-ell`をMinerへ配る（B>0）。単一モデルにC全額を割り当て、かつCが20の倍数の例ならell=floor(2q/7)で名目2/7 LP・5/7 Minerとなるが、端数時も無条件に2q/7としない。`C=B+A+P+F`、`q=ell+m`を保つ。POSITIONの50%/20%相当は取得原価の按分であり、換金額の保証ではない。
-
-全モデルを係数1.0・各モデルの一意市場・MAD2管理へ統一する。新fork特別区分、追加モデル専用κ、coreの市場/報酬免除、genesisのBFT管理免除を継承しない。originは履歴として保存し、genesisの差は正規creatorがいない点だけとする。POSITIONは小数8桁、`1 POSITION=100,000,000 atoms`として固定精度整数で計算する。
-
-通常AMMはburn5%を維持し、creatorありの総手数料1%/名目net94%、正規genesisのcreatorなしは0%/名目net95%とする。不存在creatorの1%を徴収・追加burnしない。内部購入・LP・配布の追加AMM feeは0。通常の永久LP撤去禁止・claim検証・共通発行/資本/責任capを維持し、BMR1正規廃止の限定burnは後続規範に従う。
-
-同日途中の「80%購入・q/4 LP・60%相当Miner」「Wから可変Panel枠を引いてRへ」「BFT10%」は**今回の固定50/20/20/5/5に置換済み**であり、新規受理に使わない。旧MOE1/MOE2のwhole数量・30/20/50・owner3%・旧claim/wire/native/過去試験は元profileの記録として保持する。MOE3のnative接続・移行実行・本番有効化の完了ではない。
-
-一般/複数モデルでは、RFC0068 §4.3で一度分割したCの各legを結合按分し、各モデルの実予算比`floor(q_i J_i/B_i)`でLP数量を求める。Cが20で割り切れるだけでは各モデルの比率が2/7になるとは限らない。
-<!-- MOE3-ADOPTED-20261126-END -->
-
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Branch `econ/verifier-incentive`: integration head `323ea161a` merged. It carries BUDGET's engine, G14R round 2's single 49% cap
 (F-C4R4-15), INTF's 49% fence and the Round/EXEC acceptance conditions.
 Supersedes the first-milestone note `verifier-incentive-and-seal-economics.md` (10-09, at a 50% accuser share), which stays as the
 record of that milestone.
 
 **Status: DESIGN + PoC.** No consensus code changes. Nothing here is armable. The user's 2026-10-10 rules apply throughout:
-* **ADR-0032:** the PALW reporter share is **49%** (`palw_reporter_share_v2`). A self-reporter recovers 49%, so its net loss is never
+* **旧ADR-0032:** the PALW reporter share is **49%** (`palw_reporter_share_v2`). A self-reporter recovers 49%, so its net loss is never
   the gross slash.
-* **ADR-0176:** bond and a common window `W` bound claims, reward blocks, rewards and Final weight (Q/B/R/F).
-* **ADR-0177:** the chain does not interfere with model acquisition. Effective detection `p` can be 0 for a closed model. Model
+* **旧ADR-0176:** bond and a common window `W` bound claims, reward blocks, rewards and Final weight (Q/B/R/F).
+* **旧ADR-0177:** the chain does not interfere with model acquisition. Effective detection `p` can be 0 for a closed model. Model
   coinbase is allocated through `f(S_m)`.
 
 **Labels.** Every number below carries one label:
@@ -76,9 +38,9 @@ Amounts are in BILI.
 | Id | Statement | Status |
 |---|---|---|
 | **M0** | **Capture.** Today the earliest seal of the exact convicting bytes takes the bounty. On every self-dealing path, the liar's own Sybil takes the whole 49%, and the honest verifier who found the lie earns 0. Checking an honest claim also earns 0. | **COUNTEREXAMPLE**. MEASURED at 49% (`econ_bounty`). |
-| **E1** | **The 49% did not bound a self-dealer** (before F-C4R4-15). After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. Capping it naively (O1) lets a Sybil demander dilute an honest accuser again. Rule O2 keeps both invariants. Integration now runs O4 (F-C4R4-15): every self-dealing path loses exactly 51% (MEASURED, econ-m3). The residual: after the coalition's self-default an honest accuser gets 441 instead of 490 (MEASURED). | **FIXED** for I-49 by F-C4R4-15. **RESIDUAL** for I-D. Recommendation in §2.2. |
-| **S** | **Self-dealing never pays** (self-fraud, self-accusation, bounty receipt, check fees). With E1 fixed (rule O2, or O1/O3; §2.2), a coalition that convicts its own lie loses at least `(1 − a)` of what was collected. An honest claim cannot be convicted. Self-dealing only turns gross `K` into `L_net = (1 − a_eff)·K` inside ADR-0176 D6. | **PROVEN** (§2.3). |
-| **Y** | **Per bond and window** (ADR-0176). With fully backed reservations, every forging strategy is deterred only if reward / capital per window `< p·(1 − a_eff)·W / (H_L·(λ + x − p·r_risk))`. At `p` = 0 no positive reward yield is safe. | **PROVEN** (§2.4). |
+| **E1** | **The 49% did not bound a self-dealer** (before F-C4R4-15). After a self-inflicted pre-Final default, the coalition recoups the demanders' share and the bounty: 539 of 1,000 collected. Its net loss is 46.1%, below 旧ADR-0032's 51%. Over every penalty `D`, the loss can fall to `(1 − a)²·K` = 26%. Capping it naively (O1) lets a Sybil demander dilute an honest accuser again. Rule O2 keeps both invariants. Integration now runs O4 (F-C4R4-15): every self-dealing path loses exactly 51% (MEASURED, econ-m3). The residual: after the coalition's self-default an honest accuser gets 441 instead of 490 (MEASURED). | **FIXED** for I-49 by F-C4R4-15. **RESIDUAL** for I-D. Recommendation in §2.2. |
+| **S** | **Self-dealing never pays** (self-fraud, self-accusation, bounty receipt, check fees). With E1 fixed (rule O2, or O1/O3; §2.2), a coalition that convicts its own lie loses at least `(1 − a)` of what was collected. An honest claim cannot be convicted. Self-dealing only turns gross `K` into `L_net = (1 − a_eff)·K` inside 旧ADR-0176 D6. | **PROVEN** (§2.3). |
+| **Y** | **Per bond and window** (旧ADR-0176). With fully backed reservations, every forging strategy is deterred only if reward / capital per window `< p·(1 − a_eff)·W / (H_L·(λ + x − p·r_risk))`. At `p` = 0 no positive reward yield is safe. | **PROVEN** (§2.4). |
 | **C** | **Correlation and shared collateral.** With fully backed reservations (`κ ≤ 1`), expected collection is linear and correlation is irrelevant. With `κ > 1`, the worst case (comonotone detection, which a forger can induce) divides deterrence by `κ`. | **PROVEN** (§2.5). |
 | **T0** | **A bounty-only verifier cannot be paid** once deterrence works: its income is at most the fraud rate times its share. | **PROVEN** (predecessor). Numbers redone at 49% (§3.1). |
 | **A, B** | Remedy A (pay only inside the watcher's salted sample) falls to grinding, about `1/q` trials. Remedy B (equal split) is diluted by Sybils: 245, 44 and 4 BILI at 1, 10 and 100 Sybils. | **COUNTEREXAMPLE**. DERIVED (§3.1). |
@@ -86,8 +48,8 @@ Amounts are in BILI.
 | **T6** | Whether a drawn verifier really checks (the lazy verifier) can be made observable on chain. | **OPEN**. |
 | **B12** | The seal deposit is derived. A withheld seal stalls 83 DAA. An abandoned one stalls 151 DAA (MEASURED) for 52 BILI. Parity gives `d* = c_ab·T_w/T_ab ≈ 28.6` BILI. A deposit above `d*` buys nothing. The deterred delay value is 0.345/`N_c` BILI per victim-DAA. `d*` exceeds the honest-race ceiling of 1 BILI, so the prices must be split (S3). | **DERIVED** (§4). |
 | **F1–F5** | **Open versus closed for `f(S_m)`.** F1: split-proof and merge-proof together force `f` linear. F2: equal self-funding beats publishing for every `f`. F3: the publish premium *is* a concentration premium. F4: at `p` = 0, a closed model out-earns an open one by `1/(1 − λ)` for every `f`. F5: the budget and the per-bond cap saturate. | **PROVEN** (§5). Grid DERIVED from an ASSUMED market. |
-| **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The ADR-0177 D1 reading needs the user. |
-| **AGG** | **The revised ADR-0177 goal** (§5d): `A_m = S_m^α`, with the 2× net-profit bar fixed first over 4–30× capital, below the caps. α = 1.5 passes 52 of 54 cells and never caps in range. α = 2 passes 16 of 18 and caps at about 10% of capital, withholding 19% of the budget at 30×. Every failing cell is one where honest mining is unprofitable for any α. Concentration premium: 1.4–1.8 at α = 1.5, 2.0–2.8 at α = 2; the operator's advantage is 2.0× at 10% of capital. `p = 0` stays separate: the whole model budget is fraud revenue there, for any α. | DERIVED (§5d). Recommended α = 1.5. |
+| **F-BFT** | **Under the user's premise (§3f)**, a verified-work gate makes publishing overwhelmingly better with **linear `f`**. The gate pays a model's epoch allocation only if ≥ `k` of `m` verifiers, drawn by stake from the global pool, attest a checked claim; at `σ` = 1/3, `m` = 47 and `k` = 24. Open/closed is ≥ 38.5×. A closed model is paid with probability 0.9%, so the stake-only residual is ≤ 0.30% of the model budget, and payment stays tied to verified work. It breaks at an adversary share of 0.40 (the 1% and 99% bars) and of 0.44 (the 2× bar), and at 50% closed and open are paid alike. | DERIVED under A-BFT (§5c). The 旧ADR-0177 D1 reading needs the user. |
+| **AGG** | **The revised 旧ADR-0177 goal** (§5d): `A_m = S_m^α`, with the 2× net-profit bar fixed first over 4–30× capital, below the caps. α = 1.5 passes 52 of 54 cells and never caps in range. α = 2 passes 16 of 18 and caps at about 10% of capital, withholding 19% of the budget at 30×. Every failing cell is one where honest mining is unprofitable for any α. Concentration premium: 1.4–1.8 at α = 1.5, 2.0–2.8 at α = 2; the operator's advantage is 2.0× at 10% of capital. `p = 0` stays separate: the whole model budget is fraud revenue there, for any α. | DERIVED (§5d). Recommended α = 1.5. |
 | **PESG A/E** | §5e. **T4:** UNKNOWN for every class and profile, and FAIL where MEAS proves `p_min = 0` (gather lie, 9B-8k, closed model). Known `G` = 25 per claim; the full `G` is UNKNOWN (weight value, external settlement). **E:** six of the seven attack rows PASS; one deposit with many attempts FAILS at the interim `d`. **T5:** `F_min` = 0.81–1.38 is an amortised running estimate, not an epoch guarantee. C9/C11/C12 require actual capital/startup costs and collectible minima (§5f). | Verdicts as stated (§5e–5f); expected recovery and each-epoch recovery are separate. |
 | **GATE** | **Round/EXEC ECON gate** (acceptance §4–§5), with nine criteria fixed before judging (§5a). Tickets track canonical work exactly. Revenue per compute cost is equal across model sizes. Saturation and splitting are size-neutral. It **fails** on net revenue per compute: the interim per-claim overhead is 65% of a small job's escrow against 3.6% of a large one's, a 2.7× gap. It also **fails** on capital-bound marginal revenue for the large model: a 28.8-BILI escrow fills the R cap after one job, before the Round cap. | 7 PASS, 2 FAIL. DERIVED from an ASSUMED market (§5a). |
 | **P-list** | BUDGET P-1..P-11. P-1 and P-11 together leave `280 ≤ W ≤ 436` DAA: below that, claims outlive the window; above it, the 65,536 per-span bound stops the shared window from ever saturating. Theorem Y gives P-2's `r` ceiling. G6 gives P-2's `q·ρ` floor. §2.5 gives the open-claim cap. | DERIVED where stated; the rest PROPOSED (§5b). |
@@ -104,7 +66,7 @@ Amounts are in BILI.
 
 **`f(S_m)`.**
 * No allocation curve achieves the publish goal.
-* At `p` = 0, model coinbase is capital-proportional issuance for no work. That contradicts ADR-0176 §1 and PRINCIPLES §6.
+* At `p` = 0, model coinbase is capital-proportional issuance for no work. That contradicts 旧ADR-0176 §1 and PRINCIPLES §6.
 * `palw_model_bond_allocation_v1` cannot be armed with any `f` until the user decides §6, D-F.
 * **Under the user's premise (§3f, §5c):** with an honest-capital majority as in BFT, linear `f` plus a verified-work gate meets every
   bar at `σ` ≤ 1/3. The `f`-only negative results above hold without the gate.
@@ -117,7 +79,7 @@ Amounts are in BILI.
 
 * `P`: the producer bond of claim `c`.
 * `C`: a coalition, meaning every bond of one economic owner, with `P ∈ C`. It may hold any number of verifier, demander, poster and
-  block-producer bonds. Wallets and bonds are not parties: the chain cannot tell `C`'s bonds from anyone else's (ADR-0177 D6).
+  block-producer bonds. Wallets and bonds are not parties: the chain cannot tell `C`'s bonds from anyone else's (旧ADR-0177 D6).
 * `H`: honest verifiers. They follow the protocol and take part only if their expected revenue covers their expected cost (A-RAT).
 * `U`: the job's poster.
 
@@ -151,7 +113,7 @@ E1 below concerns the kernel route.
 | A-COST | Verifier costs per check (`c_fetch`, `c_check`, `c_loc`, `c_attest`, `c_carrier`, `c_file`) are bounded inputs. MEAS measures them. |
 | A-INC | An object broadcast in time is included within `B_carrier`, against a censorship that `censorship_cost` prices. |
 | A-BEACON | The post-commit beacon is uniform except for `2^g` adversarial choices. F-ECON-2's withdrawal is closed by S1. |
-| A-ACQ | **(ADR-0177.)** A verifier can check model `m` only if it holds `m`, authenticated against the registered root. For a closed model no honest party does. |
+| A-ACQ | **(旧ADR-0177.)** A verifier can check model `m` only if it holds `m`, authenticated against the registered root. For a closed model no honest party does. |
 | A-FEE | The check fee is pre-funded in the job's escrow and paid on a verifiable event. |
 
 No independence between verifiers is assumed. The only independence used is that of the beacon's per-slot draws.
@@ -196,7 +158,7 @@ interim, a = 0.49:   49 + 490 = 539 → net −461 (46.1%)                      
 sup over D ∈ [0, K]:  −(1 − a)·β_d·K = −(1 − a)²·K = −260.1 (26.0%) at D = 510  [DERIVED, 1-BILI grid]
 ```
 
-ADR-0032 states that a self-reporter's net loss is "at least 51% of the slash". On this path that fails twice:
+旧ADR-0032 states that a self-reporter's net loss is "at least 51% of the slash". On this path that fails twice:
 * the bounty alone is 490 of a 900 slash (54%), because its basis includes the penalty the default already took;
 * the coalition also takes the demanders' 49 of the penalty.
 
@@ -204,7 +166,7 @@ Measured against everything the claim lost (1,000), the recoup is 53.9%.
 
 **The fix is a trade-off between two invariants** (G14R found the same case; its record, `g14/r4-fixes` `7e4253d7f`, leaves the choice
 to ECON):
-* **I-49:** a coalition that holds every reporter and demander role recoups at most `⌊a·collected⌋` of one claim (ADR-0032).
+* **I-49:** a coalition that holds every reporter and demander role recoups at most `⌊a·collected⌋` of one claim (旧ADR-0032).
 * **I-D:** a producer's self-inflicted default does not shrink an honest accuser's bounty (C4 F-C4R3-02, `7da2d9ee2`). That is why the
   bounty's basis is the reservation as if no default had come first.
 
@@ -302,7 +264,7 @@ Pre-empting changes `C`'s loss from `K` to `(1 − a_eff)·K` and no lower. So:
 E[Π(lie, best self-dealing)] − Π(honest) ≤ G_lie − p·(R_risk + (1 − a_eff)·K)
 ```
 
-That is ADR-0176 D6, `p·(R_risk + L_collectible_net) > C_saved`, with `L_collectible_net = (1 − a_eff)·K` and the external gain
+That is 旧ADR-0176 D6, `p·(R_risk + L_collectible_net) > C_saved`, with `L_collectible_net = (1 − a_eff)·K` and the external gain
 added. Self-dealing cannot make a lie profitable that D6 deters. It is fully priced by using `L_net` instead of the gross slash. □
 
 **Per claim at the interim terms** (`C_saved = R` = 5). DERIVED; `p_min` is the minimum effective `p`.
@@ -314,17 +276,17 @@ added. Self-dealing cannot make a lie profitable that D6 deters. It is fully pri
 | 10 | post-Final | 2.94% | 3.25% |
 | 10 | pre-Final | 2.91% | 3.22% |
 
-At `p` = 0, for a closed model (ADR-0177 D7), no reservation deters.
+At `p` = 0, for a closed model (旧ADR-0177 D7), no reservation deters.
 
 ### 2.4 Theorem Y: the ceilings bound the gain; the yield must be below `p` (PROVEN)
 
-ADR-0176 bounds a bond of capital `C` over window `W` by the same Q/B/R/F whether it computes or forges. So a forger's advantage over
+旧ADR-0176 bounds a bond of capital `C` over window `W` by the same Q/B/R/F whether it computes or forges. So a forger's advantage over
 honesty per window is at most `λ·R_W + X_W`, where:
 * `R_W ≤ R_max(C, W)`;
 * `λ ≤ 1` is the share of a reward that forging saves: compute, or reward an honest miner of the bond could not have earned.
 
 Every claim must satisfy D6 with its own reservation: `K ≥ k·R`, with `k = (λ + x − p·r_risk)/(p·(1 − a_eff))`. The reservations must
-also be fully backed: `Σ K·H_L ≤ C·T` (ADR-0176 D4). Together:
+also be fully backed: `Σ K·H_L ≤ C·T` (旧ADR-0176 D4). Together:
 
 ```text
 R_W / C  ≤  W · p·(1 − a_eff) / (H_L · (λ + x − p·r_risk))
@@ -346,7 +308,7 @@ The binding guard is the per-claim D6. Y converts it into the largest safe rewar
 DERIVED, with `λ` = 1, `x` = 0, post-Final, and `H_L` = 250, the shortest hold, so that this is an upper bound. The E1 leak lowers
 every ceiling by 9.6%.
 
-ADR-0176 D5's illustration (350 BILI, 100 claims a week; not adopted): about 6.2 claims are held at once, so each claim can reserve
+旧ADR-0176 D5's illustration (350 BILI, 100 claims a week; not adopted): about 6.2 claims are held at once, so each claim can reserve
 56.4 BILI. The deterrence-safe reward per claim is then 0.029 BILI at `p` = 0.001, or 1.44 BILI at `p` = 0.05. DERIVED.
 
 ### 2.5 Concurrent claims (PROVEN)
@@ -368,12 +330,12 @@ DERIVED, at `N` = 10, `p` = 0.05, `K` = 1,000.
 "Cascade" means one detection convicts all of the bond's claims. It helps only if verifiers are paid to re-check, and it is not relied
 on.
 
-**Rule:** reservations must be fully backed, as ADR-0176 D4 already requires. Otherwise D6 is evaluated on `min(ΣK, C)`, not on `ΣK`.
+**Rule:** reservations must be fully backed, as 旧ADR-0176 D4 already requires. Otherwise D6 is evaluated on `min(ΣK, C)`, not on `ΣK`.
 
 ### 2.6 External gains and adaptive timing
 
 * **External gains.** Fork-choice gains and external-market gains are part of `X`. **Q/B/R/F does not bound them.** They need their
-  own bound, and without one no reservation suffices. This is ADR-0176 D6's "fork-choice/外部市場利得は別途計上". The fork-choice part
+  own bound, and without one no reservation suffices. This is 旧ADR-0176 D6's "fork-choice/外部市場利得は別途計上". The fork-choice part
   belongs to the fork-choice lane and is not analysed here.
 * **Adaptive timing.** A producer that observes on chain that the honest verifiers are absent forges only then. So `p` in D6 is the
   minimum over the states the attacker can observe before it commits, not an average.
@@ -405,7 +367,7 @@ Both pay on lies only (T0).
 ### 3.2 M\*-49: the proposed mechanism (not built)
 
 1. **Watcher pool per model.**
-   * Bonds lock stake for model `m`'s pool. This is not miner capital and never counts in `S_m` (ADR-0177 D3).
+   * Bonds lock stake for model `m`'s pool. This is not miner capital and never counts in `S_m` (旧ADR-0177 D3).
    * Each pool is frozen per epoch. Exit takes at least the window plus the liability horizon.
    * The same stake is never counted in two pools.
 2. **A post-commit draw.**
@@ -417,7 +379,7 @@ Both pay on lies only (T0).
    * Each drawn slot is paid `F` on **its attestation, or on the claim's conviction or default before the attestation deadline**
      ("pay on fate", fixing H-4).
    * A drawn slot's demands are exempt from the served-demand burn (fixing H-5).
-4. **The bounty stays the 49%, with one change of recipient** (inside ADR-0032; rate and total unchanged):
+4. **The bounty stays the 49%, with one change of recipient** (inside 旧ADR-0032; rate and total unchanged):
    * of `⌊a·collected⌋`, the drawn slots that sealed a convicting proof share up to `B_cap` equally;
    * the remainder goes to the earliest sealer, as today;
    * the rest of the collected amount is burned.
@@ -427,9 +389,9 @@ Both pay on lies only (T0).
    collectible floor. To dominate a bribe, the actual receipt net of incremental prosecution costs must exceed the affordable
    bribe upper bound; equality permits indifference. §5f corrects the condition. Neither `G` nor future collection is proven here.
 
-**Budgets named** (ADR-0176 requires every new payment to name its source).
+**Budgets named** (旧ADR-0176 requires every new payment to name its source).
 * `F` comes from the poster's escrow. It is a user transfer, not issuance, not `R_PALW`, and not any producer's `R_max`.
-* The bounty comes from collected slash (ADR-0032).
+* The bounty comes from collected slash (旧ADR-0032).
 * No coinbase is touched.
 * `C`'s watcher slots earn `F` on `C`'s own claims at the same rate as on anyone's (T2), so the fee is not a renamed producer reward
   (RFC-0015 §8.3.2).
@@ -614,7 +576,7 @@ S4 and S5 bound this further.
 
 ---
 
-## 5. ADR-0177 D6: open versus closed economics for `f(S_m)`
+## 5. 旧ADR-0177 D6: open versus closed economics for `f(S_m)`
 
 ### 5.1 Setting
 
@@ -633,7 +595,7 @@ capital is `E = e·S_0`. The chain sees only `S_m` (D6).
 * Concentrating never pays iff `f` is subadditive.
 * Both hold iff `f` is additive. For a monotone `f` that means `f(S) = c·S` (Cauchy).
 
-A near-duplicate registration is always available (ADR-0175: any change is a new registration). So split-proofness is necessary.
+A near-duplicate registration is always available (旧ADR-0175: any change is a new registration). So split-proofness is necessary.
 Every non-linear, split-proof `f` therefore pays concentration.
 
 **F2. Equal self-funding beats publishing, for every `f`.** Suppose the incumbent can borrow at `r_b ≤ r_ext`, the rate at which
@@ -658,7 +620,7 @@ So a bar of "publishing ≥ Φ× closed" forces a concentration premium of at le
 * The ratio is `1/(1 − λ)`: 2× at λ = 0.5.
 * `f` cannot see openness, so no `f` removes it.
 
-**This is stake-only mining, which ADR-0176 §1 forbids.**
+**This is stake-only mining, which 旧ADR-0176 §1 forbids.**
 
 **F5. Saturation.**
 * The budget is fixed (D4). Once model `m` holds most of `R_PALW`, external capital only dilutes the incumbent: at `f = S²` and
@@ -666,7 +628,7 @@ So a bar of "publishing ≥ Φ× closed" forces a concentration premium of at le
 * The per-bond cap clips the incumbent's payout. At an ASSUMED cap of 1.5× the average yield, open/closed is 0.95 for linear `f` and
   1.50 for `S²`.
 
-### 5.3 The comparisons ADR-0177 §3 requires
+### 5.3 The comparisons 旧ADR-0177 §3 requires
 
 Market (ASSUMED):
 * 20 other models of capital 1;
@@ -723,7 +685,7 @@ The user fixes Φ\* = 2, the ranges and the market assumptions.
 * The one curve that meets O against a computing closed model, `S²`, fails A by the factor F3 predicts.
 * Linear is the only curve that is Sybil-neutral and concentration-neutral. It gives no publish premium: publishing costs the
   incumbent its forging option plus a share of its allocation.
-* The publish goal is **not** achievable by `f` under ADR-0177 D6. Per ADR-0177 §1 and D6, "the problem" stays **unsolved**.
+* The publish goal is **not** achievable by `f` under 旧ADR-0177 D6. Per 旧ADR-0177 §1 and D6, "the problem" stays **unsolved**.
 
 **The decisive consequence.**
 * At `p` = 0, model coinbase pays a closed coalition `g`-weighted, capital-proportional issuance for no work.
@@ -731,7 +693,7 @@ The user fixes Φ\* = 2, the ranges and the market assumptions.
   * capital independence is unobservable (D6);
   * the coalition can be its own verifier pool (H-3);
   * forced-error audits need a holder of the model (H-2).
-* This contradicts ADR-0176 §1 ("stakeだけで計算を省略して採掘できる規則にしない") and PRINCIPLES §6, conditions 2 and 6.
+* This contradicts 旧ADR-0176 §1 ("stakeだけで計算を省略して採掘できる規則にしない") and PRINCIPLES §6, conditions 2 and 6.
 * The same holds for Final weight at `p` = 0. It becomes capital-proportional weight without work. Its consensus consequences are
   outside this note.
 * User-paid escrow rewards are different. A closed coalition that self-posts jobs pays itself, which is zero-sum, so self-dealing
@@ -825,7 +787,7 @@ Only the subsidy depends on the attestations. Claims, user-paid escrow rewards, 
 * Linear is recommended because it alone is neutral to both splitting and merging (F1).
 * The convex curves still drive monoculture (§5.3: the top model takes 0.96 of the budget under `S²`).
 
-**`p = 0` and ADR-0176 §1.** Under the gate, a closed model's subsidy requires attestations that honest verifiers cannot give without
+**`p = 0` and 旧ADR-0176 §1.** Under the gate, a closed model's subsidy requires attestations that honest verifiers cannot give without
 the model. So the residual stake-only issuance is at most `P_closed · σ` = **0.30% of the model budget** at `σ` = 1/3. Payment stays
 tied to verified work.
 
@@ -849,15 +811,15 @@ users.
 * **Honest verifiers are lazy** (T6, outside A-BFT).
 * **A model has no Final claim to sample** in an epoch: it is not paid in that epoch.
 
-**ADR-0177 D1.** The gate withholds subsidy because verification was not attested, not because the model was not served. The chain
+**旧ADR-0177 D1.** The gate withholds subsidy because verification was not attested, not because the model was not served. The chain
 checks no availability, and no slash or suspension of claims follows. ECON reads this as consistent with D1, which forbids action
 based *only* on acquisition failure, and with PRINCIPLES §6 condition 6. **The user must confirm that reading.**
 
 ---
 
-## 5d. ADR-0177's revised goal: favour models that gather more bond (`A_m = S_m^α`; readiness §3g)
+## 5d. 旧ADR-0177's revised goal: favour models that gather more bond (`A_m = S_m^α`; readiness §3g)
 
-The user changed ADR-0177's goal. Models that gather more effective locked miner bond are strongly favoured. Publication is the means,
+The user changed 旧ADR-0177's goal. Models that gather more effective locked miner bond are strongly favoured. Publication is the means,
 and equal capital gets equal treatment. "Publish beats equal self-funding" is no longer a requirement: §5, F2–F4 and §5c stay as the
 record of the old goal. Model §12 evaluates the new one.
 
@@ -866,7 +828,7 @@ record of the old goal. Model §12 evaluates the new one.
 **The real rules the model applies:**
 * `R_m = R_PALW · S_m^α / Σ_j S_j^α`;
 * each bond is paid pro rata to its capital inside its model;
-* each bond's payment is capped at `y_cap·C` per epoch (ADR-0176's `R_max`); anything above that is withheld, never redistributed.
+* each bond's payment is capped at `y_cap·C` per epoch (旧ADR-0176's `R_max`); anything above that is withheld, never redistributed.
 
 **Variable costs per BILI of model-leg payment** (ASSUMED until measured):
 
@@ -960,7 +922,7 @@ The cap clips this at `y_cap` per unit.
 
 ### 5d.5 `p = 0` is a separate region
 
-**Region H (honest verifiers function).** The bar above applies. ADR-0176 D6 holds where `p > 0`, with M\*-49 and §2.
+**Region H (honest verifiers function).** The bar above applies. 旧ADR-0176 D6 holds where `p > 0`, with M\*-49 and §2.
 
 **Region Z (every owner closes, `p = 0`).**
 * **Fraud revenue** is the **whole paid model budget, every epoch, for any α**. The curve only moves it toward larger capital.
@@ -968,7 +930,7 @@ The cap clips this at `y_cap` per unit.
 * The net ratio in Z (the last column of model §12) reaches ≥ 2× at α ≥ 1.5 too. In region Z that means larger closed coalitions
   forge more. It is not safety.
 * **Consensus impact.** Forged claims carry Final weight up to each bond's `F_max(C, W)`: capital-proportional, and not scaled by α
-  (ADR-0177 revision).
+  (旧ADR-0177 revision).
 * **The curve is not the resolution.** Nor is the dormant attestation gate of §5c. `p = 0` stays an open safety gate.
 
 ### 5d.6 Recommendation (POLICY)
@@ -1030,7 +992,7 @@ every `p_min`. It is computed in model §13 and uses only the verdicts PASS / FA
 The rows are identical for Panel=0, Panel=1 and the current Panel route. Their difference is only the UNKNOWN seat term in `L`, which
 can only lower `p_req`.
 
-**Per bond and window (ADR-0176).** `G_W ≤ λ·R_max(C, W) + X_W` and `L_W ≤ 0.51·min(ΣK, C)`. For a 13,000-BILI bond, with `r` still
+**Per bond and window (旧ADR-0176).** `G_W ≤ λ·R_max(C, W) + X_W` and `L_W ≤ 0.51·min(ΣK, C)`. For a 13,000-BILI bond, with `r` still
 unset POLICY:
 
 | `r` per 1,000 BILI per W | `p_req` | `EV` |

@@ -2,7 +2,7 @@
 
 > **更新記録 (2026-10-31):** 以下の表は初回実装時の履歴である。DAG 幅 reader の接続、既存 gap の後続修正、現在のモデル別生成・遅延統合・再起動・replay 検証と現行 RPC driver の修正は [2026-10-31 の検証記録](../../../evidence/rfc/0018-parallel-dag-2026-10-31.md) を参照する。初回の「未 build / 未試験 / reader なし」を現在の実装状態として用いない。有効化と実プロセス受入は別に扱う。
 
-[RFC-0018](../../../rfc/0018-dag-parallel-multi-model-consensus.md) の各項目を、規則・fence・コード位置・試験sourceへ対応させる。branch `integ/rfc0018-dag`。**build・test・実node試験はいずれも未実施であり、どの行もPASSではない。** 「実装(休眠)」は規則のコードが書かれ、fenceの下で既定では動かないこと、「試験source」は試験が書かれて未実行であることを意味する。
+[RFC-0018](../../../rfc/0011-gate-c-and-consensus-credit.md) の各項目を、規則・fence・コード位置・試験sourceへ対応させる。branch `integ/rfc0018-dag`。**build・test・実node試験はいずれも未実施であり、どの行もPASSではない。** 「実装(休眠)」は規則のコードが書かれ、fenceの下で既定では動かないこと、「試験source」は試験が書かれて未実行であることを意味する。
 
 ## 1. ユーザーの完了定義(6項目)
 
@@ -12,7 +12,7 @@
 | 2 | 認証述語: commit-then-draw、global pool、m-of-k、期限、G14 window、閉鎖モデルは認証されない、試行の有界化と計数、前提の明記 | 実装(休眠) | commit `palw_security_certification_fold_v1.rs:45`、母集団 `palw_security_certification_v1.rs:280`、抽選 `:296`、verdict `:320`、承認 `palw_security_certification_fold_v1.rs:111`、sweep `:234`、計数(class row、epoch上限)fold `:234-330`、前提文言 `palw_security_certification_v1.rs:50`、module doc冒頭 | 同上(+`palw_model_eligibility_v1`・`palw_probabilistic_constraints_v1`を同じ高さ以下に要する、`palw_rfc0018_v1.rs:520`) | verdict・母集団・policy試験(`palw_rfc0018_v1/tests.rs`、`palw_security_certification_v1.rs`内) |
 | 3 | rule E v2: 資本加重・分割耐性・認証済みのみ・順序修正 | 実装(休眠) | accumulator `palw_rfc0018_v1.rs:219`、`palw_fork_choice_rule_e_v1.rs:520`、record(未認証は`attempt = false`)`:357-383`、order/decide v2 `:794`/`:804`、creditなし同士のtie `:828`、processor `consensus/src/pipeline/virtual_processor/palw_rule_e.rs:167-226`、IBD `palw_fork_choice_rule_e_v1.rs`(`palw_rule_e_ibd_commit_v1`) | `palw_rule_e_participation_v2`(rule E v1を同じ高さ以下に要する) | `palw_rfc0018_v1/tests.rs`(分割中立、除外、v1同値)、`attack_tests.rs`(T-0d/e) |
 | 4 | liveness・時計・pruning・RPCの正直な表示 | 実装(休眠) | DAG・取引・heartbeat・DAAは変更なし(creditだけがGate Cを読む)、pruning progress `palw_security_certification_v1.rs:379` と `consensus/src/pipeline/virtual_processor/processor/palw.rs:719-750`、RPC `rpc/core/src/model/message/palw_operator_reads.rs`(`uncertified_final_anchors`、`security_certification_premise`、wire v4)、`rpc/service/src/service.rs:2120-2128`、native settlement `consensus/core/src/palw_native_settlement_v1.rs:161`/`:338`/`:404` | `palw_independently_work_certified_v1` | `attack_tests.rs`(pruning、settlement)、driver `attack`(pruning progress) |
-| 5 | 文書改定(追記) | 済 | PRINCIPLES(§0の改定節)、ADR-0173/0176/0177/0178、RFC-0012/0016/0017の末尾「ユーザー方針 2026-10-15 による改定」 | — | — |
+| 5 | 文書改定(追記) | 済 | PRINCIPLES(§0の改定節)、旧ADR-0173/0176/0177/0178、RFC-0012/0016/0017の末尾「ユーザー方針 2026-10-15 による改定」 | — | — |
 | 6 | 最上位受入試験「300M閉鎖モデル/自前Panel攻撃」 | 試験source(Rust)+driver | `consensus/core/src/palw_rfc0018_v1/attack_tests.rs`、`scripts/drills/rfc0018_dag_drill.py attack` | 全fence | 未実行 |
 
 ## 2. その他の設計変更

@@ -7,7 +7,7 @@ Branch `claude/g14-f03k` (base `f25c4b176` plus SPINE `60313ccb4`, `9fee3348f`; 
 - **What:** `K::FileProof { accuser, claim, proof }`. It is non-interactive and preceded by `K::SealProof`, the seal-then-reveal for the bounty. Large filings ride the tag-113 chunk lane. The proof is checked against public material by the court (`adjudicate`).
 - **When:** while the claim is live, and after Final or a pre-Final default up to `liability_until` (`proof_open`).
 - **Limits:**
-  - (a) The court scope (ADR-0177 D2) counts dismissals **per accuser per claim**: 4, plus 16 units for segmented claims. Another bond cannot spend the outsider's allowance.
+  - (a) The court scope (旧ADR-0177 D2) counts dismissals **per accuser per claim**: 4, plus 16 units for segmented claims. Another bond cannot spend the outsider's allowance.
   - (b) The **block's** adjudication budget: runs and court work, with `prosecution_reserve_permille` reserved for proofs. It starts fresh every block, and a filing reserves nothing across blocks.
   - (c) A dismissed filing pays `dismissal_fee_v1(max_court_work)`, which is burned.
 - **Session:** none is needed for a lie whose material is public. For withheld material there is a demand: one shared session per (claim, stage, position), joinable up to 64 demanders, with its deadline fixed when it opens. A full join list only loses the late joiner its share. The default and the later proof do not depend on joining.
@@ -15,7 +15,7 @@ Branch `claude/g14-f03k` (base `f25c4b176` plus SPINE `60313ccb4`, `9fee3348f`; 
 ## 2. Verdict: the TIR-route lockout does not exist on the kernel route
 The kernel route has no per-claim challenger slot and no owner reservation queue. So Sybils cannot take a slot first, hold it silently and then refill it. What they can do is saturate a block's court with junk filings. That costs fees, lasts only that block, and is refused free after 4 dismissals per bond per claim.
 
-The three properties are fixed as invariants by the tests in §3. No code change was needed, so ADR-0192 A's shared frontier is not ported.
+The three properties are fixed as invariants by the tests in §3. No code change was needed, so 旧ADR-0192 A's shared frontier is not ported.
 
 **Residual (not closed here):** keeping an outsider out for a claim's whole exposure means saturating *every* block, including blocks the outsider's own node mines. Inside a block, the colluding producer chooses the order. The ledger prices that sustained censorship only for OPV classes (`opv_class_economics`: censorship cost must exceed the maximum gain). A **Panel-licensed class has no such registration check.** Proposal: apply the same `censorship_cost > max_gain` relation to Panel classes. That is a rule change and needs a fence, so it is for 統括 to decide.
 

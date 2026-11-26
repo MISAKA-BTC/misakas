@@ -78,5 +78,5 @@ advances its DAA and reads as alive.
 
 It does not diagnose the hang. Keep an unstripped copy of every deployed binary
 (`[profile.release] debug = 1`, `strip = false`) so the next thread dump has symbols, and read
-`docs/adr/0075-certification-is-a-consensus-object.md` §7 for why the public entry node should
+`docs/rfc/0011-gate-c-and-consensus-credit.md` §7 for why the public entry node should
 carry no PALW duties.

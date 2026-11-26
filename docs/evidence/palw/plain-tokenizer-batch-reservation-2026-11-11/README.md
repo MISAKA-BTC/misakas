@@ -1,6 +1,6 @@
 # 普通TFP1のtokenizer資料予約 — 2026-11-11
 
-コードcommit `970845a14`。この変更は[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)で維持したclaim資料・同一性照合の接続であり、HFの取得可能性認定ではない。モデル全量配信・Nodeによるモデル可用性samplingを新たな必須条件にしない。
+コードcommit `970845a14`。この変更は[RFC-0053](../../../rfc/0017-model-stop-and-retirement.md)で維持したclaim資料・同一性照合の接続であり、HFの取得可能性認定ではない。モデル全量配信・Nodeによるモデル可用性samplingを新たな必須条件にしない。
 
 ## 実装した範囲
 

@@ -1,14 +1,6 @@
 # MISAKA の構成 — 採用済み設計の入口
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 新規profileの適用範囲
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。2026-11-20の新規採掘設計はRFC0061/0062と公開裁定方針v0.5を入口とする。以下の旧日付・旧裁定版の案内は当時の状態であり、新profileの乱数・コア出力・適格性を置き換えない。
-
-[TB1](../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1](../rfc/0062-palw-function-output-and-work-admissibility.md) / [優先順位と移行](../governance/palw-tb1-fow1-transition.md) / [全適用台帳](../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
-> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) と [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
+> **2026-11-08追加採択:** EXEC credit・事前公開schedule・通常時1 BPSの目標とcourt容量は [RFC-0048](../rfc/0014-exec-schedule-and-capacity.md) と [旧ADR-0216](../rfc/0014-exec-schedule-and-capacity.md) を参照してください。設計採択、実装、測定、有効化を区別します。
 
 **このページは設計の構成であり、全機能が稼働済みとの主張ではありません。** [状態](../STATUS.md) / [設計凍結](../governance/design-freeze.md)。
 
@@ -18,7 +10,7 @@
 
 モデルが事前共有されているとは仮定せず、モデル内 Miner／Panel の全結託と資料秘匿を脅威に含めます。正常時は非対話 positive、不一致時は negative の対話で局所化し、必要資料・肯定検証が成立しなければ成功 Final を認めません。新版は結果固定後に検証を始め、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等の成立後に Final へ進みます。global pool の独立選出と正直な検証者の前提は残ります。
 
-規範入口は [RFC-v2-0020](https://github.com/MISAKA-BTC/misakas/blob/7ad72a9e0795586d50e0d1b9cbb99a222c500a33/docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)、採択記録は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) です。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下の共通構成と旧版の記録を保持し、新版の設計を旧署名済み claim へ遡及適用しません。
+規範入口は [RFC-v2-0020](../rfc/0009-court-and-claim-final.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)、採択記録は [旧ADR-0215](../rfc/0009-court-and-claim-final.md) です。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下の共通構成と旧版の記録を保持し、新版の設計を旧署名済み claim へ遡及適用しません。
 
 ## 共通構成の入口
 
@@ -38,4 +30,4 @@
 
 RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は、**mainnet 後へ延期・当面無効**。共通のテキスト・TIR・検証・登録・会計は保持します。[正式な範囲](../governance/post-mainnet-scope.md)
 
-[整理前の詳細な構成記録](../history/documentation/2026-10-17/architecture/overview.md)は、その時点の図・コード参照・決定対応を保存したものです。旧図の BFT validator を将来設計へ再導入せず、文書だけで既存 network の停止・債務解除も指示しません。
+[整理前の詳細な構成記録](https://github.com/MISAKA-BTC/misakas/blob/f839ef0dc0307b58ed6cc280e631b1e1d34f733c/docs/history/documentation/2026-10-17/architecture/overview.md)は、その時点の図・コード参照・決定対応を保存したものです。旧図の BFT validator を将来設計へ再導入せず、文書だけで既存 network の停止・債務解除も指示しません。

@@ -1,6 +1,6 @@
 # RFC-0045 native material namespace inventory — 2026-11-03
 
-This implementation inventory specifies native journal auxiliary DATA preimages within adopted RFC-0045/ADR-0213. It introduces no new body operation, no acceptance shortcut, and no computation certificate. All four purpose domains below are new native adapter material domains. Existing r1 Result, Witness, execution record, output, funding consent, Case journal event/history and Positive certification subject identities retain their exact meaning and bytes. Relay operation 14 under the separately adopted RFC-0046/ADR-0214 remains outside this inventory.
+This implementation inventory specifies native journal auxiliary DATA preimages within adopted RFC-0045/旧ADR-0213. It introduces no new body operation, no acceptance shortcut, and no computation certificate. All four purpose domains below are new native adapter material domains. Existing r1 Result, Witness, execution record, output, funding consent, Case journal event/history and Positive certification subject identities retain their exact meaning and bytes. Relay operation 14 under the separately adopted RFC-0046/旧ADR-0214 remains outside this inventory.
 
 | Domain | Exact preimage | Actual origin |
 | --- | --- | --- |

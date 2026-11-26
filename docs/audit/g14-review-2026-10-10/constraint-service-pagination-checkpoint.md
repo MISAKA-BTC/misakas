@@ -14,4 +14,4 @@ wallet 49 tests、既存 filer 28 tests は PASS。receipt book/scan 12 tests �
 
 先行サービス試験は wallet の v6 refusal、fixture の誤 assertion、producer conviction 後の全 Panel 追及 timeout を発見した。失敗ログを保持し、成功件数に数えていない。pagination 修正後の forbidden / premature stop / beaten token の actual service 3 件は、この checkpoint では実行中であり PASS を主張しない。実行中ログは途中時点の snapshot として保存する。
 
-この fixture は独立 verifier がモデルを保有する ADR-0177 D7 の前提を維持し、合成 token table と手動の公開 answer 提供を使う。実ネットワーク RPC/P2P、producer の自動 answer scheduler、tiled acquisition、上限サイズの terminal proof carriage、全 active family の網羅、全域の時間・RAM・経済条件は未証明。現時点で「producer と全 Panel が共謀しても G14 全域で一人の公開 verifier が conviction できる」とは評価できない。
+この fixture は独立 verifier がモデルを保有する 旧ADR-0177 D7 の前提を維持し、合成 token table と手動の公開 answer 提供を使う。実ネットワーク RPC/P2P、producer の自動 answer scheduler、tiled acquisition、上限サイズの terminal proof carriage、全 active family の網羅、全域の時間・RAM・経済条件は未証明。現時点で「producer と全 Panel が共謀しても G14 全域で一人の公開 verifier が conviction できる」とは評価できない。

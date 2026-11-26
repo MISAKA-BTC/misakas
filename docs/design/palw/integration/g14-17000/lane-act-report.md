@@ -24,7 +24,7 @@ branch `claude/g14-act`(base `55510b56a`)。fence は武装していない。pus
 - **rights epoch 720 と bundle epoch 1,000 — 未修正。** V+ は rights epoch = bundle の `epoch_length` = 1,000 とする。allocation epoch は 1,000 の倍数で、かつ 5,040 を割り切る必要がある。両方を満たす値は無い。直すには、V+ に bundle と独立した rights epoch を持たせる(RFC-0016 の改訂)か、t12 bundle の epoch を変える(consensus 変更)しかない。どちらも採択済み設計の範囲を超えるので、統括とユーザーの判断に回す。
 - **一覧外の 3 fence:**
   - `palw_bond_budget_v1`: 値以外の包括拒否をやめた。承認済み policy digest の一覧 `PALW_BOND_BUDGET_APPROVED_POLICY_DIGESTS_V1` は空。値が入るまでは typed-missing で拒否する。
-  - `palw_model_bond_allocation_v1`: ADR-0177 D6(モデル単位の開閉評価)を gate から外した(PRINCIPLES §9 によりモデル単位の審査は不採用)。承認済み policy 一覧 `palw_model_bond_allocation_approved_policies_v1` は空。
+  - `palw_model_bond_allocation_v1`: 旧ADR-0177 D6(モデル単位の開閉評価)を gate から外した(PRINCIPLES §9 によりモデル単位の審査は不採用)。承認済み policy 一覧 `palw_model_bond_allocation_approved_policies_v1` は空。
   - `palw_material_income_v3`: 未修正。拒否理由は値ではなく、「signed material/TTL と consumer lifecycle の検証が未完」。前提の `palw_reporter_income_v2` も包括拒否のまま。record gate に移すには要件の定義が要る。
 
 ## 4. record pin — 機構だけ作った

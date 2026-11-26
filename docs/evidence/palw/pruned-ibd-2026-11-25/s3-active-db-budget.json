@@ -1,0 +1,81 @@
+{
+  "perNodeCapBytes": 30000000000,
+  "activeDbDesignBudgetBytes": 10497346816,
+  "volumeFreeBytesAtPreflight": 3908993024,
+  "requiredVolumeFreeBytes": 12884901888,
+  "method": "Stopped regular file st_blocks * 512 by path, matching StorageBudget::scan for the active DB and its in-tree WAL/info logs. Per peer, snapshots may share APFS extents. No staging DB, external WAL, or concurrent compaction measured.",
+  "generations": [
+    {
+      "daa": 8602,
+      "generation": "ef7c7a37e92c440fa3ef4f487455f1b8",
+      "peers": [
+        {
+          "peer": 0,
+          "activeDbBytes": 11049250816,
+          "walMaintenanceBytes": 51982336,
+          "activeDbMinusDesignBytes": 551904000
+        },
+        {
+          "peer": 1,
+          "activeDbBytes": 11456856064,
+          "walMaintenanceBytes": 51994624,
+          "activeDbMinusDesignBytes": 959509248
+        },
+        {
+          "peer": 2,
+          "activeDbBytes": 11111804928,
+          "walMaintenanceBytes": 51916800,
+          "activeDbMinusDesignBytes": 614458112
+        }
+      ]
+    },
+    {
+      "daa": 8667,
+      "generation": "72e6a8b458184ee6ab3b67ac939f918b",
+      "peers": [
+        {
+          "peer": 0,
+          "activeDbBytes": 11250806784,
+          "walMaintenanceBytes": 6995968,
+          "activeDbMinusDesignBytes": 753459968
+        },
+        {
+          "peer": 1,
+          "activeDbBytes": 11215732736,
+          "walMaintenanceBytes": 26054656,
+          "activeDbMinusDesignBytes": 718385920
+        },
+        {
+          "peer": 2,
+          "activeDbBytes": 11212410880,
+          "walMaintenanceBytes": 7000064,
+          "activeDbMinusDesignBytes": 715064064
+        }
+      ]
+    },
+    {
+      "daa": 8703,
+      "generation": "bda15b77344d4277b7a1a63c690da3a1",
+      "peers": [
+        {
+          "peer": 0,
+          "activeDbBytes": 11296460800,
+          "walMaintenanceBytes": 251019264,
+          "activeDbMinusDesignBytes": 799113984
+        },
+        {
+          "peer": 1,
+          "activeDbBytes": 11423428608,
+          "walMaintenanceBytes": 264130560,
+          "activeDbMinusDesignBytes": 926081792
+        },
+        {
+          "peer": 2,
+          "activeDbBytes": 11383717888,
+          "walMaintenanceBytes": 263495680,
+          "activeDbMinusDesignBytes": 886371072
+        }
+      ]
+    }
+  ]
+}

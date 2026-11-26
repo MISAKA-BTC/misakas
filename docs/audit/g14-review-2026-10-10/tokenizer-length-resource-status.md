@@ -8,7 +8,7 @@ This is not a G14 completion or activation approval.
 
 ## Registered-model premise and existing authentication
 
-ADR-0177 D7 remains the premise: the outside verifier already holds the correct
+旧ADR-0177 D7 remains the premise: the outside verifier already holds the correct
 registered model/tokenizer/config. Raw tokenizer bytes are a verifier-supplied
 operand. This change does not impose producer distribution or a raw-tokenizer DA
 request/default obligation.

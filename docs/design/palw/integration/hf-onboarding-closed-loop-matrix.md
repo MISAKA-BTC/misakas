@@ -1,15 +1,5 @@
 # HF onboarding — closed-loop matrix (H1)
 
-<!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
-## 2026-11-20 採択 — TB1乱数とFOW1コア採掘値
-
-**ADOPTED_DESIGN_NOT_ACTIVATED**。今回のユーザー指示により、新規PALW採掘の方式をFOW1＋TB1へ統一する。コア推論の採掘値zと補助receiptを区別し、登録系列の非衝突定理・複数試行費用条件・完全検査対応を採掘適格性に要求する。未完成のQwen定理や参照fixtureを本番合格としない。
-
-本書の旧source・型・抽選式・実装状況は旧profileの記録として読む。FOW1/TB1の新規実装には0061/0062の型・purpose・固定点・失敗終端を適用し、旧記述をfallback経路として実装しない。
-
-[TB1の正本](../../../rfc/0061-palw-internal-threshold-beacon.md) / [FOW1の正本](../../../rfc/0062-palw-function-output-and-work-admissibility.md) / [用途・置換・移行](../../../governance/palw-tb1-fow1-transition.md) / [全旧記述の適用台帳](../../../maintenance/revisions/2026-11-20-tb1-fow1/BEACON_AND_POLICY_COVERAGE.md)。新profileでは本節とこれら後続規範を優先する。以下の旧方式・旧Status・原文収録は、その版の履歴又は本改定で明示的に継承する範囲であり、新規受付のfallbackではない。旧受理claimの署名・責任・原期限は保持する。設計採択、native実装、定理完成、公開activationを区別する。
-<!-- TB1-FOW1-ADOPTED-20261120-END -->
-
 Owner: H1 (HF Onboarding Closed-Loop). Branch `onboard/h1-hf-closed-loop` (base `89ffb1fb7`, plus the cherry-picked fixes named
 below). Every cell is a measurement on a private devnet with a pinned checkpoint, or it says why it is not. **Separate columns** keep
 apart what must never be read as one another: header/shape-ready, text-only scope, short context, synthetic-beacon conformance,
@@ -31,8 +21,8 @@ consensus-state,g14-gates,failures}.json`, `reproduction.md`, `summary.md`. Runn
 | L6 useful work | a real claim executes, is verified, goes Final, reward attributed — only once L5 exists |
 
 The checkpoint on this Mac (L0, L2) is the tester's own copy of the pinned revision. That is a precondition of building an artifact
-here, not a chain condition: the chain does not check that anyone serves, seeds or holds a model (ADR-0177), and no level above says
-"available". L3/L4 concern a registration, and a registration is permanently immutable (ADR-0175): the harness never "updates" a
+here, not a chain condition: the chain does not check that anyone serves, seeds or holds a model (旧ADR-0177), and no level above says
+"available". L3/L4 concern a registration, and a registration is permanently immutable (旧ADR-0175): the harness never "updates" a
 registered class; changed content (a different calibration policy, a new revision, a re-quantisation) is a NEW registration with its
 own class id, and the parent's row never moves. The stage `onboard.sh resubmit` (alias `reregister`) is only the duplicate probe: the SAME
 registration object through another carrier, which the chain must not write twice.
@@ -46,7 +36,7 @@ conformance and never L5.
 
 ## 2. Devnet
 
-Salted testnet-12 drill (ADR-0152 §8.2), loopback only, its own genesis and keyring written by the binary under test. The shipped
+Salted testnet-12 drill (旧ADR-0152 §8.2), loopback only, its own genesis and keyring written by the binary under test. The shipped
 release's flag days compressed exactly like the combined drill (`tools/drills/combined/dc.sh`): `--palw-drill-fence-at 6 --fence2-at 10
 --fence3-at 14 --tir-at 16 --tir2-at 24 --int11-at 26` — kaspad's own log lists every fence as MOVED from its shipped height
 (750/1000/1300/1700/2000/3600/5300/5395/5490/5585), none ARMED from dormant. `palw_bond_maturity` (1,000) has no drill flag and stays at

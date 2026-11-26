@@ -3,7 +3,7 @@
 branch `claude/g14-fam-panelda`(基点 d8aded6de)。画像(FP V5)は実装しない(ユーザー 2026-10-26)。
 
 ## 決定
-**ADR-0206 は accepted(2026-10-26 ユーザー決定)**: 期限付き必須公開、「期限まで非公開」への縮小を含めて採用。値は目安のまま(1,040 / 2,000 / 32,768 / 13,107,200 sompi)。
+**旧ADR-0206 は accepted(2026-10-26 ユーザー決定)**: 期限付き必須公開、「期限まで非公開」への縮小を含めて採用。値は目安のまま(1,040 / 2,000 / 32,768 / 13,107,200 sompi)。
 
 ## 方式
 `prompt_token_ids_hash` で束縛 → service 中は seat のみ → `a+1,040` までに誰でも ids を公開(hash が中身を固定)→ 外部者に notice 窓 2,080 DAA → 公開 FP 経路(③〜⑥)で告発。未開示は default: claim void・deposit burn・計算の有罪/計算 bond slash なし。開示まで報酬・credit なし(Final floor)。
@@ -14,7 +14,7 @@ branch `claude/g14-fam-panelda`(基点 d8aded6de)。画像(FP V5)は実装しな
 3. **deposit**: 受理時に producer bond の空き担保で lock(`palw_bond_committed_v1` に計上)、開示で返却、default で burn(`burn_registration_fee`、conviction 記録なし)。
 4. **保留**: `palw_claim_final_floor_v1` に `deadline+1`。`finalize_claim` 冒頭で未開示なら `PanelDaDisclosureDefault`(Borsh 140)で void。
 5. **経路接続**: 開示が claim の prompt row(TIR frame の material horizon まで)を書き、外部者の replay 入力になる。CLOCK(`palw_court_clock_v2`)を fence の前提に(validation)、期限は notice 窓の内側。
-6. **価格**(central、要確認): derived-work 下で PanelDa は ids 不在で拒否されていた(ADR-0145 §6)。governed PanelDa は prompt 全体を既払い扱い(prefill 0、ADR-0082 D10 と同じ読み)で価格付け — 過少払いのみで二重払いはない。answer accounting 武装時は従来どおり拒否。
+6. **価格**(central、要確認): derived-work 下で PanelDa は ids 不在で拒否されていた(旧ADR-0145 §6)。governed PanelDa は prompt 全体を既払い扱い(prefill 0、旧ADR-0082 D10 と同じ読み)で価格付け — 過少払いのみで二重払いはない。answer accounting 武装時は従来どおり拒否。
 7. validation(2026-10-27 改): 順序(`palw_panel_da`・`palw_court_clock_v2` が同じか下)と外部者の窓の検査はそのまま。武装の拒否は配線が欠けた場合だけ(tag 233 の kind と fence、delta 236、void reason 140、deposit、bundle mirror)。**DAA 17,000 で slice・6 family と一緒に武装(ユーザー決定 2026-10-27)**。
 
 ## 試験

@@ -1,0 +1,46 @@
+{
+  "rpcStartSeconds": [
+    50.22,
+    50.2,
+    50.18,
+    50.31,
+    50.17
+  ],
+  "firstExchangeSecondsAfterLastStartup": 4.65,
+  "retransmitSecondsAfterRestart": 4.91,
+  "minimumPhysicalFreeBytes": 12996427776,
+  "genesis": "e48d340100b0c5d66728faac1323a29325281493d1fc6339456449b4bd0ff6f141a884cc469817446a5cfee65beba3b3fa16caef8dc19e92ab7d6357a552ccae",
+  "consensusParamsId": "9cdd47b56aef3a32eec9f796a3a7628846c89f3a912f627d6b02b56efc722fa0",
+  "tb1Bootstrap": {
+    "panelPolicy": "3ce24b0dbb1bee72f7429f880b39d5f66ebff7a1e6e62b05e59b28bd816d85f1b2b5d2b8ea43421de6258c13387bc0c90a0d8907ab6572f6bc0e90f957a53762",
+    "plan": "42b9c7e98d6bf4e506b7dc95e79411c2b46d713a122f09135dc82883d0d9a6d0bb1e4628650e46535f0b3327591222ef303c708e04f3b00371282b02550b4740"
+  },
+  "countsBySlot": [
+    60,
+    60,
+    60,
+    60
+  ],
+  "allManifestFieldsEqual": true,
+  "allShutdownExitCodesZero": true,
+  "all240FilesIdenticalAfterRetransmit": true,
+  "ciphertextInventorySha256": [
+    "0d1bf5e742d9e72c1278b4a272d566fe89eafa5dde3a0919950cf5ca3d943948",
+    "e2d3d71e11607fa842b2a58e9e82a1fd5c2cd4a804ffdebae8b95bcf1c35e90e",
+    "293688eabd4d24e4442e9444a1b03c47e91dd1dca24823dd31379d194beabd92",
+    "8d96968004090c1ac4741a29964a96634a305d4ddf1bd562cd7accc143640d09"
+  ],
+  "boundedLoggingColdReopen": {
+    "remainingThreeRpcStartSeconds": 53.25,
+    "exchangeSecondsAfterLastRpc": 6.98,
+    "warningCounts": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "minimumWarningSpacingSeconds": 29.99,
+    "all240FilesIdentical": true,
+    "minimumPhysicalFreeBytes": 12987084800
+  }
+}
