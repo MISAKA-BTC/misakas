@@ -1,0 +1,144 @@
+{
+  "logical_profile": "BMR1",
+  "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "adoption_date": "2026-11-26",
+  "timezone": "Asia/Tokyo",
+  "normative_rfc": "docs/rfc/0069-bft-model-retirement-and-role-bonds.md",
+  "decision_adr": "docs/adr/0237-bft-model-retirement-and-role-bonds.md",
+  "transition": "docs/governance/model-retirement-transition.md",
+  "runtime_enabled": false,
+  "wire_ids_assigned": false,
+  "activation_height": null,
+  "scope": "all models including genesis; fork model special category removed by MOE3",
+  "regular_coinbase": {
+    "policy": "MOE3",
+    "miner_position_cost_permille": 500,
+    "lp_position_cost_permille": 200,
+    "lp_misaka_permille": 200,
+    "panel_gate_c_combined_misaka_permille": 50,
+    "bft_misaka_permille": 50,
+    "bft_amount": "F=floor(50*C/1000), split once from canonical source C",
+    "bft_recipient_plan": "authenticated prior roster and ongoing service eligibility; separate from retirement votes",
+    "retirement_success_bonus": 0,
+    "bft_receives_retired_assets": false
+  },
+  "separation": {
+    "bft_decides": "model eligibility and permanent retirement",
+    "court_decides": "individual offence, liability and slash",
+    "bft_classifies_honest_panel_or_gate_c": false,
+    "verification_bond_protection_is_court_immunity": false
+  },
+  "bond_lots": {
+    "key_fields": [
+      "funding_source",
+      "lot_id",
+      "model_id",
+      "purpose",
+      "amount",
+      "owner_identity",
+      "liability_until",
+      "hold",
+      "sequence"
+    ],
+    "retirement_burn_purposes": [
+      "MODEL_REGISTRANT",
+      "MODEL_MINING"
+    ],
+    "retirement_protected_purposes": [
+      "PANEL_VERIFY",
+      "GATE_C_VERIFY"
+    ],
+    "amount_basis": "current unspent remaining amount under model-specific responsibility",
+    "same_actor_multi_role": "classify each disjoint funding lot, not the whole account",
+    "duplicate_capital_allowed": false,
+    "other_model_or_unallocated_capital_burned": false,
+    "purpose_change_during_liability_or_case_freeze": false,
+    "missing_genesis_registrant_bond_created": false
+  },
+  "retirement_case": {
+    "states": [
+      "LIVE",
+      "RETIREMENT_REVIEW",
+      "RETIRED"
+    ],
+    "open_requires": "canonical authorized case-open record, model/root, anchor, bounded deadline and separate purpose quorum",
+    "mere_proposal_receive_freezes_assets": false,
+    "quorum": "inherited MAD2 n=3f+1, q=2f+1, concrete roster fixed before case",
+    "open_freezes": [
+      "new model mining",
+      "unconfirmed mining reward spend",
+      "target registrant/mining lot release",
+      "target AMM buy/sell and LP addition"
+    ],
+    "reject_or_timeout": "remove only case freeze, retain independent stop and original liabilities",
+    "indefinite_pending_or_deadline_reset": false,
+    "retire_requires": "dedicated MODEL_RETIRE quorum bound to exact current case, source scope, state sequence and policy",
+    "old_stop_vote_reusable": false,
+    "retired_can_resume": false,
+    "same_root_alias_can_reactivate": false,
+    "bft_controls_chain_finality_or_reorg": false
+  },
+  "retirement_assets": {
+    "pool_misaka": "100 percent of current real reserve r of the target nonredeemable pool; historical A totals and V excluded",
+    "registrant_bond": "100 percent of remaining target model MODEL_REGISTRANT lots",
+    "mining_bond": "100 percent of remaining target model MODEL_MINING lots",
+    "unissued_mining_reward": "cancel unissued allocation; do not count as actual token burn",
+    "unconfirmed_mining_misaka_escrow": "burn current amount once",
+    "unconfirmed_mining_position_escrow": "retire current position_atoms once; no MISAKA valuation mint",
+    "settled_mining_outputs": "preserve, without waiving individual Court liability",
+    "panel_gate_c_verification_bond": "always protected from BFT bulk burn, regardless of suspected misconduct",
+    "established_verification_rewards": "preserve MISAKA entitlement and original service terms",
+    "disputed_verification_reservation": "keep separate for Court; not a mining reward",
+    "established_bft_or_court_finder_rewards": "not retirement mining assets",
+    "pool_position_inventory": "freeze in closed market; no new redeem authority",
+    "settled_holder_position_balance": "preserve quantity; target AMM closes and real backing is burned",
+    "other_model_assets": "untouched",
+    "bft_or_other_beneficiary_transfer": "0"
+  },
+  "court_slash": {
+    "S": "cumulative actually recovered MISAKA penalty for one final Court offence, within original liability cap",
+    "finder_reward_permille": 490,
+    "nominal_burn_permille": 510,
+    "Q": "floor(490*S/1000)",
+    "recipients": "qualified offence-linked Panel/Gate C discovery or prosecution plan; combined 49 percent",
+    "every_role_receives_49_percent": false,
+    "raw_accusation_or_rejected_case_reward": false,
+    "uncollected_debt_unissued_cancel_position_value_or_retirement_burn_in_S": false,
+    "slash_depends_on_eligible_reward_recipient": false,
+    "same_defendant_identity_or_known_alias_can_receive": false,
+    "unknown_sybil_owner_detection_guaranteed": false,
+    "collection_key": "offence_id plus unique collection_id and funding-source consumption",
+    "incremental_reward": "floor(490*S_new/1000)-floor(490*S_old/1000)",
+    "incremental_burn": "delta_S-delta_Q",
+    "recipient_plan": "fixed for offence; distribute only delta_Q or escrow until one finite final distribution",
+    "reapportion_paid_cumulative_rewards_downwards": false,
+    "missing_qualified_recipient": "finite dedicated reward escrow, unused unqualified remainder burned at original terminal deadline",
+    "bft_gets_unclaimed_reward": false,
+    "automatic_self_slash_or_collusion_unprofitability_proved": false,
+    "initial_burn": "S-Q",
+    "terminal_unclaimed_reward_burn": "qualified reward not paid by the original deadline is burned from dedicated escrow",
+    "recovery_conservation": "S=paid_finder_reward+remaining_reward_escrow+total_burn",
+    "total_burn_can_exceed_51_percent_if_no_reward_entitlement": true
+  },
+  "atomicity": {
+    "retirement": "state, pool burn, lot consumption, reward cancellation/retirement, tombstone and one-time record commit together",
+    "court_collection": "funding recovery, reward payment/reservation, burn and cumulative ledger commit together",
+    "court_before_bft": "consume source once; preserve already established finder/service rights",
+    "bft_before_court": "no re-collection of burned source; actual recovery zero implies no additional bounty",
+    "reorg": "restore exact prior assets, liabilities, payments, cumulative counters and status"
+  },
+  "supply_reporting": [
+    "BurnedMISAKA",
+    "RetiredPositionAtoms",
+    "CancelledUnissuedReward",
+    "CourtFinderRewardMISAKA"
+  ],
+  "validation_scope": {
+    "abstract_reference_only": true,
+    "native_execution": false,
+    "real_signature_bft_or_court_judgment": false,
+    "utxo_collection_and_service_qualification": false,
+    "real_reorg_ibd": false,
+    "network_activation": false
+  }
+}

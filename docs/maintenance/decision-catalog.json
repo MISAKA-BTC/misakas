@@ -223,7 +223,7 @@
       "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
       "title": "ADR-0027: PALW-S — unilateral fraud proofs; no BFT, no challenge randomness, slash-terminal",
       "topic": "Verification / court",
-      "status": "原文と後続改定を参照"
+      "status": "旧slash規則を保持 / 新個別Court49/51はRFC0069優先"
     },
     {
       "kind": "adr",
@@ -263,7 +263,7 @@
       "path": "docs/adr/0032-palw-fee-bond-escrow.md",
       "title": "ADR-0032: PALW fee-bond escrow — pricing calls and paying challengers without new covenants",
       "topic": "Economics / budgets",
-      "status": "原文と後続改定を参照"
+      "status": "旧報酬/escrow記録 / 新Panel・Gate C合計49%とburn51%はADR0237優先"
     },
     {
       "kind": "adr",
@@ -695,7 +695,7 @@
       "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
       "title": "ADR-0087 — 追加モデルのMisakaOption市場・送金・保存則",
       "topic": "Consensus / architecture",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -711,7 +711,7 @@
       "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
       "title": "ADR-0089 — native正本とEVMのMisakaOption転送・承認・決済",
       "topic": "EVM / wallet",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -719,7 +719,7 @@
       "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
       "title": "ADR-0090 — The pair is seeded with real BILI, locked for good, and a position is whole",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -727,7 +727,7 @@
       "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
       "title": "ADR-0091 — 追加モデル報酬の30%購入・20%永久LP・余剰burn",
       "topic": "Economics / budgets",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -759,7 +759,7 @@
       "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
       "title": "ADR-0095 — 譲渡可能な追加モデルPositionと現在保有に結び付くmembership",
       "topic": "Consensus / architecture",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -807,7 +807,7 @@
       "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
       "title": "ADR-0101 — chain認証membershipとPositionの直接送受信",
       "topic": "Consensus / architecture",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -895,7 +895,7 @@
       "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
       "title": "ADR-0114 — 通常AMMのburn 5%・owner総leg 3%と版付き適用",
       "topic": "Consensus / architecture",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -975,7 +975,7 @@
       "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
       "title": "ADR-0124 — モデル分類別のMiner報酬・Panel原資・責任予約",
       "topic": "Economics / budgets",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -1247,7 +1247,7 @@
       "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
       "title": "ADR-0162 — The pair opens on a virtual reserve",
       "topic": "Consensus / architecture",
-      "status": "原文と後続改定を参照"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -1367,7 +1367,7 @@
       "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
       "title": "ADR-0177 — モデル配分・owner収入とMOE2の分類別報酬",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -1383,7 +1383,7 @@
       "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
       "title": "ADR-0179 — モデル二階層と追加モデル専用MisakaOption",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存"
+      "status": "MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持"
     },
     {
       "kind": "adr",
@@ -1735,7 +1735,7 @@
       "path": "docs/adr/0221-additional-model-burn-pause.md",
       "title": "ADR-0221 — 追加モデルの取得可否認定をburn停止・解除に置き換える",
       "topic": "Models / execution / onboarding",
-      "status": "原文と後続改定を参照"
+      "status": "旧追加限定burn停止 / 共通化と解除権限はADR0236優先"
     },
     {
       "kind": "adr",
@@ -1815,7 +1815,7 @@
       "path": "docs/adr/0231-additional-model-option-economics.md",
       "title": "ADR-0231 — 追加モデル限定MisakaOptionと新しい報酬・売買・移転規則",
       "topic": "Economics / budgets",
-      "status": "旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化"
+      "status": "旧MOE1判断記録 / 新経済はRFC0068/ADR0236のMOE3優先、未有効化"
     },
     {
       "kind": "adr",
@@ -1823,7 +1823,7 @@
       "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
       "title": "ADR-0232 — 30%買付・20%永久流動性・余剰Position burnを採択する",
       "topic": "Economics / budgets",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約"
+      "status": "旧MOE2判断記録 / MOE3はADR0236、永久LP保護を継承"
     },
     {
       "kind": "adr",
@@ -1847,7 +1847,31 @@
       "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
       "title": "ADR-0235 — モデル採用をkernel自動追加とBFT YES/NOへ分ける",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAD2二経路・技術互換とclaim検証を維持"
+      "status": "MAD2採用経路を継承 / origin別免除はMOE3で廃止"
+    },
+    {
+      "kind": "adr",
+      "number": "0236",
+      "path": "docs/adr/0236-fractional-position-miner-rewards.md",
+      "title": "ADR-0236 — 小数POSITION・全モデル1.0・50/20/20/5/5",
+      "topic": "Economics / budgets",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / 固定5leg・合計70%購入・取得原価比LP・creator1%又は0%"
+    },
+    {
+      "kind": "adr",
+      "number": "0237",
+      "path": "docs/adr/0237-bft-model-retirement-and-role-bonds.md",
+      "title": "ADR-0237 — モデル廃止と個人責任の分離・検証bond保護・49%発見報酬",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / 検証bond保護・Court個別slash・廃止bountyなし"
+    },
+    {
+      "kind": "adr",
+      "number": "0238",
+      "path": "docs/adr/0238-model-work-accounting-and-exec-credit.md",
+      "title": "ADR-0238 — モデル別仕事量とFOW1の報酬・有限EXEC生成権の接続",
+      "topic": "Models / execution / onboarding",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED / 共通meter・固定target・比例原資"
     },
     {
       "kind": "rfc",
@@ -1959,7 +1983,7 @@
       "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
       "title": "RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ",
       "topic": "Verification / court",
-      "status": "原文と後続改定を参照"
+      "status": "個別反証責任を継承 / 新回収分配49/51はRFC0069優先"
     },
     {
       "kind": "rfc",
@@ -1983,7 +2007,7 @@
       "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
       "title": "RFC-0017 — モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)",
       "topic": "Models / execution / onboarding",
-      "status": "二階層採用・旧審査撤回"
+      "status": "旧二階層の記録 / MOE3全モデル1.0はRFC0068優先"
     },
     {
       "kind": "rfc",
@@ -1999,7 +2023,7 @@
       "path": "docs/rfc/0019-annual-model-upgrade.md",
       "title": "RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変",
       "topic": "Models / execution / onboarding",
-      "status": "Draft / 原文参照"
+      "status": "旧年次fork制度の記録 / MOE3は同じ追加手続"
     },
     {
       "kind": "rfc",
@@ -2279,7 +2303,7 @@
       "path": "docs/rfc/0053-additional-model-burn-pause.md",
       "title": "RFC-0053 — 追加モデルのburnによる停止・登録者による解除",
       "topic": "Models / execution / onboarding",
-      "status": "原文と後続改定を参照"
+      "status": "旧burn停止規則 / MOE3全モデル・専用BFT ResumeはRFC0068 §2.4優先"
     },
     {
       "kind": "rfc",
@@ -2359,7 +2383,7 @@
       "path": "docs/rfc/0063-additional-model-option-economics.md",
       "title": "RFC-0063 — 追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転",
       "topic": "Economics / budgets",
-      "status": "旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化"
+      "status": "旧MOE1記録 / 新経済はRFC0068/ADR0236のMOE3優先、未有効化"
     },
     {
       "kind": "rfc",
@@ -2367,7 +2391,7 @@
       "path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
       "title": "RFC-0064 — 報酬30%買付・20%永久流動性・余剰Position burn",
       "topic": "Economics / budgets",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn"
+      "status": "旧MOE2記録 / MOE3の精度・配分・feeはRFC0068優先"
     },
     {
       "kind": "rfc",
@@ -2391,7 +2415,31 @@
       "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
       "title": "RFC-0067 — MAD2：kernel自動追加とBFT YES/NOによるモデル採用",
       "topic": "Models / execution / onboarding",
-      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / MAD2自動kernel採用又はBFT YES/NO・証明提出不要"
+      "status": "MAD2二経路を継承 / MOE3はgenesisを含め管理対象、RFC0068優先"
+    },
+    {
+      "kind": "rfc",
+      "number": "0068",
+      "path": "docs/rfc/0068-fractional-position-miner-rewards.md",
+      "title": "RFC-0068 — MOE3：小数POSITION・全モデル統一・50/20/20/5/5配分",
+      "topic": "Economics / budgets",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / 全モデル1.0・小数POSITION・最終50/20/20/5/5"
+    },
+    {
+      "kind": "rfc",
+      "number": "0069",
+      "path": "docs/rfc/0069-bft-model-retirement-and-role-bonds.md",
+      "title": "RFC-0069 — BMR1：モデル恒久廃止・用途別bond・Court slash 49/51",
+      "topic": "Models / execution / onboarding",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED / BMR1継続BFT5%・恒久廃止・用途別bond"
+    },
+    {
+      "kind": "rfc",
+      "number": "0070",
+      "path": "docs/rfc/0070-model-work-accounting-and-exec-credit.md",
+      "title": "RFC-0070 — MWA1：モデル別仕事量認定・FOW1報酬・EXEC credit",
+      "topic": "Models / execution / onboarding",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED / MWA1モデル仕事量・FOW1報酬・EXEC credit"
     }
   ]
 }

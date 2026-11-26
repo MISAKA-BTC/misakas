@@ -1,5 +1,15 @@
 # RFC-0014 — Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ
 
+<!-- BMR1-COURT-SLASH-20261126-BEGIN -->
+## 2026-11-26 後続採択 — Court実回収の49%検証報酬・51%burn
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../adr/0237-bft-model-retirement-and-role-bonds.md)を新profileの個別Court slash配分の正本とする。個別offenceから実際に回収したMISAKA Sについて、Panel/Gate C合計報酬E=floor(490S/1000)、残差T=S−Eをburnする。49%は両役割合計であり、各49%ではない。未回収額・架空予約・BFT廃止資産をSへ加えない。
+
+認証済みの不正発見/立証資格planで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFT恒久廃止は当該scopeの100%burn、BFT没収受取/廃止bountyは0のまま。全Panel/Gate C検証用途bondをBFT一律burnから保護するが、本人の個別Court責任を免除しない。正当に成立した検証報酬はMISAKA支払を維持する。
+
+通常coinbaseは別会計で最新50/20/20/5/5（Miner用POSITION50%、LP用POSITION20%、MISAKA LP20%、Panel/Gate C MISAKA5%、BFT MISAKA5%）とする。旧受取先・旧cap・旧profile・実測/署名は元版の履歴として保持し、同日途中の40/15等を新規受理へ使わない。BMR1 native接続・移行・公開有効化の完了ではない。
+<!-- BMR1-COURT-SLASH-20261126-END -->
+
 > **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
 
 > **PALW共通前提 — 2026-10-10:** [ADR-0176](../adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)を適用する。確率的検証・公開反証・客観裁定に加え、bondと共通DAA期間がclaim発行能力、ブロック数、報酬総額、Final後の確定weightの上限を決める。

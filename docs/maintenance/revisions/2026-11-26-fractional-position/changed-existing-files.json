@@ -1,0 +1,395 @@
+{
+  "source_archive_sha256": "aa065744280e926c1eee8430f0c0c6172af723c3dce9a9734aa4ecc33c5cfab4",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "input_sha256": "35af8b2a39d5d74c5645466fd7aef01909ecf93a563d39e46f6573ecd1197434",
+      "output_sha256": "b4769c6e7b260b88d01c3330c71d2dbbf5b4a175b42c2465852b8f2970b81dd4",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/AGENTS.md.txt"
+    },
+    {
+      "path": "READ_ME_FIRST.txt",
+      "input_sha256": "a7971ef8fe6e7390fc910ec15f9c8197a0d6f81737e08a99c130b72a984c0303",
+      "output_sha256": "8eaccc3415bb059ca551278816cce67c733e3bbeb68f51b32a2de6d1deb371ef",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/READ_ME_FIRST.txt.txt"
+    },
+    {
+      "path": "docs/AGENTS.md",
+      "input_sha256": "cc9ccc62ea873791ded63d86df1c54130cc2bddaae42c309755d8b67c0b0961f",
+      "output_sha256": "d238cc3cecaae125875c9f6ad3f74a67acf05b00198d95790cddcd142aef130d",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/AGENTS.md.txt"
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "input_sha256": "04a8f70f9424db8b2638656c47e7a323a86cd46284856f573dcf0db365569d6e",
+      "output_sha256": "0ada1354082c8f24cdaa94db71600b74490479ca2579d527341a3e8e15b22038",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/PRINCIPLES.md.txt"
+    },
+    {
+      "path": "docs/README.md",
+      "input_sha256": "e7fd4eb711bcecb0d3e551d9230a1ca4d02e5e4f54340a84250b45629df6eb6f",
+      "output_sha256": "99501d33dbb5bf35f9e860ad00e2d909076dc140c6eef72302b45d2b765ce296",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/README.md.txt"
+    },
+    {
+      "path": "docs/STATUS.md",
+      "input_sha256": "dbe99f8e0b4aaeeee446eb70d7564a6b379c972fec3690054258e8ace00aef59",
+      "output_sha256": "5a5fea2055b861ff8aed7c5849ee906c52ed4d65078db2c352efe8efacc0d090",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/STATUS.md.txt"
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "input_sha256": "150f66dda612712eacecc4c0131a16bd8403ddf32a2d985a7c1af9a708b4e807",
+      "output_sha256": "a28b74c4185a80be1b6952062fdffb84dd628e5e57b7169e3bc12a2aab5da481",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0027-palw-slash-unilateral-fraud-proofs.md.txt"
+    },
+    {
+      "path": "docs/adr/0032-palw-fee-bond-escrow.md",
+      "input_sha256": "e7f575eda08cfbee529b406b287649ba4c405777374b1085e32610fa776988eb",
+      "output_sha256": "ddbeb8f294482140e94482035a9df0f44820c629d63e8312a5e7e5895642c9bc",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0032-palw-fee-bond-escrow.md.txt"
+    },
+    {
+      "path": "docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+      "input_sha256": "c14f5c93e5425c7b55ab0dc301bbf978c2822395707303d76e28db0851452232",
+      "output_sha256": "99fb10bb4022ebf1b6097bd753d0e7e18ea5a76ea33fdd050ddd38b6b74e3e5c",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md.txt"
+    },
+    {
+      "path": "docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+      "input_sha256": "8881b5391217dc64a63c0ae4d125d1eecf142c1e57f97df41614d38490d4ebf3",
+      "output_sha256": "f98967e3ad56a5c3923c7eb05133f7de8222335c0a832d5d3db699379062ceb4",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md.txt"
+    },
+    {
+      "path": "docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+      "input_sha256": "85a880dbedeeb6897b5919d6571f9be5e077cad9a72bc0fa478d846d6fbafac9",
+      "output_sha256": "20ec9ae0f017720d80d848b6fcb8eeac4eec4f8421733e661e2d96336cd396e5",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md.txt"
+    },
+    {
+      "path": "docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+      "input_sha256": "3ca92b52f98a98fa1ef39fe586d086c90a957e006aafd006a382a11d52dff798",
+      "output_sha256": "90306926dbf2e0fc15c1e79a6018fe403de65d91b6f748f73e1ff8c0476afa76",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0091-the-reward-buys-the-pair-and-no-holder-is-paid.md.txt"
+    },
+    {
+      "path": "docs/adr/0095-a-position-is-a-membership-not-an-income.md",
+      "input_sha256": "6e5a1950f9d456c1260ce450dcb50d6c718b48618e2872dcca236d0dbe05acc2",
+      "output_sha256": "1dde5fdfc3585c6fc64a173c00d5766ed2c5901bf71e2da29792f1fc1fc8bf44",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0095-a-position-is-a-membership-not-an-income.md.txt"
+    },
+    {
+      "path": "docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md",
+      "input_sha256": "a11720feae5f5541b1e859b81b3abcbb455251bad529de640b0b5b7b8b6998b3",
+      "output_sha256": "c7a7bbbdf306025e07e4604cda6d5aec8c8a8d8466b9c623016d47bcaff22cf9",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md.txt"
+    },
+    {
+      "path": "docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md",
+      "input_sha256": "e8309b1bfb83e438e48cab26c62fa76760084a9db73538fa765792660231d673",
+      "output_sha256": "c3ba5adb7a4fec7ffea2ea5f614f7889ccbf26edd18bdea4501791961751bb23",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md.txt"
+    },
+    {
+      "path": "docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+      "input_sha256": "11ab693655131ba99ec31a8ce9b9600fb63ce077486a576901ea8f3826be4414",
+      "output_sha256": "33fc21214c0d3fe05463016b1eda37b23b7a57d0dc26ffd4545f1a7e3866e3e6",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md.txt"
+    },
+    {
+      "path": "docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md",
+      "input_sha256": "e2e5e9fae38b0c7e9003be50fc5c695bdc229eead787eb60f6e689609d4389eb",
+      "output_sha256": "6f6d05edda1fc1e26598e6e1d521964b9fe0311890d8da5136150dca190cafe5",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0162-the-pair-opens-on-a-virtual-reserve.md.txt"
+    },
+    {
+      "path": "docs/adr/0177-model-bond-allocation-without-availability-consensus.md",
+      "input_sha256": "bd41ca9674183f84922c39162969a33bf3ff1b1cbb7bfa706539040d47e22757",
+      "output_sha256": "88312d787e2acf08706019b46c08d7129e2ff85a802e808ce8a4f1fa1c531e28",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0177-model-bond-allocation-without-availability-consensus.md.txt"
+    },
+    {
+      "path": "docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md",
+      "input_sha256": "c47ac62ddd9b5063ca2f67496744040983d9a38e0dd451d8dca12d3e3ad13d92",
+      "output_sha256": "e200a33cbb7817f4027eb954e3a953766014c14ad85a7cbec18ab136c310216a",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0179-model-tiers-genesis-annual-1-0-registered-0-3.md.txt"
+    },
+    {
+      "path": "docs/adr/0180-palw-only-consensus-no-bft-validators.md",
+      "input_sha256": "96d22678d1fb7c078622b596812ac803f3704b13247071521e0a6965b92ea809",
+      "output_sha256": "5cc51dfd421084031283512a17e9f391142da10dc288d2b6d1b20d196d01d111",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0180-palw-only-consensus-no-bft-validators.md.txt"
+    },
+    {
+      "path": "docs/adr/0221-additional-model-burn-pause.md",
+      "input_sha256": "9a499343bf259dece99aa9a3b367f92a45d8af58f5cd05a686ffeca5ad689daa",
+      "output_sha256": "a231fdc96330673f8d4c5583ba2c967221ef7e950a16d0da1b2456914a6549d8",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0221-additional-model-burn-pause.md.txt"
+    },
+    {
+      "path": "docs/adr/0231-additional-model-option-economics.md",
+      "input_sha256": "5b96e7892d550f41b2cf7b50bae9a99104b1d33bf3292764b1dbfa5bf8dc48fb",
+      "output_sha256": "c86c00bbc5e4e21b3f9691cc7e2a0634f612a9c724bdb948009f2a304651a918",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0231-additional-model-option-economics.md.txt"
+    },
+    {
+      "path": "docs/adr/0232-reward-buy-and-permanent-liquidity.md",
+      "input_sha256": "98e23edaac5495a8ae1070ee5a8d4e0e3e3ebed1643728b68ae3094e4537beca",
+      "output_sha256": "39819d3958fcd43fd2e1ef44bcd60cd444e285f16c655f6c31d2fb0559a7a0cf",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0232-reward-buy-and-permanent-liquidity.md.txt"
+    },
+    {
+      "path": "docs/adr/0233-model-admission-screening-and-bft-stop.md",
+      "input_sha256": "cc69f5833e7cea298cb80c9c89690c29906027625b60ab2388b5b06a529ba6a6",
+      "output_sha256": "50a3b2c05fcd027b8538dc2e38b78e8a8d1866f73a031375544870a0fb3c4f3a",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0233-model-admission-screening-and-bft-stop.md.txt"
+    },
+    {
+      "path": "docs/adr/0234-qwen3-fow1-execution-and-readout.md",
+      "input_sha256": "eccf79f56a6b7ceea477cb50add285f8db8149ef7fd6ae6574f5e83eadbb62fe",
+      "output_sha256": "d2f4b5ffc76fc0acfb851cffb71930a9dda1326f8c876aa0e0413b7f9c23551e",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0234-qwen3-fow1-execution-and-readout.md.txt"
+    },
+    {
+      "path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
+      "input_sha256": "b711bc54a04eafc3c2a6f93db8a6c47f0fb10d443faa2301030932221bac1b6c",
+      "output_sha256": "d966f653098216580c488a5bc01752f33912903e45586ad69757865f30048e35",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md.txt"
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "input_sha256": "587eef5ebc20d7a1e5c70a1c275092a7a103b08f45b96a2d3cb7f507fc877157",
+      "output_sha256": "70e6d48edbb52ab206c82d464a2c1a0619ac08150c81a289aa546cb652d8b981",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/INDEX.md.txt"
+    },
+    {
+      "path": "docs/adr/README.md",
+      "input_sha256": "e6b4a784304570a1d3202e2219380c277968aec468400776dbdb2b3e2fc73537",
+      "output_sha256": "0f39538439aa97380a99dfc496ba72885b3887d4ba1ffbd80cf200c966048ead",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/README.md.txt"
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "input_sha256": "9f00f83f4ece18b6e7e26a7c03c84a7a702e4aaaadc75998981fa740ce185563",
+      "output_sha256": "d42616514533166fe5b576cb5232baf449056c5b4b07b6b7c6952852723bab3a",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/adr/TOPICS.md.txt"
+    },
+    {
+      "path": "docs/design/palw/README.md",
+      "input_sha256": "f14042b2834c59bbd915f7b5a44e52c0af12a4113d9d4aa18dad3a992528f1cb",
+      "output_sha256": "7d6835b60e32b78bc380ff83847e31432b5a39c5643627128333da138976d54a",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/README.md.txt"
+    },
+    {
+      "path": "docs/design/palw/consensus/public-adjudication-policy-v0.6.md",
+      "input_sha256": "b96827a9f0db90f84dc6a0c8b351a2f47226bb422cd1c006cddf59ad226e618c",
+      "output_sha256": "ed7c4584ad0e2191d5d0416e27b27d99f5b10e9db1165cbe6f2f982e4f0ecb20",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/consensus/public-adjudication-policy-v0.6.md.txt"
+    },
+    {
+      "path": "docs/design/palw/consensus/verification-responsibilities-and-simplification-2026-11-23.md",
+      "input_sha256": "831d657dca37a2f60e4fb0f4bc242544a6c14227e259bf121b83a48f02bfa50c",
+      "output_sha256": "a3246f56995b477c0fe9f9a90a9ea5c180c883765962688392779ac93f78db96",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/consensus/verification-responsibilities-and-simplification-2026-11-23.md.txt"
+    },
+    {
+      "path": "docs/design/palw/economics/bond-budget-and-model-allocation.md",
+      "input_sha256": "fddc8b98744accdf69558c2a36e7ad16a7f6fad9577da12e2a291d21c56340a2",
+      "output_sha256": "4e1e3f45ddd5e9c30634d21e2d50f0de82cb69f216ef05339ab474f9dcbd98e0",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/economics/bond-budget-and-model-allocation.md.txt"
+    },
+    {
+      "path": "docs/design/palw/economics/econ-verifier-incentive-and-allocation.md",
+      "input_sha256": "f759a79aa6f494b6fb77c7c632483d1cb08d63e52cc7efd0bf8c7e5b7a991b36",
+      "output_sha256": "55cf3a3b31f71678cf37e72be190aa55a2110fed27461b1687722290103effc1",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/economics/econ-verifier-incentive-and-allocation.md.txt"
+    },
+    {
+      "path": "docs/design/palw/integration/additional-model-burn-pause-2026-11-11.md",
+      "input_sha256": "d958f653d1179ea5d0bd670d2f7662742f35438425ab1395a07909b9567c2dd5",
+      "output_sha256": "410d1413939ef623d8df0baaccb858235b313b03fb77c3fbc56b1554678ce1d3",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/design/palw/integration/additional-model-burn-pause-2026-11-11.md.txt"
+    },
+    {
+      "path": "docs/governance/design-freeze.md",
+      "input_sha256": "8e663058aac232187dd1f651788341e3b09355cb7d7a19f7d1b94e2610dd1125",
+      "output_sha256": "18777a282909a92b2aab56655f3aa5a7c04a5b3918874d3b4dd0945d45c621f6",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/design-freeze.md.txt"
+    },
+    {
+      "path": "docs/governance/document-lifecycle.md",
+      "input_sha256": "120df7b6a569d6d53d9658d5a25aabd179aa86f8211494ae75604d815724abe8",
+      "output_sha256": "8549afb036524f92688744704c0c1f602ad35bf30c8fd81e75824337671e3e1f",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/document-lifecycle.md.txt"
+    },
+    {
+      "path": "docs/governance/model-admission-dual-route-transition.md",
+      "input_sha256": "0e316007acfb9d41f40416aa90396c8bf87e12d19a60410cd3bd7cc292f3a1ab",
+      "output_sha256": "eb372ceeb008d0f1102948452b019d79295f94783b3f52b57057ac16976cecf8",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-admission-dual-route-transition.md.txt"
+    },
+    {
+      "path": "docs/governance/model-admission-safety-transition.md",
+      "input_sha256": "075379f42a80d859ef3b92064cc1d7f4cf8f0055e7f145f71517cb73672ee4e1",
+      "output_sha256": "5dba48bab2f0ef1314df0decd7b728cba77b5cd9996eb35fe91ba06b75539357",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-admission-safety-transition.md.txt"
+    },
+    {
+      "path": "docs/governance/model-option-economics-transition.md",
+      "input_sha256": "f220fc3ae820d3dca934c9bc1dde5edfacc966dc32f12a1d93136138d8db59e4",
+      "output_sha256": "642c9dcdfce101139cef254cbdae01888f1b92c2fce6bb70a6d8063c5ae09737",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/model-option-economics-transition.md.txt"
+    },
+    {
+      "path": "docs/governance/palw-tb1-fow1-transition.md",
+      "input_sha256": "a064b1df7e8f58cda2101e072a29c6fb9ebadb6d9b3ec04dfe474007f11e6287",
+      "output_sha256": "7aaf4a30de3004d48a947ac09f64ed949c2712b38d116773bd0df3948b74f555",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/palw-tb1-fow1-transition.md.txt"
+    },
+    {
+      "path": "docs/governance/parameter-register.md",
+      "input_sha256": "45b5f225e3ef61ab9d5ab99ba0b7e452c9df612ad7d57a93eee50ec5a35526f1",
+      "output_sha256": "e1d5f52ea2c45ab5909ee62abc4782b2b8bcc2278ee1bdcd7eec934bd10885db",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/parameter-register.md.txt"
+    },
+    {
+      "path": "docs/governance/parameters.json",
+      "input_sha256": "862b888af1a02cb521d0f7b1a31acff166b6117e6f76cba9b28d23078e743021",
+      "output_sha256": "0f74bb58d87dfdba7a33770db51ec1564dca984062ca71d632bf0310b7896ca0",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/parameters.json.txt"
+    },
+    {
+      "path": "docs/governance/qwen-fow1-profile-transition.md",
+      "input_sha256": "154a21f8b842b26eac6c43067c901f918778c6e0d1a726018daabac612928b24",
+      "output_sha256": "0a11d24a6b63c0da94d23b77003d27ea38b809cfb0035552818fc70fe487fcff",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/governance/qwen-fow1-profile-transition.md.txt"
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "input_sha256": "bc5e454f76ee6171788f24cb0901de54755e9c0464e669dfae641d127baeb825",
+      "output_sha256": "6cd53d25761f45c4f3b1262a0a3a1791fc5ca17025cb31e82d44c3e80c2adaf6",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/catalog.md.txt"
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "input_sha256": "e19499dc06349849ac0e42e3ba5fa85a9a1b685a8e5d75bb2b6691fac4dc0332",
+      "output_sha256": "7f86d79d7c04aa80517072cefbe301bda1e30c94afca5ad90c8b28fd4bd766e4",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/decision-catalog.json.txt"
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "input_sha256": "65c22e4946f04a50e82ac6138791548297132cfb08d30df61212f536b461f71f",
+      "output_sha256": "61f7b95d1b459680e31103dec7aa887b1dad2c45dd50564f7ea7bd069f17ca05",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/generate_indexes.py.txt"
+    },
+    {
+      "path": "docs/maintenance/number-registry.json",
+      "input_sha256": "a0e3baeedea840d9be7b0936ff730ed931db4ff98e25eca8fdcf352f8e4096db",
+      "output_sha256": "72786c749609e8798d0a09a5487d5529582e36fa28ceaa6e8654a5fbdb707fc9",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/number-registry.json.txt"
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "input_sha256": "d064e7d1863860007f9b151c08494ed72aa34e774b03ff70bf2d2f1cf368f7f1",
+      "output_sha256": "b5b3ce3601425026c3469605419cb20c015b4a3fb140d448025983fb1753e42f",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/maintenance/numbering.md.txt"
+    },
+    {
+      "path": "docs/reference/palw/palw-registry-map.md",
+      "input_sha256": "27d8bb3d3afe633ca8528e89684327213ec7999d17ed9dd87ab08987f9e3caf4",
+      "output_sha256": "6e11c11ac41f93474fed51819f43add4019d574d641988b4f25393ddcf814c42",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/reference/palw/palw-registry-map.md.txt"
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "input_sha256": "a0b759f44596afe99322bb3a4960f942159d2dd0bec468f22e0f4b749aeb51f5",
+      "output_sha256": "a6997b485a0d3a5c823bee75b0e3155c5f560af8c4eb436547d14ccf26baec01",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0014-panel-independent-fraud-prosecution.md.txt"
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "input_sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c",
+      "output_sha256": "be8d791405e3d455e85999678d962146612688e916e9d1f0e09bdad244b1beb5",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0015-panel-free-permissionless-verification.md.txt"
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "input_sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a",
+      "output_sha256": "c216068fb7c3760f1a157ce1752af64acecc02fe9a40440927005e8315321f2f",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md.txt"
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "input_sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc",
+      "output_sha256": "7b28aac5bb8a202e84a7ae8e0f7ac5225ee6ac92c07a3158b95fc3872f2329f1",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0017-model-eligibility-examination-and-renewal.md.txt"
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "input_sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e",
+      "output_sha256": "311bc43cf718cee1c34f790ad5e28338a900ad465a59172ac54d89ae254fb9c9",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0019-annual-model-upgrade.md.txt"
+    },
+    {
+      "path": "docs/rfc/0053-additional-model-burn-pause.md",
+      "input_sha256": "180c2ac80af36cbb23d62f999d70cbc46aed2ec00446026e0fe33f97887e790c",
+      "output_sha256": "e5d824c66c57e223afed242bc7e5c95c1e16fcc5536cb12033d8477f193bc53d",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0053-additional-model-burn-pause.md.txt"
+    },
+    {
+      "path": "docs/rfc/0063-additional-model-option-economics.md",
+      "input_sha256": "37216403f09f17d37333d963226aa58ef7e47f0d2f4f3b0e83cadc057a713df4",
+      "output_sha256": "9499e68c0da1d84f8ddca199e75dd5faa20a8201699dda06fb7e84e5a8f9f3b6",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0063-additional-model-option-economics.md.txt"
+    },
+    {
+      "path": "docs/rfc/0064-reward-buy-and-permanent-liquidity.md",
+      "input_sha256": "7a78eeb1c9d64367bb3546214e866f40ef18a5edac69af4167fe0be104f8c985",
+      "output_sha256": "2ac6487d2b04f70ecc44e29d17b090103ef3b71a69221100115b3392cb08d6a9",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0064-reward-buy-and-permanent-liquidity.md.txt"
+    },
+    {
+      "path": "docs/rfc/0065-model-admission-screening-and-bft-stop.md",
+      "input_sha256": "a98f36906890cbd21880e11e127fe21b46dc8c6c1665f25c03b12f652c1c7d3e",
+      "output_sha256": "20368d351b9c88cac7ea70da2fd98461d6a71140dfad8c1133eec046bd9db13d",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0065-model-admission-screening-and-bft-stop.md.txt"
+    },
+    {
+      "path": "docs/rfc/0066-qwen3-fow1-execution-and-readout.md",
+      "input_sha256": "aa6d65584ba5911edfbbaa5ba3a1b6bb6c649c5416eced635ceb1c79302dea6a",
+      "output_sha256": "f4344c0173917bf4639dffdca7c788dc300dbba47313c18e6a6dbb2b9a1f758d",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0066-qwen3-fow1-execution-and-readout.md.txt"
+    },
+    {
+      "path": "docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md",
+      "input_sha256": "c75c94e7e14da6452e3a66386b08410de3f815bf9a9229a32d788ead502d5df6",
+      "output_sha256": "3349309ab0711e7d507f4edbdfb9cefaa86cd8a28198c418cda55574fd508060",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/0067-model-admission-kernel-auto-and-bft-decision.md.txt"
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "input_sha256": "24ad0bb7b5acb22e0a1224c6f31e7b8a21eecdc372ab5636ca0e70bce3845591",
+      "output_sha256": "ca46b25635bad57106bd1824e9b85d12d0ed7bc11a492efdb61d91d02c5391ca",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/INDEX.md.txt"
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "input_sha256": "6c714d2651e40c46bfbc06f3d3be2ba51bef9449cfa691a6245510b17c43de00",
+      "output_sha256": "f6b95c4554839d76974af298e56096859b51224d666480385b5a5c2b5232b1da",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/README.md.txt"
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "input_sha256": "a665df9e060e2f964bc82c0cb4c7417a871c426a7a0526288ad9ecb632eafee9",
+      "output_sha256": "6351fefacaf492c4ea0968116c59fd0d90b0e7ca25d9c986ed6ddd4e4d41c249",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/rfc/TOPICS.md.txt"
+    },
+    {
+      "path": "docs/spec/palw/model-tiers.md",
+      "input_sha256": "e12cdbd2e926e1630c2f41c4e5fbd7749d6935cb289cd60bb6af35e576e230bb",
+      "output_sha256": "3af650e351816cd76d7c7a404309820eed891852853f5b5d2afed867d2034bfe",
+      "before_copy": "docs/maintenance/revisions/2026-11-26-fractional-position/before/docs/spec/palw/model-tiers.md.txt"
+    }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "date": "2026-11-26",
+  "timezone": "Asia/Tokyo",
+  "status": "PASS_WITH_UNCHANGED_INPUT_DOC_FAILURES",
+  "design_state": "ADOPTED_DESIGN_NOT_ACTIVATED",
+  "source_archive": "LLM-chain-pre(2).zip",
+  "source_archive_sha256": "aa065744280e926c1eee8430f0c0c6172af723c3dce9a9734aa4ecc33c5cfab4",
+  "input_files_preserved": 10719,
+  "input_files_deleted": 0,
+  "existing_files_changed": 65,
+  "matching_before_snapshots": 65,
+  "unchanged_protected_files": 6563,
+  "coinbase_permille": {
+    "miner_position_cost": 500,
+    "lp_position_cost": 200,
+    "lp_misaka": 200,
+    "panel_gate_c_combined_misaka": 50,
+    "bft_misaka": 50
+  },
+  "court_actual_recovery_permille": {
+    "panel_gate_c_combined": 490,
+    "initial_burn_remainder": 510
+  },
+  "reference_math": {
+    "run": 26,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "reference_retirement_court": {
+    "run": 20,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "documentation_tool_unittests": {
+    "run": 16,
+    "failures": 0,
+    "errors": 0
+  },
+  "total_unit_tests": 62,
+  "reference_exhaustive": {
+    "cases": 7920,
+    "positive_success": 4325,
+    "dust_rejected": 3355,
+    "zero_noop": 240,
+    "domain": "X=1..12, inventory=1..20 atoms, C=0..32 atoms"
+  },
+  "reference_seeded_random": {
+    "seed": 20261126,
+    "cases": 600,
+    "positive_success": 600,
+    "dust_rejected": 0,
+    "amount_range": "0..10^15 atoms"
+  },
+  "policy_reference_alignment": "PASS",
+  "doc_checker_exit_code": 1,
+  "doc_missing_file_occurrences_before": 1384,
+  "doc_missing_file_occurrences_after": 1384,
+  "doc_missing_heading_occurrences_before": 2,
+  "doc_missing_heading_occurrences_after": 2,
+  "new_doc_failures_added": 0,
+  "input_doc_failures_removed": 0,
+  "native_runtime_modified": false,
+  "native_moe3_or_bmr1_tested": false,
+  "real_signatures_bft_court_proofs_or_asset_provenance_tested": false,
+  "network_activated": false
+}

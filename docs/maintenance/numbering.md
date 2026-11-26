@@ -126,3 +126,17 @@ CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042
 ## 2026-11-20 MOE2追加採択
 
 [RFC0064](../rfc/0064-reward-buy-and-permanent-liquidity.md)と[ADR0232](../adr/0232-reward-buy-and-permanent-liquidity.md)を未使用番号として追加した。原子的市場登録と追加モデル限定を引き継ぎ、30%購入・20%永久LP・残余50%へ改訂する。既存番号、旧next_local、wire IDは再利用しない。設計採択済み・未有効化。
+
+## 2026-11-26 MOE3小数POSITION・報酬配布
+
+[RFC-0068](../rfc/0068-fractional-position-miner-rewards.md)／[ADR-0236](../adr/0236-fractional-position-miner-rewards.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加する。今回の添付LLM-chain-pre(2).zip内で未使用を確認した範囲の採番であり、未取得remoteの未使用保証ではない。小数POSITION、全モデル係数1.0・一意市場・MAD2管理・新fork特別区分廃止と、最終50/20/20/5/5の共通C配分を記録する。同日途中の80/20/q4案は最終指定へ置換済み。通常burn5%・creatorあり1%/なし0%は維持する。次のpost-consolidation候補はRFC-0069／ADR-0237。歴史的next_local、既存番号・wire ID・fence・過去native MOE2を変更しない。
+
+## 2026-11-26 BMR1追加採択 — BFT報酬とモデル恒久廃止
+
+[RFC-0069](../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR-0237](../adr/0237-bft-model-retirement-and-role-bonds.md)をADOPTED_DESIGN_NOT_ACTIVATEDとして追加する。BFT通常継続5%（途中10%を最新指示で置換）、Panel/Gate C MISAKA5%、共通Cの50/20/20/5/5、モデル廃止時の指定資産100%burn、検証用途bondの一律BFTburn保護とCourt個別slash分離を採択する。今回の添付内で同番号の主文書が未使用と確認した範囲の割当で、未取得remoteの未使用保証ではない。次のpost-consolidation候補はRFC-0070／ADR-0238。既存番号・wire・runtime・過去の採択記録を再利用/上書きしない。
+
+最新の個別Court slashについて、実回収MISAKA Sの49%をPanel/Gate C合計へ、その残差51%をburnする。受取資格・自己slash受領禁止・同一offence一回払いをRFC0069/ADR0237へ含める。BFT恒久廃止100%burnとは別であり、追加採番はしない。
+
+## 2026-11-26 MWA1設計案
+
+[RFC-0070](../rfc/0070-model-work-accounting-and-exec-credit.md)／[ADR-0238](../adr/0238-model-work-accounting-and-exec-credit.md)を提供treeの未使用番号として追加する。状態はPROPOSED_DESIGN_NOT_ACTIVATED。次のpost-consolidation候補はRFC-0071／ADR-0239。未取得remoteの予約は未確認。既存番号・wire・fenceは変更しない。

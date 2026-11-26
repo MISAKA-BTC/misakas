@@ -263,10 +263,39 @@
       "adr_path": "docs/adr/0235-model-admission-kernel-auto-and-bft-decision.md",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "audit": "Allocation checked in supplied 7dddad729 archive only. MAD2 two routes; no runtime/wire allocation."
+    },
+    {
+      "date": "2026-11-26",
+      "rfc": "0068",
+      "rfc_path": "docs/rfc/0068-fractional-position-miner-rewards.md",
+      "adr": "0236",
+      "adr_path": "docs/adr/0236-fractional-position-miner-rewards.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adopted_by": "user",
+      "audit": "Unused RFC0068/ADR0236 checked in supplied archive. Final user split 50% Miner POSITION cost / 20% LP POSITION cost / 20% MISAKA LP / 5% Panel-Gate C MISAKA / 5% BFT MISAKA; all-model unification and fractional POSITION. Same-day 80/20, W/P and 40/15 formulations superseded. No runtime/wire activation."
+    },
+    {
+      "date": "2026-11-26",
+      "rfc": "0069",
+      "rfc_path": "docs/rfc/0069-bft-model-retirement-and-role-bonds.md",
+      "adr": "0237",
+      "adr_path": "docs/adr/0237-bft-model-retirement-and-role-bonds.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adopted_by": "user",
+      "audit": "Unused RFC0069/ADR0237 checked in supplied archive. BMR1 model retirement100%burn, role-scoped verification protection; recurring BFT5% under final 50/20/20/5/5. Individual Court recovered MISAKA split49% eligible Panel/Gate C combined and residual51%burn, no offender self-reward or duplicate offence reward; no retirement bounty. No runtime/wire activation."
+    },
+    {
+      "date": "2026-11-26",
+      "rfc": "0070",
+      "rfc_path": "docs/rfc/0070-model-work-accounting-and-exec-credit.md",
+      "adr": "0238",
+      "adr_path": "docs/adr/0238-model-work-accounting-and-exec-credit.md",
+      "status": "PROPOSED_DESIGN_NOT_ACTIVATED",
+      "audit": "MWA1 requested design, allocated in supplied MOE3/BMR1 archive only. Common work meter and pre-fixed FOW1 ticket, proportional award budget and finite EXEC credits. No runtime/wire activation."
     }
   ],
   "next_post_consolidation": {
-    "rfc": "0068",
-    "adr": "0236"
+    "rfc": "0071",
+    "adr": "0239"
   }
 }

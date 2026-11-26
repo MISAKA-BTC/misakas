@@ -4,13 +4,15 @@
 
 > 新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を参照してください。
 
-> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。
+> **BFT継続報酬・恒久廃止の後続正本。** [BMR1移行](../governance/model-retirement-transition.md)とRFC0069/ADR0237を優先します。BFTは共通C分割の5%継続報酬、Panel/Gate Cは5% MISAKA。正規モデル廃止で対象LP内actual MISAKA・登録者責任bond・MINING bond・未確定mining報酬を100%burn/失効。全検証bondは不正者も一律BFTburn対象外、個人不正はCourt個別slash、実回収MISAKAの49%をPanel/Gate C合計・残差51%burn。自己slash受領と同一offence二重報酬を禁止。正当な検証報酬と他モデルを保護、用途別lot分離・重複担保/責任中用途変更禁止。BFTは没収を受け取らず廃止bounty0。旧10%と可変W/P前段は置換済みです。
+
+> **モデル採用経路の継承。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)のkernel自動採用/BFT YES・NOを継承します。MOE3ではgenesisを含む全モデルを同じ管理対象とし、旧GENESIS免除とforkの特別経済区分は旧profileに限定します。技術互換・個別claim検証を維持します。
 
 > **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
 
 > **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
 
-> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
+> **モデル・経済条件の最新正本。** [MOE3適用・移行](../governance/fractional-position-economics-transition.md)とRFC0068/ADR0236の最終50/20/20/5/5を適用します。同一CからMiner用POSITION購入50%、LP用POSITION購入20%、MISAKA LP20%、Panel/Gate C MISAKA5%、BFT MISAKA5%。F/P/A/Jをfloor、Dを残差、B=D+Jで70%一括購入、LP量floor(qJ/B)・Miner残差。全モデル1.0・一意市場・小数8桁・MAD2管理、通常burn5%/creator1%又は0%を維持します。同日途中の80/20/q4・W/P前段・BFT10%は置換済みです。設計採択・未native有効化。
 
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
 
@@ -29,12 +31,12 @@
 | RFC-0011 | [Permissionless model onboarding with probabilistic constraint verification and court on di…](0011-permissionless-model-and-long-context-onboarding.md) | 原文と後続改定を参照 |
 | RFC-0012 | [PALW-only consensus and native EVM settlement: retire DNS validators and their reorg veto](0012-palw-only-consensus-and-native-evm-settlement.md) | 原文と後続改定を参照 |
 | RFC-0013 | [Reproducible layouts and resource-bounded model onboarding tools](0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md) | 原文と後続改定を参照 |
-| RFC-0014 | [Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ](0014-panel-independent-fraud-prosecution.md) | 原文と後続改定を参照 |
+| RFC-0014 | [Panel多数派に依存しないPALW fraud prosecution: 1人の正直なverifierから有界の客観証拠へ](0014-panel-independent-fraud-prosecution.md) | 個別反証責任を継承 / 新回収分配49/51はRFC0069優先 |
 | RFC-0015 | [Panel=0: 固定Panelからpermissionless verifierとobjective fraud proofへ移行する](0015-panel-free-permissionless-verification.md) | 原文と後続改定を参照 |
 | RFC-0016 | [bond加重のブロック生成機会と弾力的Final容量: 物理ブロック機会をbondへ接続する](0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md) | 採用設計・測定待ち・休眠 |
-| RFC-0017 | [モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)](0017-model-eligibility-examination-and-renewal.md) | 二階層採用・旧審査撤回 |
+| RFC-0017 | [モデル階層: genesis・年次フォーク 1.0、登録モデル 0.3(モデル単位の審査は廃止)](0017-model-eligibility-examination-and-renewal.md) | 旧二階層の記録 / MOE3全モデル1.0はRFC0068優先 |
 | RFC-0018 | [DAGを最大限に活用する設計変更: 多モデル並行生成、特権なきPanel anchor、SecurityCertified(Gate C)とDNS廃止後の収束](0018-dag-parallel-multi-model-consensus.md) | Draft / 個別採択あり |
-| RFC-0019 | [年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変](0019-annual-model-upgrade.md) | Draft / 原文参照 |
+| RFC-0019 | [年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変](0019-annual-model-upgrade.md) | 旧年次fork制度の記録 / MOE3は同じ追加手続 |
 | RFC-0020 | [長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md) | Draft / 部分実装 |
 | RFC-0021 | [設計凍結・例外変更手続きと文書の役割分離](0021-design-freeze-and-documentation-governance.md) | Accepted / 文書管理 |
 | RFC-0022 | [初期 mainnet から画像・動画・モデル改善を外す適用範囲](0022-post-mainnet-media-and-model-improvement-scope.md) | Accepted / 延期・無効化方針 |
@@ -69,7 +71,7 @@
 | RFC-0050 | [公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md) | Accepted design / 公開資料・モデル未保有の一人検証、未有効化 |
 | RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | 原文と後続改定を参照 |
 | RFC-0052 | [Hugging Face 固定モデル取得と claim 固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md) | 原文と後続改定を参照 |
-| RFC-0053 | [追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md) | 原文と後続改定を参照 |
+| RFC-0053 | [追加モデルのburnによる停止・登録者による解除](0053-additional-model-burn-pause.md) | 旧burn停止規則 / MOE3全モデル・専用BFT ResumeはRFC0068 §2.4優先 |
 | RFC-0054 | [公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |
 | RFC-0055 | [全モデル共通の受付難易度・資源予約・総搬送1 BPS](0055-global-admission-court-calendar-and-one-bps.md) | 前回提供の設計 / 資源保護・未有効化 |
 | RFC-0056 | [全claim共通の受付難易度とcourt負荷連動制御](0056-global-claim-admission-difficulty.md) | Proposed design / 全claim受付難易度・未実装未有効化 |
@@ -79,8 +81,11 @@
 | RFC-0060 | [モデル登録時の試行別出力束縛と暗号学的非重複性](0060-model-registration-and-attempt-output-binding.md) | 旧MOR1記録 / receiptとコアzを分離、新規採掘はRFC62 |
 | RFC-0061 | [PALW内部閾値beaconと用途別乱数契約](0061-palw-internal-threshold-beacon.md) | ADOPTED_DESIGN_NOT_ACTIVATED / TB1用途別乱数 |
 | RFC-0062 | [PALW-FOW1：推論関数の採掘出力と新規仕事の適格性](0062-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1コア出力・費用適格性 |
-| RFC-0063 | [追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転](0063-additional-model-option-economics.md) | 旧MOE1記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
-| RFC-0064 | [報酬30%買付・20%永久流動性・余剰Position burn](0064-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2整数買付・永久流動性・余剰burn |
+| RFC-0063 | [追加モデル限定MisakaOption・50%買上げ・5%/3%手数料・直接移転](0063-additional-model-option-economics.md) | 旧MOE1記録 / 新経済はRFC0068/ADR0236のMOE3優先、未有効化 |
+| RFC-0064 | [報酬30%買付・20%永久流動性・余剰Position burn](0064-reward-buy-and-permanent-liquidity.md) | 旧MOE2記録 / MOE3の精度・配分・feeはRFC0068優先 |
 | RFC-0065 | [MAS1：モデル追加時の構造検査・実用性条件とBFT停止](0065-model-admission-screening-and-bft-stop.md) | MAS1自動審査・停止 / MAD2のBFT採用はRFC0067優先 |
 | RFC-0066 | [QF1：Qwen3-8Bを用いるFOW1の具体的実行・Readout](0066-qwen3-fow1-execution-and-readout.md) | ADOPTED_DESIGN_NOT_ACTIVATED / QF1 Qwen3整数実行・37-vector Readout |
-| RFC-0067 | [MAD2：kernel自動追加とBFT YES/NOによるモデル採用](0067-model-admission-kernel-auto-and-bft-decision.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAD2自動kernel採用又はBFT YES/NO・証明提出不要 |
+| RFC-0067 | [MAD2：kernel自動追加とBFT YES/NOによるモデル採用](0067-model-admission-kernel-auto-and-bft-decision.md) | MAD2二経路を継承 / MOE3はgenesisを含め管理対象、RFC0068優先 |
+| RFC-0068 | [MOE3：小数POSITION・全モデル統一・50/20/20/5/5配分](0068-fractional-position-miner-rewards.md) | ADOPTED_DESIGN_NOT_ACTIVATED / 全モデル1.0・小数POSITION・最終50/20/20/5/5 |
+| RFC-0069 | [BMR1：モデル恒久廃止・用途別bond・Court slash 49/51](0069-bft-model-retirement-and-role-bonds.md) | ADOPTED_DESIGN_NOT_ACTIVATED / BMR1継続BFT5%・恒久廃止・用途別bond |
+| RFC-0070 | [MWA1：モデル別仕事量認定・FOW1報酬・EXEC credit](0070-model-work-accounting-and-exec-credit.md) | PROPOSED_DESIGN_NOT_ACTIVATED / MWA1モデル仕事量・FOW1報酬・EXEC credit |

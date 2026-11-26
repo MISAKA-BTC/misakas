@@ -1,5 +1,10 @@
 # 文書索引（互換入口）
 
+## 2026-11-26 MWA1 — モデル別仕事量・報酬・EXEC credit
+
+**PROPOSED_DESIGN_NOT_ACTIVATED**。[RFC0070](rfc/0070-model-work-accounting-and-exec-credit.md)／[ADR0238](adr/0238-model-work-accounting-and-exec-credit.md)をモデル別仕事量認定の設計案として追加する。FOW1一試行一Ticket・事前固定targetを維持し、共通meter・ModelWorkProfile・当選原資の認定仕事量比例・有限EXEC creditを接続する案。BFTは任意倍率を付けず、旧MOE2・genesis管理免除を復活させない。MOE3全モデル1.0・50/20/20/5/5、BMR1の49/51個別slashと100%廃止burn、独立Gate Cを維持する。共通carrier 1 BPS、台帳確定600秒は設計目標。120秒計画epoch・原期限・公開fence・QF1 REVIEW_HOLDは変更しない。詳細式の採択、実装、実測、公開有効化は別工程。
+
+
 <!-- MAD2-ADOPTED-20261123-BEGIN -->
 ## 2026-11-23 後続採択 — 二経路モデル採用 MAD2
 

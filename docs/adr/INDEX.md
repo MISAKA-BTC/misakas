@@ -4,13 +4,15 @@
 
 > 新規採掘は [TB1/FOW1移行契約](../governance/palw-tb1-fow1-transition.md) を参照してください。
 
-> **モデル採用・管理の最新規則。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)とRFC0067/ADR0235を優先します。追加モデルは自動kernel審査又は証明提出なしのBFT YES/NOで採用し、両経路ともBFT管理対象です。元genesisだけはBFTの追加・変更・停止・解除の対象外。BFTで追加できるforkモデルはgenesis同様の経済扱いですが停止対象です。技術互換・個別claim検証は維持します。旧UNKNOWN一律停止はAUTO側と旧profileの記録として読み、BFT採用へ適用しません。
+> **BFT継続報酬・恒久廃止の後続正本。** [BMR1移行](../governance/model-retirement-transition.md)とRFC0069/ADR0237を優先します。BFTは共通C分割の5%継続報酬、Panel/Gate Cは5% MISAKA。正規モデル廃止で対象LP内actual MISAKA・登録者責任bond・MINING bond・未確定mining報酬を100%burn/失効。全検証bondは不正者も一律BFTburn対象外、個人不正はCourt個別slash、実回収MISAKAの49%をPanel/Gate C合計・残差51%burn。自己slash受領と同一offence二重報酬を禁止。正当な検証報酬と他モデルを保護、用途別lot分離・重複担保/責任中用途変更禁止。BFTは没収を受け取らず廃止bounty0。旧10%と可変W/P前段は置換済みです。
+
+> **モデル採用経路の継承。** [MAD2適用・移行](../governance/model-admission-dual-route-transition.md)のkernel自動採用/BFT YES・NOを継承します。MOE3ではgenesisを含む全モデルを同じ管理対象とし、旧GENESIS免除とforkの特別経済区分は旧profileに限定します。技術互換・個別claim検証を維持します。
 
 > **Qwen向け具体profile。** [QF1適用・移行](../governance/qwen-fow1-profile-transition.md)とRFC0066/ADR0234が36層Qwen3の整数実行・37-vector Readoutを固定します。費用定理・G-USE・native有効化は未完で、MAS1のUNKNOWN停止を維持します。
 
 > **モデル採掘資格の後続正本。** [MAS1適用・移行](../governance/model-admission-safety-transition.md)とRFC0065/ADR0233を優先します。構造検査・G-USE・FOW1三gate・停止状態を共通確認し、UNKNOWNの仮承認をしません。BFTは限定された安全停止であり、費用定理や台帳finalityを置換しません。
 
-> **経済条件の後続正本。** [MOE2適用・移行契約](../governance/model-option-economics-transition.md)とRFC0064/ADR0232を優先します。追加モデルの30%買付・20%永久LP・余剰Position burn、整数残差のworker配分、追加登録時の市場原子生成、coreのR全額Miner配分を採択済み・未有効化として扱います。通常AMMの5%/3%、直接移転とTB1/FOW1の正当性・乱数・採掘適格性・Court条件は維持します。旧MOE1の50%取得・全retireと過去実装は[保存原本と改訂記録](../maintenance/revisions/2026-11-20-permanent-liquidity/README.md)で追跡し、新規MOE2のfallbackにしません。
+> **モデル・経済条件の最新正本。** [MOE3適用・移行](../governance/fractional-position-economics-transition.md)とRFC0068/ADR0236の最終50/20/20/5/5を適用します。同一CからMiner用POSITION購入50%、LP用POSITION購入20%、MISAKA LP20%、Panel/Gate C MISAKA5%、BFT MISAKA5%。F/P/A/Jをfloor、Dを残差、B=D+Jで70%一括購入、LP量floor(qJ/B)・Miner残差。全モデル1.0・一意市場・小数8桁・MAD2管理、通常burn5%/creator1%又は0%を維持します。同日途中の80/20/q4・W/P前段・BFT10%は置換済みです。設計採択・未native有効化。
 
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
 
@@ -43,12 +45,12 @@
 | ADR-0025 | [Chain participation and IBD candidate selection](0025-chain-participation-and-ibd-candidate-selection.md) | 原文と後続改定を参照 |
 | ADR-0026 | [Current PALW architecture on testnet-11](0026-current-palw-testnet11-architecture.md) | 原文と後続改定を参照 |
 | ADR-0026 | [PALW v2 verification architecture — borrow Ambient's shape, strengthen the proof](0026-palw-v2-runtime-separated-verification.md) | 原文と後続改定を参照 |
-| ADR-0027 | [PALW-S — unilateral fraud proofs; no BFT, no challenge randomness, slash-terminal](0027-palw-slash-unilateral-fraud-proofs.md) | 原文と後続改定を参照 |
+| ADR-0027 | [PALW-S — unilateral fraud proofs; no BFT, no challenge randomness, slash-terminal](0027-palw-slash-unilateral-fraud-proofs.md) | 旧slash規則を保持 / 新個別Court49/51はRFC0069優先 |
 | ADR-0028 | [PALW challenge sampling — a scheduler for re-execution, never a verdict](0028-palw-challenge-sampling-protocol.md) | 原文と後続改定を参照 |
 | ADR-0029 | [PALW chain carriage — the objects ride the rails the fork already built](0029-palw-chain-carriage.md) | 原文と後続改定を参照 |
 | ADR-0030 | [The PALW step function, pinned at tile granularity — shape profile v3](0030-palw-step-function-shape-profile.md) | 原文と後続改定を参照 |
 | ADR-0031 | [Canonical transcendentals — exp and log are algorithms, not functions](0031-palw-canonical-transcendentals.md) | 原文と後続改定を参照 |
-| ADR-0032 | [PALW fee-bond escrow — pricing calls and paying challengers without new covenants](0032-palw-fee-bond-escrow.md) | 原文と後続改定を参照 |
+| ADR-0032 | [PALW fee-bond escrow — pricing calls and paying challengers without new covenants](0032-palw-fee-bond-escrow.md) | 旧報酬/escrow記録 / 新Panel・Gate C合計49%とburn51%はADR0237優先 |
 | ADR-0033 | [PALW V1 credit overlay（不採用）](0033-palw-credit-gate-wiring.md) | 原文と後続改定を参照 |
 | ADR-0034 | [PALW re-verification routing — four execution-class families, five model bands, one decidi…](0034-palw-execution-class-model-band-routing.md) | 原文と後続改定を参照 |
 | ADR-0035 | [The public PALW testnet is testnet-11, continued — and it pins its determinism class at th…](0035-palw-public-testnet-strategy.md) | 原文と後続改定を参照 |
@@ -102,21 +104,21 @@
 | ADR-0084 | [The ids ride, the capture stays home — a model-class claim serves its answer, never its hi…](0084-the-ids-ride-the-capture-stays-home.md) | 原文と後続改定を参照 |
 | ADR-0085 | [The close is assembled from what the executor served — a disputed tile, not a capture](0085-the-close-is-assembled-from-what-was-served.md) | 原文と後続改定を参照 |
 | ADR-0086 | [the opening carries the fold, not the leaves](0086-the-opening-carries-the-fold-not-the-leaves.md) | 原文と後続改定を参照 |
-| ADR-0087 | [追加モデルのMisakaOption市場・送金・保存則](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0087 | [追加モデルのMisakaOption市場・送金・保存則](0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0088 | [the class keeps its graph; a line keeps its owner, and the owner keeps publishing](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) | 原文と後続改定を参照 |
-| ADR-0089 | [native正本とEVMのMisakaOption転送・承認・決済](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
-| ADR-0090 | [The pair is seeded with real BILI, locked for good, and a position is whole](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) | 原文と後続改定を参照 |
-| ADR-0091 | [追加モデル報酬の30%購入・20%永久LP・余剰burn](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0089 | [native正本とEVMのMisakaOption転送・承認・決済](0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
+| ADR-0090 | [The pair is seeded with real BILI, locked for good, and a position is whole](0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
+| ADR-0091 | [追加モデル報酬の30%購入・20%永久LP・余剰burn](0091-the-reward-buys-the-pair-and-no-holder-is-paid.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0092 | [The ladder is minted once, and the wall clock is what binds](0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md) | 原文と後続改定を参照 |
 | ADR-0093 | [The court can try a fused row; the responder is what is missing](0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md) | 原文と後続改定を参照 |
 | ADR-0094 | [A seed is paid in as many transactions as it takes](0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md) | 原文と後続改定を参照 |
-| ADR-0095 | [譲渡可能な追加モデルPositionと現在保有に結び付くmembership](0095-a-position-is-a-membership-not-an-income.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0095 | [譲渡可能な追加モデルPositionと現在保有に結び付くmembership](0095-a-position-is-a-membership-not-an-income.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0096 | [The app you already use is the entrance, and the shape of the answer is committed](0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md) | 原文と後続改定を参照 |
 | ADR-0097 | [A model's fit is a lookup, and the entrance says its limits before the first token](0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md) | 原文と後続改定を参照 |
 | ADR-0098 | [The panel's coverage is a number, and a seat that found a lie files nothing else](0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md) | 原文と後続改定を参照 |
 | ADR-0099 | [The adder measures, the chain recomputes, and a seat holds a shard](0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md) | 原文と後続改定を参照 |
 | ADR-0100 | [A model is data: the one-move court, the held measurement and the licence per shard, and t…](0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md) | 原文と後続改定を参照 |
-| ADR-0101 | [chain認証membershipとPositionの直接送受信](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0101 | [chain認証membershipとPositionの直接送受信](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0102 | [The embedding lift is read per token, and a kernel a network has not armed is not in its i…](0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md) | 原文と後続改定を参照 |
 | ADR-0103 | [The context is held off the chain, and the chain carries a root, an opening and a logarith…](0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md) | 原文と後続改定を参照 |
 | ADR-0105 | [A heartbeat never turns a bonded block red, and the clock steps aside for a draw that has …](0105-a-heartbeat-never-turns-a-bonded-block-red.md) | 原文と後続改定を参照 |
@@ -127,7 +129,7 @@
 | ADR-0110 | [A context limit is activated from reproducible public vectors, not the maintainer's workst…](0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md) | 原文と後続改定を参照 |
 | ADR-0111 | [A seat may demand the committed leaf it needs to judge](0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md) | 原文と後続改定を参照 |
 | ADR-0112 | [A class's weights are read within a budget the operator states, and the budget is a fifth …](0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md) | 原文と後続改定を参照 |
-| ADR-0114 | [通常AMMのburn 5%・owner総leg 3%と版付き適用](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0114 | [通常AMMのburn 5%・owner総leg 3%と版付き適用](0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0115 | [A pending transaction is announced until it lands](0115-a-pending-transaction-is-announced-until-it-lands.md) | 原文と後続改定を参照 |
 | ADR-0116 | [An attention history is the class's, and the held regime reduces over its own width](0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md) | 原文と後続改定を参照 |
 | ADR-0117 | [A draw is one forward](0117-a-draw-is-one-forward.md) | 原文と後続改定を参照 |
@@ -137,7 +139,7 @@
 | ADR-0121 | [A held capture is served from its fold as the replay streams, and a node holds two ladders](0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md) | 原文と後続改定を参照 |
 | ADR-0122 | [Mining is a purpose: an operator runs one command and reads one work id](0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md) | 原文と後続改定を参照 |
 | ADR-0123 | [The epoch progressively releases unused class budget](0123-the-epoch-progressively-releases-unused-class-budget.md) | 原文と後続改定を参照 |
-| ADR-0124 | [モデル分類別のMiner報酬・Panel原資・責任予約](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0124 | [モデル分類別のMiner報酬・Panel原資・責任予約](0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0125 | [The execution lane is a second lane inside the cadence, and it widens one permit at a time](0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md) | 原文と後続改定を参照 |
 | ADR-0126 | [The validator carve drops to a fifth, and the stake reorg gate stays](0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md) | 原文と後続改定を参照 |
 | ADR-0127 | [PALW settles on its own, and its terms are not DNS terms](0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md) | 原文と後続改定を参照 |
@@ -171,7 +173,7 @@
 | ADR-0155 | [testnet-12's second post-launch flag day: two fences at DAA 1,300](0155-testnet-12-flag-day-daa-1300.md) | 原文と後続改定を参照 |
 | ADR-0160 | [Claim capacity is separated from collateral price (v3): the bond is one shared guarantee s…](0160-claim-capacity-separation.md) | 原文と後続改定を参照 |
 | ADR-0161 | [A claim is not an emission: multi-claim carriage under a fixed per-DAA reward budget](0161-a-claim-is-not-an-emission.md) | 原文と後続改定を参照 |
-| ADR-0162 | [The pair opens on a virtual reserve](0162-the-pair-opens-on-a-virtual-reserve.md) | 原文と後続改定を参照 |
+| ADR-0162 | [The pair opens on a virtual reserve](0162-the-pair-opens-on-a-virtual-reserve.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0163 | [An adapter class is its parent plus an adapter, and is listed](0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md) | 原文と後続改定を参照 |
 | ADR-0165 | [Useful work carries the clock: BASE-0 remains the idle-only bonded floor (A″), REAL attemp…](0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md) | 原文と後続改定を参照 |
 | ADR-0166 | [Verifier unavailability is not producer fraud](0166-verifier-unavailability-is-not-producer-fraud.md) | 原文と後続改定を参照 |
@@ -186,9 +188,9 @@
 | ADR-0174 | [Token name Misaka, ticker BILI; address prefixes stay unchanged](0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md) | 原文と後続改定を参照 |
 | ADR-0175 | [新規モデル登録は自由、登録モデルは永久不変](0175-registered-models-are-permanently-immutable.md) | 原文と後続改定を参照 |
 | ADR-0176 | [Bond bounds PALW claim capacity, blocks, rewards and Final weight](0176-bond-bounds-palw-production-rewards-and-final-weight.md) | 原文と後続改定を参照 |
-| ADR-0177 | [モデル配分・owner収入とMOE2の分類別報酬](0177-model-bond-allocation-without-availability-consensus.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0177 | [モデル配分・owner収入とMOE2の分類別報酬](0177-model-bond-allocation-without-availability-consensus.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0178 | [The fork choice heals a partition on bonded participation: one search over every tip, econ…](0178-fork-choice-heals-a-partition-on-bonded-participation.md) | 原文と後続改定を参照 |
-| ADR-0179 | [モデル二階層と追加モデル専用MisakaOption](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2経済条項適用・旧採択と実装履歴は別保存 |
+| ADR-0179 | [モデル二階層と追加モデル専用MisakaOption](0179-model-tiers-genesis-annual-1-0-registered-0-3.md) | MOE3経済はRFC0068/ADR0236優先 / 旧採択・実装履歴を保持 |
 | ADR-0180 | [PALW のみの合意:BFT の validator を使わない](0180-palw-only-consensus-no-bft-validators.md) | 台帳BFT禁止を維持 / モデル採用と停止はADR0235/0233 |
 | ADR-0181 | [採用済み設計を原則凍結し、重大問題時のみ新規 RFC・ADR で変更する](0181-design-freeze-and-controlled-change.md) | Accepted / 原則凍結 |
 | ADR-0182 | [画像・動画経路とモデル改善を mainnet 後へ延期し、当面無効にする](0182-defer-media-and-model-improvement-until-post-mainnet.md) | Accepted / 延期・無効化方針 |
@@ -232,7 +234,7 @@
 | ADR-0218 | [公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md) | Accepted design / 一人前提・最低一件承認の追加採択、未有効化 |
 | ADR-0219 | [受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md) | 原文と後続改定を参照 |
 | ADR-0220 | [Hugging Face取得とclaim固有の資料供給を分離する](0220-hugging-face-model-acquisition-and-claim-materials.md) | 原文と後続改定を参照 |
-| ADR-0221 | [追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md) | 原文と後続改定を参照 |
+| ADR-0221 | [追加モデルの取得可否認定をburn停止・解除に置き換える](0221-additional-model-burn-pause.md) | 旧追加限定burn停止 / 共通化と解除権限はADR0236優先 |
 | ADR-0222 | [公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |
 | ADR-0223 | [全モデル共通の受付難易度・資源予約・総搬送1 BPS](0223-global-admission-court-calendar-and-one-bps.md) | 前回提供の判断記録 / 未有効化 |
 | ADR-0224 | [全claim共通の受付難易度とcanonical負荷観測](0224-global-claim-admission-difficulty.md) | Proposed design / CAD1の判断案・未有効化 |
@@ -242,8 +244,11 @@
 | ADR-0228 | [モデル登録で採掘試行に束縛した認証出力形式を要求する](0228-model-registration-and-attempt-output-binding.md) | MOR1の履歴と今回の置換 / ADR230のコアz条件優先 |
 | ADR-0229 | [全対象乱数源をPALW内部閾値beaconへ統合する](0229-palw-internal-threshold-beacon.md) | ADOPTED_DESIGN_NOT_ACTIVATED / TB1選択・移行 |
 | ADR-0230 | [推論関数の採掘出力と反復費用検査を新規採掘の共通条件にする](0230-palw-function-output-and-work-admissibility.md) | ADOPTED_DESIGN_NOT_ACTIVATED / FOW1登録・一回会計 |
-| ADR-0231 | [追加モデル限定MisakaOptionと新しい報酬・売買・移転規則](0231-additional-model-option-economics.md) | 旧MOE1判断記録 / 新規30%買付・20%永久LPはRFC0064/ADR0232優先、未有効化 |
-| ADR-0232 | [30%買付・20%永久流動性・余剰Position burnを採択する](0232-reward-buy-and-permanent-liquidity.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MOE2非償還receipt・有限終端・分類制約 |
+| ADR-0231 | [追加モデル限定MisakaOptionと新しい報酬・売買・移転規則](0231-additional-model-option-economics.md) | 旧MOE1判断記録 / 新経済はRFC0068/ADR0236のMOE3優先、未有効化 |
+| ADR-0232 | [30%買付・20%永久流動性・余剰Position burnを採択する](0232-reward-buy-and-permanent-liquidity.md) | 旧MOE2判断記録 / MOE3はADR0236、永久LP保護を継承 |
 | ADR-0233 | [モデル追加時の構造・実用性検査と限定BFT停止を採択する](0233-model-admission-screening-and-bft-stop.md) | MAS1の履歴 / BFT採用の追加はADR0235優先 |
 | ADR-0234 | [Qwen3の整数実行と37-vector ReadoutをFOW1の具体profileとして採択する](0234-qwen3-fow1-execution-and-readout.md) | ADOPTED_DESIGN_NOT_ACTIVATED / QF1位置・codec固定、費用・品質未認定 |
-| ADR-0235 | [モデル採用をkernel自動追加とBFT YES/NOへ分ける](0235-model-admission-kernel-auto-and-bft-decision.md) | ADOPTED_DESIGN_NOT_ACTIVATED / MAD2二経路・技術互換とclaim検証を維持 |
+| ADR-0235 | [モデル採用をkernel自動追加とBFT YES/NOへ分ける](0235-model-admission-kernel-auto-and-bft-decision.md) | MAD2採用経路を継承 / origin別免除はMOE3で廃止 |
+| ADR-0236 | [小数POSITION・全モデル1.0・50/20/20/5/5](0236-fractional-position-miner-rewards.md) | ADOPTED_DESIGN_NOT_ACTIVATED / 固定5leg・合計70%購入・取得原価比LP・creator1%又は0% |
+| ADR-0237 | [モデル廃止と個人責任の分離・検証bond保護・49%発見報酬](0237-bft-model-retirement-and-role-bonds.md) | ADOPTED_DESIGN_NOT_ACTIVATED / 検証bond保護・Court個別slash・廃止bountyなし |
+| ADR-0238 | [モデル別仕事量とFOW1の報酬・有限EXEC生成権の接続](0238-model-work-accounting-and-exec-credit.md) | PROPOSED_DESIGN_NOT_ACTIVATED / 共通meter・固定target・比例原資 |

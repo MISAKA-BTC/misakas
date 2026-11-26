@@ -1,5 +1,65 @@
 # パラメーター台帳 — 数値変更1件(2026-10-22 記録: 平均期間 30→7 日)
 
+<!-- BMR1-ADOPTED-20261126-BEGIN -->
+## 2026-11-26 最終BMR1台帳 — 継続BFT5%・恒久廃止
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0069](../rfc/0069-bft-model-retirement-and-role-bonds.md)／[ADR0237](../adr/0237-bft-model-retirement-and-role-bonds.md)。BFT報酬はMOE3の同一C分割の5%であり、先行10%を適用しない。Panel/Gate Cは同じ分割の5% MISAKA。
+
+| キー | 現行BMR1 | 対象・境界 |
+| --- | --- | --- |
+| `bmr1_bft_coinbase_permille` | 50‰ | 継続報酬、廃止件数・没収額と無関係 |
+| `bmr1_retirement_lp_misaka_burn_permille` | 1,000‰ | 当該pool actual MISAKA、virtual/receipt累計を数えない |
+| `bmr1_retirement_registration_bond_burn_permille` | 1,000‰ | 当該modelの登録者責任lot |
+| `bmr1_retirement_mining_bond_burn_permille` | 1,000‰ | 当該modelのMINING lot |
+| `bmr1_unsettled_mining_reward_forfeit_permille` | 1,000‰失効/burn | 未発行予約失効と実資産burnの二重計上禁止 |
+| `bmr1_verification_bond_bft_burn_permille` | 0‰ | 全Panel/Gate C検証lot。不正者も保護、Court個別slashは維持 |
+| `bmr1_legitimate_verification_reward_preserved` | 支払維持 | 正当に成立した検証報酬のMISAKA払い |
+| `bmr1_retirement_bounty` | 0 | BFTは没収を受け取らない |
+| `bmr1_role_lot_isolation` | 必須 | MINING6,000/PANEL4,000なら前者のみburn。他model無影響、重複担保/責任中用途変更禁止 |
+| `bmr1_court_verification_reward_permille` | 490‰、E=floor(490S/1000) | Court実回収MISAKA SからPanel/Gate C合計へ。各49%ではない |
+| `bmr1_court_burn_residual` | T=S−E（名目510‰） | 端数はburn、E+T=S |
+| `bmr1_court_reward_once_no_self` | 自己slash受領禁止・offence一回 | 正規発見/立証資格plan。BFT廃止100%burnと別会計 |
+
+通常LP撤去禁止を維持し、正規BMR1廃止のactual reserve消却だけを限定例外とする。モデル廃止と個人不正裁定・可逆Pauseを分離する。旧profileの履歴とnativeを保持し、新規実装・移行・公開activationは別工程とする。
+
+**個別Court slashの実回収額は別会計。** 対象offenceから実際に回収したMISAKAをSとし、Panel/Gate C合計の報酬を`E=floor(490S/1000)`、残り`T=S-E`をburnとする（名目49%/51%、端数はburn）。49%は両役割の合計であり、それぞれ49%ではない。不正発見・立証の資格を認証したplanで一回配分し、不正本人の自己slash受領と同一offenceの二重報酬を禁止する。BFTモデル廃止の100%burn資産をSへ加えず、BFTの没収受取・廃止bountyは0のまま。検証bondがBFT一律burnから保護されることは、本人のCourt個別slash免除ではない。
+<!-- BMR1-ADOPTED-20261126-END -->
+
+<!-- MOE3-ADOPTED-20261126-BEGIN -->
+## 2026-11-26 最終MOE3台帳 — 固定50/20/20/5/5
+
+**ADOPTED_DESIGN_NOT_ACTIVATED**。[RFC0068](../rfc/0068-fractional-position-miner-rewards.md)／[ADR0236](../adr/0236-fractional-position-miner-rewards.md)。ユーザー最新指定を優先する。同日途中の80%買付/q4、可変Panel W/P前段、BFT10%は現行値ではない。
+
+| キー | 現行MOE3 | 単位・端数・対象 |
+| --- | --- | --- |
+| `moe3_distribution_basis` | 同一coinbase原資Cを一度分割 | C=F+P+A+J+D=B+A+P+F |
+| `moe3_miner_purchase_residual` | D=C−F−P−A−J（名目50%） | Miner POSITION購入原価。全通貨端数をDへ |
+| `moe3_lp_position_purchase_permille` | J=floor(200C/1000) | LP POSITION購入原価、20% |
+| `moe3_lp_misaka_permille` | A=floor(200C/1000) | MISAKA LP、20% |
+| `moe3_panel_gatec_misaka_permille` | P=floor(50C/1000) | Panel/Gate C MISAKA、5%。内部配分は正規plan |
+| `bmr1_bft_coinbase_permille` | F=floor(50C/1000) | BFT継続報酬、5%。同じCから一度だけ |
+| `moe3_purchase_permille` | B=D+J（名目70%） | 2本のPOSITION購入を一括執行。独立floor(600C/1000)で再計算しない |
+| `moe3_lp_position_fraction` | ell=floor(qJ/B)（B>0） | 単一モデルへC全額・C20倍数の例なら2q/7。一般/複数モデルは実予算比floor(q_i J_i/B_i) |
+| `moe3_miner_position_residual` | m=q−ell | POSITION丸め残差をMinerへ。名目50%相当 |
+| `moe3_position_decimals` | 8、1 POSITION=10^8 atoms | 小数対応、旧数量を版付き移行 |
+| `moe3_direct_misaka_reward` | Minerへの直接MISAKAは0 | Panel/Gate CのPとBFTのFはMISAKA |
+| `moe3_normal_owner_fee_permille` | creatorあり10‰、正規genesisなし0‰ | 通常売買gross、netは名目94%又は95% |
+| `moe3_normal_burn_fee_permille` | 50‰を維持 | 通常売買gross。不存在creator分の追加burn禁止 |
+| `moe3_internal_fee_permille` | 0を維持 | 内部購入・LP・配布の追加AMM feeなし |
+| `moe3_model_coefficient` | 全モデル1.0 | 旧core1.0/追加0.3を統一 |
+| `moe3_registered_tier_cap` | 追加専用κを廃止 | 共通発行・資本・責任capは維持 |
+| `moe3_market_eligibility` | 全モデルに一意市場 | genesisもPOSITION・同じ配分 |
+| `moe3_model_management_scope` | 全モデルMAD2管理 | 旧genesis免除廃止、台帳finality権限は付与しない |
+| `moe3_fork_designation` | 新特別区分を廃止 | 追加と同手続、旧originは履歴 |
+| `moe3_burn_pause_scope` | 全モデル | 規定停止burn・支払者認証・旧state/sequence/前操作 |
+| `moe3_burn_resume_authorization` | native登録者OR専用BFT BurnResume | 両方で規定解除burn必須、独立safety stop/RETIREDは解除しない |
+| `moe3_pause_state_migration` | PAUSED/sequence/前操作保存、旧pending drain | 自動解除なし、原期限保持 |
+
+[検証記録](../maintenance/revisions/2026-11-26-fractional-position/README.md)は整数保存則と端数を扱う。旧MOE2の率・途中案・旧tier値は歴史であり新規受理へ使わない。native/RPC/ABI・移行実行・本番有効化は別工程。停止/解除burnの具体額は今回変更しない。
+
+一般/複数モデルでは、RFC0068 §4.3で一度分割したCの各legを結合按分し、各モデルの実予算比`floor(q_i J_i/B_i)`でLP数量を求める。Cが20で割り切れるだけでは各モデルの比率が2/7になるとは限らない。
+<!-- MOE3-ADOPTED-20261126-END -->
+
 <!-- TB1-FOW1-ADOPTED-20261120-BEGIN -->
 ## 2026-11-20 新規profileの適用範囲
 

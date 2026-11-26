@@ -1,0 +1,121 @@
+{
+  "status": "PASS",
+  "scope": "MOE3 50/20/20/5/5 arithmetic, coupled allocation, decimal codec and abstract allocation/market journal",
+  "profile": "MOE3",
+  "position_decimals": 8,
+  "position_scale_atomic_string": "100000000",
+  "nominal_permille": {
+    "miner_position_cost": 500,
+    "lp_position_cost": 200,
+    "lp_misaka": 200,
+    "panel_gate_c_misaka_total": 50,
+    "bft_misaka": 50
+  },
+  "bounded_amount_bits": 128,
+  "bounded_two_factor_product_bits": 256,
+  "native_runtime_tested": false,
+  "network_activation_tested": false,
+  "unittests": {
+    "run": 26,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "measurements": {
+    "coupled_counterexample": {
+      "coinbase_misaka_atoms": "21",
+      "weights": {
+        "a": "1",
+        "b": "4",
+        "c": "4",
+        "d": "4"
+      },
+      "independent_a": {
+        "miner_cost": "1",
+        "lp_position_cost": "1"
+      },
+      "coupled": [
+        {
+          "model": "a",
+          "miner_cost": "2",
+          "lp_position_cost": "1"
+        },
+        {
+          "model": "b",
+          "miner_cost": "3",
+          "lp_position_cost": "1"
+        },
+        {
+          "model": "c",
+          "miner_cost": "3",
+          "lp_position_cost": "1"
+        },
+        {
+          "model": "d",
+          "miner_cost": "3",
+          "lp_position_cost": "1"
+        }
+      ]
+    },
+    "fixed_example": {
+      "coinbase_misaka_atoms": "100000000000",
+      "bft_misaka_atoms": "5000000000",
+      "verification_misaka_atoms": "5000000000",
+      "lp_purchase_misaka_atoms": "20000000000",
+      "miner_purchase_misaka_atoms": "50000000000",
+      "purchase_misaka_atoms": "70000000000",
+      "lp_misaka_atoms": "20000000000",
+      "gross_position_atoms": "411764705882",
+      "lp_position_atoms": "117647058823",
+      "miner_position_atoms": "294117647059",
+      "buy_x": "170000000000",
+      "buy_inventory_position_atoms": "588235294118",
+      "after": {
+        "model_id": "model",
+        "profile": "MOE3",
+        "creator": "creator",
+        "migrated_from": null,
+        "virtual_misaka_atoms": "0",
+        "real_misaka_atoms": "190000000000",
+        "seed_locked_misaka_atoms": "0",
+        "inventory_position_atoms": "705882352941",
+        "holder_position_atoms": "294117647059",
+        "retired_position_atoms": "0",
+        "issued_position_atoms": "1000000000000"
+      }
+    },
+    "price_counterexample": {
+      "buy_spot_misaka_per_position": "85000000000/294117647059",
+      "lp_spot_misaka_per_position": "190000000000/705882352941",
+      "proportional_lp_position_atoms_not_used": "69204152249",
+      "nominal_miner_cost_misaka_atoms": "50000000000",
+      "hypothetical_immediate_gross_sale_misaka_atoms": "55882352941",
+      "hypothetical_creator_present_net_sale_misaka_atoms": "52529411765"
+    },
+    "seeded_random": {
+      "seed": 20261126,
+      "cases": 600,
+      "positive_success": 600,
+      "dust_rejected": 0,
+      "amount_range": "0..10^15 atoms"
+    },
+    "exhaustive": {
+      "cases": 7920,
+      "positive_success": 4325,
+      "dust_rejected": 3355,
+      "zero_noop": 240,
+      "domain": "X=1..12, inventory=1..20 atoms, C=0..32 atoms"
+    }
+  },
+  "limitations": [
+    "Finite probes supplement the elementary identities in MATH.md; they are not an all-input machine proof.",
+    "The journal checks separate P/F reservation and local market atomicity/undo, not DAG consensus, persistence, IBD or native/EVM routing.",
+    "No work qualification, issuance entitlement, panel/court funding, export cap, maturity or deadline is bypassed or verified here.",
+    "No BPS price-limit evaluator is implemented; three-factor comparisons may need checked u512 or exact comparison decomposition.",
+    "Uniform coefficient 1 and no origin branch are reference interfaces; native selection/cap removal is not tested.",
+    "Coupled global budget apportionment is tested separately; the settlement journal is single-model and no native multi-market transaction is implemented.",
+    "Migration is an abstract one-time book. Old wire bytes, allowances, pending claims and authenticated activation snapshots require native integration.",
+    "LiquidityDust still exists at atom precision; no all-state liveness, future price, MEV or profitability guarantee is made."
+  ],
+  "test_transcript": "test_atomicity_at_each_failure_point (test_moe3_reference.ReferenceTests.test_atomicity_at_each_failure_point) ... ok\ntest_coinbase_five_legs_conserve_and_bft_is_only_five_percent_once (test_moe3_reference.ReferenceTests.test_coinbase_five_legs_conserve_and_bft_is_only_five_percent_once) ... ok\ntest_coupled_apportionment_conserves_global_legs_and_tie_order (test_moe3_reference.ReferenceTests.test_coupled_apportionment_conserves_global_legs_and_tie_order) ... ok\ntest_coupled_model_budget_prevents_insufficient_miner_cost_counterexample (test_moe3_reference.ReferenceTests.test_coupled_model_budget_prevents_insufficient_miner_cost_counterexample) ... ok\ntest_decimal_codec_rejects_lossy_noncanonical_inputs (test_moe3_reference.ReferenceTests.test_decimal_codec_rejects_lossy_noncanonical_inputs) ... ok\ntest_decimal_codec_roundtrip_and_json_precision (test_moe3_reference.ReferenceTests.test_decimal_codec_roundtrip_and_json_precision) ... ok\ntest_final_50_20_20_5_5_example_replaces_old_80_percent (test_moe3_reference.ReferenceTests.test_final_50_20_20_5_5_example_replaces_old_80_percent) ... ok\ntest_fixed_lp_can_reduce_post_buy_spot_and_nominal_is_not_price (test_moe3_reference.ReferenceTests.test_fixed_lp_can_reduce_post_buy_spot_and_nominal_is_not_price) ... ok\ntest_internal_operations_are_fee_free_for_every_model (test_moe3_reference.ReferenceTests.test_internal_operations_are_fee_free_for_every_model) ... ok\ntest_market_refusal_preserves_prior_verification_and_bft_rights (test_moe3_reference.ReferenceTests.test_market_refusal_preserves_prior_verification_and_bft_rights) ... ok\ntest_migration_refuses_pending_allowances_unknown_and_overflow (test_moe3_reference.ReferenceTests.test_migration_refuses_pending_allowances_unknown_and_overflow) ... ok\ntest_min_out_is_net_miner_atoms_and_gross_is_checked (test_moe3_reference.ReferenceTests.test_min_out_is_net_miner_atoms_and_gross_is_checked) ... ok\ntest_normal_fees_owner_present_and_absent (test_moe3_reference.ReferenceTests.test_normal_fees_owner_present_and_absent) ... ok\ntest_one_time_migration_preserves_supply_and_price_units (test_moe3_reference.ReferenceTests.test_one_time_migration_preserves_supply_and_price_units) ... ok\ntest_position_remainder_all_goes_to_miner (test_moe3_reference.ReferenceTests.test_position_remainder_all_goes_to_miner) ... ok\ntest_positive_dust_never_partially_commits (test_moe3_reference.ReferenceTests.test_positive_dust_never_partially_commits) ... ok\ntest_quote_overflows_and_invalid_values_leave_state_unchanged (test_moe3_reference.ReferenceTests.test_quote_overflows_and_invalid_values_leave_state_unchanged) ... ok\ntest_seeded_random_preservation_with_virtual_reserve_and_retire_history (test_moe3_reference.ReferenceTests.test_seeded_random_preservation_with_virtual_reserve_and_retire_history) ... ok\ntest_single_settlement_and_receipt_is_not_a_balance (test_moe3_reference.ReferenceTests.test_single_settlement_and_receipt_is_not_a_balance) ... ok\ntest_small_exhaustive_against_independent_exact_input_formula (test_moe3_reference.ReferenceTests.test_small_exhaustive_against_independent_exact_input_formula) ... ok\ntest_undo_replay_restores_all_economic_state_together (test_moe3_reference.ReferenceTests.test_undo_replay_restores_all_economic_state_together) ... ok\ntest_uniform_registration_including_creatorless_genesis (test_moe3_reference.ReferenceTests.test_uniform_registration_including_creatorless_genesis) ... ok\ntest_unsigned_and_wide_arithmetic_boundaries (test_moe3_reference.ReferenceTests.test_unsigned_and_wide_arithmetic_boundaries) ... ok\ntest_valid_u128_boundary_is_not_accidentally_truncated (test_moe3_reference.ReferenceTests.test_valid_u128_boundary_is_not_accidentally_truncated) ... ok\ntest_verification_plan_is_misaka_and_not_invented_half_split (test_moe3_reference.ReferenceTests.test_verification_plan_is_misaka_and_not_invented_half_split) ... ok\ntest_zero_is_noop_no_receipt_no_consumption (test_moe3_reference.ReferenceTests.test_zero_is_noop_no_receipt_no_consumption) ... ok\n\n----------------------------------------------------------------------\nRan 26 tests in 0.294s\n\nOK\n"
+}
