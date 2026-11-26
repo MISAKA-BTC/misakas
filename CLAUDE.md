@@ -14,9 +14,10 @@ ZK などで LLM の計算を証明することは不可能である(ユーザ�
 
 ## 2026-11-26 採択済み設計
 
-- 全モデルの係数は **1.0**。genesis を含む全モデルを BFT モデル管理の対象とし、新規追加・採用の経路は BFT 承認に統一する。KERNEL_AUTO の自動採用を廃止し、kernel 演算、変換、技術互換検査を維持する。BFT 票に数学的定理や費用・品質の証拠提出は必須としない。[RFC-0007](docs/rfc/0007-bft-model-admission.md)
-- MOE3 の配分は Miner 用 POSITION 購入 50%、LP 用 POSITION 購入 20%、MISAKA 永久 LP 20%、Panel/Gate C 5%、BFT 5%。[RFC-0016](docs/rfc/0016-position-market-and-rewards.md)
-- 全モデル共通の burn-pause と正規解除を維持する。BMR1 の恒久廃止は用途別 bond を区別し、規定の対象資産を 100% burn する。個別 Court slash の実回収額は適格者報酬 49%、burn 51% を基本とし、端数と未受給分は RFC の規則に従う。[RFC-0017](docs/rfc/0017-model-stop-and-retirement.md)
+- 全モデルの係数は **1.0**。genesis を含む全モデルを BFT モデル管理の対象とし、新規追加・採用の経路は `BFT_DECISION` に統一する。`KERNEL_AUTO` の自動採用を廃止し、kernel 演算、変換、`BaseCompatible` 技術互換検査を維持する。測定資料は対象へ紐づけて追跡するが、測定証拠の添付・数学的定理・一律合格閾値は票の有効条件にしない（`UNKNOWN` を `PASS` へ改変しない）。新規の `FORK_DESIGNATED` 特別区分および元 genesis の管理免除は設けない。[RFC-0007](docs/rfc/0007-bft-model-admission.md)
+- MOE3 の配分は Miner 用 POSITION 購入 50%、LP 用 POSITION 購入 20%、MISAKA 永久 LP 20%、Panel/Gate C 5%、BFT 5%（小数 8 桁 POSITION）。旧 MOE2（30/20/50）や二階層（1.0/0.3）を新規経路へ混入しない。[RFC-0016](docs/rfc/0016-position-market-and-rewards.md)
+- 全モデル共通の burn-pause と正規解除を維持する。BMR1 の恒久廃止は用途別 bond（`MINING` と `PANEL/GATE_C` の分離）を区別し、規定の対象資産を 100% burn、Panel/Gate C 検証 bond は一律保護する。個別 Court slash の実回収額は適格者報酬 49%、burn 51% を基本とし、端数と未受給分は RFC の規則に従う。[RFC-0012](docs/rfc/0012-bonds-budgets-and-slashing.md)・[RFC-0017](docs/rfc/0017-model-stop-and-retirement.md)
+- MWA1（[RFC-0013](docs/rfc/0013-model-work-accounting.md)）は `PROPOSED_DESIGN_NOT_ACTIVATED`（提案段階）であり、参照検証に留め、未採択の価格・量子・target を公開条件や合意実装に組み込まない。
 - G14、Court、独立 Gate C、FOW1、TB1、一回会計を維持する。既受理 claim は受付時の署名・原期限・責任に従う。既存 wire ID・合意規則・公開 fence の変更は個別実装と有効化手続きに従う。[PRINCIPLES](docs/PRINCIPLES.md)
 
 ## 文書と開発

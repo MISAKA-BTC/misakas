@@ -4,11 +4,11 @@
 
 現行のモデル追加・管理方針は [RFC-0007](../rfc/0007-bft-model-admission.md) と [RFC-0017](../rfc/0017-model-stop-and-retirement.md) に従う。以下の過去の試験と当時の残件は、各試験で用いたprofileの記録として読む。
 
-11月26日配布の [RFC-0068（MOE3）](../rfc/0016-position-market-and-rewards.md) と [RFC-0069（BMR1）](../rfc/0017-model-stop-and-retirement.md) は採択済み・未有効化。[RFC-0070（MWA1）](../rfc/0013-model-work-accounting.md) は提案段階。以下の作業順で第22〜27回の合格条件を更新する。これ以前の実測・決済証跡は当時のprofileに属する。
+11月26日統合後の正本では、[RFC-0007（BFTモデル追加）](../rfc/0007-bft-model-admission.md)・[RFC-0016（MOE3）](../rfc/0016-position-market-and-rewards.md)・[RFC-0017（BMR1）](../rfc/0017-model-stop-and-retirement.md) は採択済み・未有効化。[RFC-0013（MWA1）](../rfc/0013-model-work-accounting.md) は提案段階。以下の作業順で第22〜27回の合格条件を更新する。これ以前の実測・決済証跡は当時のprofileに属する。
 
 | 回 | 改訂後の実装・検証方針 |
 |---|---|
-| 22 | MAD2は測定結果と正規BFT承認による追加を検証する。kernel自動追加は仕様に残し、今回の公開合格条件から外す。MOE3では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1の恒久廃止では対象モデルの登録者・採掘bondと、Panel・Gate Cの個別Court責任を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
+| 22 | 新規モデル追加・採用はRFC-0007に従い `BFT_DECISION` のみに統一し、`BaseCompatible` 検査・対象に紐づく任意測定資料の追跡・正規BFT承認による原子登録と市場作成を検証する。`KERNEL_AUTO` の自動採用は廃止（kernel解析・lowering・技術互換検査は維持、測定証拠の添付や一律合格閾値は票の有効条件にしない）。MOE3（RFC-0016）では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1（RFC-0017・RFC-0012）の恒久廃止では対象モデルの登録者・採掘bondと、Panel・Gate Cの個別Court責任（検証bondは一律保護）を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
 | 23 | 同一仕事でFOW1の有償適格性・独立再実行・成功Finalを確認。MWA1の仕事量・報酬・EXEC credit案は別に参照検証し、価格・量子・targetの提案値を公開条件へ組み込むには採択を要する。 |
 | 24 | 新規経済経路はMOE3。POSITIONは小数8桁。原資Cの50%は採掘報酬用POSITION購入、20%は永久LP用POSITION購入、20%はMISAKA側永久LP、5%はPanel・Gate C、5%はBFT。genesisのcreator不在を含む一回決済・端数・供給保存を同じ仕事で照合。旧MOE2の未決済分は元契約で完了させる。 |
 | 25–26 | 移行前後の市場、POSITION残高、永久LP、用途別bond、廃止・slash・未決済receiptを対象状態に含め、PrunedとArchivalのIBD・reorg・再起動後の一致、保持義務、媒体ピークと回収量を測定する。既存市場を再初期化しない。 |
