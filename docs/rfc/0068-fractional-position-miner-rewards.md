@@ -24,7 +24,7 @@
 
 同日の途中案「80%購入・POSITION20%相当LP・60%相当Miner」「BFT10%」、直前の40/20/20/15/5及び可変のPanel総枠案は、**今回の50/20/20/5/5へ置換**する。旧MOE2の30/20/残余を新規経路へ混ぜない。
 
-先行指示の全モデル共通化を維持する。genesisもPOSITIONを有効にし、全モデルの係数は1.0、forkモデルの独立区分は廃止。genesisに登録者がいないことが差であり、市場・採掘係数・BFT管理の免除を残さない。新しくモデルを追加する経路はMAD2のKERNEL_AUTO又はBFT_DECISIONである。
+先行指示の全モデル共通化を維持する。genesisもPOSITIONを有効にし、全モデルの係数は1.0、forkモデルの独立区分は廃止。genesisに登録者がいないことが差であり、市場・採掘係数・BFT管理の免除を残さない。今回のTestnetのモデル追加は測定とBFT_DECISIONを通常経路とし、KERNEL_AUTOは仕様上の経路として残す（RFC0067の11月26日追記）。
 
 旧資料のBILIはMISAKAのtickerであり、通貨の単位やaddress prefixは変更しない。POSITIONの数量を小数化し、model IDやNFT/token IDを小数にしない。
 

@@ -6,7 +6,7 @@
 
 | 回 | 改訂後の実装・検証方針 |
 |---|---|
-| 22 | MAD2のkernel自動採用とBFT採用を検証。MOE3では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1の恒久廃止では対象モデルの登録者・採掘bondと、Panel・Gate Cの個別Court責任を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
+| 22 | MAD2は測定結果と正規BFT承認による追加を検証する。kernel自動追加は仕様に残し、今回の公開合格条件から外す。MOE3では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1の恒久廃止では対象モデルの登録者・採掘bondと、Panel・Gate Cの個別Court責任を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
 | 23 | 同一仕事でFOW1の有償適格性・独立再実行・成功Finalを確認。MWA1の仕事量・報酬・EXEC credit案は別に参照検証し、価格・量子・targetの提案値を公開条件へ組み込むには採択を要する。 |
 | 24 | 新規経済経路はMOE3。POSITIONは小数8桁。原資Cの50%は採掘報酬用POSITION購入、20%は永久LP用POSITION購入、20%はMISAKA側永久LP、5%はPanel・Gate C、5%はBFT。genesisのcreator不在を含む一回決済・端数・供給保存を同じ仕事で照合。旧MOE2の未決済分は元契約で完了させる。 |
 | 25–26 | 移行前後の市場、POSITION残高、永久LP、用途別bond、廃止・slash・未決済receiptを対象状態に含め、PrunedとArchivalのIBD・reorg・再起動後の一致、保持義務、媒体ピークと回収量を測定する。既存市場を再初期化しない。 |
