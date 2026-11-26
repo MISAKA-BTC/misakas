@@ -6,7 +6,7 @@ empty filter never passes), the test counts, the source commit (the tree must be
 `scripts/release/pin_arming_record.py` accepts. Output goes to `--out` (not under docs/). Nothing is pinned here.
 
 Run (release window): BUILDSLOT_PRIORITY=release BUILDSLOT_SINCE=1760000000 PER_BUILD_GB=2 MAX_SLOTS=6 CARGO_BUILD_JOBS=8 \\
-  python3 scripts/release/run_arming_evidence.py --jobs 6 --out scripts/release/arming-runs-17400
+  python3 scripts/release/run_arming_evidence.py --jobs 6 --out /path/to/new-candidate-evidence
 """
 import argparse
 import hashlib
@@ -19,6 +19,7 @@ import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+HISTORICAL_RUNS = ROOT / 'scripts/release/arming-runs-17400'
 BUILDSLOT = os.path.expanduser('~/Downloads/MISAKA-wt-b/buildslot.sh')
 CORE = ['-p', 'kaspa-consensus-core']
 
@@ -117,7 +118,9 @@ def main():
     ap.add_argument('--no-warm', action='store_true', help='skip the up-front cargo test --no-run')
     ap.add_argument('--tir-test-threads', type=int, default=3, help='RUST_TEST_THREADS for the tir_public_fold parts')
     a = ap.parse_args()
-    out = pathlib.Path(a.out)
+    out = pathlib.Path(a.out).resolve()
+    if out == HISTORICAL_RUNS.resolve() or HISTORICAL_RUNS.resolve() in out.parents:
+        ap.error('historical 17,400 evidence is immutable; choose a separate output directory')
     out.mkdir(parents=True, exist_ok=True)
     head = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(['git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=no'], capture_output=True,

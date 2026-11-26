@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Generate `consensus/core/src/palw_t12_17000_records_v1.rs` — the testnet-12 DAA 17,000 arm-readiness records (lane ACT2).
 
-User decision 2026-10-27: arm the 17,000 list with the drill skipped. A requirement has a slot filled by a passing run output (the
-pin script's JSON form) OR by a typed waiver. No run output in that form exists for any requirement of this list (lanes ran tests and
-E2E and reported them in prose; none kept a `passed: true` JSON tied to one source commit), so every slot below is a waiver. A waiver
-says the requirement was NOT run as pinned evidence, or that it is a user decision. It never says "passed", and it lifts no other
-refusal (ordering, values, measurement derivation, wiring, open blockers).
+The restored run JSON and logs record the 2026-10-28 suites on source commit da46131a41fe7c90ec263b0f26ab9b444e4c74a2.
+They reproduce the historical 17,400 records and the height-only 18,400 rebind. They do not establish that a later candidate passed.
+Unfilled slots stay pending; typed waivers preserve their original scope and do not lift other refusals.
 
 Run: python3 scripts/release/gen_t12_17000_records.py > consensus/core/src/palw_t12_17000_records_v1.rs
 """
@@ -144,7 +142,7 @@ def main():
     # leaves its slot pending, so its record is not emitted.
     sources = {json.loads(f.read_text()).get('sourceCommit') for f in RUNS_DIR.glob('*.json')} if RUNS_DIR.exists() else set()
     if len(sources) > 1:
-        sys.exit('run outputs name several source commits %s: re-run run_arming_evidence.py once on one commit' % sorted(sources))
+        sys.exit('run outputs name several source commits %s: restore the historical single-commit evidence set' % sorted(sources))
     source = next(iter(sources), '0' * 40)
 
     def run_ok(rid):
