@@ -65,6 +65,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 CORE = "kaspa-consensus-core"
@@ -334,8 +335,7 @@ KITLIB = "contrib/t12-deploy-kit/lib.sh"
 PLAN = "contrib/t12-deploy-kit/PLAN.md"
 APP = "contrib/misakascan-t12/app.js"
 SCAN_DEPLOY = "contrib/misakascan-t12/DEPLOY.md"
-CHECKLIST = "docs/history/networks/testnet-12/t12-rcore-launch-checklist.md"
-REGEN_DOC = "docs/history/networks/testnet-12/testnet-12-regenesis-2026-09-23.md"
+RELEASE_PINS = "contrib/t12-deploy-kit/RELEASE-PINS.md"
 JOIN_DOC = "docs/operations/mining/testnet12-join-mining.md"
 README = "README.md"
 SCAN_INDEX = "contrib/misakascan-t12/index.html"
@@ -379,7 +379,7 @@ def t41_record_names() -> list[str]:
     path = os.path.join(REPO, GOLDEN)
     if not os.path.exists(path):
         return []
-    text = open(path, encoding="utf-8").read()
+    text = Path(path).read_text(encoding="utf-8")
     fn = re.search(r"fn t41_the_v22_record_encodings_are_pinned\(\)", text)
     want = re.compile(r"let want = \[", re.M).search(text, fn.end()) if fn else None
     end = re.compile(r"^\s*\];", re.M).search(text, want.end()) if want else None
@@ -688,20 +688,20 @@ def registry() -> list[Pin]:
     for i, what in enumerate(["floor", "8k", "2m"]):
         pins.append(Pin(f"app.LLM_CLASSES.{what}", "copy", APP, [r"^const LLM_CLASSES = \["], f"testnet-12.class.{what}", nth=i,
                         until=r"^\];", tests=kit))
-    # The launch checklist §3 (the identity the kit's fleet.env is filled against).
+    # The kit release pins §3 (the identity the kit's fleet.env is filled against).
     sec3 = [r"^## 3\. "]
     for name, key, length in [("EXPECT_FP", "from.testnet-12.params_id", 64), ("EXPECT_GENESIS", "genesis.testnet-12.hash", 128),
                               ("PREMINE_TXID", "testnet-12.premine_txid", 128)]:
-        pins.append(Pin(f"checklist.{name}", "copy", CHECKLIST, sec3 + [rf"^{name}="], key, fmt="token", length=length,
+        pins.append(Pin(f"checklist.{name}", "copy", RELEASE_PINS, sec3 + [rf"^{name}="], key, fmt="token", length=length,
                         until=r"^## 4\. ", group="checklist.sec3"))
-    pins.append(Pin("checklist.schedule_id", "copy", CHECKLIST, sec3 + [r"^# schedule id "], "from.testnet-12.schedule_id", fmt="token",
+    pins.append(Pin("checklist.schedule_id", "copy", RELEASE_PINS, sec3 + [r"^# schedule id "], "from.testnet-12.schedule_id", fmt="token",
                     length=64, until=r"^## 4\. ", group="checklist.sec3"))
-    pins.append(Pin("checklist.rule_manifest_digest", "copy", CHECKLIST, sec3 + [r"^# rule manifest digest "], "rule_manifest.digest",
+    pins.append(Pin("checklist.rule_manifest_digest", "copy", RELEASE_PINS, sec3 + [r"^# rule manifest digest "], "rule_manifest.digest",
                     fmt="token", length=128, until=r"^## 4\. ", group="checklist.sec3"))
-    pins.append(Pin("checklist.drill_genesis_salt53", "copy", CHECKLIST, [r"の drill genesis は `"], "drill.testnet-12.salt53.genesis",
+    pins.append(Pin("checklist.drill_genesis_salt53", "copy", RELEASE_PINS, [r"の drill genesis は `"], "drill.testnet-12.salt53.genesis",
                     fmt="abbr", comment=None))
     # The label on each document's copy block ("<commit> での暫定値（出荷値ではない）" / the shipping form).
-    for name, file in [("checklist", CHECKLIST), ("plan", PLAN), ("scan_deploy", SCAN_DEPLOY)]:
+    for name, file in [("checklist", RELEASE_PINS), ("plan", PLAN), ("scan_deploy", SCAN_DEPLOY)]:
         pins.append(Pin(f"label.{name}", "label", file, [LABEL_ANCHOR], None, fmt="label", comment=None))
     # PLAN.md §4's provisional line.
     pins.append(Pin("plan.EXPECT_FP", "copy", PLAN, [r"^`EXPECT_FP="], "from.testnet-12.params_id", fmt="token", length=64, comment=None))
@@ -711,12 +711,12 @@ def registry() -> list[Pin]:
                     comment=None))
     pins.append(Pin("plan.rule_manifest_digest", "copy", PLAN, [r"^`EXPECT_FP=", r"rule manifest digest `"], "rule_manifest.digest",
                     fmt="abbr", comment=None))
-    # The regenesis record's table and the join guide (prose: no reason comment, the commit carries it).
+    # The kit's genesis table and the join guide (prose: no reason comment, the commit carries it).
     new_genesis = [r"^## 新 genesis"]
     for row, key in [("genesis hash", "genesis.testnet-12.hash"), ("hash_merkle_root", "genesis.testnet-12.hash_merkle_root"),
                      ("utxo commitment", "genesis.testnet-12.utxo_commitment"), ("premine txid", "testnet-12.premine_txid"),
                      ("community txid", "testnet-12.community_txid")]:
-        pins.append(Pin(f"regen_doc.{row.replace(' ', '_')}", "copy", REGEN_DOC, new_genesis + [rf"^\| {re.escape(row)} \| `"], key,
+        pins.append(Pin(f"regen_doc.{row.replace(' ', '_')}", "copy", RELEASE_PINS, new_genesis + [rf"^\| {re.escape(row)} \| `"], key,
                         fmt="token", length=128, comment=None, until=r"^## "))
     pins.append(Pin("join_doc.genesis", "copy", JOIN_DOC, [r"The genesis is `"], "genesis.testnet-12.hash", fmt="abbr", comment=None))
     pins.append(Pin("join_doc.premine", "copy", JOIN_DOC, [r"The premine sits on `"], "testnet-12.premine_txid", fmt="abbr",
@@ -734,10 +734,10 @@ def registry() -> list[Pin]:
                     length=64, comment=None))
     pins.append(Pin("join_doc.schedule_id", "copy", JOIN_DOC, [r"^Consensus fence schedule: [0-9, ]+ \(schedule id "],
                     "from.testnet-12.schedule_id", fmt="token", length=64, comment=None))
-    pins.append(Pin("readme.fp", "copy", README, [r"Its fingerprint is\n\*\*`"], "from.testnet-12.params_id", fmt="token",
-                    length=64, comment=None))
-    pins.append(Pin("readme.schedule_id", "copy", README, [r"and schedule id `"], "from.testnet-12.schedule_id", fmt="token",
-                    length=64, comment=None))
+    pins.append(Pin("readme.fp", "copy", README, [r"params fingerprint `"], "from.testnet-12.params_id", fmt="abbr",
+                    comment=None))
+    pins.append(Pin("readme.schedule_id", "copy", README, [r"^and schedule ID `"], "from.testnet-12.schedule_id", fmt="abbr",
+                    comment=None))
     pins.append(Pin("scan_index.fp", "copy", SCAN_INDEX,
                     [r'network prints params fingerprint\n\s*<span class="mono" style="word-break:break-all">'],
                     "from.testnet-12.params_id", fmt="token", length=64, comment=None))
@@ -976,7 +976,9 @@ def compare(pins: list[Pin], computed: dict[str, str], notes: dict[str, str], sh
                        f"--shipping: {arrives} must have landed" if arrives else "no such file")
                 rows.append(Row(pin, "locate-error", detail=f"{pin.file} does not exist ({why})"))
             continue
-        text = cache.setdefault(pin.file, open(path, encoding="utf-8").read())
+        if pin.file not in cache:
+            cache[pin.file] = Path(path).read_text(encoding="utf-8")
+        text = cache[pin.file]
         try:
             start, end, pinned, line_at = locate(text, pin)
         except LocateError as e:
@@ -1121,8 +1123,8 @@ def apply(rows: list[Row], reason: str, head: str) -> list[str]:
         if r.decision == "move":
             by_file.setdefault(r.pin.file, []).append(r)
     for file, rs in sorted(by_file.items()):
-        path = os.path.join(REPO, file)
-        text = open(path, encoding="utf-8").read()
+        path = Path(REPO, file)
+        text = path.read_text(encoding="utf-8")
         groups: dict[object, list[Row]] = {}
         for r in rs:
             groups.setdefault(r.pin.group or r.line_at, []).append(r)
@@ -1147,7 +1149,7 @@ def apply(rows: list[Row], reason: str, head: str) -> list[str]:
         # literal edits that begin at the same offset (none do: a literal never starts a line here).
         for s, e, rep in sorted(edits, key=lambda x: (x[0], x[1]), reverse=True):
             text = text[:s] + rep + text[e:]
-        open(path, "w", encoding="utf-8").write(text)
+        path.write_text(text, encoding="utf-8")
     return sorted(by_file)
 
 

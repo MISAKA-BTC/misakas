@@ -1,0 +1,2 @@
+# Calibration input is pinned to a Git blob, including its whitespace.
+crescendo-calibration.txt -text -whitespace

@@ -1,7 +1,7 @@
 {
   "format": "palw-gen-v1/job-vectors/1",
-  "spec": "docs/rfc/0003-palw-generative-model-classes.md \u00a7I.0; docs/spec/palw/04b-tensor-ir.md \u00a715",
-  "generator": "scripts/palw-gen-job-vectors.py",
+  "spec": "docs/rfc/0003-jobs-tokenizers-and-generation.md \u00a71; docs/spec/palw/04b-tensor-ir.md \u00a715",
+  "generator": "scripts/verify/palw-gen-job-vectors.py",
   "job_id_key": "misaka-palw/gen-v1/job-id/v1",
   "canonical_seed_key": "misaka-palw/gen-v1/canonical-seed/v1",
   "cases": [

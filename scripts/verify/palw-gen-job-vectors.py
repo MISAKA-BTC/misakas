@@ -153,7 +153,7 @@ def build():
     seeds = [{"anchor_hex": a.hex(), "seed_hex": h64(SEED_KEY, a)[:32].hex()} for a in anchors]
     return {
         "format": "palw-gen-v1/job-vectors/1",
-        "spec": "docs/rfc/0003-palw-generative-model-classes.md §I.0; docs/spec/palw/04b-tensor-ir.md §15",
+        "spec": "docs/rfc/0003-jobs-tokenizers-and-generation.md §1; docs/spec/palw/04b-tensor-ir.md §15",
         "generator": "scripts/verify/palw-gen-job-vectors.py",
         "job_id_key": JOB_ID_KEY.decode(),
         "canonical_seed_key": SEED_KEY.decode(),
