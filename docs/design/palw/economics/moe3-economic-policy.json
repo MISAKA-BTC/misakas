@@ -103,7 +103,7 @@
     "miner_position_cost_nominal_permille": 500,
     "lp_position_purchase_permille": 200,
     "lp_misaka_permille": 200,
-    "panel_gate_c_combined_misaka_permille": 50,
+    "panel_misaka_permille": 50,
     "bft_misaka_permille": 50,
     "F": "floor(50*C/1000)",
     "P": "floor(50*C/1000)",
@@ -119,10 +119,10 @@
     "cash_rounding_remainder_to": "D, Miner POSITION purchase budget",
     "position_rounding_remainder_to": "M, Miner recipients",
     "miner_direct_misaka_payout": "0",
-    "panel_gate_c_payment_asset": "MISAKA",
+    "panel_payment_asset": "MISAKA",
     "bft_payment_asset": "MISAKA",
-    "panel_gate_c_internal_plan": "authenticated eligible service plan summing to P; no assumed equal split",
-    "miner_internal_plan": "authenticated mining-recipient plan summing to M; excludes Panel/Gate C/BFT duplicate accounting",
+    "panel_internal_plan": "authenticated Panel service assignments summing to P",
+    "miner_internal_plan": "authenticated mining-recipient plan summing to M; excludes Panel/BFT duplicate accounting",
     "source_budget_split_once": true,
     "model_allocation": {
       "method": "coupled largest remainder with canonical model ID ties",
@@ -136,7 +136,7 @@
       "zero_model_allocation": "B_i=A_i=0: no-op before quote/division, no receipt even when global C>0"
     },
     "separate_role_reservations_before_market_settlement": true,
-    "established_panel_gate_c_and_bft_rights_survive_market_failure": true,
+    "established_panel_and_bft_rights_survive_market_failure": true,
     "surplus_position_burn": "0",
     "nominal_percent_is_market_value_guarantee": false,
     "maturity_and_liability_holds_preserved": true,
@@ -160,7 +160,7 @@
     "inventory_after": "U1+L=U-M",
     "holder_after": "H+M",
     "retired_after": "Z",
-    "panel_gate_c_misaka_reserved": "P",
+    "panel_misaka_reserved": "P",
     "bft_misaka_reserved": "F",
     "virtual_reserve_changes": false,
     "old_locked_seed_changes": false,
@@ -243,8 +243,7 @@
     "policy": "BMR1",
     "actual_recovered_misaka_reward_permille": 490,
     "recipient_roles": [
-      "PANEL",
-      "GATE_C"
+      "QUALIFIED_OFFENCE_FINDER_INCLUDING_NON_SELECTED"
     ],
     "combined_not_per_role": true,
     "retirement_burn_eligible": false,

@@ -14,7 +14,7 @@
 | ADR-0008 | [ADR-0008 — G14の1席Panel・独立完全再実行を選ぶ理由](0008-one-panel-independent-reexecution.md) | DECISION_RATIONALE |
 | ADR-0009 | [ADR-0009 — 有界Court・反証優先・検証先行Finalを選ぶ理由](0009-bounded-court-and-verification-gated-final.md) | DECISION_RATIONALE |
 | ADR-0010 | [ADR-0010 — 公開資料・有限原資・供給者契約を選ぶ理由](0010-public-materials-and-funded-service.md) | DECISION_RATIONALE |
-| ADR-0011 | [ADR-0011 — 独立Gate C・合意credit認証を選ぶ理由](0011-independent-gate-c-certification.md) | DECISION_RATIONALE |
+| ADR-0011 | [ADR-0011 — G14と公開Courtに合意creditを結び付ける理由](0011-independent-gate-c-certification.md) | DECISION_RATIONALE |
 | ADR-0012 | [ADR-0012 — 用途別bond・予算予約・個別slashを選ぶ理由](0012-role-bonds-budgets-and-slashing.md) | DECISION_RATIONALE |
 | ADR-0013 | [ADR-0013 — モデル別仕事量・報酬・EXECの接続を選ぶ理由](0013-model-work-accounting.md) | PROPOSED_DECISION_NOT_ACTIVATED |
 | ADR-0014 | [ADR-0014 — EXEC・共通容量・難易度・合意時計を選ぶ理由](0014-exec-capacity-and-consensus-clock.md) | DECISION_RATIONALE |

@@ -4,7 +4,7 @@
 
 各RFCは数式・形式・状態遷移・制約・受入条件を定めます。背景・選択理由・比較した案は[同じ番号のADR](../adr/README.md)へ置きます。
 
-モデル追加は **BFT YES/NOのみ**です。kernel解析・lowering・互換検査は実行準備であり、承認を代替しません。個別claimのPanel、Court、独立Gate Cは維持します。
+モデル追加は **BFT YES/NOのみ**です。kernel解析・lowering・互換検査は実行準備であり、承認を代替しません。個別claimのG14 Panelと公開Courtは維持します。
 
 | 現行番号 | 設計の範囲 |
 | --- | --- |
@@ -18,7 +18,7 @@
 | RFC-0008 | [G14 Panel・完全再実行・肯定承認](0008-g14-panel-and-verification.md) |
 | RFC-0009 | [Court・単独反証・claim Final](0009-court-and-claim-final.md) |
 | RFC-0010 | [モデル資料・共有供給・有限資金契約](0010-materials-and-funded-delivery.md) |
-| RFC-0011 | [独立Gate C・合意credit認証](0011-gate-c-and-consensus-credit.md) |
+| RFC-0011 | [G14・公開Courtによる合意credit](0011-gate-c-and-consensus-credit.md) |
 | RFC-0012 | [用途別bond・予算・Court slash](0012-bonds-budgets-and-slashing.md) |
 | RFC-0013 | [MWA1：モデル別仕事量・報酬原資](0013-model-work-accounting.md) |
 | RFC-0014 | [EXEC credit・schedule・共通容量・難易度](0014-exec-schedule-and-capacity.md) |

@@ -75,7 +75,7 @@
       "kind": "rfc",
       "number": "0011",
       "path": "docs/rfc/0011-gate-c-and-consensus-credit.md",
-      "title": "RFC-0011 — 独立Gate C・合意credit認証",
+      "title": "RFC-0011 — G14・公開Courtによる合意credit",
       "status": "DESIGN_SPECIFICATION"
     },
     {
@@ -215,7 +215,7 @@
       "kind": "adr",
       "number": "0011",
       "path": "docs/adr/0011-independent-gate-c-certification.md",
-      "title": "ADR-0011 — 独立Gate C・合意credit認証を選ぶ理由",
+      "title": "ADR-0011 — G14と公開Courtに合意creditを結び付ける理由",
       "status": "DECISION_RATIONALE"
     },
     {

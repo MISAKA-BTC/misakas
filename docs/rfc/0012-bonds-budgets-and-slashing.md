@@ -8,7 +8,7 @@
 
 ## 1. 原資と役割
 
-miner account bond、model登録者責任bond、Panel/Gate C検証bond、TB1/BFTの役務bond、手数料UTXO、報酬原資、market reserveを別勘定にする。残高があるだけで任意の役務へ拘束してよいことにはしない。
+miner account bond、model登録者責任bond、Panel検証bond、TB1/BFTの役務bond、手数料UTXO、報酬原資、market reserveを別勘定にする。残高があるだけで任意の役務へ拘束してよいことにはしない。
 
 modelと用途を固定したlotを使い、同じ元本の二重担保を禁止する。兼任者でもMININGとVERIFICATIONを分け、責任中の付替え・引出し・他modelへの逃避を認めない。
 
@@ -42,7 +42,7 @@ rollbackは元の親状態と保存deltaへ一致させ、再適用は同じ結�
 
 個人の計算不正、署名違反、認証された提供義務違反等は、Courtで確定したoffenceと責任lotに限定して処理する。任意の未応答、BFT不採用、正しい高速計算だけで有罪にしない。
 
-実際に回収したMISAKAをSとすると、発見・立証者であるPanel/Gate Cの**合計**報酬は`E=floor(490*S/1000)`、burnは`S-E`。各役割へ49%ずつ支払う規則ではない。
+実際に回収したMISAKAをSとすると、選出内外の発見・立証者の**合計**報酬は`E=floor(490*S/1000)`、burnは`S-E`。各役割へ49%ずつ支払う規則ではない。
 
 受取資格、提出元、先行性、重複、同一offenceのsourceを正規planで固定する。不正本人・同一認証identityの自己slash受領を認めないが、未知のsybil共謀を完全排除したとは主張しない。
 
@@ -50,7 +50,7 @@ rollbackは元の親状態と保存deltaへ一致させ、再適用は同じ結�
 
 ## 6. BFT廃止との分離
 
-全Panel/Gate CのVERIFICATION lotは、BFTによるモデル恒久廃止の一括burnから保護する。不正者もこの用途上の保護を持ち、本人の違反は別のCourtで個別slashする。
+全PanelのVERIFICATION lotは、BFTによるモデル恒久廃止の一括burnから保護する。不正者もこの用途上の保護を持ち、本人の違反は別のCourtで個別slashする。
 
 登録者責任・MINING用途・未確定mining報酬・actual market reserveの廃止効果はRFC-0017に従う。正当に成立した検証役務報酬をモデル廃止だけで消さない。BFTの通常5%と没収原資は別であり、廃止bountyを作らない。
 

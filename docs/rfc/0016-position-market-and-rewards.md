@@ -77,7 +77,7 @@ A=\lfloor200C/1000\rfloor,\quad J=\lfloor200C/1000\rfloor,
 D=C-F-P-A-J,\qquad B=D+J.
 \]
 
-FはBFT5%、PはPanel/Gate C合計5%、AはMISAKA側LP20%、JはLP用POSITION購入20%、DはMiner等のPOSITION購入50%と通貨端数。Bは合計購入予算であり、名目70%。常に `C=F+P+A+J+D=F+P+A+B`。Dを独立にfloorして端数を失わない。DそのものをMISAKAでMinerへ渡さない。
+FはBFT5%、PはPanel5%、AはMISAKA側LP20%、JはLP用POSITION購入20%、DはMiner等のPOSITION購入50%と通貨端数。Bは合計購入予算であり、名目70%。常に `C=F+P+A+J+D=F+P+A+B`。Dを独立にfloorして端数を失わない。DそのものをMISAKAでMinerへ渡さない。
 
 これは割合をCへ一度適用する方式である。5%控除後の残額へ再び5%等を掛けたり、Cとは別に追加の50%・20%を徴収したりしない。
 
@@ -89,7 +89,7 @@ FはBFT5%、PはPanel/Gate C合計5%、AはMISAKA側LP20%、JはLP用POSITION購
 
 各市場は `B_i=D_i+J_i` で購入し、その実予算比 `J_i/B_i` でLP数量を決める。個々のmodelで5%/5%をもう一度引かない。単一モデルの場合は添字を省略できる。global Cが正でも、あるmodelの `B_i=A_i=0` は起こり得る。このmodelはquote・除算より前にno-opとして扱い、receiptを作らない。0/0を評価せず、正の配分だけをdust検査する。
 
-P内部のPanelとGate Cの比率・資格・成熟・受取先・端数は、新profileへ結合した認証済み検証reward planで決める。合計5%であり、それぞれ5%ではない。新たな一律半々を仮定しない。旧planの20%等をそのまま総枠へ重ねない。D内の採掘役割配分も明示planに従い、全員POSITIONで払い、Panel/Gate C/BFTをD側へ重複計上しない。
+Pの全額はPanel役務のMISAKA原資とする。元assignment、完全再実行承認、成熟、受取先、整数端数を版付き支払planに結ぶ。選出外の公開反証は個別Courtの49%枠から元offenceに結び付けて精算する。D内の採掘役割にはPOSITIONで支払い、P・Fの役務を重複計上しない。
 
 Fは[RFC-0017](0017-model-stop-and-retirement.md)のBFT継続役務planでMISAKA配布する。未設定の受取資格・planをcallerが選べず、元の有限予約・期限・責任を満たしてから支払う。
 
@@ -136,7 +136,7 @@ burn=\lfloor50G/1000\rfloor,
 
 購入はnetをcurveへ、売却はcurve算出grossをreal reserveから一度出して三項へ分ける。実reserve・旧seed制約を守り、virtualを現金化しない。直接POSITION移転にAMM feeを課さず、通常network fee・署名・nonce・allowance・lockを適用する。送金で登録者権、bond、claim責任、EXEC creditは移動しない。
 
-Courtによる個別不正の確定slashは、実回収MISAKAの49%を正規の不正発見・立証Panel/Gate Cへ配り、残り51%をburnする。これはcoinbaseの検証報酬5%に加える別原資であり、BFT恒久廃止100%burnからの報酬ではない。受取資格と一回性はRFC-0017に従う。
+Courtによる個別不正の確定slashは、実回収MISAKAの49%を正規の選出内外の発見・立証者へ配り、残り51%をburnする。これはcoinbaseの検証報酬5%に加える別原資であり、BFT恒久廃止100%burnからの報酬ではない。受取資格と一回性はRFC-0017に従う。
 
 ## 7. 永久LPと恒久廃止の限定例外
 
@@ -162,7 +162,7 @@ C=F+P+A+B,\quad q=L+M,\quad U_2+H_2+Z_2=S.
 | LP用POSITIONの購入原資J | 200 MISAKA |
 | 合計購入B | 700 MISAKA |
 | LPのMISAKA A | 200 MISAKA |
-| Panel・Gate C P | 50 MISAKA |
+| Panel P | 50 MISAKA |
 | BFT F | 50 MISAKA |
 | 購入q | 4,117.64705882 POSITION |
 | LPへL | 1,176.47058823 POSITION |

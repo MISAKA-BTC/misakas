@@ -18,7 +18,7 @@ ADRは背景、決定、判断理由、比較した選択肢、帰結を記す�
 | [ADR-0008 G14の1席Panel・独立完全再実行](0008-one-panel-independent-reexecution.md) | [RFC-0008](../rfc/0008-g14-panel-and-verification.md) |
 | [ADR-0009 有界Court・反証優先・検証先行Final](0009-bounded-court-and-verification-gated-final.md) | [RFC-0009](../rfc/0009-court-and-claim-final.md) |
 | [ADR-0010 公開資料・有限原資・供給者契約](0010-public-materials-and-funded-service.md) | [RFC-0010](../rfc/0010-materials-and-funded-delivery.md) |
-| [ADR-0011 独立Gate C・合意credit認証](0011-independent-gate-c-certification.md) | [RFC-0011](../rfc/0011-gate-c-and-consensus-credit.md) |
+| [ADR-0011 G14・公開Courtによる合意credit](0011-independent-gate-c-certification.md) | [RFC-0011](../rfc/0011-gate-c-and-consensus-credit.md) |
 | [ADR-0012 用途別bond・予算予約・個別slash](0012-role-bonds-budgets-and-slashing.md) | [RFC-0012](../rfc/0012-bonds-budgets-and-slashing.md) |
 | [ADR-0013 モデル別仕事量・報酬・EXECの接続](0013-model-work-accounting.md) | [RFC-0013](../rfc/0013-model-work-accounting.md) |
 | [ADR-0014 EXEC・共通容量・難易度・合意時計](0014-exec-capacity-and-consensus-clock.md) | [RFC-0014](../rfc/0014-exec-schedule-and-capacity.md) |

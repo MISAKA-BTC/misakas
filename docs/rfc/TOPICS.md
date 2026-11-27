@@ -20,7 +20,7 @@
 - [RFC-0008 — G14 Panel・完全再実行・肯定承認](0008-g14-panel-and-verification.md)
 - [RFC-0009 — Court・単独反証・claim Final](0009-court-and-claim-final.md)
 - [RFC-0010 — モデル資料・共有供給・有限資金契約](0010-materials-and-funded-delivery.md)
-- [RFC-0011 — 独立Gate C・合意credit認証](0011-gate-c-and-consensus-credit.md)
+- [RFC-0011 — G14・公開Courtによる合意credit](0011-gate-c-and-consensus-credit.md)
 - [RFC-0012 — 用途別bond・予算・Court slash](0012-bonds-budgets-and-slashing.md)
 
 ## 仕事・合意・経済

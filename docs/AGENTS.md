@@ -3,7 +3,7 @@
 [PRINCIPLES.md](PRINCIPLES.md)と[現行RFC20本](rfc/README.md)を設計の入口とする。以下は2026-11-26のユーザー決定を反映する。
 
 - モデル追加はBFTのYES/NOのみ。kernel自動lowering・互換検査は実行準備であり、自動採用を復活させない。BFT票へ数学的証明・G-COST測定の提出を再要求しない。
-- 技術互換、個別claimのPanel/Court、独立Gate C、TB1、正規Ticket、一回会計は維持する。BFT YESを計算費用の証明と書かない。
+- 技術互換、個別claimのG14 Panel、公開Court、TB1、正規Ticket、一回会計は維持する。BFT YESを計算費用の証明と書かない。
 - genesisを含む全モデルの係数を1.0とし、BFT管理とMOE3を適用する。配分は50：20：20：5：5。全モデルのburn-pauseと正規解除、BMR1の用途別bondと対象資産100%burn、個別Court slashの49%報酬・51%burnを維持する。
 - LLM計算のZK/SNARK/STARK/zkVM/PCS/GKR validity等を提案・実装しない。ハッシュ・署名・commitment/opening・乱数認証は利用できる。
 - RFC20本・ADR20本への統合と旧RFC/ADR本文・改訂コピーの削除はユーザー承認済み。RFC-v1/RFC-v2、archive、旧本文の別コピーを作らない。番号対応は小さな索引だけとする。

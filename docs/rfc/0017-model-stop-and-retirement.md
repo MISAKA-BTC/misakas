@@ -8,14 +8,14 @@
 
 ## 1. 二つの制裁を分離する
 
-**BFTはモデルの採用・存続を判断し、Courtは個人の不正・責任を裁く。** モデル恒久廃止のためにBFTが個々のPanel/Gate Cの正当性を判定する制度を作らない。
+**BFTはモデルの採用・存続を判断し、Courtは個人の不正・責任を裁く。** モデル恒久廃止のためにBFTが個々のPanelの正当性を判定する制度を作らない。
 
 | 対象 | BFTモデル恒久廃止 | Courtの個別不正認定 |
 | --- | --- | --- |
 | 対象モデルの登録者責任bond | 全残額burn | 既存の個別責任も適用 |
 | 対象モデルに拘束された採掘bond | 全残額burn | 既存の個別責任も適用 |
 | Panel検証bond | 一律に一括burn対象外 | 虚偽承認等が成立すればslash可能 |
-| Gate C検証bond | 一律に一括burn対象外 | 不正が成立すればslash可能 |
+| 旧契約のGate C検証bond | 一括burn対象外 | 元の責任期間・違反規則で個別裁定 |
 | 他モデルのbond・未割当資金 | 対象外 | 当該個別違反だけを適用 |
 | 正当に成立した検証報酬 | 元条件でMISAKA支払を維持 | 元契約の責任・holdは維持 |
 
@@ -23,7 +23,7 @@
 
 ## 2. 通常報酬と没収は別原資
 
-最新の通常coinbase配分はMiner等POSITION50%、LP用POSITION購入20%、MISAKA永久LP20%、Panel/Gate C合計MISAKA5%、BFT MISAKA5%である。通常coinbaseの10%BFT案・15%検証案は置換済み。原資Cの一回分割、端数、役務planはRFC-0016に従う。
+最新の通常coinbase配分はMiner等POSITION50%、LP用POSITION購入20%、MISAKA永久LP20%、PanelMISAKA5%、BFT MISAKA5%である。通常coinbaseの10%BFT案・15%検証案は置換済み。原資Cの一回分割、端数、役務planはRFC-0016に従う。
 
 BFT5%は、元coinbaseの認証配分record、当該期間の正規roster・継続役務資格・支払planに結合する。modelごとにさらに5%控除しない。廃止のYES/NO、件数、没収額、発見報酬と連動させず、廃止成功報酬は0とする。
 
@@ -33,7 +33,7 @@ BFT5%は、元coinbaseの認証配分record、当該期間の正規roster・継�
 
 ## 3. 用途別bond台帳
 
-各bondを `funding_source / lot_id / model_id / purpose / amount / owner_identity / liability_until / hold / sequence` に結合する。purposeは少なくともMODEL_REGISTRANT、MODEL_MINING、PANEL_VERIFY、GATE_C_VERIFYを区別する。アドレス又はアカウント全体から制裁額を決めない。
+各bondを `funding_source / lot_id / model_id / purpose / amount / owner_identity / liability_until / hold / sequence` に結合する。purposeは少なくともMODEL_REGISTRANT、MODEL_MINING、PANEL_VERIFY、および旧契約に残るGATE_C_VERIFYを区別する。アドレス又はアカウント全体から制裁額を決めない。
 
 同じ資金atomsを複数purposeやmodelの全額担保として重複計上しない。複数モデルへ分ける資金は、認証された相互に重ならないsub-lotへ分割する。`sum(sub_lot.amount)<=funding_source.unspent_amount`を守り、合計を超えるreserve、未知の用途、重複lot、未認証の自己申告を拒否する。
 
@@ -89,15 +89,15 @@ pool内POSITIONは閉鎖市場の凍結在庫として保持する。既確定ho
 | 未commitのquote・受取予定 | 予定を取消。存在しないPOSITIONをburnしない |
 | 既にrへ入っている購入/LP資金 | §5.1で処理済み。元R/Cの額面を追加burnしない |
 | 既確定の採掘報酬出力 | 本項の一括burn対象外。個別Court責任は残る |
-| Panel/Gate Cの成立報酬・裁定待ち専用予約 | 採掘報酬と別管理し、一括burn対象外 |
+| Panelの成立報酬・裁定待ち専用予約 | 採掘報酬と別管理し、一括burn対象外 |
 
 未確定/確定の判定は元のasset別award・権利確定境界へ結合し、単なる未引出し又はliability hold中というだけで既確定支払を未確定へ戻さない。状態境界が未定義なproducerをBMR1で有効化しない。
 
 ## 6. 検証者保護とCourt責任
 
-Panel/Gate Cの全検証lotは、BFT廃止で一律に対象外。BFTは「正常か」を分類しない。既存の虚偽承認、資料義務違反、期限違反その他の個別offenceは、Court・反証・slashの元条件で裁く。
+Panelの全検証lotは、BFT廃止で一律に対象外。BFTは「正常か」を分類しない。既存の虚偽承認、資料義務違反、期限違反その他の個別offenceは、Court・反証・slashの元条件で裁く。
 
-正当に成立したPanel/Gate CのMISAKA報酬権は支払を維持する。争われている検証役務の資金も専用escrow/予約へ残し、Courtの結果に従って元契約で精算する。廃止により検証報酬を自動的に「不正」としない。
+正当に成立したPanelのMISAKA報酬権は支払を維持する。争われている検証役務の資金も専用escrow/予約へ残し、Courtの結果に従って元契約で精算する。廃止により検証報酬を自動的に「不正」としない。
 
 BFTとCourtが同じ資金を参照する場合も、native順序・remaining lot・一回消費を用いる。罪の成立、未回収債務、回収済みslashを別recordとして保ち、資金がなくても架空の回収・報酬を発行しない。
 
@@ -111,11 +111,11 @@ BFTとCourtが同じ資金を参照する場合も、native順序・remaining lo
 Q=\lfloor490S/1000\rfloor,\qquad Burn=S-Q.
 \]
 
-**PanelとGate Cが合わせて49%**のMISAKAを受け取り、残差51%をburnする。双方へ49%ずつ支払う規則ではない。通常coinbaseの検証報酬5%とは別原資であり、同じSを両方の報酬へ計上しない。
+累計実回収MISAKAの49%をfloorした額が適格な発見・立証者全員の報酬枠である。残差をburnする。通常のPanel役務5%は別原資とする。
 
 ### 7.2 受取資格と配分
 
-受取人は当該offenceの不正発見・立証に寄与した、認証済みPanel/Gate Cの受取planに結合する。単に全検証者へ配る恒常poolや、BFTのモデル廃止票への報酬にはしない。提出証拠、受理順序、役割、claim/offence、identity、重み・端数・期限を事前の版付きplanで固定する。既存の無許可な第三者反証入口を閉じないが、49%受給には指定された正規Panel/Gate Cの資格が必要であり、報告後に任意の受取人を選ばない。
+元offenceの有効な証拠と提出者identityを認証して受取planを固定する。選出外の提出者も同一条件で適格となる。受理順、重複排除、重み・端数・期限を事前の版付きplanに結ぶ。自己申告、証拠の複製、受取人の事後差替えによる支払を拒否する。
 
 被告と同じcanonical責任identity及び認証済みaliasは、そのoffenceの発見報酬を受け取れない。関連鍵・実質所有者の全てをchainから判別できるとは主張しない。資格・配分planが成立しない場合は架空recipientを作らず、有限の専用予約で正規解決を待つ。期限までに有効な受取権が成立しない部分はburnし、BFTやMinerへ付け替えない。
 

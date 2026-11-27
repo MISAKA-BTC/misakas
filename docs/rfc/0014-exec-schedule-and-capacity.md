@@ -14,7 +14,7 @@ claim処理、モデル推論、資料取得、次scheduleの準備を通常の1
 
 ## 2. 発行と用途
 
-発行には成功Final、独立Gate C、成熟、依存、停止・取消なし、資本・bond予算、一回会計を必要とする。同じroot work、snapshot、sliceを別仕事として発行しない。EXEC_TXとEXEC_SLICEは用途・消費・予約を分ける。
+発行には成功Final、公開Court条件、成熟、依存、停止・取消なし、資本・bond予算、一回会計を必要とする。同じroot work、snapshot、sliceを別仕事として発行しない。EXEC_TXとEXEC_SLICEは用途・消費・予約を分ける。
 
 MWA1の仕事量Wからcreditを導く部分は**提案**である。採用する場合は同じ認証済み当選仕事を使い、量子Q、端数処理、上限を事前固定する。端数を確率配分する場合は独立SCHEDULEの固定規則を使い、剰余偏り・有限拒否回数を定義する。permit数を増やして採掘Ticketを増やさない。
 
@@ -56,13 +56,13 @@ authorityのreorgはcanonical branchに従って戻す。曝露済み乱数、�
 
 ## 8. 600秒決済目標
 
-600秒はMWA1が提案する台帳確定frontierの運用目標であり、claimを600秒で強制Finalにする期限ではない。120秒計画epoch、原claim責任期間、Gate C抽選、slot、報酬成熟を別々に定義する。
+600秒はMWA1が提案する台帳確定frontierの運用目標であり、claimを600秒で強制Finalにする期限ではない。120秒計画epoch、原claim責任期間、公開異議期間、slot、報酬成熟を別々に定義する。
 
 必要仕事供給、認証速度、schedule先行、通信・検証容量が揃わなければ目標を達成したと表示しない。600slotのうちCourt/controlが占める分を引かずに毎分60取引blockを保証しない。
 
 ## 9. 受入条件
 
-事前集合の差替え、seed再利用、二重permit、close後生成、未来authorityへの循環、無Gate C発行、複数modelでのglobal枠超過、Court飢餓、ゼロ供給epoch、restart/reorgを試験する。BPS、充足率、credit在庫、frontier遅延を別に計測する。
+事前集合の差替え、seed再利用、二重permit、close後生成、未来authorityへの循環、公開Court条件未達の発行、複数modelでのglobal枠超過、Court飢餓、ゼロ供給epoch、restart/reorgを試験する。BPS、充足率、credit在庫、frontier遅延を別に計測する。
 
 ## 9. 時計・heartbeat・massの境界
 

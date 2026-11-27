@@ -10,7 +10,7 @@
 
 標準のG14はproducerを除外した正規Panel 1席の承認をclaimの成功条件に含める。一席方式は他の公開検証者を排除せず、有効な反証は承認に優先する。
 
-Panel=1は、Gate Cの抽選位置数、登録bond総数、Node数、独立operator数が1でよいという意味ではない。適格poolと除外条件は固定DrawPolicyで定め、BFTモデル承認とも別にする。
+G14は1席とする。適格poolと除外条件は固定DrawPolicyで定める。選出外の監視者は登録や当番割当を要せず公開反証に参加できる。
 
 ## 2. 抽選と担当
 
@@ -28,7 +28,7 @@ Panelは不変artifact、tokenizer、入力、数値profile、challenge、prefix
 
 | 検査結果 | 提出と効果 |
 | --- | --- |
-| 全必須関係が一致 | 元assignmentに署名した承認。なおFinal・Gate C・当選は別条件 |
+| 全必須関係が一致 | 元assignmentに署名した承認。なおFinal・公開Court条件・当選は別条件 |
 | 計算不一致 | 適格noticeと認証された局所反証。元期限・元予約でCourtへ |
 | 資料不足 | 資料case。未検証を承認に変換しない |
 | local資源故障 | 原因を保持して復旧又は担当規則による失敗処理。Miner有罪と混同しない |
@@ -49,13 +49,13 @@ Panelは不変artifact、tokenizer、入力、数値profile、challenge、prefix
 
 新しいcell profileは、全依存境界、position範囲、weight参照、反証の構成・搬送資源を覆う。全体coverageが不足したまま正常承認を作らない。共有資料・並列検証を理由に単独の適格検証者の入口を閉じない。
 
-## 7. FinalとGate C
+## 7. 公開反証とFinal
 
-Panel承認後も、通知期間、未解決case、資料条件、依存取消、現在の停止を確認する。反証がなかったというだけで未検証claimをFinalにしない。claim Final後の合意credit・受賞・決済には独立Gate Cを必要とする。
+Panel承認後も通知期間、未解決case、資料義務、依存取消、現在の停止を確認する。選出外の参加者は同じclaimの全資料を要求し、元期限内に単独で反証できる。Nodeは有効な反証を虚偽承認に優先させる。合意creditはRFC-0011に従う。
 
 ## 8. 検証項目
 
-producer自身の承認、別claim/位置/weightの証拠、無資料承認、同一義務の二重報酬、偽Readout、悪意多数の肯定票と有効反証の競合を拒否する。G14 1席、Gate Cの必要定足数、3Nodeでの一致は別々に測る。
+producer自身の承認、別claimの証拠、無資料承認、二重報酬、偽Readoutを拒否する。選出席がMinerと共謀した場合に、第三者の反証で両者の違反を個別に裁定できることを確認する。
 
 ## 9. G14 assignmentと返答責務
 
@@ -63,4 +63,4 @@ producer自身の承認、別claim/位置/weightの証拠、無資料承認、�
 
 Minerは結果commitと規定の有界応答を担う。Panelが元資料から正常・不正の局所証拠を構成するprofileでも、Minerに任意の全proof構築サービスを追加要求しない。先に反証を発見した席は、その同じ不一致と両立しない正常承認を出さない。
 
-Panelのtrace保持・最小担保・役務期間は対象policyで固定する。Gate Cの位置定足数をG14席数に転用せず、独立operator数は別欄で示す。既存のshard/cell部品を利用しても、当該claimに必要な全実行のcoverageと元境界認証を省略しない。
+Panelのtrace保持・最小担保・役務期間を対象policyで固定する。shard/cell部品を利用する場合も全実行のcoverageと元境界認証を要求する。

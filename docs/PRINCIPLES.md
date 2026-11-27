@@ -12,6 +12,8 @@ LLM・モデル計算の暗号学的validity proofを採用しない。ZK、SNAR
 
 Panelによる再実行、必要な範囲の確率的検査、公開資料、局所反証、Nodeの決定論的Court、用途別bond・個別slashを用いる。ハッシュ・署名・Merkle opening・乱数の認証は利用できるが、全計算や費用の証明と称さない。
 
+2026-11-27改定。新規profileは独立Gate Cを廃止する。不正claimごとに実際に検査する正直な監視者、資料の取得又は供給違反の立証、元期限内の包含と決定論的裁定を安全性の前提とする。選出外の有効な単独反証でMinerと虚偽承認Panelの責任を個別に裁く。旧claimは受付時profileに従う。
+
 ## 3. モデル追加はBFTのみ
 
 新規モデルの正式追加は、共通技術互換と有効なBFT YES定足数に基づく。kernel自動解析のPASS、timeout、別経路のfallbackでは追加しない。BFT採否に数学的証明・品質証明・費用測定の提出を必須としない。未評価はUNKNOWNとして保持する。
@@ -22,7 +24,7 @@ Panelによる再実行、必要な範囲の確率的検査、公開資料、局
 
 MOE3では全モデルが係数1.0、一意なPOSITION市場、同じBFT管理を持つ。genesisの差はcreator不在であり、停止免除や市場免除を設けない。稼働後にgenesis originを付ける追加経路、特別なfork経済分類を設けない。
 
-coinbase CはMiner用POSITION購入50%、LP用POSITION購入20%、MISAKA永久LP20%、Panel/Gate C合計MISAKA5%、BFT MISAKA5%。整数残差は規定式に従う。通常売買はburn5%、正規creatorがあれば1%、いなければ0%。[RFC-0016](rfc/0016-position-market-and-rewards.md)。
+coinbase CはMiner用POSITION購入50%、LP用POSITION購入20%、MISAKA永久LP20%、PanelMISAKA5%、BFT MISAKA5%。整数残差は規定式に従う。通常売買はburn5%、正規creatorがあれば1%、いなければ0%。[RFC-0016](rfc/0016-position-market-and-rewards.md)。
 
 ## 5. 停止・廃止・個人責任
 
@@ -30,11 +32,11 @@ coinbase CはMiner用POSITION購入50%、LP用POSITION購入20%、MISAKA永久LP
 
 BFTはモデル採用・専用停止・専用解除・規定恒久廃止を扱う。台帳finality・fork choice・reorg vetoの権限を持たない。
 
-恒久廃止は対象のactual reserve、登録責任lot、MINING lot、未確定mining報酬を規定scopeで100%burn/失効する。全Panel/Gate C検証lotと正当な検証報酬を一括没収しない。個人不正はCourtで別に扱い、実回収MISAKAの49%を有資格の発見・立証者合計へ、残りをburnする。二重配分・自己slash報酬を認めない。[RFC-0012](rfc/0012-bonds-budgets-and-slashing.md)、[RFC-0017](rfc/0017-model-stop-and-retirement.md)。
+恒久廃止は対象のactual reserve、登録責任lot、MINING lot、未確定mining報酬を規定scopeで100%burn/失効する。全Panel検証lotと正当な検証報酬を一括没収しない。個人不正はCourtで別に扱い、実回収MISAKAの49%を有資格の発見・立証者合計へ、残りをburnする。二重配分・自己slash報酬を認めない。[RFC-0012](rfc/0012-bonds-budgets-and-slashing.md)、[RFC-0017](rfc/0017-model-stop-and-retirement.md)。
 
 ## 6. claimから台帳へ
 
-claim Final、独立Gate C認証、正規Ticket当選、受賞block受理、報酬決済を区別する。元claimの全関係、元期限、資料取得・包含、正直参加者、選出前固定を明示する。BFT YESや未告発を成功Final・SecurityCertifiedの代替にしない。[RFC-0008](rfc/0008-g14-panel-and-verification.md)、[RFC-0009](rfc/0009-court-and-claim-final.md)、[RFC-0011](rfc/0011-gate-c-and-consensus-credit.md)、[RFC-0015](rfc/0015-dag-blocks-and-settlement.md)。
+claim Final、公開異議期間の満了、正規Ticket当選、受賞block受理、報酬決済を区別する。元claimの全関係、元期限、資料取得・包含、正直参加者、選出前固定を明示する。BFT YESや未告発を公開Courtを経た成功Finalの代替にしない。[RFC-0008](rfc/0008-g14-panel-and-verification.md)、[RFC-0009](rfc/0009-court-and-claim-final.md)、[RFC-0011](rfc/0011-gate-c-and-consensus-credit.md)、[RFC-0015](rfc/0015-dag-blocks-and-settlement.md)。
 
 ## 7. 仕事・資源・保存
 

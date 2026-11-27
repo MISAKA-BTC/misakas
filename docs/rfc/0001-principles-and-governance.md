@@ -30,19 +30,19 @@ LLM・モデル計算の正しさを示す暗号学的validity proofは使用し
 | G14 Panel | 選出義務に対する独立完全再実行、承認又は反証 | 全Nodeのfork choice、他人の資産没収 |
 | 公開検証者 | 元claimへの適格notice、資料要求、局所反証 | 無根拠な有罪判定 |
 | Node / Court | 同一性・署名・有界局所関係・状態遷移の検査 | 未取得モデルの全体再実行をしたという主張 |
-| Gate C検証者 | 独立抽選による仕事認証 | BFTモデル採用、無条件の計算費用保証 |
+| 選出外の監視者 | 公開資料の独立再実行、資料要求、個別反証 | BFTモデル採用 |
 | TB1 holder | 秘密準備・保持・規定時点での公開 | 台帳finality・任意の再抽選 |
 | BFTモデル管理者 | モデル採用YES/NO、規定の停止・解除・廃止 | 個別claim検証の免除、fork choice、reorg veto |
 
-同じ人が複数の役割を担っても、署名domain、権限、選出条件、用途別bondを分離する。Node数、Panel人数、Gate C抽選位置数、独立operator数、BFT定足数を混同しない。
+署名domain・権限・bondを各役割に結合する。選出1席、実際の監視者数、Node数、BFT定足数を個別に記録する。
 
 ## 4. 成功条件の分離
 
-`ModelRegistered`、`BftApproved`、`ClaimAccepted`、`ClaimFinal`、`SecurityCertified`、`TicketWon`、`AwardAccepted`、`Settled`を別に保持する。claim Finalは台帳の決済確定ではない。Finalだけからcredit、受賞、支払いを作らない。
+`ModelRegistered`、`BftApproved`、`ClaimAccepted`、`ClaimFinal`、`TicketWon`、`AwardAccepted`、`Settled`を別に保持する。claim Finalは台帳の決済確定ではない。Finalだけからcredit、受賞、支払いを作らない。
 
 適格反証・失効・未解決資料case・依存取消は同一batchの成功効果に優先する。資料を取れないことを計算不正と断定せず、検証が成立しなければ成功を認めない。未解決責任を保ったまま、依存しない他claimは進められる設計にする。
 
-一人の正直Panelという仮定は、対象claimを実際に検証し、資料を取得し、元期限内に反証を包含・処理できる能動的参加者を意味する。ネットワークのどこかに一人いるというだけでは足りない。Gate C、TB1、BFTの故障前提は別に記述する。
+一人の正直Panelという仮定は、対象claimを実際に検証し、資料を取得し、元期限内に反証を包含・処理できる能動的参加者を意味する。ネットワークのどこかに一人いるというだけでは足りない。公開監視、TB1、BFTの故障前提は別に記述する。
 
 ## 5. 全モデルに共通する方針
 
@@ -64,7 +64,7 @@ MOE3の共通coinbase配分は50/20/20/5/5。Courtの個別slashは実回収額�
 | --- | --- |
 | PALW汎用VM、PALW-BVM/GVM | 不採用。既知のTIR primitiveと版付きkernelを使う |
 | kernel判定だけでのモデル自動追加 | 廃止。BFT採用だけを新規入口にする |
-| Panel=0による成功確定 | 新規の標準経路にしない。G14 Panel承認と独立Gate Cを維持 |
+| Panel=0による成功確定 | 新規の標準経路にしない。G14 Panel承認と公開Court条件を維持 |
 | 画像・動画の採掘、モデル改善protocol | mainnet後へ延期・当面無効。共通のtext実行部品は利用できる |
 | 年次forkだけの1.0昇格、追加モデル0.3、core市場免除 | 新経済には適用しない |
 | 後付けID、receiptの非衝突性によるLLM費用保証 | 採掘費用の根拠にしない |

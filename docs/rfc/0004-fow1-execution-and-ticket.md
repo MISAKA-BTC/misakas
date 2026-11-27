@@ -69,7 +69,7 @@ G-COLLは異なる試行のコアzの衝突特性、G-COSTは正しいTicket入�
 
 ## 8. 成功効果と移行
 
-モデル承認、正規TB1文脈、元claimの完全検査、Final、独立Gate C、唯一Ticketの当選、成熟、現在の停止・依存・予算、一回消費を各効果の入口で確認する。FinalとGate Cの順序はprofileに従い、いずれか一つで全部を代替しない。
+モデル採用、元のTB1文脈、選出Panelの完全再実行、公開異議期間、資料義務とCourtを経た成功Final、唯一Ticketの当選、成熟、停止・依存・予算、権利の一回消費を各効果の入口で確認する。
 
 切替後の新規入口はFOW1を使い、旧TFO3/AN1/MOR1/旧quantum抽選へfallbackしない。既受理旧claimは元規則で有限にdrainする。旧reader、wire、enumを保つことと、新規旧方式の採掘を許すことを分ける。
 

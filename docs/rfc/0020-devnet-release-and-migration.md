@@ -8,7 +8,7 @@
 
 ## 1. 開発の目標
 
-実LLM推論から正規claim、Panel/Court、Final、独立Gate C、Ticket当選、権利一回消費、PALW受賞block、通常合意受理、報酬決済までを同じprofileで接続する。環境管理や観測器の拡張だけを完了としない。
+実LLM推論から正規claim、Panel/Court、Final、公開Court条件、Ticket当選、権利一回消費、PALW受賞block、通常合意受理、報酬決済までを同じprofileで接続する。環境管理や観測器の拡張だけを完了としない。
 
 ## 2. 実装と試験の順序
 
@@ -23,9 +23,9 @@
 
 ## 3. ローカル環境
 
-Node、Studio、Miner、Panel、Gate C、TB1、BFT投票、テスト資金、bond、資料をローカルで用意する。test用鍵・genesis・network・署名domain・データ領域を公開環境と分離する。
+Node、Studio、Miner、Panel、公開監視、TB1、BFT投票、テスト資金、bond、資料をローカルで用意する。test用鍵・genesis・network・署名domain・データ領域を公開環境と分離する。
 
-Node3台は状態一致の検査用であり、必要operator/署名者数とは別である。G14 1席、独立Gate C、TB1/BFTの定足数を各profileから導き、不要な席数を固定の慣習として持ち込まない。必要な故障前提を減らして公開安全性を主張しない。
+Node3台は状態一致の検査用であり、必要operator/署名者数とは別である。G14 1席、公開Court条件、TB1/BFTの定足数を各profileから導き、不要な席数を固定の慣習として持ち込まない。必要な故障前提を減らして公開安全性を主張しない。
 
 genesisに正規modelがある場合は再追加せず、実行artifact・tokenizer・layoutと必要なbondを準備する。新規追加を試す場合はBFT YESからmodel/marketの原子登録までを別に確認する。
 
@@ -47,7 +47,7 @@ snapshotは有限数とし、複製の実容量を確認する。不要な生成
 
 ## 6. 完成の証拠
 
-claim ID、受付block/DAA、Panel承認、Court終端、Final、Gate C、正規当選Ticket、受賞block hash、初回submitBlock、P2P伝播、3peerのroot、仕事キー所有、消費index、予算差分、報酬UTXO、settled frontier、終了codeを保存する。
+claim ID、受付block/DAA、Panel承認、Court終端、Final、公開Court条件、正規当選Ticket、受賞block hash、初回submitBlock、P2P伝播、3peerのroot、仕事キー所有、消費index、予算差分、報酬UTXO、settled frontier、終了codeを保存する。
 
 claim Finalと台帳確定を混同しない。通常block、heartbeat、fixtureだけの受賞、既受理blockの再提出は実LLM受賞の証拠ではない。E2E、容量・負荷、合意安全性の分析を別の結論として報告する。
 

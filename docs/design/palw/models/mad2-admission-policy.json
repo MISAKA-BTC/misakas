@@ -20,7 +20,7 @@
     "no_applicable_technical_failure_or_stop"
   ],
   "effective_model_admission": "profile_active AND base_compatible AND valid_current_bft_yes AND current_policy_and_generation AND no_applicable_stop AND NOT retired",
-  "claim_effect": "effective_model_admission AND existing_claim_verification_and_gate_c AND ticket_and_one_use_accounting",
+  "claim_effect": "effective_model_admission AND g14_reexecution_and_public_court_final AND ticket_and_one_use_accounting",
   "bft": {
     "decisions": [
       "YES",
@@ -79,7 +79,8 @@
   "assurance": {
     "bft": "BFT_POLICY_APPROVAL",
     "unknown_assessments_rewritten_pass": false,
-    "claims_bypass_panel_court_or_gate_c": false,
+    "claims_bypass_g14_or_public_court": false,
+    "independent_gate_c_required_for_new_claims": false,
     "free_bft_certificate_fields_in_ticket": false
   },
   "control": {

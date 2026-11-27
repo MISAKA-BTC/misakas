@@ -43,7 +43,7 @@ BFTが既存のG-COLL/G-COST/G-USE結果をPASSへ書き換えること、登録
 ### 3.1 三種類の尺度
 
 - `W_econ`: 認定された新規の規範仕事量（CCU整数）。採掘報酬とEXEC creditの共通基準。
-- `W_verify_upper`: 適格な検証・再実行の保守的上界。Panel/Gate Cの役務予約・受付可否に使い、Minerの仕事へ加算しない。
+- `W_verify_upper`: 適格な検証・再実行の保守的上界。Panelの役務予約・受付可否に使い、Minerの仕事へ加算しない。
 - `ResourceVector`: Nodeの局所Court検査、material、hash、署名、帯域、RAM/VRAM、disk、live stock、carrierを別次元で予約する。W_econが小さくても資源負担が大きいjobを無条件受付しない。
 
 `W_econ` は物理的な実行時間・電力や普遍的な計算費用下界ではない。共通の算術MAC-equivalentで価格を付ける規範量であり、正規計算を同じ結果で高速化することは許容する。FOW1のG-COST評価はBFTの任意判断資料として区別し、自動採用の条件にはしない。
@@ -81,9 +81,9 @@ FOW1の入力拘束・G-COST・一回性を維持する。合法的なbatch、GP
 
 ### 3.4 Nodeをmodel-freeに保つ
 
-登録時に有限graph/shapeを解析して不変の集計表を認証し、線形・区分和のclosed formを使う。claim受付時はbounded execution facts、token数、Stop、prefix origin、正規stage/branch集計のcommitmentを読む。Nodeはモデル重み全量取得やLLM完全再実行を行わない。元claimに束縛されたwork factsについてPanel/Gate Cが独立再実行で照合し、個別positionのshape・branch・origin・count・合計不一致を既存Courtの有界局所反証で裁けるようにする。分解の完全性が未接続なら成功させない。
+登録時に有限graph/shapeを解析して不変の集計表を認証し、線形・区分和のclosed formを使う。claim受付時はbounded execution facts、token数、Stop、prefix origin、正規stage/branch集計のcommitmentを読む。Nodeはモデル重み全量取得やLLM完全再実行を行わない。元claimに束縛されたwork factsについてPanelが独立再実行で照合し、個別positionのshape・branch・origin・count・合計不一致を既存Courtの有界局所反証で裁けるようにする。分解の完全性が未接続なら成功させない。
 
-受付時は `W_est` と `W_max` のみで、成功Final・Gate Cと正規Ticketを経るまで経済creditに使う `W_cert` を確定しない。Producerの実測値、RPC estimate、登録者の自己申告は合意値でない。署名済みfactsだけで計算が正しいとみなさない。
+受付時は `W_est` と `W_max` のみで、成功Final・公開Court条件と正規Ticketを経るまで経済creditに使う `W_cert` を確定しない。Producerの実測値、RPC estimate、登録者の自己申告は合意値でない。署名済みfactsだけで計算が正しいとみなさない。
 
 ## 4. FOW1の一試行一Ticketと公平な報酬
 
@@ -98,7 +98,7 @@ FOW1の256bit Ticket `T=H_FOW1-ticket(Enc_P(s,R_x,R_y,R_z,R_tau))`、正規TB1�
 ```
 R_quote(W) = floor(a_e * W / b_e)
 R_max      = R_quote(W_max)
-R_actual   = R_quote(W_cert)   // 正規当選・Final・Gate C・成熟その他全gate成立後
+R_actual   = R_quote(W_cert)   // 正規当選・Final・公開Court条件・成熟その他全gate成立後
 ```
 
 `R_actual` はMOE3の配分対象原資Cのうち当該仕事へ予約された総額であり、Minerの直接MISAKA受取ではない。受付時に `R_max` を全額確保できなければ新規試行を許さない（又は試行前に小さいjob envelopeを新規予約する）。事後的な倍率／cap clipping／勝者間の減額で公平性を変更しない。実行長に応じた未使用予約の解放は、同一sourceの期限・終端に従う。`R_quote=0` は新たなmintがない場合として明示し、resourceや既存の検証義務を免除しない。
@@ -128,7 +128,7 @@ MOE3 §2.1の `c_m=1`、7日相当平均bondの既存 `A_m=mean_bond_m^(3/2)`、
 
 ```
 F = floor(50*C/1000)      // BFT 5%, MISAKA
-P = floor(50*C/1000)      // Panel + Gate C 5%, MISAKA
+P = floor(50*C/1000)      // Panel 5%, MISAKA
 A = floor(200*C/1000)     // LP MISAKA
 J = floor(200*C/1000)     // LP POSITION購入原価
 D = C - F - P - A - J    // Miner購入原価50% + 端数
@@ -137,15 +137,15 @@ B = D + J                // 一括購入原価70%
 
 複数modelはRFC-0016 §4.3の結合按分を**そのまま**使う：`E=D-2J`、`J_i=apportion(J,r)`、`A_i=J_i`、`E_i=apportion(E,r)`、`D_i=2J_i+E_i`。最大剰余、canonical model IDでtie-break。`B_i=D_i+J_i`。各modelで5%を再控除しない。丸めにより各modelの個別配分が名目50/20/20と完全一致するとは限らない。`C`は全sourceの上限内、P/F合計は共通原資で一回。
 
-市場はRFC-0016の `X=V+r`、`q=floor(B_i U/(X+B_i))`、`L=floor(q J_i/B_i)`、`M=q-L`、`r'=r+B_i+A_i`、`U'=U-M`、holder `H'=H+M` を使用する。V・seedの既存制約、POSITION atoms、小額dust、quote、期限、一回消費、checked広幅整数を維持。名目2/7は実購入予算比と一致する場合だけ。旧MOE2のreserve比LPや余剰burn、外部LP引出し、virtual reserve換金を追加しない。MをMiner側に配る際は同model内の認証済み採掘配分plan・責任hold・成熟に従う。市場失敗に伴うP/Fの横取り禁止、役務費用不足は別途診断・受付制御する。5%枠がGate C費用を賄えることは実測前に保証しない。
+市場はRFC-0016の `X=V+r`、`q=floor(B_i U/(X+B_i))`、`L=floor(q J_i/B_i)`、`M=q-L`、`r'=r+B_i+A_i`、`U'=U-M`、holder `H'=H+M` を使用する。V・seedの既存制約、POSITION atoms、小額dust、quote、期限、一回消費、checked広幅整数を維持。名目2/7は実購入予算比と一致する場合だけ。旧MOE2のreserve比LPや余剰burn、外部LP引出し、virtual reserve換金を追加しない。MをMiner側に配る際は同model内の認証済み採掘配分plan・責任hold・成熟に従う。市場失敗に伴うP/Fの横取り禁止、役務費用不足は別途診断・受付制御する。5%枠がPanel再実行費用を賄えることは実測前に保証しない。
 
-BMR1の個別Court slashは実回収額Sの累積に対する `floor(490*S/1000)` の差分を有効なPanel/Gate C発見・立証者へ一度、残差をburn。BFT恒久廃止の100%burn/失効と混ぜない。全検証bondはBFT廃止から保護し、個別責任は維持。恒久廃止は対象marketの現存real reserveと用途別lot等に限定する。新規未発行の取消と既発行資産burnを二重計数しない。
+BMR1の個別Court slashは実回収額Sの累積に対する `floor(490*S/1000)` の差分を有効な選出内外の発見・立証者へ一度、残差をburn。BFT恒久廃止の100%burn/失効と混ぜない。全検証bondはBFT廃止から保護し、個別責任は維持。恒久廃止は対象marketの現存real reserveと用途別lot等に限定する。新規未発行の取消と既発行資産burnを二重計数しない。
 
 ## 6. EXEC credit（1 BPSと10分確定目標）
 
 ### 6.1 仕事から生成権へ
 
-本版では**同じFOW1正規当選・成功Final・独立Gate C・成熟・依存・一回会計・現在の適格性を満たす仕事**から有限creditを発行する。落選仕事を別入口で合意credit化しない。Ticketは一枚のみ、EXEC quantumは当選抽選券ではなく既に認定された生成権の数量である。Coinbaseの予約・支払いとEXECの発行は別purposeの一回性を持ち、同じ仕事を新しい仕事として重ねない。
+本版では**同じFOW1正規当選・成功Final・公開Court条件・成熟・依存・一回会計・現在の適格性を満たす仕事**から有限creditを発行する。落選仕事を別入口で合意credit化しない。Ticketは一枚のみ、EXEC quantumは当選抽選券ではなく既に認定された生成権の数量である。Coinbaseの予約・支払いとEXECの発行は別purposeの一回性を持ち、同じ仕事を新しい仕事として重ねない。
 
 共通 `Q_exec>0`（CCU/生成権）と上限を試行前のprofileに固定し、 `n=floor(W_cert/Q_exec)`、`r=W_cert mod Q_exec` とする。端数はRFC-0014のfreeze→独立TB1 SCHEDULE seedの規範で `Pr(extra=1)=r/Q_exec` とする方式を提案する。実装は有限かつ偏りのない範囲サンプリング（固定widthの rejection sampling、試行上限と未成立時の保留/失効を規定）または等価な厳密整数規則を使う。旧 `lead_u64 % quantum` を任意u128範囲へ無条件流用しない。上限での失敗・丸め誤差を報告し、別seedによる引き直しを禁止。`n+extra` の最大値が予約上限に収まらないなら試行前に拒否する。候補集合・W・権利ownerはseed以前に固定し、生成権不足を無認証発行で埋めない。
 
@@ -155,11 +155,11 @@ BMR1の個別Court slashは実回収額Sの累積に対する `floor(490*S/1000)
 
 ### 6.2 共通carrierの1 BPS
 
-RFC-0014の全kind共通global 1000ms slot、最大1正規外側carrier/slotを維持する。10分区間には名目最大600枠であり、Court・認証・資料・制御・bootstrap・復旧の保護枠があるため600通常EXEC_TXを常に保証しない。EXEC_TXとEXEC_SLICEを混ぜない。scheduleと生成権の事前公開・署名・閉鎖・消費、既存の正規carrier取り込みを維持。claim/反証/Gate C/新scheduleは既発行creditだけに依存させず、循環deadlockを作らない。
+RFC-0014の全kind共通global 1000ms slot、最大1正規外側carrier/slotを維持する。10分区間には名目最大600枠であり、Court・認証・資料・制御・bootstrap・復旧の保護枠があるため600通常EXEC_TXを常に保証しない。EXEC_TXとEXEC_SLICEを混ぜない。scheduleと生成権の事前公開・署名・閉鎖・消費、既存の正規carrier取り込みを維持。claim/公開反証/新scheduleは既発行creditだけに依存させず、循環deadlockを作らない。
 
 ### 6.3 600秒の台帳確定目標
 
-台帳のsafe/settled frontier進行を通常健全時の**平均600秒の設計目標**とする。これは個別claimのFinal期限・Gate C期限・TB1 round・DAA・120秒のRFC-0014計画/difficulty epoch・1秒slotを一括変更するものではない。既存の合意安全条件、保護期間、異議、成熟が成立した範囲だけ確定する。600秒で強制Final、空の証明、未認証weight、依存のある未確定UTXOの確定を認めない。実際のfinality latencyとfrontier進行間隔を別々に測り、達成不能なら原因と性能目標の再設計を報告する。BFTへ台帳finalityやfork choiceの権限を与えない。
+台帳のsafe/settled frontier進行を通常健全時の**平均600秒の設計目標**とする。これは個別claimのFinal期限・公開異議期限・TB1 round・DAA・120秒のRFC-0014計画/difficulty epoch・1秒slotを一括変更するものではない。既存の合意安全条件、保護期間、異議、成熟が成立した範囲だけ確定する。600秒で強制Final、空の証明、未認証weight、依存のある未確定UTXOの確定を認めない。実際のfinality latencyとfrontier進行間隔を別々に測り、達成不能なら原因と性能目標の再設計を報告する。BFTへ台帳finalityやfork choiceの権限を与えない。
 
 EXEC生成数からcoinbase発行を独立させる。既存発行scheduleのsourceと認証済みcredit/報酬予算を使い、heartbeatや空EXECを発行源にしない。DAAと実時間の変換は既存ClockBridge、canonical clockに従う。短時間試験用profileは公開規則を変えない。
 
@@ -169,7 +169,7 @@ EXEC生成数からcoinbase発行を独立させる。既存発行scheduleのsou
 
 比較suiteでは正確なHF repository/revision、artifact digest、tokenizer、量子化、入力frame、context、output/Stop、実行contractを固定する。ユーザーの例であるQwen2BとFlash Nextは正確なモデルIDが未指定なので、測定対象の同定を先に行う。実測では稼働expert数と実行shapeを保存し、同じtoken geometryと同一テキストを別に試験する。既存の異なる標準jobのCCU表から報酬倍率を決定しない。
 
-PGM1等のGPU/低RAM runtimeは同じFOW1数値・trace・work factsを生成しなければならない。RAM/VRAM/SSD配置、batch/fusionは経済値を変えない。性能較正ではtoken/s、prefill/decode、claim-ready latency、Panel/Gate Cの独立再実行、初回取得、spool、peak RAM/VRAM、SSD・帯域、電力（測定可否を明示）を記録する。実機時間をNodeの合意値にしない。較正結果から未知アルゴリズムの費用下界や同等の実費収益を保証しない。
+PGM1等のGPU/低RAM runtimeは同じFOW1数値・trace・work factsを生成しなければならない。RAM/VRAM/SSD配置、batch/fusionは経済値を変えない。性能較正ではtoken/s、prefill/decode、claim-ready latency、Panelの独立再実行、初回取得、spool、peak RAM/VRAM、SSD・帯域、電力（測定可否を明示）を記録する。実機時間をNodeの合意値にしない。較正結果から未知アルゴリズムの費用下界や同等の実費収益を保証しない。
 
 ## 8. 更新、移行、障害
 
@@ -184,9 +184,9 @@ reorgはcanonical branchのjournalをundoし、source残高、model cap、予約
 1. 同一FOW1 instanceのCPU/GPU/streamed executionでwork vector・W・四Root・Ticket・正規エラーが一致する。
 2. 固定小型Dense、大型Dense、active MoE、Attention長、EOS、QF1 stage、prefix、分岐の手計算とnative meterが一致する。宣言膨張・leaf粒度・inactive expert・再包装・偽originに増額しない。
 3. BFT YES/NOは共通meterを使用し、BFTの任意係数や未知kernelを拒否。測定UNKNOWNをPASSにしない。既存停止・QF1 hold維持。
-4. FOW1の唯一target、境界・0/2^256、事後変更拒否、落選・Final前・Gate C前のmint拒否。予算不足を試行前に検出。整数floorとモデル間条件付き期待原資を参照式で確認。
+4. FOW1の唯一target、境界・0/2^256、事後変更拒否、落選・Final前・異議期間満了前のmint拒否。予算不足を試行前に検出。整数floorとモデル間条件付き期待原資を参照式で確認。
 5. MOE3同一Cの5leg、複数model結合按分・実予算比LP・8桁POSITION・dust・quote・P/F保護、BMR1の独立49/51と100%burnが原子的に一致。
 6. EXEC creditの一回発行・同一用途二重消費拒否、future seed freeze、丸め・上限、global 1 BPS/保護枠、落選仕事のcredit不可、再起動/reorgで状態一致。
-7. 既存のコードと短時間fixtureで全経路を先に接続。その後実LLMの一貫したclaimでFinal/Gate C/当選・報酬・EXECを3ピアで確認。Pruned Node/Archival Node一致、IBD、物理保存容量、連続1 BPS供給条件と600秒frontier目標を長時間試験で測る。
+7. 既存のコードと短時間fixtureで全経路を先に接続。その後実LLMの一貫したclaimで公開Courtを経たFinal/当選・報酬・EXECを3ピアで確認。Pruned Node/Archival Node一致、IBD、物理保存容量、連続1 BPS供給条件と600秒frontier目標を長時間試験で測る。
 
 実装／試験／評価／採択／activationは区別する。設計の追加を公開済み、実機公平性の達成、全経路の実装済みとはしない。具体的な実装順序・diagnostics・例示fixtureは[詳細設計](../design/palw/economics/mwa1-implementation.md)を参照する。

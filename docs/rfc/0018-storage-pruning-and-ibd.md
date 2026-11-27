@@ -14,7 +14,7 @@ node-local cache、再取得可能な派生pack、終端済み資料、古いsna
 
 ## 2. pruning不変条件
 
-hot state、cold state、snapshot、IBD staging、Court body、trace、delta、署名・曝露journalのlive setを明示する。claimがFinalでもGate C、支払い、係争、依存、保持が終わるまでpinを外さない。
+hot state、cold state、snapshot、IBD staging、Court body、trace、delta、署名・曝露journalのlive setを明示する。claimがFinalでも公開異議期間、支払い、係争、依存、保持が終わるまでpinを外さない。
 
 prune許可は認証されたfrontier、元責任終端、material_until、reorg保持、他recordからの参照で決める。未解決liabilityを保存先移動で消さない。pruned Nodeも同じconsensus判定を再現する。
 

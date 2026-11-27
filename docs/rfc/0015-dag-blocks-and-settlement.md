@@ -14,7 +14,7 @@ PALWの正規仕事・権利・合意規則に基づいてDAGを選択する。B
 
 ## 2. 受賞ブロックの条件
 
-受賞候補は元claim、model/profile、正規Ticket、当選権利、仕事キー、producer/beneficiary、選択親、報酬原資、署名を束縛する。validatorは親状態からFinal、独立Gate C、成熟、現在の停止/取消、期限、予算、未消費を再計算する。
+受賞候補は元claim、model/profile、正規Ticket、当選権利、仕事キー、producer/beneficiary、選択親、報酬原資、署名を束縛する。validatorは親状態からFinal、公開Court条件、成熟、現在の停止/取消、期限、予算、未消費を再計算する。
 
 署名検査、当選確認、権利消費、予算減算、work identity、報酬出力、market適用が必要なprofileではその決済を、同じ原子遷移へ結合する。途中だけ成功して二回支払いできる状態を作らない。
 
@@ -32,7 +32,7 @@ Panel anchorのproducer特権と採用認可を混同しない。anchor/grinding
 
 ## 5. 決済frontier
 
-claim Final、Gate C認証、受賞block選択、報酬出力の包含、safe/settled frontier、支出可能性を別状態にする。報酬出力の受付位置を覆う認証済み後続attempt等、対象profileの決済条件を満たしてからSettledとする。
+claim Final、公開Court条件、受賞block選択、報酬出力の包含、safe/settled frontier、支出可能性を別状態にする。報酬出力の受付位置を覆う認証済み後続attempt等、対象profileの決済条件を満たしてからSettledとする。
 
 直前frontierが報酬位置の一つ前まで進んだだけでは決済済みにしない。DAAだけの進行や未認証後続attemptを確定根拠にしない。整数の境界と包含位置はprofileの正規比較を使う。
 
@@ -40,7 +40,7 @@ claim Final、Gate C認証、受賞block選択、報酬出力の包含、safe/se
 
 認証失効、conviction、依存取消によるweight/権利停止は対象scopeへ伝播する。消費済み権利、未成熟報酬、確定済み取引を一律に同じrollback対象とせず、受理時規則に従う。
 
-選択枝から受賞が外れたら旧報酬を現在枝の決済と表示しない。同じ権利を別候補が消費した場合は、署名、claim、権利、Panel/Gate C、全peer受理を再検査してから観測checkpointを更新する。
+選択枝から受賞が外れたら旧報酬を現在枝の決済と表示しない。同じ権利を別候補が消費した場合は、署名、claim、権利、Panel、全peer受理を再検査してから観測checkpointを更新する。
 
 保存deltaのundoで親root、redoで子rootと全会計を再現する。市場処理は同じblockの更新前reserveから再計算し、改変された差分を適用・巻戻しの両方で拒否する。
 
@@ -50,7 +50,7 @@ nativeの正規支払・権利をEVM側へ結合する場合も、同じsource�
 
 ## 8. 受入条件
 
-実LLM claim由来の受賞を通常経路で生成し、3peerで同一block hash、選択状態、適用後root、仕事キー、権利消費、予算差分、報酬出力を照合する。重複block、別候補競合、無Gate C、資金不足、選択親変更、再起動、reorg、pruned復元を検証する。
+実LLM claim由来の受賞を通常経路で生成し、3peerで同一block hash、選択状態、適用後root、仕事キー、権利消費、予算差分、報酬出力を照合する。重複block、別候補競合、公開異議期間中の受賞、資金不足、選択親変更、再起動、reorg、pruned復元を検証する。
 
 ## 9. EVMとnativeの状態境界
 

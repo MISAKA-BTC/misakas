@@ -55,10 +55,10 @@
     {
       "key": "gate_c_policy",
       "symbol": "DrawPolicy",
-      "baseline": "対象profileで明示固定",
+      "baseline": "既受理の旧profileのみ",
       "unit": "policy",
       "approval_state": "ADOPTED_DESIGN_NOT_ACTIVATED",
-      "guard": "抽選位置数・人数・承認閾値を混同しない。ここで本番値を捏造しない。",
+      "guard": "新規profileに抽選・承認義務を生成しない。旧claimには元DrawPolicyを適用する。",
       "source": "docs/rfc/0011-gate-c-and-consensus-credit.md",
       "runtime_config_changed": false
     },
@@ -68,7 +68,7 @@
       "baseline": "1",
       "unit": "selected seat",
       "approval_state": "ADOPTED_DESIGN_NOT_ACTIVATED",
-      "guard": "producer除外。独立Gate Cの要件を減らさない。",
+      "guard": "producer除外。選出外の公開反証を受け付ける。",
       "source": "docs/rfc/0008-g14-panel-and-verification.md",
       "runtime_config_changed": false
     },
@@ -265,7 +265,7 @@
     {
       "key": "moe3_direct_misaka_reward",
       "symbol": "D",
-      "baseline": "0 direct MISAKA to Miner; Panel/Gate C P=5% and BFT F=5% are MISAKA",
+      "baseline": "0 direct MISAKA to Miner; Panel P=5% and BFT F=5% are MISAKA",
       "unit": "MISAKA atomic units",
       "guard": "All legs share one C split. No W/P variable pre-stage, core exemption, direct-MISAKA Miner fallback, or double 5% deduction.",
       "source": "docs/rfc/0016-position-market-and-rewards.md",
@@ -503,11 +503,11 @@
       "runtime_config_changed": false
     },
     {
-      "key": "moe3_panel_gatec_misaka_permille",
+      "key": "moe3_panel_misaka_permille",
       "symbol": "P",
       "baseline": "50; P=floor(50C/1000)",
       "unit": "permille of C paid in MISAKA",
-      "guard": "5% total fixed by latest user; internal Panel/Gate C shares use authenticated plan, no invented equal split; verification receives MISAKA, not POSITION",
+      "guard": "5% is allocated to authenticated Panel service assignments.",
       "source": "docs/rfc/0016-position-market-and-rewards.md",
       "approval_state": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "runtime_config_changed": false

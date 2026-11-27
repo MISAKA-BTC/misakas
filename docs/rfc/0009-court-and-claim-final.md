@@ -28,7 +28,7 @@ collect_until、material_until、責任終端、reorg保持を別欄にする。
 
 ## 4. 単独反証と肯定資料の優先関係
 
-適格反証はPanel又はGate Cの肯定承認より優先する。多数票で算術不一致を正常化しない。複数の矛盾したclaimがある場合は、それぞれの元commitmentに対する客観的違反を判断する。
+適格反証はPanelの肯定承認より優先する。多数票で算術不一致を正常化しない。複数の矛盾したclaimがある場合は、それぞれの元commitmentに対する客観的違反を判断する。
 
 不一致箇所の対話局所化は任意である。すでに局所化された反証を直接受理し、相手の協力を必須にしない。単なるRootの相違だけではどちらが不正かを断定しない。
 
@@ -76,7 +76,7 @@ G-13の既存seat下限を適用するprofileでは240,000 BILIをdraw/bind/room
 
 native claimの責任horizonは元署名入力と受付rulesetから`Final下限 + window_court`として導く。後続EXEC等が責任を延ばすprofileでは、短い別lifetimeで上書きしない。保持中の未払fee、資本、pending caseをhorizonまで追跡し、条件成立時の支払い、契約に従うrefund、個別slashを別遷移にする。
 
-Panel-licensed Finalの記録専用eventは、対象profileが認めない限りbeacon sourceや合意creditへ計上しない。記録専用行の再読出しを、独立Gate Cの成功として扱わない。
+Panel-licensed Finalの記録専用eventは、対象profileが認めない限りbeacon sourceや合意creditへ計上しない。記録専用行の再読出しを、公開Court条件の成功として扱わない。
 
 ## 11. 直列witness filingの時計【提案】
 

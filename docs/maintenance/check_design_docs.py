@@ -65,7 +65,8 @@ def main():
     for x in ['mathematical_proof_required','cost_measurement_evidence_required','utility_evaluation_evidence_required','hard_technical_failure_may_be_overridden','ledger_finality_authority']:
         if policies['admission']['bft'][x] is not False:errors.append('wrong BFT boundary: '+x)
     if not policies['admission']['control']['all_models_bft_managed']:errors.append('model management exemption')
-    if policies['admission']['assurance']['claims_bypass_panel_court_or_gate_c'] is not False:errors.append('claim bypass')
+    if policies['admission']['assurance']['claims_bypass_g14_or_public_court'] is not False:errors.append('claim bypass')
+    if policies['admission']['assurance']['independent_gate_c_required_for_new_claims'] is not False:errors.append('new claim requires independent Gate C')
     proposed=(d/'rfc/0013-model-work-accounting.md').read_text()
     if 'PROPOSED_DESIGN_NOT_ACTIVATED' not in proposed:errors.append('MWA1 status incorrectly promoted')
     storage=(d/'rfc/0018-storage-pruning-and-ibd.md').read_text()

@@ -9,7 +9,7 @@
 | `admission_routes` | BFT_DECISION only | route | [仕様](../rfc/0007-bft-model-admission.md) |
 | `bft_n` | 3*f+1; f>=1 | operators | [仕様](../rfc/0007-bft-model-admission.md) |
 | `bft_q` | 2*f+1 | distinct signatures | [仕様](../rfc/0007-bft-model-admission.md) |
-| `gate_c_policy` | 対象profileで明示固定 | policy | [仕様](../rfc/0011-gate-c-and-consensus-credit.md) |
+| `gate_c_policy` | 既受理の旧profileのみ | policy | [仕様](../rfc/0011-gate-c-and-consensus-credit.md) |
 | `g14_panel_seats` | 1 | selected seat | [仕様](../rfc/0008-g14-panel-and-verification.md) |
 | `existing_batch_notice_daa` | a+3120 | DAA | [仕様](../rfc/0009-court-and-claim-final.md) |
 | `existing_batch_hard_daa` | a+10000 | DAA | [仕様](../rfc/0009-court-and-claim-final.md) |
@@ -30,7 +30,7 @@
 | `moe3_lp_misaka_permille` | 200; A=floor(200C/1000) | permille of C | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_lp_position_fraction` | ell=floor(q*J/B), for B>0 | POSITION atomic units | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_miner_position_residual` | m=q-ell | POSITION atomic units | [仕様](../rfc/0016-position-market-and-rewards.md) |
-| `moe3_direct_misaka_reward` | 0 direct MISAKA to Miner; Panel/Gate C P=5% and BFT F=5% are MISAKA | MISAKA atomic units | [仕様](../rfc/0016-position-market-and-rewards.md) |
+| `moe3_direct_misaka_reward` | 0 direct MISAKA to Miner; Panel P=5% and BFT F=5% are MISAKA | MISAKA atomic units | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_normal_owner_fee_permille` | 10 with creator; 0 for canonical creator-less genesis | permille of gross normal AMM trade | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_normal_burn_fee_permille` | 50 (unchanged) | permille of gross normal AMM trade | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_internal_fee_permille` | 0 (unchanged) | permille | [仕様](../rfc/0016-position-market-and-rewards.md) |
@@ -54,7 +54,7 @@
 | `moe3_distribution_basis` | one target coinbase budget, split exactly once | MISAKA atoms | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_miner_purchase_residual` | C-F-P-A-J; nominal 500 permille plus all currency remainder | MISAKA atoms for Miner POSITION purchase | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `moe3_lp_position_purchase_permille` | 200; J=floor(200C/1000) | permille of C for LP POSITION purchase | [仕様](../rfc/0016-position-market-and-rewards.md) |
-| `moe3_panel_gatec_misaka_permille` | 50; P=floor(50C/1000) | permille of C paid in MISAKA | [仕様](../rfc/0016-position-market-and-rewards.md) |
+| `moe3_panel_misaka_permille` | 50; P=floor(50C/1000) | permille of C paid in MISAKA | [仕様](../rfc/0016-position-market-and-rewards.md) |
 | `bmr1_court_verification_reward_permille` | 490; E=floor(490S/1000) | permille of actual recovered MISAKA S in individual Court slash | [仕様](../rfc/0017-model-stop-and-retirement.md) |
 | `bmr1_court_burn_residual` | S-E; nominal 510 permille plus rounding remainder | MISAKA atoms recovered by Court | [仕様](../rfc/0017-model-stop-and-retirement.md) |
 | `bmr1_court_reward_once_no_self` | no offender self-slash reward; one reward per offence | recipient and idempotence rule | [仕様](../rfc/0017-model-stop-and-retirement.md) |

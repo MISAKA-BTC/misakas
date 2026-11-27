@@ -1,3 +1,7 @@
+## 2026-11-27 ユーザー決定（新規profileの合意credit）
+
+RFC-0011・ADR-0011を適用する。新規claimはG14選出1席の完全再実行、選出外にも開かれた資料要求・反証、元期限とCourtの解決を必要とする。独立Gate Cは旧claimの受付時契約に限る。Panel役務は5%、BFTは5%。個別Courtの実回収額の49%枠は選出外を含む適格な立証者へ、残差はburn。下記の旧Gate C必須記述は新規profileではこの決定が置き換える。
+
 # MISAKA — agent instructions
 
 This file is read automatically by coding agents (Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`). The design premise above all ADRs/RFCs is [docs/PRINCIPLES.md](docs/PRINCIPLES.md).

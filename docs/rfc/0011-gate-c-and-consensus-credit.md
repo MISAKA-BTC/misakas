@@ -1,57 +1,28 @@
-# RFC-0011 — 独立Gate C・合意credit認証
+# RFC-0011 — G14・公開Courtによる合意credit
 
-- 文書日付：2026-11-26（Asia/Tokyo）
-- 文書区分：**DESIGN_SPECIFICATION**。採択済みの規則を統合する。提案に限る部分は該当節で明示する。
-- 判断理由：[ADR-0011](../adr/0011-independent-gate-c-certification.md)
-- 規範入口：[設計原則](../PRINCIPLES.md)／[RFC一覧](README.md)
-- 本文は実装の設計を定める。実装・実測・公開有効化の完了を示すものではない。
+- 改定日　2026-11-27。DESIGN_SPECIFICATION、採択済み。公開有効化はRFC-0020による。
+- 判断理由は[ADR-0011](../adr/0011-independent-gate-c-certification.md)、Finalの遷移は[RFC-0009](0009-court-and-claim-final.md)に従う。
 
-## 1. 目的
+## 1. 安全性の前提
 
-独立Gate Cは、claimのFinalを合意weight・EXEC credit・受賞・決済へ利用する前に、抽選された検証者による仕事認証を要求する。合意資源の付与は本RFCの独立認証条件を必須とする。
+新profileでは独立Gate Cを廃止する。G14の選出1席が指定された仕事を完全再実行し、元claimとassignmentに署名する。選出外を含む誰でも全FOW1 claimを発見し、同じモデル・入力・実行資料を取得して再実行し、公開Courtへ提出できる。Public Panelはこの経路を使う参加者の呼称で、登録資格・抽選・定足数を追加しない。
 
-Gate Cは計算の暗号学的証明ではなく、明示した正直割合、資料取得、参加、期限内包含の前提を持つ認証である。G14の一人の正直Panelという条件から、Gate Cの故障比率は導けない。
+安全性には、不正claimごとに少なくとも一人の正直な監視者が実際に検査し、資料を取得するか供給違反を申し立て、元期限内に有効な要求・反証が包含されて裁定されることを仮定する。監視者の不在、取得不能、検閲、Court容量不足の下では不正を見逃し得る。署名や未告発の件数から監視の実施を推定しない。
 
-## 2. 状態を分離する
+## 2. Finalと反証
 
-```text
-ClaimFinal != SecurityCertified != AwardAccepted != Settled
-```
+各Nodeは選択枝で元claim、選出1席の有効な完全再実行承認、資料公開と供給義務、元の異議期間の経過、全依存、Courtの終端を確認する。期間中、未解決case、未履行資料義務、成立した反証、取り消された依存では成功Finalを与えない。根拠を欠く異議には元の有界受付規則を使う。正当な単独反証は虚偽承認に優先する。BFTはモデルの採用・停止・廃止を担う。
 
-claimはFinalであっても認証待ちになり得る。未認証claimはfork choiceの仕事weight、EXEC credit、受賞支払い、決済frontierへの成功効果を持たない。ローカルreplayの一致を独立認証の代替にしない。
+Minerの不正とPanelの虚偽承認は、各人の署名・義務・違反証拠・責任lotに個別に結び付けて裁く。片方の有罪だけで他方をslashしない。選出外の立証者も、元証拠・identity・決定論的分配planの条件を満たせば受給できる。累計実回収額から49%をfloorした枠の増分を一度だけ割り当て、残差をburnする。通常のPanel役務5%は別原資とする。
 
-## 3. 抽選と独立性
+## 3. 合意・決済・保存
 
-母集団、bond、capability、役務期間、重み、actor除外、抽選位置数、承認閾値、復元/非復元、失効条件を対象profileのDrawPolicyで固定する。元claimの検証Panelと同一の承認票を流用しない。
+producer、validator、RPC、再起動・IBDは受付時profileと同じ選択親から仕事の適格性を導く。新profileでは上記の成功Final、当該効果が要する成熟・当選・未消費権利・依存・予算を検査する。独立抽選、attestation、SecurityCertified行を要求または合成しない。fork choiceのsafe weight・safe frontier、immature/live量の区分、rule E、EXEC credit、受賞・発行、settlement depthとsettled anchorに適用する。保留中の仕事から成功creditを先取りしない。受賞の選択と報酬UTXOの決済はそれぞれの原条件を満たす。heartbeatによる時計の進行だけでfrontierを進めない。
 
-同じbondへ複数位置が割り当てられるprofileでは、抽選位置数と人数を別に報告する。一人に多数位置が集まった事実を、多数の独立検証者がいたこととして表示しない。固定された抽選規則を、都合のよい人数へ変更して成功させない。
+未決Court、資料供給・責任の元期限、依存、未消費権利、既受理の署名、reorg用の差分を保存する。pruned importは受付世代、Finalの根拠と未解決義務を検査し、巻き戻しで同じ元期限と残高を復元する。
 
-乱数はprofileが指定するTB1 purpose/sessionから取得し、対象集合を公開前に固定する。model採用のBFT票をGate C票へ転用せず、用途別authorityと署名domainを検査する。
+## 4. 移行と公開判定
 
-## 4. 検証者の仕事
+新規則の開始点・network・profile版を明示し、claim受付時に固定する。開始前のclaim、既存Gate C抽選・署名・認証、成立報酬、検証lot、元期限は旧契約で完結する。現在時刻で既存claimを新規則に移さない。旧wire tagを再定義しない。移行未実装のノードで認証フラグを切って新profileの成功としない。
 
-検証者は元claimのmodel/input/trace/Readoutと認証された資料を取得し、対象profileの検査義務を実行する。完全再実行を要求するprofileでは部分検査だけで承認しない。model非保有の検証者は取得から始められるが、取得機会がないまま正常承認してはならない。
-
-承認はclaim、抽選record、担当位置、検査policy、世代、元期限に結合する。不一致は適格反証へ、資料不足は資料case又は未検証終端へ進める。
-
-## 5. 認証述語
-
-Nodeは元claimの状態、正規抽選、適格な署名、重複排除、必要承認数、拒否/失効、期限、未解決case、依存を同じcanonical状態から確認する。無署名、少数の任意承認、別roundの承認、失効後の票を数えない。
-
-認証後でも責任期間内の有効反証・取消は規定の成功効果を停止する。認証の寿命、失効、再審、依存creditへの伝播はprofileで固定し、再抽選による無限の救済を行わない。
-
-## 6. 合意・決済への入口
-
-合意仕事を加算する関数を共有し、Final、SecurityCertified、成熟、失効、現在の依存、資本・責任上限を確認する。producer、validator、RPC見積もり、cold replay、IBDで別の簡略判定を作らない。
-
-決済frontierは認証された仕事と選択履歴から導く。heartbeatでDAAだけが進んだことを認証済み仕事の進行とみなさない。信用のない区間の活性と新規認証の循環を別に検証する。
-
-## 7. 検証項目
-
-Finalのみの受賞拒否、別actor/claim/epoch署名、抽選前署名、重複位置、同一operator集中、認証後conviction、restart、reorg、pruned import、旧profileの読取り互換を確認する。正当な否認とlocal障害の理由を保持する。
-
-## 8. 認証consumerと位置数
-
-既存の75抽選位置・必要賛成41位置のprofileは、そのDrawPolicyの一例として元規則を保持する。復元抽出で同一bondが複数位置を得る場合も、位置の重複とoperatorの独立性を別に検査・表示する。G14一席を理由に必要賛成位置を減らさない。
-
-safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来報酬、EXECは同じ認証gateに従う。未認証claimの合意creditは資本cap以内であってもゼロとする。利用者原資の有料役務fee/refundは、その個別契約の条件で別に処理し、新しい発行creditを作らない。
+公開前に各FOW1経路で、正常な仕事、選出外監視者によるMinerと虚偽承認Panelの反証、資料不供給、期限境界、重複提出、旧新claimの同居を通常入口から試験する。無効claimのweight・EXEC・報酬・frontierへの寄与がゼロであること、有効claimがGate C票なしで進むこと、ArchivalとPrunedのIBD・再起動・reorg後のroot・責任・UTXO一致を照合する。1 BPSと平均600秒は測定対象で、異議期間を短縮する条件に使わない。

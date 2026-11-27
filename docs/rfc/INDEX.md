@@ -14,7 +14,7 @@
 | RFC-0008 | [RFC-0008 — G14 Panel・完全再実行・肯定承認](0008-g14-panel-and-verification.md) | DESIGN_SPECIFICATION |
 | RFC-0009 | [RFC-0009 — Court・単独反証・claim Final](0009-court-and-claim-final.md) | DESIGN_SPECIFICATION |
 | RFC-0010 | [RFC-0010 — モデル資料・共有供給・有限資金契約](0010-materials-and-funded-delivery.md) | DESIGN_SPECIFICATION |
-| RFC-0011 | [RFC-0011 — 独立Gate C・合意credit認証](0011-gate-c-and-consensus-credit.md) | DESIGN_SPECIFICATION |
+| RFC-0011 | [RFC-0011 — G14・公開Courtによる合意credit](0011-gate-c-and-consensus-credit.md) | DESIGN_SPECIFICATION |
 | RFC-0012 | [RFC-0012 — 用途別bond・予算・Court slash](0012-bonds-budgets-and-slashing.md) | DESIGN_SPECIFICATION |
 | RFC-0013 | [RFC-0013 — MWA1：モデル別仕事量・報酬原資](0013-model-work-accounting.md) | PROPOSED_DESIGN_NOT_ACTIVATED |
 | RFC-0014 | [RFC-0014 — EXEC credit・schedule・共通容量・難易度](0014-exec-schedule-and-capacity.md) | DESIGN_SPECIFICATION |

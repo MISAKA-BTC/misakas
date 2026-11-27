@@ -86,7 +86,7 @@ BFTは全モデルを管理するが、既存descriptorの重みや数値意味�
 
 ## 8. 個別claimの検証
 
-BFT採用はモデルの利用認可であり、Minerの各計算の承認ではない。Panel完全再実行、Court、元期限、Final、独立Gate C、TB1、正規Ticket、権利消費、報酬会計を省略しない。
+BFT採用はモデルの利用認可であり、Minerの各計算の承認ではない。Panel完全再実行、Court、元期限、Final、公開Court条件、TB1、正規Ticket、権利消費、報酬会計を省略しない。
 
 BFTの集合交差は所定の故障仮定の下で相反決定を防ぐ認可上の性質であり、モデルの有用性・計算困難性・判断の正しさを証明しない。相反する有効quorumを検出したら対象proposalの新規成功を保留し、到着順で都合よく選ばない。
 
@@ -94,4 +94,4 @@ BFTの集合交差は所定の故障仮定の下で相反決定を防ぐ認可�
 
 activation前に署名codec、domain、roster権限、期限、容量、journal、旧claim cut、読み取り互換を確定する。既受理claimの元期限・責任・署名を変えず、旧自動承認を新BFT票として偽装しない。
 
-必須試験は、技術互換＋q YESでの追加、q未満/NO/期限切れの拒否、AUTO PASSだけでは追加不能、未知kernel＋YESの拒否、二重票、別scope、停止優先、genesisへの正規停止、reorg/restart、登録と市場の原子性、不正claimと無Gate C受賞の拒否である。
+必須試験は、技術互換＋q YESでの追加、q未満/NO/期限切れの拒否、AUTO PASSだけでは追加不能、未知kernel＋YESの拒否、二重票、別scope、停止優先、genesisへの正規停止、reorg/restart、登録と市場の原子性、不正claimと公開Court条件未達の受賞の拒否である。

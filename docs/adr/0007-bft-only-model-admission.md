@@ -26,4 +26,4 @@ kernel自動PASSによる採用、timeoutによる採用、BFT不成立時の自
 
 ## 帰結
 
-採否にはBFT参加者の判断と故障前提が入る。UNKNOWNはUNKNOWNのままであり、採用票は計算困難性の定理にならない。個別claimのPanel・Court・Gate Cを引き続き必要とする。
+採否にはBFT参加者の判断と故障前提が入る。UNKNOWNはUNKNOWNのままであり、採用票は計算困難性の定理にならない。個別claimのPanel・公開Courtを引き続き必要とする。

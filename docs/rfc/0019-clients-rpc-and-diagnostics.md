@@ -14,7 +14,7 @@ remote clientがNodeを持たない構成でも、帰属、署名対象、受取
 
 ## 2. 一件のclaimの診断
 
-次の段階を独立に返す：model採用、技術互換、資金/役務予約、実行、claim受付、Panel、資料/Court、Final、Gate C、Ticket、権利、受賞block、報酬出力、決済frontier。
+次の段階を独立に返す：model採用、技術互換、資金/役務予約、実行、claim受付、Panel、資料/Court、Final、公開Court条件、Ticket、権利、受賞block、報酬出力、決済frontier。
 
 各段階は状態、理由code、対象claim、選択親、state root、受付位置、元期限、次条件、再試行可否、根拠recordを持つ。`found=false`、診断API非対応、未登録、未同期、ローカル故障を同じ空応答にしない。
 
@@ -49,7 +49,7 @@ RPC受理、mempool、block包含、選択鎖、決済を別に観測する。�
 
 ## 6. 3peerの照合
 
-同じ選択tipと状態snapshotで、各peerから独立にregistry、claim、Panel、Court、Gate C、権利、UTXOを読む。tipがずれた応答を単純比較して不一致と断定しない。
+同じ選択tipと状態snapshotで、各peerから独立にregistry、claim、Panel、Court、資料義務、権利、UTXOを読む。tipがずれた応答を単純比較して不一致と断定しない。
 
 初回submitBlock、他peerへのP2P伝播、重複再提出を別記録にする。RPC成功だけを受賞成功と表示しない。実報酬が選択枝から外れた場合はcheckpointを再監査する。
 
@@ -61,7 +61,7 @@ RPC受理、mempool、block包含、選択鎖、決済を別に観測する。�
 
 CLI、RPC、SDK、Studioはnativeと同じhash幅、address checksum、asset単位、model/profile、署名domainを使用する。base-unit整数をfloatへ変換して予算・残高・Ticketを比較しない。JavaScriptで安全整数を超える値は整数文字列又は規定のbig integer codecで搬送する。
 
-親状態に依存する見積もりは`selected_parent`、policy identity、予約分解、必要額と利用可能額、元署名slotを束縛する。stale見積もりを別の親で受理済みと表示しない。受付・mempool滞留・選択履歴包含・Final・Gate C・当選・消費・決済を別段階にする。
+親状態に依存する見積もりは`selected_parent`、policy identity、予約分解、必要額と利用可能額、元署名slotを束縛する。stale見積もりを別の親で受理済みと表示しない。受付・mempool滞留・選択履歴包含・Final・公開Court条件・当選・消費・決済を別段階にする。
 
 原因を保持するerrorは下位原因、再試行分類、claim/case、parent/rootを持つ。transportで文字列へ変換しても機械判定用codeを失わない。`Halted`と`Corrupt`、`NotFinalized`と`OutsideWindow`、`Conflict`と`NativeUnavailable`を同じ文字列照合へ縮約しない。未対応RPCを正常な空結果又は不存在としてcacheしない。
 

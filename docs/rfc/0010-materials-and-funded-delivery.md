@@ -46,12 +46,12 @@ local資源不足、供給者不在、偽資料、署名不一致、期限切れ
 
 偽root、違うmodelの正しいtile、範囲外unit、別case、同意なし予約、同一slot再利用、再掲によるcase消失、供給競合、最遅応答、欠落body、走査上限、reorg、restart、pruned復元を確認する。
 
-資料取得の成功、全量再実行の成功、Courtでの裁定、Final、Gate Cをそれぞれ別の記録にする。
+資料取得の成功、全量再実行の成功、Courtでの裁定、成功Finalをそれぞれ別の記録にする。
 
 
 ## 8. Positive assignmentと原資契約
 
-本節は採択済みの限定契約と、その実装前に確定を要するwire候補を定める。`prover`は再実行・局所証拠の役務であり、暗号学的計算証明を生成しない。op・aux・domain・数値policyの候補は未割当状態を維持する。モデル採用はRFC-0007、全モデルの経済はRFC-0016、独立Gate CはRFC-0011へ結合する。
+本節は採択済みの限定契約と、その実装前に確定を要するwire候補を定める。`prover`は再実行・局所証拠の役務であり、暗号学的計算証明を生成しない。op・aux・domain・数値policyの候補は未割当状態を維持する。モデル採用はRFC-0007、全モデルの経済はRFC-0016、公開Court条件はRFC-0011へ結合する。
 
 最初の経路は既存TIR登録、受理済みCanonicalTirAssignment、後続body0 Result、Panel、Node、P、poster-funded settlementとする。新Resultはprimary L1 workを代替せず、PAV2/PAV3、own-template job、class ticket、L1 tag、PoW、既存発行規則を変更しない。assignmentの発行・block/Final weight entitlementはB=F=R=0とし、実資金・役務費用・資源までゼロにしない。
 
@@ -170,7 +170,7 @@ C_initial = C_qualified_service_paid + C_refunded
 
 結果がないこの時点ではCaseRowやResultRowを作らず、ゼロResultIdも保存しない。accepted assignmentは `Open` となる。Minerの通常推論は行えるが、初期profileの合意data/proverサービスはまだ開始しない。off-chainの任意作業をaccepted data receipt、課金可能なwitnessサービス又は未採択assignmentの受理へ昇格しない。
 
-Node側の全branch service/capacityは、policyの全合法branchと全Result受付時刻を覆う有限envelopeとして、実native ownerが予約する。prover build・Node check・fraud/liability・refundだけでなく、**Result受理をcommit起点とする既存actual Gate C policy**のanchor delay、draw queue/epoch容量、certify_by、attestation、decision/prosecution/pending-fraud条件とNoPopulation/Expired等の不成立branchを含める。P参加者のdata取得・保持・支払・安全返金の最遅時刻までを既存policyの最悪boundから導出し、`result_before + worst_existing_end_to_end_bound <= reserve_until` をchecked演算で必要とする。新しいP policyや短縮TTLで既存anchor/draw/decisionを省略しない。既存policyの全branchに有限な最悪boundを解決できなければ拒否する。
+NodeはResult受理から元の公開・異議期間、資料要求・回答、Court受付・裁定、支払・返金まで、合法な全branchの有限な資源と期限を予約する。result_before と最悪所要期間の和が reserve_until 以下であることをchecked演算で検査する。全branchの上界が決まらなければ受付を拒否する。旧profileの成立済みassignmentには元の抽選・失効・返金条件を適用する。
 
 単に将来capacityや自己申告のP所要日数を整数rowへ書くだけでは足りない。op9はこの同じpolicy、残余期間、actual lease、P用data供給/保持cutoffを再検査し、reserved envelopeからCaseへ原子的に移す。actor local実行資源とnative Node全体資源を区別し、実供給・inclusionの仮定を無条件の進行保証としない。必要なowner/preimageが無ければ受付拒否する。
 
@@ -268,7 +268,7 @@ paid worker successには純APIのappend-only用途 `WorkerPayment` を提案す
 
 r1全fieldと独立native期待値、元max context/CUゼロ、別worker/key/ancestor/rules/class/layout/inputの拒否、output依存funding cycle不在、nonce/bundleと全Result/Caseの一回消費、実UTXO/lock/prefix変更、payer/refund/caps、A/C二重払い、join/取消/未完duty、全原子的rollbackを検査する。
 
-Panel/P不成立を無関係なMinerの責任へ転嫁しない。Gate CのNoPopulation/Expiredとfinite bound欠落、P未完での計算credit/WorkerPayment拒否、適格service/refundの進行、WorkerPaymentからRewardへの誤用、reorg/restart/pruning/IBDの同値を検査する。
+Panel/P不成立を無関係なMinerの責任へ転嫁しない。Panel不成立・資料供給期限違反とfinite bound欠落、P未完での計算credit/WorkerPayment拒否、適格service/refundの進行、WorkerPaymentからRewardへの誤用、reorg/restart/pruning/IBDの同値を検査する。
 
 有限policy/scheduleのpreimage、実役務とnative block/globalのCPU/RAM/通信/保持/復旧、全consumer接続、独立reviewを有効化前に確認する。旧claimは元規則を維持し、未発効時の既存fingerprint/root/wireを変えない。設計採択だけで公開activationを行わない。
 
