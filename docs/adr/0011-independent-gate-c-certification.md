@@ -1,5 +1,7 @@
 # ADR-0011 — G14と公開Courtに合意creditを結び付ける理由
 
+- 文書区分：**DECISION_RATIONALE**
+
 2026-11-27 採択。対応仕様は[RFC-0011](../rfc/0011-gate-c-and-consensus-credit.md)。
 
 ## 背景

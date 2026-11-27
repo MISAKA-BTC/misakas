@@ -1,5 +1,7 @@
 # RFC-0011 — G14・公開Courtによる合意credit
 
+- 文書区分：**DESIGN_SPECIFICATION**
+
 - 改定日　2026-11-27。DESIGN_SPECIFICATION、採択済み。公開有効化はRFC-0020による。
 - 判断理由は[ADR-0011](../adr/0011-independent-gate-c-certification.md)、Finalの遷移は[RFC-0009](0009-court-and-claim-final.md)に従う。
 

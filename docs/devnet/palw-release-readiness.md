@@ -8,13 +8,25 @@
 
 | 回 | 改訂後の実装・検証方針 |
 |---|---|
-| 22 | 新規モデル追加・採用はRFC-0007に従い `BFT_DECISION` のみに統一し、`BaseCompatible` 検査・対象に紐づく任意測定資料の追跡・正規BFT承認による原子登録と市場作成を検証する。`KERNEL_AUTO` の自動採用は廃止（kernel解析・lowering・技術互換検査は維持、測定証拠の添付や一律合格閾値は票の有効条件にしない）。MOE3（RFC-0016）では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1（RFC-0017・RFC-0012）の恒久廃止では対象モデルの登録者・採掘bondと、Panel・Gate Cの個別Court責任（検証bondは一律保護）を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
+| 22 | 新規モデル追加・採用はRFC-0007に従い `BFT_DECISION` のみに統一し、`BaseCompatible` 検査・対象に紐づく任意測定資料の追跡・正規BFT承認による原子登録と市場作成を検証する。`KERNEL_AUTO` の自動採用は廃止（kernel解析・lowering・技術互換検査は維持、測定証拠の添付や一律合格閾値は票の有効条件にしない）。MOE3（RFC-0016）では元genesisを含む全モデルを共通管理し、係数1.0、一意市場とする。新規のfork特別区分・元genesisの管理免除は廃止。BMR1（RFC-0017・RFC-0012）の恒久廃止では対象モデルの登録者・採掘bondと、Miner・虚偽承認Panelの個別Court責任（検証bondは一律保護）を区別して検証する。QF1の常駐配送証跡と公開保留を引き継ぐ。 |
 | 23 | 同一仕事でFOW1の有償適格性・独立再実行・成功Finalを確認。MWA1の仕事量・報酬・EXEC credit案は別に参照検証し、価格・量子・targetの提案値を公開条件へ組み込むには採択を要する。 |
-| 24 | 新規経済経路はMOE3。POSITIONは小数8桁。原資Cの50%は採掘報酬用POSITION購入、20%は永久LP用POSITION購入、20%はMISAKA側永久LP、5%はPanel・Gate C、5%はBFT。genesisのcreator不在を含む一回決済・端数・供給保存を同じ仕事で照合。旧MOE2の未決済分は元契約で完了させる。 |
+| 24 | 新規経済経路はMOE3。POSITIONは小数8桁。原資Cの50%は採掘報酬用POSITION購入、20%は永久LP用POSITION購入、20%はMISAKA側永久LP、5%はPanel、5%はBFT。genesisのcreator不在を含む一回決済・端数・供給保存を同じ仕事で照合。旧MOE2の未決済分は元契約で完了させる。 |
 | 25–26 | 移行前後の市場、POSITION残高、永久LP、用途別bond、廃止・slash・未決済receiptを対象状態に含め、PrunedとArchivalのIBD・reorg・再起動後の一致、保持義務、媒体ピークと回収量を測定する。既存市場を再初期化しない。 |
 | 27 | 全対象の短時間検証後に総合試験。保存S3のDAA 8602の受賞・残決済は旧条件で照合し、MOE3新規経路の結果と個別に記録する。公開有効化・QF1 REVIEW_HOLD解除・VPS配備には別途承認を要する。 |
 
-BMR1のBFT恒久廃止では対象モデルに拘束された該当資産を規定どおりburnする。Courtの個別slashは別の回収であり、新規則では実回収MISAKAの49%がPanel・Gate C、残余51%がburnとなる。各移行の発効条件と旧権利の扱いは[MOE3移行契約](../governance/fractional-position-economics-transition.md)・[BMR1移行契約](../governance/model-retirement-transition.md)に従う。日程は到達目標であり、改訂仕様のnative接続・実媒体検証は未達。
+BMR1のBFT恒久廃止では対象モデルに拘束された該当資産を規定どおりburnする。Courtの個別slashは別の回収であり、新規則では実回収MISAKAの49%が選出内外の適格な発見・立証者、残余51%がburnとなる。各移行の発効条件と旧権利の扱いは[MOE3移行契約](../governance/fractional-position-economics-transition.md)・[BMR1移行契約](../governance/model-retirement-transition.md)に従う。日程は到達目標であり、改訂仕様のnative接続・実媒体検証は未達。
+
+## 11月27日改定　独立Gate C廃止後の実装計画
+
+新規claimはRFC-0011のG14・公開Courtに従う。以下の従前見積もりに2セッションを追加し、進行中分を含め実装・個別検証まで残り10、公開候補判定まで残り12を見込む。第22〜27回の順序を維持し、次の証拠を従前の合格条件に加える。
+
+| 工程 | 追加作業と判定 |
+|---|---|
+| 第22〜23回（追加1セッション） | 受付時profileを固定し、各FOW1入口から選出外の監視者がclaimを発見して元資料を入手する。共謀・資料不供給で成功Finalを止め、MinerとPanelの個別責任、選出外発見者の実回収49%を通常Courtから追跡する。正常系ではGate C票なしで成功Finalに到達する。 |
+| 第23〜24回（追加1セッション） | 同じ選択親でfork choice、safe frontier、EXEC、受賞・決済、RPCを照合する。Panel役務5%、BFT5%、旧契約の成立報酬の支払いと二重払い拒否を照合する。 |
+| 第25〜27回 | 新旧claimが混在する非空台帳をPruned/ArchivalでIBD・再起動・reorgし、異議の元期限、資料、root、UTXOを照合。実LLMで同じ仕事を3peerで追跡し、実測と公開承認を記録する。 |
+
+第22回のFreePrompt採掘権と未発行予算の原資照合は `08d282d85`。部分消費、同額でも異なるquantumを使った枝の区別、審査中の保留、旧契約を含むBMR1の短時間試験9件が成功した。これらは新しい公開Court経路を実証する試験とは別に記録する。
 
 ## 11月25日時点の接続表と以後の試験履歴
 
