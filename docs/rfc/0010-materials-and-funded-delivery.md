@@ -481,3 +481,7 @@ None時は全shipped fingerprint/root/wireを不変にする。`CooperativeV1 / 
 8. P NoPopulation/Expired/NotCertified、pending-fraud、prover放棄、全live/retired join、未終了retention/dutyを含む実branch。P/fraud finite owner欠落を短縮TTLやsaved flagで通さないこと。
 9. DB全接続を閉じたrestart、reorg/rollback、snapshot/pruned IBD、missing/corrupt/truncated/duplicate資料、hard-quota不足、NativeHeap/Wireの全field登録。raw orphanのみから成功しないこと。
 10. 全shipped None fingerprint/root/wire、旧r1/TFO1/0–13/0–18互換性、元Assignment intake profileの固定（後日activationをまたぐ旧A→C/joinにRを遡及必須化しないこと）、historical raw pruning後のlive署名package保持、WorkerPayment→Reward誤用拒否、元account予算とonceの不変。Miner/Panel/Node/custody/relay別のCPU/RAM/通信/保持/復旧とnative全block/global資源を実測すること。
+
+## 10. 後発検証者への供給
+
+claim受付時に、静的artifactとclaim固有資料それぞれのroot・revision・範囲、供給者の署名義務、要求・応答期限、費用と最大bytesを確定する。後発者は選択履歴から要求を出し、第三者も同じrootへの正しいopeningを供給できる。応答の包含を確認してから再実行する。計算の矛盾と、署名済み供給義務の客観的不履行は個別に裁定する。帰責不能の取得失敗では成功を保留し、元期限で未検証終端とする。

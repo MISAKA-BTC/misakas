@@ -66,3 +66,9 @@ CLI、RPC、SDK、Studioはnativeと同じhash幅、address checksum、asset単�
 原因を保持するerrorは下位原因、再試行分類、claim/case、parent/rootを持つ。transportで文字列へ変換しても機械判定用codeを失わない。`Halted`と`Corrupt`、`NotFinalized`と`OutsideWindow`、`Conflict`と`NativeUnavailable`を同じ文字列照合へ縮約しない。未対応RPCを正常な空結果又は不存在としてcacheしない。
 
 web資産操作は実network、asset、受取人、額、fee、署名対象を確認できる形で表示する。EVM/Nativeそれぞれの同一asset対応、Positionの直接移転と通常AMM売買、claim役務feeとcoinbaseを混同しない。
+
+## 10. 後発監視者の再開と診断
+
+監視サービスは選択履歴のclaimと承認を列挙し、model、tokenizer、実行profile、入力とtraceのrootを照合して独立再実行する。保存する位置には選択blockを含め、再起動時に未処理分へ追いつき、reorgでは外れた枝の判断・送信状態を照合して元期限から再開する。署名、notice包含、証拠、個別裁定、回収、支払いまで追跡する。
+
+診断は初回期限超過、元証拠との不一致、資料取得不能、Court容量不足、責任拘束中、既回収、裁定待ち、回収待ち、決済待ちを型付きの原因・対象・選択枝・期限とともに返す。再試行を表示文言の部分一致で決定しない。

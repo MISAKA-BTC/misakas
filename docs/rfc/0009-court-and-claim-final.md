@@ -91,3 +91,11 @@ Panel-licensed Finalの記録専用eventは、対象profileが認めない限り
 response eligibilityは当該前提が実際に受理された時刻を保持する。Original再掲、case archived化、別の選択親からの履歴によって期限や資格を作り直さない。初回noticeの等号、terminal material、ready-root opening、金融解消は対象codecの正規境界で検査する。
 
 caseの終端と金融責任の解消は別である。未解決責任、資料保持、返金可能残額、既成立役務を保存し、無関係なclaimの進行は依存関係を検査して継続できる。
+
+## 13. 後発参加の時計と適格な反証
+
+承認前から公開検査を受け付け、承認後も最初のnotice期限までは選出外から初回申立を受理する。期限内に包含したnoticeは元caseに固定し、notice締切後も元の係争hardと予算内で資料応答・証拠・裁定を進める。再掲、再起動、後発参加で時計を更新しない。Final後の処理は受付時profileの事後反証・責任期間に限る。責任や保存の期限だけを根拠に初回noticeを再開しない。
+
+受付時に `D_hard − D_notice ≥ B_data + B_reexec + B_filing + B_court + B_chain` をprofileの同じ時計単位で検査する。最大許可仕事に必要な取得・独立再実行・搬送・裁定・包含の上界と既存profileの境界余裕を確保する。§3のBatch値の適用範囲を保つ。資料要求と既受理応答に予約容量を与え、正当な反証者自身の当選を待たせない。
+
+各実行profileは入力・初期状態、model rootに対するweight位置・型・shape、対象演算（行列積、Attention、正規化、活性化等）、演算間接続、出力列・Stop、Readout・Ticket入力を局所checkerに対応付ける。規範実行と異なる許可traceの最初の相違がどの関係を破るか、元commitmentに対する有界openingと局所再計算で論証する。未対応の関係を持つprofileは公開対象に含めない。

@@ -69,3 +69,7 @@ diskは論理サイズと物理使用量、1block/1claim当たり増分、compac
 このUTXO multiset commitment、PALW table root、headerのPALW state root、§3の提案authenticated mapは別形式である。幅が同じでも互換とみなさず、schema・domain・root種別を検査する。pruned/archival/IBDで同じUTXO集合とPALW状態を復元し、それぞれの正規rootを照合する。
 
 保存形式の圧縮やrow streamはcanonical状態を変更しない。新rootへの移行には別の採用・発効・同期互換設計を要し、旧rootを新算法で再計算して既存headerの意味を変えない。
+
+## 10. 後発検証を保つ境界
+
+初回申立、係争、供給、署名者の責任、支払いの元期限と未解決義務から保持境界を導く。Pruned同期後の新規参加者が元claim・Panel署名・認証済み必要資料・case・回収元を復元または期限内に取得できることを検査する。Archivalとのreorg・再適用でroot、未決責任、回収と受取UTXOが一致することを確認する。

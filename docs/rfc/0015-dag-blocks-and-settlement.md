@@ -61,3 +61,7 @@ nativeは8小数、EVMの表示単位は18小数とするprofileでは`EVM_NATIV
 ヘッダー拡張を採るprofileでは、64-byteの`evm_payload_hash`、64-byteの`evm_commitment_root`を規定順に扱い、`EvmPayload64`、`EvmCommitment64`等の既存domainで照合する。EVM内部の32-byte値をnative Hash64へ暗黙変換しない。EVM署名とnative PQ署名は異なるdomain・実行環境に閉じる。
 
 chain ID、gas schedule、payload limit、script bridge、receipt形式と発効はnetwork policyへ固定する。未採択の並列lane・別finality案を現行の受賞条件へ追加しない。EVMの存在はLLM計算の暗号学的証明を許可するものではない。
+
+## 10. 係争と不可逆な支払い
+
+同じ選択親・受付世代で異議期間、同batchの申立・失効・依存取消を評価してから当選権利の使用、受賞支払い、safe・settled frontierの進行を判定する。反証が勝ったclaimの寄与を追跡し、不可逆な出力・外部確定が一度も発生していないことを履歴で検査する。
